@@ -3,6 +3,9 @@
 // SDK re-exports (types useful in form consumers)
 export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
 export type {
+  ExprValue,
+  FormulaEditorProps,
+  FormulaField,
   CollectionBrowserColumn,
   CollectionBrowserViewProps,
   DrilldownTarget,
@@ -19,6 +22,13 @@ export type {
 export {
   CollectionBrowserView,
   CommentPanel,
+  FormulaEditor,
+  evaluateBoolean,
+  evaluateExpression,
+  evaluateNumeric,
+  extractExpressionTokens,
+  parseExpression,
+  validateExpression,
   DataTable,
   defaultItemUrl,
   GridFlushContext,

@@ -19,6 +19,12 @@ export interface User {
   company?: string | null
   manager_id: string | null
   delegate_id: string | null
+  /**
+   * Set ONLY when the request authenticated via an API key that carries
+   * scope_restrictions — rides the user object because scope enforcement
+   * receives the user, not the request. See migration 208.
+   */
+  api_key_scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }>
   delegate_expires_at: Date | null
   is_out_of_office: boolean
   created_at: Date

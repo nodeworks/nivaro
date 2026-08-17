@@ -22,6 +22,9 @@ import { applyUserScopesToQuery } from './user-scopes.js'
 import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { span } from './request-trace.js'
+import { applyRowRulesOnCreate } from './row-rules-autofill.js'
+import { enforceValidationRules } from './validation-rules.js'
 import {
   computeRollupTotal,
   parseRollupFormula,
@@ -1391,10 +1394,24 @@ export async function readItems(
   workspaceId?: string
 ) {
   assertNotRouteOnly(collection)
-  const col = await getCollection(collection)
-  if (!col) throw new CollectionNotFoundError(collection)
 
-  const allowed = await can(user, 'read', collection)
+  // These five have no interdependency, but each is a separate round trip and
+  // the SQL Server sits ~37ms away — run serially they were half the floor cost
+  // of every list read. clearRelCache() must precede getRelsForCollection.
+  clearRelCache()
+  const [col, allowed, allowedFields, rels, rowFilter] = await span('permissions+metadata', () =>
+    Promise.all([
+      getCollection(collection),
+      can(user, 'read', collection),
+      getAllowedFields(user, 'read', collection),
+      getRelsForCollection(collection),
+      getRowFilter(user, 'read', collection)
+    ])
+  )
+
+  // Errors surface in the original order — a caller must not learn that a
+  // collection exists from a Forbidden instead of a NotFound.
+  if (!col) throw new CollectionNotFoundError(collection)
   if (!allowed) throw new ForbiddenError()
 
   const rawConditions = (req?.query as Record<string, string>)?.conditions
@@ -1407,7 +1424,6 @@ export async function readItems(
     }
   }
 
-  const allowedFields = await getAllowedFields(user, 'read', collection)
   const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
@@ -1434,10 +1450,6 @@ export async function readItems(
       selectFields = selectFields.filter((f) => !sensitiveCols.includes(f))
     }
   }
-
-  // Pre-load relations for this collection (and prime cache for nested ones)
-  clearRelCache()
-  const rels = await getRelsForCollection(collection)
 
   // Strip O2M virtual field names — they have no physical column (e.g. 'report_widgets'
   // on report_definitions). Selecting them causes MSSQL "Invalid column name" errors.
@@ -1484,7 +1496,6 @@ export async function readItems(
   await applyWorkspaceScope(countQ, collection, workspaceId)
 
   // Row-level security — policy row_filter conditions (no-op when policy has none)
-  const rowFilter = await getRowFilter(user, 'read', collection)
   if (rowFilter) {
     applyRowFilter(q, rowFilter, user)
     applyRowFilter(countQ, rowFilter, user)
@@ -1556,40 +1567,53 @@ export async function readItems(
     countQ.whereNotIn('id', excludeSub)
   }
 
-  await hooks.trigger('before', { collection, action: 'read', user, database: db, req })
+  await span('hooks:before-read', () =>
+    hooks.trigger('before', { collection, action: 'read', user, database: db, req })
+  )
 
-  const [rawData, countRows] = await Promise.all([q, countQ])
+  const [rawData, countRows] = await span('query+count', () => Promise.all([q, countQ]))
   const total = Number((countRows[0] as { count: string | number }).count)
 
   // Decrypt configured encrypted fields before computed fields run
-  let data = await Promise.all(
-    (rawData as Record<string, unknown>[]).map((row) => decryptItemFields(collection, row))
+  let data = await span('decrypt', () =>
+    Promise.all(
+      (rawData as Record<string, unknown>[]).map((row) => decryptItemFields(collection, row))
+    )
   )
 
   // Tree permissions on list reads — batched (one rules query + one ancestry
   // pass per page). Denied rows are dropped; `total` still reflects the
   // pre-filter count, which only differs when deny rules apply.
-  data = await filterRowsByTreePermissions(user, collection, data)
+  data = await span('tree-permissions', () => filterRowsByTreePermissions(user, collection, data))
 
   // Inherited field values (tree collections) — before computed fields so
   // formulas see effective values. Adds `_inherited` sidecar per row.
-  await applyInheritedFields(collection, data)
+  await span('inherited-fields', () => applyInheritedFields(collection, data))
 
   // Apply read-time computed fields (scoped to the explicit field selection when present)
-  await applyReadComputedFields(
-    collection,
-    data,
-    selectFields[0] === '*' ? undefined : (selectFields as string[])
+  await span(
+    'computed-fields',
+    () =>
+      applyReadComputedFields(
+        collection,
+        data,
+        selectFields[0] === '*' ? undefined : (selectFields as string[])
+      ),
+    `${data.length} rows`
   )
 
   // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
   if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
-    await expandRelations(user, data, collection, nestedFieldMap, 0, workspaceId)
+    await span('expand-relations', () =>
+      expandRelations(user, data, collection, nestedFieldMap, 0, workspaceId)
+    )
   }
 
   const result = { data, total, limit, offset: effectiveOffset }
 
-  await hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })
+  await span('hooks:after-read', () =>
+    hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })
+  )
 
   return result
 }
@@ -1842,6 +1866,10 @@ export async function createOne(
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
   data = await coerceRelationObjects(collection, data)
+  // The fields the CALLER explicitly sent, captured before any rule, autofill
+  // or computed pass mutates the payload — explicit values always win over
+  // layout autofill, and validation only ever judges what the caller wrote.
+  const callerFields = new Set(Object.keys(data))
 
   const allowed = await can(user, 'create', collection)
   if (!allowed) throw new ForbiddenError()
@@ -1862,6 +1890,12 @@ export async function createOne(
   // Field rules — apply inline field defaults based on other field values
   await applyFieldRules(collection, ctx.payload)
 
+  // Layout row-rule autofill — the grid rules the admin form runs per row
+  // (oracle category from CIFA, task precedence chain, line_type from the
+  // parent's workflow_type) now apply to API creates too. Fills only fields
+  // the caller left out; never throws.
+  await applyRowRulesOnCreate(collection, ctx.payload, callerFields)
+
   // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_create')
 
@@ -1871,6 +1905,11 @@ export async function createOne(
   // Write-time computed fields — evaluated after auto-IDs so formula can reference them
   // For create, the payload itself is the full context
   await applyWriteComputedFields(collection, ctx.payload, ctx.payload)
+
+  // Field validation rules — 400 {code: VALIDATION_RULE_FAILED} on the first
+  // caller-provided value that violates its field's rules. Runs after every
+  // transform so it judges what will actually be written.
+  await enforceValidationRules(collection, ctx.payload, callerFields)
 
   // Stamp the active workspace on the row when the table is workspace-aware.
   // Admins may override via an explicit workspace_id in the payload.
@@ -1937,6 +1976,10 @@ export async function updateOne(
   const allowed = await can(user, 'update', collection)
   if (!allowed) throw new ForbiddenError()
 
+  // The fields the caller explicitly sent — validation only judges these.
+  const callerFields = new Set(Object.keys(data))
+  callerFields.delete('_change_reason')
+
   // Change reason rides the payload as a virtual `_change_reason` key — strip
   // it before anything downstream sees it (it must never reach a column write)
   const changeReason =
@@ -1959,7 +2002,7 @@ export async function updateOne(
     database: db,
     req
   }
-  await hooks.trigger('before', ctx)
+  await span('hooks:before-update', () => hooks.trigger('before', ctx))
 
   // Row-level security — filter applies to both the previousData fetch and the mutation
   const rowFilter = await getRowFilter(user, 'update', collection)
@@ -1993,17 +2036,24 @@ export async function updateOne(
   }
 
   // before_update rules — may mutate the payload (e.g. set_field)
-  await evaluateRules(collection, 'before_update', ctx.payload, previousData)
+  await span('rules:before-update', () =>
+    evaluateRules(collection, 'before_update', ctx.payload, previousData)
+  )
 
   // Field rules — apply inline field defaults based on other field values
-  await applyFieldRules(collection, ctx.payload)
+  await span('field-rules', () => applyFieldRules(collection, ctx.payload))
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_update')
 
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
-  await applyWriteComputedFields(collection, ctx.payload, writeCtx)
+  await span('computed-fields:write', () =>
+    applyWriteComputedFields(collection, ctx.payload, writeCtx)
+  )
+
+  // Field validation rules on the caller's fields (see createOne)
+  await enforceValidationRules(collection, ctx.payload, callerFields)
 
   // Auto-ID prefix recompute — if a relation an auto_id pattern depends on
   // just changed (e.g. re-parenting to a different project), re-render the
@@ -2038,26 +2088,39 @@ export async function updateOne(
   // .update(). Skip the UPDATE but still run the read-back + after hooks so
   // the call stays a graceful no-op instead of a 500.
   if (Object.keys(columnPayload).length > 0) {
-    const updQ = db(collection).where({ id })
-    await applyWorkspaceScope(updQ, collection, workspaceId)
-    if (rowFilter) applyRowFilter(updQ, rowFilter, user)
-    await updQ.update(columnPayload)
+    await span('update', async () => {
+      const updQ = db(collection).where({ id })
+      await applyWorkspaceScope(updQ, collection, workspaceId)
+      if (rowFilter) applyRowFilter(updQ, rowFilter, user)
+      await updQ.update(columnPayload)
+    })
   }
-  const result = await readOne(user, collection, id, workspaceId)
+  const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
 
   // Recalc any stored rollups this row contributes to — both the previous and
   // new parent when an FK field changed (never throws)
-  await recalcAffectedRollups(collection, result as Record<string, unknown> | null, previousData)
-
-  // after_update rules
-  await evaluateRules(
-    collection,
-    'after_update',
-    (result ?? ctx.payload) as Record<string, unknown>,
-    previousData
+  await span('rollup-recalc', () =>
+    recalcAffectedRollups(collection, result as Record<string, unknown> | null, previousData)
   )
 
-  await hooks.trigger('after', { ...ctx, result, previousData, changeReason: changeReason || undefined })
+  // after_update rules
+  await span('rules:after-update', () =>
+    evaluateRules(
+      collection,
+      'after_update',
+      (result ?? ctx.payload) as Record<string, unknown>,
+      previousData
+    )
+  )
+
+  await span('hooks:after-update', () =>
+    hooks.trigger('after', {
+      ...ctx,
+      result,
+      previousData,
+      changeReason: changeReason || undefined
+    })
+  )
 
   broadcastCollectionUpdate(req?.server?.io, collection, id)
 

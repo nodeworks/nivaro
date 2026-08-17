@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
+import { evaluateNumeric } from '../lib/expression'
 
 // Generic tabular renderer for custom-query rows (widget slots + page builder).
 // Config-driven: column labels/formats, computed formula columns, optional
@@ -181,74 +182,18 @@ export function pivotQueryRows(
   return { rows: [...byKey.values()], columns }
 }
 
-// Minimal recursive-descent arithmetic evaluator (+ - * / parentheses, unary
-// minus) — no dynamic code execution.
-function evalArithmetic(expr: string): number | null {
-  let pos = 0
-  const peek = () => expr[pos]
-  const skip = () => {
-    while (expr[pos] === ' ') pos++
-  }
-  function parseExpr(): number {
-    let v = parseTerm()
-    for (;;) {
-      skip()
-      const op = peek()
-      if (op === '+' || op === '-') {
-        pos++
-        const rhs = parseTerm()
-        v = op === '+' ? v + rhs : v - rhs
-      } else return v
-    }
-  }
-  function parseTerm(): number {
-    let v = parseFactor()
-    for (;;) {
-      skip()
-      const op = peek()
-      if (op === '*' || op === '/') {
-        pos++
-        const rhs = parseFactor()
-        v = op === '*' ? v * rhs : v / rhs
-      } else return v
-    }
-  }
-  function parseFactor(): number {
-    skip()
-    if (peek() === '-') {
-      pos++
-      return -parseFactor()
-    }
-    if (peek() === '(') {
-      pos++
-      const v = parseExpr()
-      skip()
-      if (peek() !== ')') throw new Error('unbalanced')
-      pos++
-      return v
-    }
-    const m = /^\d+(\.\d+)?/.exec(expr.slice(pos))
-    if (!m) throw new Error('bad token')
-    pos += m[0].length
-    return Number(m[0])
-  }
-  try {
-    const v = parseExpr()
-    skip()
-    if (pos !== expr.length) return null
-    return Number.isFinite(v) ? v : null
-  } catch {
-    return null
-  }
-}
-
+/**
+ * Column formulas delegate to the shared expression engine (lib/expression.ts).
+ *
+ * This file used to carry its own recursive-descent arithmetic parser, one of
+ * five separate dialects in the codebase. Worse, it still substituted token
+ * VALUES into the expression string before parsing, so a value that was not a
+ * bare number could change the expression's shape rather than just its inputs.
+ * `missing: 'zero'` keeps the behaviour every configured report formula relies
+ * on — a column with no value in a row still reads as 0.
+ */
 function evalRowFormula(formula: string, row: Record<string, unknown>): number | null {
-  const expr = formula.replace(/\{\{\s*([\w]+)\s*\}\}/g, (_, f: string) => {
-    const v = Number(row[f])
-    return Number.isFinite(v) ? String(v) : '0'
-  })
-  if (!/^[\d\s+\-*/().]+$/.test(expr)) return null
-  return evalArithmetic(expr)
+  return evaluateNumeric(formula, row)
 }
 
 function fmt(v: unknown, format?: QueryTableColumn['format']): string {

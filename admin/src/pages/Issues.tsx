@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
+  PlayCircle,
   Plus,
   X
 } from 'lucide-react'
@@ -43,6 +44,8 @@ interface Issue {
   raised_by_name?: string | null
   raised_by_email?: string | null
   resolution_notes: string | null
+  recording_id?: string | null
+  recording_offset_ms?: number | null
   created_at: string
   updated_at: string
 }
@@ -306,8 +309,23 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
       toast.error(err.response?.data?.error ?? 'Failed to update issue')
   })
 
+  const replayId = issue.recording_id ?? full?.recording_id
+  const replayOffset = issue.recording_offset_ms ?? full?.recording_offset_ms
+
   return (
     <div className='space-y-4 bg-slate-50 px-6 py-4 dark:bg-muted/30'>
+      {replayId && (
+        <Link
+          to={`/session-replays?recording=${replayId}${replayOffset != null ? `&t=${replayOffset}` : ''}`}
+          className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 hover:bg-nvr-cyan/20 dark:text-slate-100'
+        >
+          <PlayCircle className='h-3.5 w-3.5' />
+          Watch replay of this error
+          <span className='text-[11px] text-muted-foreground'>
+            {replayOffset != null ? 'opens at the error moment' : 'last ~60s before the error'}
+          </span>
+        </Link>
+      )}
       {full?.details && (
         <pre className='max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
           {full.details}

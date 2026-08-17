@@ -62,7 +62,18 @@ export async function getStateDurationStats(): Promise<Map<string, StateDuration
       .finally(() => {
         loading = null
       })
+    // Swallowed on the background path only — a stale-cache holder must not
+    // become an unhandled rejection when the refresh fails; the next caller
+    // retries via the same `loading` gate.
+    loading.catch(() => {})
   }
+  // Stale-while-revalidate: the aggregate walks the ENTIRE workflow history
+  // (millions of rows post-legacy-import, ~2.7s) — making one queue request
+  // eat that every TTL expiry showed up as a mystery 2.7s spike in traces.
+  // Ten-minute-old percentiles are indistinguishable from fresh ones for a
+  // "historically stuck" flag, so an expired cache serves immediately while
+  // the refresh runs behind it. Only a truly cold process ever waits.
+  if (cache) return cache.stats
   return loading
 }
 

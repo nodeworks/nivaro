@@ -1,3 +1,4 @@
+import { evaluateNumeric } from '../../lib/expression'
 /**
  * Client-side evaluation of a rollup field over rows the user is CURRENTLY
  * editing, so a header total moves with the grid instead of waiting for a save
@@ -100,24 +101,13 @@ export function matchesRollupFilter(
   return true
 }
 
-/** `{{a}} - {{b}}` over the row, arithmetic only. Mirrors evalClientFormula. */
+/**
+ * `{{a}} - {{b}}` over the row. Delegates to the shared expression engine
+ * rather than keeping a third copy of the same substitute-then-eval logic;
+ * `missing: 'zero'` preserves the previous behaviour for existing rollups.
+ */
 function evalRowFormula(formula: string, row: Record<string, unknown>): number | null {
-  const expr = formula.replace(/\{\{([\w.]+)\}\}/g, (_m, path: string) => {
-    const value = path.split('.').reduce<unknown>((acc, seg) => {
-      if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[seg]
-      return undefined
-    }, row)
-    const n = Number(value)
-    return Number.isNaN(n) ? '0' : String(n)
-  })
-  if (!/^[\d\s+\-*/.()]+$/.test(expr)) return null
-  try {
-    // biome-ignore lint/security/noGlobalEval: sanitized to digits and operators above
-    const out = eval(expr) as number
-    return Number.isFinite(out) ? out : null
-  } catch {
-    return null
-  }
+  return evaluateNumeric(formula, row)
 }
 
 /**

@@ -25,6 +25,8 @@ import {
   FileImage,
   FileText,
   GitBranch,
+  GitCompare,
+  UserX,
   Globe,
   HeartPulse,
   House,
@@ -82,7 +84,7 @@ import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useT } from '@/lib/i18n'
 import { usePagePresence } from '@/lib/use-page-presence'
-import { useSessionRecorder } from '@/lib/use-session-recorder'
+import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -165,6 +167,8 @@ export const navCategories: NavCategory[] = [
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
       { icon: Clock, label: 'SLA Rules', to: '/sla-rules' },
       { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit' },
+      { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps' },
+      { icon: Link2, label: 'Integrations', to: '/integration-health' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },
@@ -184,6 +188,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
       { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
+      { icon: GitCompare, label: 'Environment Config', to: '/config-diff' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
@@ -227,14 +232,22 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
     return { error }
   }
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
-    // Report to the issue log (deduped server-side); never block rendering
-    api
-      .post('/issues/client', {
-        message: error.message,
-        stack: [error.stack, info.componentStack].filter(Boolean).join('\n---\n').slice(0, 6000),
-        url: window.location.pathname
-      })
-      .catch(() => {})
+    // Report to the issue log (deduped server-side); never block rendering.
+    // captureErrorClip resolves the replay link (live recording offset, or an
+    // uploaded last-minute clip in buffer mode) — null when neither mode is
+    // on, and it self-times-out so the report never waits long for it.
+    void captureErrorClip().then((replay) => {
+      api
+        .post('/issues/client', {
+          message: error.message,
+          stack: [error.stack, info.componentStack].filter(Boolean).join('\n---\n').slice(0, 6000),
+          url: window.location.pathname,
+          ...(replay
+            ? { recording_id: replay.recording_id, recording_offset_ms: replay.offset_ms }
+            : {})
+        })
+        .catch(() => {})
+    })
   }
   render() {
     if (this.state.error) {

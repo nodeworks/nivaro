@@ -51,14 +51,40 @@ export async function issuesRoutes(app: FastifyInstance) {
   // POST /issues/client — React error boundary reports. Deduped by
   // fingerprint via trackError; severity fixed to 'high'.
   app.post('/client', { preHandler: requireAuth }, async (req, reply) => {
-    const body = req.body as { message?: string; stack?: string; url?: string }
+    const body = req.body as {
+      message?: string
+      stack?: string
+      url?: string
+      recording_id?: string
+      recording_offset_ms?: number
+    }
     if (!body.message?.trim()) return reply.code(400).send({ error: 'message is required' })
+    // The replay link is caller-supplied — accept only a uuid-shaped id, and
+    // only one that exists AND belongs to the reporting user, or a client
+    // could attach someone else's recording to an issue.
+    let recordingId: string | null = null
+    if (typeof body.recording_id === 'string' && /^[0-9a-f-]{36}$/i.test(body.recording_id)) {
+      const rec = await db('nivaro_session_recordings')
+        .where({ id: body.recording_id, user: req.user?.id ?? '' })
+        .first('id')
+      if (rec) recordingId = body.recording_id
+    }
     await trackError({
       source: 'client',
       route: String(body.url ?? 'unknown').slice(0, 300),
       message: body.message,
       stack: body.stack ?? null,
-      userId: req.user?.id ?? null
+      userId: req.user?.id ?? null,
+      recordingId,
+      recordingOffsetMs:
+        // Explicit null must STAY null (a clip has no offset — the whole clip
+        // is the context); Number(null) is 0, which would claim precision the
+        // link does not have.
+        recordingId &&
+        body.recording_offset_ms != null &&
+        Number.isFinite(Number(body.recording_offset_ms))
+          ? Math.max(0, Math.floor(Number(body.recording_offset_ms)))
+          : null
     })
     return reply.code(204).send()
   })
@@ -92,6 +118,8 @@ export async function issuesRoutes(app: FastifyInstance) {
         'i.fingerprint',
         'i.occurrence_count',
         'i.last_seen_at',
+        'i.recording_id',
+        'i.recording_offset_ms',
         'i.created_at',
         'i.updated_at',
         db.raw(

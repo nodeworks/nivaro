@@ -35,6 +35,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'anthropic_api_key',
       'presence_session_ttl',
       'session_recording_enabled',
+      'error_replay_enabled',
       'session_recording_retention_days',
       'two_factor_enabled',
       'presence_sweep_interval',

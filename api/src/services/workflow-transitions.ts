@@ -64,7 +64,7 @@ interface WorkflowBinding {
 
 export type SkipOp = 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte' | 'in' | 'notin'
 
-interface SkipCriteria {
+export interface SkipCriteria {
   mode?: 'all' | 'any'
   conditions: Array<{
     type: 'no_owners' | 'field_compare' | 'field_empty' | 'field_nonempty' | 'lookup_compare'
@@ -266,7 +266,11 @@ export async function evaluateSkipCriteriaDetailed(
   instanceId: string | null,
   collection: string,
   itemId: string,
-  database: typeof db
+  database: typeof db,
+  // Simulation override: evaluate PROPOSED criteria instead of the stored
+  // row's — how the impact-preview endpoint answers "what changes if I save
+  // this" without saving it. Everything else (owners, lookups) stays live.
+  criteriaOverride?: { criteria?: SkipCriteria | null; skipIfNoOwners?: boolean }
 ): Promise<SkipEvaluation> {
   try {
     const state = await database<WorkflowState>('nivaro_workflow_states')
@@ -277,12 +281,19 @@ export async function evaluateSkipCriteriaDetailed(
     // Standalone skip-if-no-owners flag: skip the state when THIS RECORD resolves
     // zero owners for it — owner groups may exist but match other dimensions
     // (EFP getRealOwners semantics; includes manually-assigned instance owners).
-    if (coerceBool(state.skip_if_no_owners)) {
+    const effectiveSkipNoOwners =
+      criteriaOverride?.skipIfNoOwners !== undefined
+        ? criteriaOverride.skipIfNoOwners
+        : coerceBool(state.skip_if_no_owners)
+    if (effectiveSkipNoOwners) {
       const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
       if (owners.length === 0) return { skipped: true, reasons: [NO_OWNERS_REASON] }
     }
 
-    const criteria = parseJson<SkipCriteria>(state.skip_criteria)
+    const criteria =
+      criteriaOverride !== undefined && 'criteria' in criteriaOverride
+        ? (criteriaOverride.criteria ?? null)
+        : parseJson<SkipCriteria>(state.skip_criteria)
     if (!criteria || !Array.isArray(criteria.conditions) || criteria.conditions.length === 0) {
       return { skipped: false, reasons: [] }
     }

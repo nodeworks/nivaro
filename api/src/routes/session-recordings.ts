@@ -60,18 +60,42 @@ async function recordingEnabled(): Promise<boolean> {
 export async function sessionRecordingRoutes(app: FastifyInstance) {
   // Recorder asks whether it should run at all
   app.get('/enabled', { preHandler: requireAuth }, async (_req, reply) => {
-    return reply.send({ data: { enabled: await recordingEnabled() } })
+    const row = await db('nivaro_settings')
+      .where({ id: 1 })
+      .first('session_recording_enabled', 'error_replay_enabled')
+    return reply.send({
+      data: {
+        enabled: !!row?.session_recording_enabled,
+        // Error-clip buffer mode: record into a rolling in-memory buffer,
+        // upload only when an error is reported (see migration 210).
+        error_replay: !!(row as { error_replay_enabled?: unknown } | undefined)
+          ?.error_replay_enabled
+      }
+    })
   })
 
-  app.post<{ Body: { app?: string; origin?: string } }>(
+  app.post<{ Body: { app?: string; origin?: string; clip?: boolean } }>(
     '/start',
     { preHandler: requireAuth },
     async (req, reply) => {
-      if (!(await recordingEnabled())) {
+      // A clip start is gated by the error-replay bit, not the full-recording
+      // bit — clips exist precisely so operators can keep continuous
+      // recording OFF and still get the last minute before an error.
+      const isClip = req.body?.clip === true
+      if (isClip) {
+        const row = await db('nivaro_settings').where({ id: 1 }).first('error_replay_enabled')
+        if (!(row as { error_replay_enabled?: unknown } | undefined)?.error_replay_enabled) {
+          return reply.code(409).send({ error: 'Error replay is disabled' })
+        }
+      } else if (!(await recordingEnabled())) {
         return reply.code(409).send({ error: 'Session recording is disabled' })
       }
       const id = randomUUID()
-      const appLabel = typeof req.body?.app === 'string' ? req.body.app.slice(0, 100) : null
+      const appLabel = isClip
+        ? 'error-clip'
+        : typeof req.body?.app === 'string'
+          ? req.body.app.slice(0, 100)
+          : null
       // Where this happened. Taken from the client's own origin, falling back
       // to the request's host — a recording whose environment is unknown is
       // hard to act on, and the referer is the closest thing we have.
@@ -107,9 +131,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (!Array.isArray(events) || events.length === 0 || typeof seq !== 'number') {
         return reply.code(400).send({ error: 'seq and events[] are required' })
       }
-      const rec = (await db('nivaro_session_recordings')
-        .where({ id: req.params.id })
-        .first()) as
+      const rec = (await db('nivaro_session_recordings').where({ id: req.params.id }).first()) as
         | { id: string; user: string; byte_size: number; truncated: boolean; ended_at: Date | null }
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Recording not found' })
@@ -245,7 +267,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       })
       return reply
         .header('content-type', 'text/plain; charset=utf-8')
-        .header('content-disposition', `attachment; filename="replay-${String(rec.id).slice(0, 8)}.spec.ts"`)
+        .header(
+          'content-disposition',
+          `attachment; filename="replay-${String(rec.id).slice(0, 8)}.spec.ts"`
+        )
         .send(script)
     }
   )

@@ -1002,6 +1002,101 @@ export function PipelinePanel({
   )
 }
 
+/**
+ * "What am I approving?" — the change summary for the state the approver is
+ * signing off on. Fetched only while a transition confirm is open; a record
+ * untouched since entering the state renders one quiet line rather than
+ * nothing, because "no changes" is itself the answer.
+ */
+function ApprovalBriefStrip({ collection, item }: { collection: string; item: string | number }) {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['approval-brief', collection, String(item)],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            entered_at: string
+            days_in_state: number
+            revisions: number
+            field_changes: Array<{ field: string; old?: unknown; new: unknown }>
+            changed_total: number
+            comments: number
+            addendums: { count: number; cost_impact: number }
+            edited_by: string[]
+          } | null
+        }>(get(`/pipelines/instance/${collection}/${item}/approval-brief`))
+        .then((r) => r.data),
+    staleTime: 30_000,
+    retry: false
+  })
+  if (!data) return null
+
+  const fmt = (v: unknown) => {
+    if (v === null || v === undefined || v === '') return '—'
+    const s = String(v)
+    return s.length > 36 ? `${s.slice(0, 36)}…` : s
+  }
+
+  return (
+    <div className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[11.5px] dark:border-border dark:bg-card'>
+      <p className='text-slate-500 dark:text-muted-foreground'>
+        <span className='font-medium text-slate-700 dark:text-foreground'>
+          Since entering this state
+        </span>{' '}
+        ({data.days_in_state}d ago):{' '}
+        {data.changed_total === 0 && data.comments === 0 && data.addendums.count === 0 ? (
+          <span>no changes to this record.</span>
+        ) : (
+          <>
+            {data.changed_total > 0 && (
+              <span>
+                {data.changed_total} field{data.changed_total === 1 ? '' : 's'} changed
+                {data.edited_by.length > 0 ? ` by ${data.edited_by.join(', ')}` : ''}
+              </span>
+            )}
+            {data.comments > 0 && (
+              <span>
+                {data.changed_total > 0 ? ' · ' : ''}
+                {data.comments} comment{data.comments === 1 ? '' : 's'}
+              </span>
+            )}
+            {data.addendums.count > 0 && (
+              <span>
+                {' · '}
+                {data.addendums.count} addendum{data.addendums.count === 1 ? '' : 's'}
+                {data.addendums.cost_impact !== 0
+                  ? ` (${data.addendums.cost_impact > 0 ? '+' : ''}$${Math.abs(data.addendums.cost_impact).toLocaleString()})`
+                  : ''}
+              </span>
+            )}
+          </>
+        )}
+      </p>
+      {data.field_changes.length > 0 && (
+        <div className='mt-1 space-y-0.5'>
+          {data.field_changes.slice(0, 5).map((f) => (
+            <p key={f.field} className='font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+              {f.field}:{' '}
+              {f.old !== undefined && (
+                <>
+                  <span className='text-red-600 line-through dark:text-red-400'>{fmt(f.old)}</span>{' '}
+                </>
+              )}
+              <span className='text-emerald-600 dark:text-emerald-400'>{fmt(f.new)}</span>
+            </p>
+          ))}
+          {data.field_changes.length > 5 && (
+            <p className='text-[10.5px] text-slate-400'>
+              +{data.field_changes.length - 5} more — see History for the full trail
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PipelinePanelInner({
   collection,
   item,
@@ -1281,6 +1376,7 @@ function PipelinePanelInner({
           </div>
         )}
       </div>
+      <ApprovalBriefStrip collection={collection} item={item} />
       <input
         type='text'
         value={comment}
@@ -1727,6 +1823,7 @@ function PipelineTransitionButtonsInner({
               </div>
             )}
           </div>
+          <ApprovalBriefStrip collection={collection} item={item} />
           <input
             type='text'
             value={comment}

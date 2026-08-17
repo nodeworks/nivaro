@@ -46,8 +46,15 @@ import { flowRegistryRoutes } from './flow-registry.js'
 import { flowsRoutes, webhookFlowRoute } from './flows.js'
 import { globalSearchRoutes } from './global-search.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { cronRoutes } from './cron.js'
 import { healthRoutes } from './health.js'
+import { preflightRoutes } from './preflight.js'
+import { traceRoutes } from './traces.js'
+import { configDiffRoutes } from './config-diff.js'
+import { viewSubscriptionsRoutes } from './view-subscriptions.js'
+import { coverageGapsRoutes } from './coverage-gaps.js'
+import { integrationHealthRoutes } from './integration-health.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
@@ -126,10 +133,19 @@ export async function registerRoutes(app: FastifyInstance) {
   const META_ROUTES = /^\/api\/(data-model|collections|field-config|collection-layouts|field-groups)\b/
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
-    if (META_ROUTES.test(req.url)) clearMetadataCache()
+    if (META_ROUTES.test(req.url)) {
+      clearMetadataCache()
+      clearRowRuleCache()
+    }
   })
 
   await app.register(healthRoutes)
+  await app.register(preflightRoutes)
+  await app.register(traceRoutes)
+  await app.register(configDiffRoutes)
+  await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
+  await app.register(coverageGapsRoutes)
+  await app.register(integrationHealthRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(activityRoutes, { prefix: '/activity' })

@@ -6,7 +6,19 @@ import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { I18nProvider } from '@/lib/i18n'
-import { ThemeProvider } from '@/lib/theme'
+import { ThemeProvider, useTheme } from '@/lib/theme'
+
+/**
+ * Sonner needs to be TOLD the theme — without the prop it renders light
+ * surfaces no matter what class the app root carries, which under dark mode
+ * meant near-white toasts with near-white text. resolvedTheme is the app's
+ * actual light/dark answer (explicit choice or system), so toasts follow the
+ * theme switcher exactly like every other surface.
+ */
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme()
+  return <Toaster richColors position='bottom-right' theme={resolvedTheme} />
+}
 
 function safeRedirectPath(raw: string | null | undefined, fallback = '/'): string {
   if (!raw) return fallback
@@ -122,6 +134,15 @@ const PublicDashboardPage = lazy(() =>
 const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default: m.ErdViewPage })))
 const SchemaGraphPage = lazy(() =>
   import('@/pages/SchemaGraph').then((m) => ({ default: m.SchemaGraphPage }))
+)
+const ConfigDiffPage = lazy(() =>
+  import('@/pages/ConfigDiff').then((m) => ({ default: m.ConfigDiffPage }))
+)
+const CoverageGapsPage = lazy(() =>
+  import('@/pages/CoverageGaps').then((m) => ({ default: m.CoverageGapsPage }))
+)
+const IntegrationHealthPage = lazy(() =>
+  import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
 )
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -405,6 +426,9 @@ export default function App() {
                   <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
                   <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
+                  <Route path='config-diff' element={<ConfigDiffPage />} />
+                  <Route path='coverage-gaps' element={<CoverageGapsPage />} />
+                  <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />
@@ -486,7 +510,7 @@ export default function App() {
                 </Route>
               </Routes>
             </BrowserRouter>
-            <Toaster richColors position='bottom-right' />
+            <ThemedToaster />
           </AuthProvider>
         </QueryClientProvider>
       </I18nProvider>

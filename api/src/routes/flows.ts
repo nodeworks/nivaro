@@ -643,6 +643,177 @@ export async function flowsRoutes(app: FastifyInstance) {
     return reply.send({ data: { steps: trace, output, error, dry_run: body.dry_run !== false } })
   })
 
+  /**
+   * Replay an event flow over a historical window.
+   *
+   * The scenario this exists for: a flow was misconfigured (or inactive) for
+   * three days, and every record touched in that window silently missed its
+   * notification / push / writeback. Dead-letters covers deliveries that
+   * FAILED; nothing covered runs that never happened. Replay walks
+   * nivaro_activity for the flow's collections+actions in [from, to] and
+   * re-executes the flow once per matching write.
+   *
+   * Semantics an operator must know:
+   *   - dry_run defaults TRUE and returns the match count + a sample —
+   *     replays fan out real side effects, so the count comes first.
+   *   - The payload is the record's CURRENT row (the original write payload
+   *     is gone), previousData is empty, and the payload carries
+   *     `$replay: true` so a flow can guard if it cares. Flows keyed off
+   *     field DELTAS will not see them — replay is for "run again for these
+   *     records", not "reconstruct the past".
+   *   - delete events are skipped (the record no longer exists to load) and
+   *     reported as skipped_deletes.
+   *   - Only after-timing event flows replay. A before-hook flow mutates a
+   *     write in flight; replaying one outside a write is meaningless.
+   *   - Runs are sequential — a 500-record replay is 500 flow runs, and
+   *     stampeding them concurrently would flood mail/webhook targets.
+   *   - Collections with accountability ''/none write no activity rows, so
+   *     they have nothing to replay from. A zero match on a busy collection
+   *     usually means that, not a quiet window.
+   */
+  app.post('/:id/replay', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const flow = await db<Flow>('nivaro_flows').where({ id }).first()
+    if (!flow) return reply.code(404).send({ error: 'Not found' })
+    if (flow.trigger !== 'event') {
+      return reply.code(400).send({ error: 'Only event-trigger flows can be replayed' })
+    }
+    const opts = flow.trigger_options
+      ? (JSON.parse(flow.trigger_options) as EventTriggerOptions)
+      : {}
+    if ((opts.timing ?? 'after') === 'before') {
+      return reply
+        .code(400)
+        .send({ error: 'Before-timing flows mutate a write in flight and cannot be replayed' })
+    }
+
+    const body = (req.body ?? {}) as {
+      from?: string
+      to?: string
+      dry_run?: boolean
+      limit?: number
+    }
+    const from = body.from ? new Date(body.from) : null
+    const to = body.to ? new Date(body.to) : null
+    if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return reply.code(400).send({ error: 'from and to (ISO datetimes) are required' })
+    }
+    if (to.getTime() <= from.getTime()) {
+      return reply.code(400).send({ error: 'to must be after from' })
+    }
+    const dryRun = body.dry_run !== false
+    const limit = Math.min(Math.max(Number(body.limit) || 500, 1), 1000)
+
+    const actions = (opts.types ?? []).filter((t) => t === 'create' || t === 'update')
+    const effectiveActions = actions.length ? actions : ['create', 'update']
+    const collections = (opts.collections ?? []).filter(Boolean)
+
+    const q = db('nivaro_activity')
+      .whereIn('action', effectiveActions)
+      .whereBetween('timestamp', [from, to])
+      .whereNotNull('item')
+      .orderBy('id', 'asc')
+      .limit(limit + 1)
+      .select('id', 'collection', 'action', 'item', 'timestamp')
+    if (collections.length) q.whereIn('collection', collections)
+    // A wildcard flow still must never replay system-table writes.
+    else q.whereRaw("collection NOT LIKE 'nivaro[_]%'")
+
+    const rows = (await q) as Array<{
+      id: number
+      collection: string
+      action: string
+      item: string
+      timestamp: Date
+    }>
+    const truncated = rows.length > limit
+    const matched = rows.slice(0, limit)
+
+    const deleteCount = ((opts.types ?? []).includes('delete') && collections.length)
+      ? Number(
+          (
+            await db('nivaro_activity')
+              .where('action', 'delete')
+              .whereBetween('timestamp', [from, to])
+              .whereIn('collection', collections)
+              .count('* as c')
+              .first()
+          )?.c ?? 0
+        )
+      : 0
+
+    if (dryRun) {
+      return reply.send({
+        data: {
+          dry_run: true,
+          matched: matched.length,
+          truncated,
+          skipped_deletes: deleteCount,
+          sample: matched.slice(0, 20)
+        }
+      })
+    }
+
+    let executed = 0
+    let failed = 0
+    let missing = 0
+    for (const row of matched) {
+      let record: Record<string, unknown> | undefined
+      try {
+        record = (await db(row.collection)
+          .where({ id: row.item })
+          .first()) as Record<string, unknown> | undefined
+      } catch {
+        record = undefined
+      }
+      if (!record) {
+        missing++ // deleted since, or the activity row outlived the record
+        continue
+      }
+      try {
+        await executeFlow({
+          flowId: id,
+          flowName: flow.name,
+          trigger: `replay:${row.action}`,
+          payload: {
+            collection: row.collection,
+            action: row.action,
+            keys: [row.item],
+            payload: { ...record, $replay: true },
+            previousData: {}
+          },
+          log: app.log,
+          userId: req.user?.id
+        })
+        executed++
+      } catch (err) {
+        failed++
+        app.log.warn({ err, flowId: id, item: row.item }, 'Flow replay run failed')
+      }
+    }
+
+    await logActivity({
+      action: 'flow-replay',
+      user: req.user?.id,
+      collection: 'nivaro_flows',
+      item: id,
+      comment: `${executed} runs (${failed} failed, ${missing} missing) over ${from.toISOString()} → ${to.toISOString()}`,
+      req
+    })
+
+    return reply.send({
+      data: {
+        dry_run: false,
+        matched: matched.length,
+        executed,
+        failed,
+        missing,
+        truncated,
+        skipped_deletes: deleteCount
+      }
+    })
+  })
+
   app.post('/:id/trigger', async (req, reply) => {
     const { id } = req.params as { id: string }
     const flow = await db<Flow>('nivaro_flows').where({ id }).first()

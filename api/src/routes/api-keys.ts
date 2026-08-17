@@ -6,6 +6,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
 interface ApiKeyBody {
+  scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }> | null
   name?: string
   user?: string
   scopes?: ApiKeyScope[]
@@ -35,8 +36,27 @@ function sanitize(row: Record<string, unknown>) {
   return {
     ...rest,
     scopes: parseJson<ApiKeyScope[]>(rest.scopes, []),
+    scope_restrictions: parseJson<Array<{ dimension: string; values: Array<string | number> }>>(
+      (rest as { scope_restrictions?: string | null }).scope_restrictions,
+      []
+    ),
     ip_allowlist: parseJson<string[]>(rest.ip_allowlist, [])
   }
+}
+
+function validScopeRestrictions(
+  v: unknown
+): v is Array<{ dimension: string; values: Array<string | number> }> {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (r) =>
+        r &&
+        typeof r === 'object' &&
+        typeof (r as { dimension?: unknown }).dimension === 'string' &&
+        Array.isArray((r as { values?: unknown }).values)
+    )
+  )
 }
 
 function validScopes(scopes: unknown): scopes is ApiKeyScope[] {
@@ -77,6 +97,11 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     if (body.scopes !== undefined && !validScopes(body.scopes)) {
       return reply.code(400).send({ error: 'scopes must be an array of { collection, actions[] }' })
     }
+    if (body.scope_restrictions != null && !validScopeRestrictions(body.scope_restrictions)) {
+      return reply
+        .code(400)
+        .send({ error: 'scope_restrictions must be an array of { dimension, values[] }' })
+    }
 
     const key = `nvk_${randomBytes(16).toString('hex')}`
     const keyHash = createHash('sha256').update(key).digest('hex')
@@ -90,6 +115,10 @@ export async function apiKeysRoutes(app: FastifyInstance) {
       expires_at: body.expires_at ? new Date(body.expires_at) : null,
       rate_limit_per_minute: body.rate_limit_per_minute ?? null,
       ip_allowlist: toJsonStr(body.ip_allowlist ?? []),
+      scope_restrictions:
+        body.scope_restrictions && body.scope_restrictions.length
+          ? toJsonStr(body.scope_restrictions)
+          : null,
       is_active: true,
       created_at: new Date()
     })
@@ -120,6 +149,17 @@ export async function apiKeysRoutes(app: FastifyInstance) {
       updates.rate_limit_per_minute = body.rate_limit_per_minute
     }
     if (body.ip_allowlist !== undefined) updates.ip_allowlist = toJsonStr(body.ip_allowlist)
+    if (body.scope_restrictions !== undefined) {
+      if (body.scope_restrictions != null && !validScopeRestrictions(body.scope_restrictions)) {
+        return reply
+          .code(400)
+          .send({ error: 'scope_restrictions must be an array of { dimension, values[] }' })
+      }
+      updates.scope_restrictions =
+        body.scope_restrictions && body.scope_restrictions.length
+          ? toJsonStr(body.scope_restrictions)
+          : null
+    }
     if (body.is_active !== undefined) updates.is_active = body.is_active
 
     if (Object.keys(updates).length > 0) {

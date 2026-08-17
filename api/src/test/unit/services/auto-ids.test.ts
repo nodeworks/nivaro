@@ -45,8 +45,9 @@ describe('validateAutoIdPattern', () => {
   it('accepts the workflows pattern', () => {
     expect(validateAutoIdPattern(WF)).toBeNull()
   })
-  it('rejects missing seq token', () => {
-    expect(validateAutoIdPattern('{project.name}-X')).toMatch(/seq/)
+  it('accepts seq-less patterns (pure template fields)', () => {
+    // Seq-less auto_id is a real feature (workflows.name) — no {seq} is valid.
+    expect(validateAutoIdPattern('{project.name}-X')).toBeNull()
   })
   it('rejects seq not final', () => {
     expect(validateAutoIdPattern('{seq}-{project.name}')).toMatch(/final/)
@@ -107,13 +108,31 @@ const rels = [
     one_collection: 'workflows',
     one_field: 'funding_years',
     junction_field: 'funding_years_year'
+  },
+  // regions alias + its junction companion leg. The leg carries junction_field
+  // as the pairing marker (real nivaro_relations shape) — the target-collection
+  // lookup must NOT filter it out.
+  {
+    many_collection: 'workflows_regions',
+    many_field: 'workflows_id',
+    one_collection: 'workflows',
+    one_field: 'regions',
+    junction_field: 'regions_id'
+  },
+  {
+    many_collection: 'workflows_regions',
+    many_field: 'regions_id',
+    one_collection: 'regions',
+    one_field: null,
+    junction_field: 'workflows_id'
   }
 ]
 
 const rows: Record<string, Record<string, Record<string, unknown>>> = {
   projects: { '123': { id: 123, project_type: 7 } },
   project_types: { '7': { id: 7, short_code: 'CR' } },
-  workflows: { '55': { id: 55, project: 123 } }
+  workflows: { '55': { id: 55, project: 123 } },
+  regions: { '11': { id: 11, short_code: 'BS' } }
 }
 
 const lookups: AutoIdLookups = {
@@ -125,7 +144,12 @@ const lookups: AutoIdLookups = {
     fk === 'workflows_id' &&
     valueField === 'funding_years_year'
       ? 2026
-      : null
+      : junction === 'workflows_regions' &&
+          String(parentId) === '55' &&
+          fk === 'workflows_id' &&
+          valueField === 'regions_id'
+        ? 11
+        : null
 }
 
 describe('resolveAutoIdTokens', () => {
@@ -221,6 +245,49 @@ describe('junction-triggered recompute (M2O own-row DB fallback)', () => {
       seqValue: '76800'
     })
     expect(out).toBe('26-76800')
+  })
+})
+
+describe('multi-segment M2M tokens ({regions[0].short_code})', () => {
+  // Regression: the path AFTER a resolved M2M id resolves against the
+  // junction's TARGET collection. The old hop loop looked for an M2O column
+  // named after the alias on the PARENT collection, so every multi-segment
+  // M2M token rendered empty on recompute — editing a workflow's description
+  // silently stripped the region prefix off its name.
+  const parsed = parseAutoIdPattern('{regions[0].short_code}{funding_years[0] % 100}-{seq}')
+
+  it('resolves via junction + target row on recompute (no draft values)', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: {},
+      recordId: 55,
+      lookups,
+      seqValue: '76800'
+    })
+    expect(out).toBe('BS26-76800')
+  })
+
+  it('resolves via target row when the draft supplies the id array', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: { regions: [11], funding_years: [2026] },
+      lookups,
+      seqValue: '####'
+    })
+    expect(out).toBe('BS26-####')
+  })
+
+  it('renders empty when the record has no junction rows', async () => {
+    const out = await resolveAutoIdTokens(parsed, {
+      collection: 'workflows',
+      values: {},
+      recordId: 999,
+      lookups,
+      seqValue: '1'
+    })
+    // Record 999 has no junction rows for EITHER alias, so both tokens
+    // render empty rather than throwing.
+    expect(out).toBe('-1')
   })
 })
 

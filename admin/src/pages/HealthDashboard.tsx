@@ -1,5 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Cpu, Database, GitBranch, HeartPulse, Wifi, Zap } from 'lucide-react'
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  Cpu,
+  Database,
+  GitBranch,
+  HeartPulse,
+  ShieldAlert,
+  Wifi,
+  Zap
+} from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -13,6 +24,113 @@ interface DetailedHealth {
   version?: string
   node_version: string
   memory_mb: number
+}
+
+type Severity = 'ok' | 'warn' | 'fail'
+
+interface PreflightCheck {
+  id: string
+  status: Severity
+  summary: string
+  detail?: Record<string, unknown>
+}
+
+interface Preflight {
+  status: Severity
+  version: string
+  environment: string
+  checks: PreflightCheck[]
+}
+
+const SEVERITY_STYLE: Record<Severity, { dot: string; text: string; card: string; label: string }> =
+  {
+    ok: {
+      dot: 'bg-green-500',
+      text: 'text-green-600 dark:text-green-400',
+      card: 'border-slate-200 dark:border-border',
+      label: 'Deploy consistent'
+    },
+    warn: {
+      dot: 'bg-amber-400',
+      text: 'text-amber-600 dark:text-amber-400',
+      card: 'border-amber-300 dark:border-amber-500/40',
+      label: 'Deploy needs attention'
+    },
+    fail: {
+      dot: 'bg-red-500',
+      text: 'text-red-600 dark:text-red-400',
+      card: 'border-red-300 dark:border-red-500/40',
+      label: 'Deploy is inconsistent'
+    }
+  }
+
+/**
+ * Render the lists a failing check carries (missing migration files, pending
+ * ones, absent extensions). These are the actual names an operator needs to
+ * act on, so they are shown rather than hidden behind a toggle — a failing
+ * preflight is rare and always worth reading in full.
+ */
+function CheckDetail({ detail }: { detail?: Record<string, unknown> }) {
+  if (!detail) return null
+  const lists: Array<{ key: string; values: string[] }> = []
+  for (const key of ['missing_files', 'pending', 'absent']) {
+    const values = detail[key]
+    if (Array.isArray(values) && values.length > 0) {
+      lists.push({ key, values: values.map(String) })
+    }
+  }
+  if (lists.length === 0) return null
+
+  return (
+    <div className='mt-1.5 space-y-1'>
+      {lists.map(({ key, values }) => (
+        <div key={key} className='text-[11px]'>
+          <span className='text-muted-foreground'>{key.replace(/_/g, ' ')}:</span>{' '}
+          <span className='font-mono text-[10.5px]'>{values.join(', ')}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Deploy preflight. Distinct from the subsystem cards below: those answer "is
+ * this instance up", this answers "did the deploy land coherently" — a
+ * container can be perfectly healthy right up until the restart that kills it
+ * because the database is ahead of the image.
+ */
+function PreflightPanel({ data }: { data: Preflight }) {
+  const style = SEVERITY_STYLE[data.status]
+  const Icon =
+    data.status === 'ok' ? CheckCircle2 : data.status === 'warn' ? AlertTriangle : ShieldAlert
+
+  return (
+    <div className={cn('mb-4 rounded-lg border bg-white p-4 dark:bg-card', style.card)}>
+      <div className='mb-3 flex items-center gap-2'>
+        <Icon className={cn('h-4 w-4', style.text)} />
+        <span className='text-[13px] font-medium'>Deploy preflight</span>
+        <span className={cn('text-[13px] font-semibold', style.text)}>{style.label}</span>
+      </div>
+
+      <div className='grid gap-2 sm:grid-cols-2'>
+        {data.checks.map((check) => (
+          <div key={check.id} className='flex gap-2'>
+            <span
+              className={cn(
+                'mt-[5px] inline-block h-2 w-2 shrink-0 rounded-full',
+                SEVERITY_STYLE[check.status].dot
+              )}
+            />
+            <div className='min-w-0'>
+              <p className='text-[12px] font-medium capitalize'>{check.id}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>{check.summary}</p>
+              {check.status !== 'ok' && <CheckDetail detail={check.detail} />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function formatUptime(seconds: number): string {
@@ -107,6 +225,21 @@ export function HealthDashboardPage() {
     refetchInterval: 15_000
   })
 
+  // A failing preflight answers with 503 and a body — axios rejects on the
+  // status, so read the payload back off the error rather than losing exactly
+  // the response that matters most.
+  const { data: preflight } = useQuery<Preflight | null>({
+    queryKey: ['preflight'],
+    queryFn: () =>
+      api
+        .get<{ data: Preflight }>('/preflight')
+        .then((r) => r.data.data)
+        .catch((err: { response?: { data?: { data?: Preflight } } }) => {
+          return err.response?.data?.data ?? null
+        }),
+    refetchInterval: 60_000
+  })
+
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
@@ -122,6 +255,7 @@ export function HealthDashboardPage() {
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+        {preflight && <PreflightPanel data={preflight} />}
         {isLoading || !data ? (
           <div className='grid grid-cols-2 gap-4 lg:grid-cols-4'>
             {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (

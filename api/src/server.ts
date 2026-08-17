@@ -18,6 +18,7 @@ import { trackError } from './services/error-tracking.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
+import { requestTracePlugin } from './plugins/request-trace.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
 import { legacyCompatRoutes } from './plugins/legacy-compat.js'
@@ -38,7 +39,20 @@ import { callExternalApi } from './services/external-apis.js'
 import { NIVARO_VERSION } from './version.js'
 
 export async function buildServer() {
+  // File-size ceiling from settings, read BEFORE the server exists because it
+  // feeds fastify's GLOBAL bodyLimit too. Fastify's default bodyLimit is 1MB
+  // and it 413s on Content-Length BEFORE any content parser runs — so a
+  // multipart upload over 1MB died with "Content Too Large" no matter what
+  // the multipart plugin's own fileSize limit said (found live on staging:
+  // a BID template re-import). Global limit = file ceiling + headroom for
+  // the multipart envelope and large JSON bodies.
+  const _fsMb = process.env.CLOUD_META_DB_URL
+    ? null
+    : await db('nivaro_settings').first('file_max_size_mb').catch(() => null)
+  const _fileSizeMb = (_fsMb?.file_max_size_mb as number | null) ?? 50
+
   const app = fastify({
+    bodyLimit: (_fileSizeMb + 8) * 1024 * 1024,
     trustProxy: config.TRUST_PROXY,
     logger: {
       level: config.LOG_LEVEL,
@@ -96,11 +110,7 @@ export async function buildServer() {
   )
 
   // ─── Multipart (file uploads) ──────────────────────────────────────────────
-  // In cloud mode skip the startup DB query (no default tenant) and use 50 MB.
-  const _fsMb = process.env.CLOUD_META_DB_URL
-    ? null
-    : await db('nivaro_settings').first('file_max_size_mb').catch(() => null)
-  const _fileSizeMb = (_fsMb?.file_max_size_mb as number | null) ?? 50
+  // File ceiling read above (it also sets the global bodyLimit).
   await app.register(fastifyMultipart, {
     limits: { fileSize: _fileSizeMb * 1024 * 1024 }
   })
@@ -109,6 +119,9 @@ export async function buildServer() {
   await app.register(redisPlugin)
 
   // ─── Rate limiting + API analytics logging ────────────────────────────────
+  // Tracing goes first so its onRequest hook opens the phase context before
+  // anything downstream can want to record a span into it.
+  await app.register(requestTracePlugin)
   await app.register(rateLimitPlugin)
   await app.register(apiLoggerPlugin)
 
@@ -332,6 +345,46 @@ export async function buildServer() {
     app.cron.schedule('workflow-auto-sweep', '30 * * * *', async () => {
       const { sweepAutoTransitions } = await import('./services/workflow-transitions.js')
       await sweepAutoTransitions()
+    })
+
+    // Saved-view subscription digests — "what entered my filtered view".
+    // Set-diff per subscription, run as the subscriber; see
+    // services/view-subscriptions.ts. 07:35 lands before the 07:45 action digest.
+    app.cron.schedule('view-subscriptions-daily', '35 7 * * *', async () => {
+      const { runViewSubscriptionDigests } = await import('./services/view-subscriptions.js')
+      await runViewSubscriptionDigests('daily', app)
+    })
+    app.cron.schedule('view-subscriptions-weekly', '35 7 * * 1', async () => {
+      const { runViewSubscriptionDigests } = await import('./services/view-subscriptions.js')
+      await runViewSubscriptionDigests('weekly', app)
+    })
+
+    // Dangling-FK sweep — the relations sibling of rollup drift: business
+    // rows whose FK points at a deleted/never-existed parent (blank labels,
+    // drill 404s). See services/fk-integrity.ts.
+    // Manual: POST /api/cron/fk-integrity-sweep/run.
+    app.cron.schedule('fk-integrity-sweep', '40 3 * * *', async () => {
+      const { detectDanglingFks } = await import('./services/fk-integrity.js')
+      const report = await detectDanglingFks()
+      if (report.dangling_relations > 0) {
+        app.log.warn(
+          `dangling FKs: ${report.total_dangling_rows} rows across ${report.dangling_relations} relation(s)`
+        )
+      }
+    })
+
+    // Rollup drift detection — stored rollups can silently go stale (chained
+    // rollups don't cascade; recalc failures are swallowed by design), and
+    // nothing ever went back to check. Nightly sample-compare, drift lands as
+    // deduped nivaro_issues rows. Manual run: POST /api/cron/rollup-drift-sweep/run.
+    app.cron.schedule('rollup-drift-sweep', '20 3 * * *', async () => {
+      const { detectRollupDrift } = await import('./services/rollup-drift.js')
+      const report = await detectRollupDrift()
+      if (report.drifted_rows > 0) {
+        app.log.warn(
+          `rollup drift: ${report.drifted_rows} stale rows across ${report.fields.length} field(s)`
+        )
+      }
     })
 
     // Alert definitions sweep — anomaly detections and threshold rules whose

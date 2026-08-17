@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -278,14 +279,131 @@ function evalAgainstResolved(op: RecordFilter['op'], resolved: unknown, target: 
   return evalFilterOp(op, resolved, target)
 }
 
+/**
+ * A state's owner groups, partitioned and with their `filters` JSON parsed once.
+ *
+ * The workflows template carries ~3,900 owner groups, and every record resolved
+ * against that state used to re-partition the array and re-parse every group's
+ * filters — 518 records × 3,900 groups is two million JSON.parse calls per queue
+ * read, which is where most of that queue's owner-resolution time went. The
+ * groups for a state are identical across every record being resolved, so this
+ * is prepared once and reused.
+ *
+ * Groups with no filters are dropped from `candidates` entirely rather than
+ * being skipped inside the loop: an unfiltered non-default group can never
+ * match, so it has no business being in the hot path at all.
+ */
+export interface PreparedOwnerGroups {
+  candidates: Array<{ group: OwnerGroup; filters: RecordFilter[] }>
+  defaults: OwnerGroup[]
+  /** Every distinct field the candidates' filters read — the memo signature basis. */
+  filterFields: string[]
+}
+
+// ── State→owner-groups cache ────────────────────────────────────────────────
+// The workflows template carries ~3,900 owner groups; fetching and re-parsing
+// them was ~700ms of EVERY owner resolution at this server's RTT, for data
+// that changes only when an admin edits the matrix. 60s TTL; the owner-group
+// CRUD routes and template restore bust it explicitly, so edits are visible
+// immediately rather than a minute later.
+const OWNER_GROUP_CACHE_TTL = 60_000
+const ownerGroupCache = new Map<
+  string,
+  { groups: OwnerGroup[]; prepared: PreparedOwnerGroups; at: number }
+>()
+
+// state→template + collection bindings ride the same TTL/bust — they answer
+// the owner-fallback question and change through the same admin surface.
+const fallbackMetaCache = new Map<
+  string,
+  { templateByState: Map<string, string>; at: number }
+>()
+const bindingsCache = new Map<
+  string,
+  { rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>; at: number }
+>()
+
+export function bustOwnerGroupCache(): void {
+  ownerGroupCache.clear()
+  fallbackMetaCache.clear()
+  bindingsCache.clear()
+}
+
+/**
+ * Groups + prepared structure per state, cached. A `database` other than the
+ * module default (a transaction, a tenant DB) bypasses the cache — a cached
+ * answer from a different connection would be wrong in cloud mode.
+ */
+async function getOwnerGroupsForStates(
+  stateIds: string[],
+  database: typeof db
+): Promise<Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups }>> {
+  const out = new Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups }>()
+  const cacheable = database === db
+  const missing: string[] = []
+  const now = Date.now()
+  for (const id of stateIds) {
+    const hit = cacheable ? ownerGroupCache.get(id) : undefined
+    if (hit && now - hit.at < OWNER_GROUP_CACHE_TTL) {
+      out.set(id, { groups: hit.groups, prepared: hit.prepared })
+    } else {
+      missing.push(id)
+    }
+  }
+  if (missing.length > 0) {
+    const rows = (await database<OwnerGroup>('nivaro_pipeline_owner_groups')
+      .whereIn('state', missing)
+      .orderBy('sort')
+      .orderBy('is_default')) as OwnerGroup[]
+    const byState = new Map<string, OwnerGroup[]>()
+    for (const g of rows) {
+      const list = byState.get(g.state) ?? []
+      list.push(g)
+      byState.set(g.state, list)
+    }
+    for (const id of missing) {
+      const groups = byState.get(id) ?? []
+      const prepared = prepareOwnerGroups(groups)
+      out.set(id, { groups, prepared })
+      if (cacheable) ownerGroupCache.set(id, { groups, prepared, at: now })
+    }
+  }
+  return out
+}
+
+export function prepareOwnerGroups(groups: OwnerGroup[]): PreparedOwnerGroups {
+  const candidates: PreparedOwnerGroups['candidates'] = []
+  const defaults: OwnerGroup[] = []
+  const fieldSet = new Set<string>()
+  for (const group of groups) {
+    if (coerceBool(group.is_default)) {
+      defaults.push(group)
+      continue
+    }
+    const filters = parseJson(group.filters) as RecordFilter[] | null
+    if (!filters || filters.length === 0) continue
+    for (const f of filters) fieldSet.add(f.field)
+    candidates.push({ group, filters })
+  }
+  return { candidates, defaults, filterFields: [...fieldSet].sort() }
+}
+
 export function pickWinningGroups(
   groups: OwnerGroup[],
   record: Record<string, unknown>,
   relations: RelationInfo[],
   resolvedValues?: Map<string, ResolvedFilterValue>
 ): OwnerGroup[] {
-  const nonDefault = groups.filter((g) => !coerceBool(g.is_default))
-  const defaults = groups.filter((g) => coerceBool(g.is_default))
+  return pickWinningGroupsPrepared(prepareOwnerGroups(groups), record, relations, resolvedValues)
+}
+
+export function pickWinningGroupsPrepared(
+  prepared: PreparedOwnerGroups,
+  record: Record<string, unknown>,
+  relations: RelationInfo[],
+  resolvedValues?: Map<string, ResolvedFilterValue>
+): OwnerGroup[] {
+  const { candidates, defaults } = prepared
 
   function evalFilter(f: RecordFilter): boolean {
     const resolved = resolvedValues?.get(f.field)
@@ -306,25 +424,22 @@ export function pickWinningGroups(
     return evalFilterOp(f.op, record[f.field], f.value)
   }
 
-  const matched: Array<{ group: OwnerGroup; filterCount: number }> = []
-  for (const group of nonDefault) {
-    const filters = parseJson(group.filters) as RecordFilter[] | null
-    if (!filters || filters.length === 0) continue
-    if (filters.every((f) => evalFilter(f))) {
-      matched.push({ group, filterCount: filters.length })
+  // Only the single most specific match is returned, so track the running best
+  // rather than collecting every match and sorting — the comparison is the same
+  // one the sort used (more filters wins; ties break on lower priority).
+  let best: { group: OwnerGroup; filterCount: number } | null = null
+  for (const { group, filters } of candidates) {
+    if (!filters.every((f) => evalFilter(f))) continue
+    if (
+      best === null ||
+      filters.length > best.filterCount ||
+      (filters.length === best.filterCount && (group.priority ?? 0) < (best.group.priority ?? 0))
+    ) {
+      best = { group, filterCount: filters.length }
     }
   }
 
-  if (matched.length > 0) {
-    matched.sort((a, b) =>
-      b.filterCount !== a.filterCount
-        ? b.filterCount - a.filterCount
-        : (a.group.priority ?? 0) - (b.group.priority ?? 0)
-    )
-    return [matched[0].group]
-  }
-
-  return defaults
+  return best ? [best.group] : defaults
 }
 
 export interface OwnerResolutionRequest {
@@ -389,9 +504,12 @@ async function resolveFilterValues(
 
   const baseRels = await relsFor(collection)
 
-  for (const field of fields) {
+  // Fields resolve independently (each writes its own key into the per-item
+  // maps), so their query chains run concurrently — serially, four dotted
+  // dims stacked their round trips end to end.
+  await Promise.all(fields.map(async (field) => {
     const segments = field.split('.')
-    if (segments.length < 2 || segments.length > 4) continue
+    if (segments.length < 2 || segments.length > 4) return
     const prefix = segments[0]
     try {
       const m2o = baseRels.find(
@@ -434,7 +552,7 @@ async function resolveFilterValues(
             display: fk == null ? null : (displayByRowId.get(String(fk)) ?? null)
           })
         }
-        continue
+        return
       }
 
       const alias = baseRels.find((r) => r.one_collection === collection && r.one_field === prefix)
@@ -481,7 +599,7 @@ async function resolveFilterValues(
     } catch {
       // Unresolvable field — leave it out; legacy prefix fallback applies.
     }
-  }
+  }))
 
   return out
 }
@@ -494,18 +612,9 @@ export async function resolveStateOwnersBatch(
   if (requests.length === 0) return result
 
   const stateIds = [...new Set(requests.map((r) => r.stateId))]
-  const groupRows = stateIds.length
-    ? ((await database<OwnerGroup>('nivaro_pipeline_owner_groups')
-        .whereIn('state', stateIds)
-        .orderBy('sort')
-        .orderBy('is_default')) as OwnerGroup[])
-    : []
+  const groupData = await getOwnerGroupsForStates(stateIds, database)
   const groupsByState = new Map<string, OwnerGroup[]>()
-  for (const g of groupRows) {
-    const list = groupsByState.get(g.state) ?? []
-    list.push(g)
-    groupsByState.set(g.state, list)
-  }
+  for (const [id, entry] of groupData) groupsByState.set(id, entry.groups)
 
   const withGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length > 0)
   const withoutGroups = requests.filter((r) => (groupsByState.get(r.stateId) ?? []).length === 0)
@@ -515,22 +624,39 @@ export async function resolveStateOwnersBatch(
   // property of the binding, and one state can be reached from several.
   const fallbackFieldByKey = new Map<string, string>()
   if (stateIds.length > 0) {
-    const stateRows = (await selectInChunks(stateIds, 2000, (chunk) =>
-      database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
-    )) as Array<{ id: string; template: string }>
-    const templateByState = new Map(stateRows.map((r) => [String(r.id).toUpperCase(), r.template]))
+    const cacheable = database === db
+    const stateCacheKey = [...stateIds].sort().join(',')
+    let templateByState: Map<string, string>
+    const metaHit = cacheable ? fallbackMetaCache.get(stateCacheKey) : undefined
+    if (metaHit && Date.now() - metaHit.at < OWNER_GROUP_CACHE_TTL) {
+      templateByState = metaHit.templateByState
+    } else {
+      const stateRows = (await selectInChunks(stateIds, 2000, (chunk) =>
+        database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
+      )) as Array<{ id: string; template: string }>
+      templateByState = new Map(stateRows.map((r) => [String(r.id).toUpperCase(), r.template]))
+      if (cacheable) fallbackMetaCache.set(stateCacheKey, { templateByState, at: Date.now() })
+    }
     // `select('*')` rather than naming owner_fallback_field: an instance whose
     // database has not yet run migration 196 would otherwise throw "Invalid
     // column name" on EVERY owner resolution, taking down queues, panels and
     // notifications over a feature that is opt-in and null by default. Absent
     // column reads as undefined, which is exactly "no fallback configured".
-    const allBindings = (await database('nivaro_workflow_bindings')
-      .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
-      .select('*')) as Array<{
+    const collectionsKey = [...new Set(requests.map((r) => r.collection))].sort().join(',')
+    let allBindings: Array<{
       collection: string
       template: string
       owner_fallback_field?: string | null
     }>
+    const bindHit = cacheable ? bindingsCache.get(collectionsKey) : undefined
+    if (bindHit && Date.now() - bindHit.at < OWNER_GROUP_CACHE_TTL) {
+      allBindings = bindHit.rows
+    } else {
+      allBindings = (await database('nivaro_workflow_bindings')
+        .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
+        .select('*')) as typeof allBindings
+      if (cacheable) bindingsCache.set(collectionsKey, { rows: allBindings, at: Date.now() })
+    }
     const bindingRows = allBindings.filter(
       (b): b is typeof b & { owner_fallback_field: string } =>
         typeof b.owner_fallback_field === 'string' && b.owner_fallback_field.trim() !== ''
@@ -548,18 +674,38 @@ export async function resolveStateOwnersBatch(
     }
   }
 
+  // Partition + parse each state's groups exactly once. Every record resolved
+  // against a state sees the identical group set, so doing this per request
+  // meant re-parsing the same filter JSON once per record (see
+  // prepareOwnerGroups — this is the bulk of the cost on a large template).
+  const preparedByState = new Map<string, PreparedOwnerGroups>()
+  for (const stateId of new Set(withGroups.map((r) => r.stateId))) {
+    preparedByState.set(
+      stateId,
+      groupData.get(stateId)?.prepared ?? prepareOwnerGroups(groupsByState.get(stateId) ?? [])
+    )
+  }
+
   // Dotted filter fields used by the groups each collection's requests can hit —
   // pre-resolved in batch so M2M and multi-hop M2O dimensions actually match.
+  // Walked per (collection, state) pair rather than per request, for the same
+  // reason: the answer cannot differ between two records of the same collection
+  // sitting in the same state.
   const dottedFieldsByCollection = new Map<string, Set<string>>()
+  const dottedSeen = new Set<string>()
   for (const req of withGroups) {
     let set = dottedFieldsByCollection.get(req.collection)
     if (!set) {
       set = new Set()
       dottedFieldsByCollection.set(req.collection, set)
     }
-    for (const g of groupsByState.get(req.stateId) ?? []) {
-      const filters = parseJson(g.filters) as RecordFilter[] | null
-      for (const f of filters ?? []) {
+    const pairKey = `${req.collection}::${req.stateId}`
+    if (dottedSeen.has(pairKey)) continue
+    dottedSeen.add(pairKey)
+    // Only `candidates` carry filters — a default group has none by definition,
+    // and an unfiltered non-default group is already dropped as unmatchable.
+    for (const { filters } of preparedByState.get(req.stateId)?.candidates ?? []) {
+      for (const f of filters) {
         if (f.field.includes('.')) set.add(f.field)
       }
     }
@@ -573,18 +719,62 @@ export async function resolveStateOwnersBatch(
   const needsRecord = requests.filter(
     (r) => (groupsByState.get(r.stateId) ?? []).length > 0 || fallbackFieldByKey.has(r.key)
   )
+  // Columns each collection's rows are actually read for: plain filter
+  // fields, the first segment of every dotted filter (the FK the prefix
+  // lookup compares), and any owner-fallback field. The old `select('*')`
+  // dragged the workflows table's hundred-plus columns (several nvarchar(max))
+  // across a ~37ms-RTT link for every resolved record — most of the remaining
+  // owner-resolution time was transfer, not matching.
+  const neededColsByCollection = new Map<string, Set<string>>()
+  const addCol = (collection: string, col: string) => {
+    if (!col || col.includes('.')) return
+    let set = neededColsByCollection.get(collection)
+    if (!set) {
+      set = new Set(['id'])
+      neededColsByCollection.set(collection, set)
+    }
+    set.add(col)
+  }
+  for (const req of needsRecord) {
+    for (const { filters } of preparedByState.get(req.stateId)?.candidates ?? []) {
+      for (const f of filters) {
+        if (f.field.includes('.')) {
+          addCol(req.collection, f.field.split('.')[0])
+          // lookup_compare-style record_field reads ride the same row
+        } else {
+          addCol(req.collection, f.field)
+        }
+      }
+    }
+    const fallback = fallbackFieldByKey.get(req.key)
+    if (fallback) addCol(req.collection, fallback)
+  }
+
   const collections = [...new Set(needsRecord.map((r) => r.collection))]
   for (const collection of collections) {
     const ids = [
       ...new Set(needsRecord.filter((r) => r.collection === collection).map((r) => r.itemId))
     ]
+    const needed = neededColsByCollection.get(collection)
     let rows: Record<string, unknown>[] = []
     try {
-      rows = await selectInChunks(ids, 2000, (chunk) =>
-        database(collection).whereIn('id', chunk).select('*')
+      rows = await span('owners:records', () =>
+        selectInChunks(ids, 2000, (chunk) =>
+          database(collection)
+            .whereIn('id', chunk)
+            .select(needed ? [...needed] : '*')
+        )
       )
     } catch {
-      rows = []
+      // A needed column that is actually an ALIAS (no physical column) throws —
+      // fall back to the full row rather than resolving nobody.
+      try {
+        rows = await selectInChunks(ids, 2000, (chunk) =>
+          database(collection).whereIn('id', chunk).select('*')
+        )
+      } catch {
+        rows = []
+      }
     }
     const byId = new Map<string, Record<string, unknown>>()
     for (const row of rows) byId.set(String(row.id), row)
@@ -604,31 +794,76 @@ export async function resolveStateOwnersBatch(
     if (dotted.length > 0) {
       resolvedByCollection.set(
         collection,
-        await resolveFilterValues(collection, byId, dotted, database)
+        await span('owners:filter-values', () =>
+          resolveFilterValues(collection, byId, dotted, database)
+        )
       )
     }
   }
 
   const winningGroupsByKey = new Map<string, OwnerGroup[]>()
   const allGroupIds = new Set<string>()
+
+  // Group matching is a pure function of the DIMENSION VALUES a record's
+  // filters read, and hundreds of records share a handful of dimension
+  // tuples (a 519-record workflows page collapses to a few dozen distinct
+  // zone/region/project-type combinations). Memoize the winning-group pick
+  // per (state, signature-of-those-values) — evaluating ~3,900 candidate
+  // groups once per TUPLE instead of once per RECORD is most of the
+  // remaining owner-resolution CPU. The signature captures exactly what
+  // evalFilter reads per field: the batch-resolved ids/display sets when
+  // present, else the FK prefix for dotted fields, else the record's own
+  // column value.
+  const sigValue = (
+    field: string,
+    record: Record<string, unknown>,
+    relations: RelationInfo[],
+    resolved: Map<string, ResolvedFilterValue> | undefined
+  ): string => {
+    const rv = resolved?.get(field)
+    if (rv) {
+      const ids = rv.ids instanceof Set ? [...rv.ids].sort().join(',') : String(rv.ids ?? '')
+      const disp =
+        rv.display instanceof Set ? [...rv.display].sort().join(',') : String(rv.display ?? '')
+      return `${ids}\u0001${disp}`
+    }
+    if (field.includes('.')) {
+      const prefix = field.split('.')[0]
+      const rel = relations.find((r) => r.many_field === prefix)
+      return String(rel ? (record[rel.many_field] ?? '') : '')
+    }
+    return String(record[field] ?? '')
+  }
+
+  const winningMemo = new Map<string, OwnerGroup[]>()
   for (const req of withGroups) {
-    const groups = groupsByState.get(req.stateId) ?? []
+    const prepared =
+      preparedByState.get(req.stateId) ?? { candidates: [], defaults: [], filterFields: [] }
     const record = recordsByCollectionAndId.get(req.collection)?.get(req.itemId) ?? {}
     const relations = relationsByCollection.get(req.collection) ?? []
     const resolved = resolvedByCollection.get(req.collection)?.get(req.itemId)
-    const winning = pickWinningGroups(groups, record, relations, resolved)
+
+    const sig =
+      `${req.stateId}\u0000${req.collection}\u0000` +
+      prepared.filterFields.map((f) => sigValue(f, record, relations, resolved)).join('\u0000')
+
+    let winning = winningMemo.get(sig)
+    if (!winning) {
+      winning = pickWinningGroupsPrepared(prepared, record, relations, resolved)
+      winningMemo.set(sig, winning)
+    }
     winningGroupsByKey.set(req.key, winning)
     for (const g of winning) allGroupIds.add(g.id)
   }
 
   const groupUsersByGroup = new Map<string, ResolvedOwner[]>()
   if (allGroupIds.size > 0) {
-    const rows = await selectInChunks([...allGroupIds], 2000, (chunk) =>
+    const rows = await span('owners:group-users', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
       database('nivaro_pipeline_owner_group_users as ogu')
         .join('nivaro_users as u', 'ogu.user', 'u.id')
         .whereIn('ogu.group', chunk)
         .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-    )
+    ))
     for (const row of rows as Array<ResolvedOwner & { group: string }>) {
       const list = groupUsersByGroup.get(row.group) ?? []
       list.push({
@@ -649,12 +884,12 @@ export async function resolveStateOwnersBatch(
     Array<ResolvedOwner & { state: string | null }>
   >()
   if (instanceIds.length > 0) {
-    const rows = await selectInChunks(instanceIds, 2000, (chunk) =>
+    const rows = await span('owners:instance-owners', () => selectInChunks(instanceIds, 2000, (chunk) =>
       database('nivaro_pipeline_instance_owners as io')
         .join('nivaro_users as u', 'io.user', 'u.id')
         .whereIn('io.instance', chunk)
         .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-    )
+    ))
     for (const row of rows as Array<ResolvedOwner & { instance: string; state: string | null }>) {
       const list = instanceOwnerRowsByInstance.get(row.instance) ?? []
       list.push({

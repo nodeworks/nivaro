@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { restoreLayoutVersion, snapshotLayoutVersion } from '../services/layout-versions.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
@@ -339,6 +340,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+
+    await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
     const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null }>
 
@@ -843,11 +846,56 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: { ungrouped_sort } })
   })
 
+  // GET /collection-layouts/:id/versions — snapshot history (see migration 211)
+  app.get('/:id/versions', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const rows = await db('nivaro_layout_versions as v')
+      .leftJoin('nivaro_users as u', 'v.created_by', 'u.id')
+      .where('v.layout_id', Number(id))
+      .orderBy('v.version', 'desc')
+      .select(
+        'v.id',
+        'v.version',
+        'v.note',
+        'v.created_at',
+        db.raw(
+          "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as created_by_name"
+        )
+      )
+    return reply.send({ data: rows })
+  })
+
+  // POST /collection-layouts/:id/versions/:versionId/restore — id-preserving,
+  // captures a 'before restore' version first so the restore is reversible.
+  app.post(
+    '/:id/versions/:versionId/restore',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id, versionId } = req.params as { id: string; versionId: string }
+      const result = await restoreLayoutVersion(Number(id), Number(versionId), req.user?.id)
+      if (!result) return reply.code(404).send({ error: 'Version not found' })
+      await logActivity({
+        action: 'layout-version-restore',
+        user: req.user?.id,
+        collection: 'nivaro_collection_layouts',
+        item: String(id),
+        comment: `restored ${result.restored_assignments} assignments, ${result.restored_groups} groups`,
+        req
+      })
+      return reply.send({ data: result })
+    }
+  )
+
   // PUT /collection-layouts/:id/assignments — bulk replace
   app.put('/:id/assignments', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Not found' })
+
+    // The editor auto-saves this route on a 400ms debounce — snapshot the
+    // CURRENT state first so a bad drag is one restore away. Deduped, so the
+    // save stream doesn't mint a version per keystroke burst.
+    await snapshotLayoutVersion(Number(id), 'before assignments save', req.user?.id)
 
     const body = req.body as {
       assignments: Array<{

@@ -1,9 +1,28 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
-import { authenticate } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { buildOpenAPISpec } from '../services/schema-builder.js'
 
 export async function schemaRoutes(app: FastifyInstance) {
+  // GET /schema/impact/:collection/:field — everything that references a
+  // field across config surfaces (layouts, formulas, rules, queues, owner
+  // filters, reports, imports, …). The TableEditor delete confirm shows this
+  // so a field removal stops being a silent multi-surface breakage. Advisory
+  // by design — see services/schema-impact.ts for match semantics.
+  app.get<{ Params: { collection: string; field: string } }>(
+    '/schema/impact/:collection/:field',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { collection, field } = req.params
+      if (!/^[A-Za-z_][\w]*$/.test(collection) || !/^[A-Za-z_][\w]*$/.test(field)) {
+        return reply.code(400).send({ error: 'Invalid identifier' })
+      }
+      const { buildImpactReport } = await import('../services/schema-impact.js')
+      return reply.send({ data: await buildImpactReport(collection, field) })
+    }
+  )
+
+
   // OpenAPI 3.1 JSON spec — always fresh (queries nivaro_collections/fields each time)
   app.get('/schema.json', async (req, reply) => {
     const baseUrl = `${req.protocol}://${req.hostname}${config.PORT !== 443 && config.PORT !== 80 ? `:${config.PORT}` : ''}`

@@ -499,3 +499,320 @@ export async function evaluateRulesForTrigger(
   }
   return updates
 }
+
+// ─── Layout row rules (grid autofill) ─────────────────────────────────────────
+//
+// The per-row autofill rules configured on an inline-grid layout assignment
+// (`options.row_rules` — oracle category from the picked CIFA, task via the
+// project-type-filtered cifa_tasks/category_tasks precedence chain, line_type
+// from the parent's workflow_type, …). This logic lived inline in
+// POST /field-rules/evaluate, which meant it ONLY ran when a browser asked:
+// a child row created straight through the items API got none of it. It is a
+// service now so createOne can run the same rules with the same semantics —
+// one evaluator, two callers, no drift.
+
+export interface RowRuleSource {
+  source_type: string
+  source_field: string
+  source_related_field: string
+  source_hop?: string
+  o2m_collection?: string
+  filter_field?: string
+  filter_value?: string
+  source_one_collection?: string
+}
+
+export interface RowRule {
+  trigger_field?: string | null
+  trigger_fields?: string[] | null
+  trigger_related_field?: string | null
+  trigger_op?: string
+  trigger_value?: string | null
+  target_field: string
+  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
+  target_value?: string | null
+  sources?: RowRuleSource[]
+  only_if_empty?: boolean
+  sort?: number
+}
+
+/**
+ * Evaluate a set of layout row rules against a child-row draft. Mutates and
+ * returns `working`. `$parent.<field>` trigger fields and value templates
+ * resolve from `parentContext`. `changedField`, when set, restricts rules to
+ * those triggered by that field (the live-edit path); the create path leaves
+ * it unset so every rule gets its chance.
+ */
+export async function evaluateRowRules(
+  database: Knex,
+  collection: string,
+  working: Record<string, unknown>,
+  parentContext: Record<string, unknown>,
+  rowRules: RowRule[],
+  changedField?: string
+): Promise<Record<string, unknown>> {
+  const subParent = (s: string | null | undefined): string | null => {
+    if (s == null) return null
+    return s.replace(/\$parent\.(\w+)/g, (_, f) => {
+      const v = parentContext[f]
+      return v != null ? String(v) : ''
+    })
+  }
+
+  const sorted = [...rowRules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+  for (const rule of sorted) {
+    const triggerField = rule.trigger_field ?? null
+    const isParentTrigger = !!triggerField && triggerField.startsWith('$parent.')
+    const extraTriggerFields = Array.isArray(rule.trigger_fields)
+      ? rule.trigger_fields.filter(Boolean)
+      : []
+    const allTriggerFields = triggerField
+      ? [triggerField, ...extraTriggerFields]
+      : extraTriggerFields
+
+    if (!isParentTrigger) {
+      if (changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField))
+        continue
+      if (triggerField && !(triggerField in working)) continue
+    }
+
+    let val: unknown
+    if (isParentTrigger) {
+      const parentKey = (triggerField as string).slice(8)
+      val = parentContext[parentKey] ?? null
+    } else {
+      const activeField =
+        changedField && allTriggerFields.includes(changedField) ? changedField : triggerField
+      val = activeField ? working[activeField] : null
+    }
+
+    // trigger_related_field: resolve the M2O related record and compare that
+    // field instead; dot-paths hop, __id__/__entity__ compare the last FK id.
+    if (rule.trigger_related_field && triggerField && val != null) {
+      try {
+        const trigRel = (await database('nivaro_relations')
+          .where({ many_collection: collection, many_field: triggerField })
+          .whereNull('junction_field')
+          .first()) as { one_collection: string } | undefined
+        if (trigRel?.one_collection) {
+          let currentRecord = (await database(trigRel.one_collection)
+            .where({ id: String(val) })
+            .first()) as Record<string, unknown> | undefined
+          let currentCollection = trigRel.one_collection
+          let lastFkId: string | null = String(val)
+          const parts = rule.trigger_related_field.split('.')
+          for (let i = 0; i < parts.length - 1; i++) {
+            const hop = parts[i]
+            const fkId = currentRecord?.[hop]
+            if (fkId == null) {
+              currentRecord = undefined
+              lastFkId = null
+              break
+            }
+            lastFkId = String(fkId)
+            const hopRel = (await database('nivaro_relations')
+              .where({ many_collection: currentCollection, many_field: hop })
+              .whereNull('junction_field')
+              .first()) as { one_collection: string } | undefined
+            if (!hopRel?.one_collection) {
+              currentRecord = undefined
+              lastFkId = null
+              break
+            }
+            currentRecord = (await database(hopRel.one_collection)
+              .where({ id: String(fkId) })
+              .first()) as Record<string, unknown> | undefined
+            currentCollection = hopRel.one_collection
+          }
+          const lastPart = parts[parts.length - 1]
+          val =
+            lastPart === '__id__' || lastPart === '__entity__'
+              ? lastFkId
+              : (currentRecord?.[lastPart] ?? null)
+        } else {
+          val = null
+        }
+      } catch {
+        val = null
+      }
+    }
+
+    const op = rule.trigger_op ?? 'nnull'
+    const rawTriggerValue = subParent(rule.trigger_value)
+
+    let triggered = false
+    switch (op) {
+      case 'eq':
+        triggered = String(val) === String(rawTriggerValue ?? '')
+        break
+      case 'neq':
+        triggered = String(val) !== String(rawTriggerValue ?? '')
+        break
+      case 'null':
+        triggered = val == null
+        break
+      case 'nnull':
+        triggered = val != null
+        break
+      case 'in': {
+        let list: string[]
+        try {
+          const parsed = JSON.parse(rawTriggerValue ?? '[]')
+          list = Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          list = (rawTriggerValue ?? '')
+            .split(',')
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+        }
+        triggered = list.includes(String(val))
+        break
+      }
+      case 'contains':
+        triggered = String(val).includes(String(rawTriggerValue ?? ''))
+        break
+      default:
+        triggered = triggerField ? val != null : true
+    }
+    if (!triggered) continue
+
+    if (rule.only_if_empty) {
+      const existing = working[rule.target_field]
+      if (existing != null && existing !== '') continue
+    }
+
+    if (rule.target_type === 'clear') {
+      working[rule.target_field] = null
+    } else if (rule.target_type === 'set' || rule.target_type === 'pick') {
+      const rv = subParent(rule.target_value)
+      if (rv !== null) working[rule.target_field] = rv
+    } else if (rule.target_type === 'relation_field') {
+      const fkId = triggerField ? working[triggerField] : null
+      if (fkId == null) {
+        working[rule.target_field] = null
+        continue
+      }
+      try {
+        const rel = (await database('nivaro_relations')
+          .where({ many_collection: collection, many_field: triggerField })
+          .whereNull('junction_field')
+          .first()) as { one_collection: string } | undefined
+        if (!rel?.one_collection) continue
+        const relatedRecord = (await database(rel.one_collection)
+          .where({ id: String(fkId) })
+          .first()) as Record<string, unknown> | undefined
+        working[rule.target_field] =
+          relatedRecord && rule.target_value ? (relatedRecord[rule.target_value] ?? null) : null
+      } catch {
+        /* non-fatal */
+      }
+    } else if (rule.target_type === 'precedence' && Array.isArray(rule.sources)) {
+      let resolved: unknown = null
+      for (const src of rule.sources) {
+        if (!src.source_field || !src.source_related_field) continue
+        try {
+          if (src.source_type === 'relation_field') {
+            const fkId = working[src.source_field]
+            if (fkId == null) continue
+            const rel = (await database('nivaro_relations')
+              .where({ many_collection: collection, many_field: src.source_field })
+              .whereNull('junction_field')
+              .first()) as { one_collection: string } | undefined
+            if (!rel?.one_collection) continue
+            const relRec = (await database(rel.one_collection)
+              .where({ id: String(fkId) })
+              .first()) as Record<string, unknown> | undefined
+            const candidate = relRec?.[src.source_related_field] ?? null
+            if (candidate != null) {
+              resolved = candidate
+              break
+            }
+          } else if (src.source_type === 'o2m_first') {
+            const rowId = working.id
+            if (rowId == null) continue
+            const rel = (await database('nivaro_relations')
+              .where({ one_collection: collection, one_field: src.source_field })
+              .whereNull('junction_field')
+              .first()) as { many_collection: string; many_field: string } | undefined
+            if (!rel?.many_collection) continue
+            const firstRec = (await database(rel.many_collection)
+              .where({ [rel.many_field]: String(rowId) })
+              .orderBy('id', 'asc')
+              .first()) as Record<string, unknown> | undefined
+            const candidate = firstRec?.[src.source_related_field] ?? null
+            if (candidate != null) {
+              resolved = candidate
+              break
+            }
+          } else if (src.source_type === 'o2m_filtered') {
+            if (!src.o2m_collection || !src.filter_field) continue
+            const hop = src.source_hop ?? 'm2o'
+            let intermediateId: string | null = null
+            let intermediateCollection: string | null = null
+            if (hop === 'm2o') {
+              const fkId = working[src.source_field]
+              if (fkId == null) continue
+              intermediateId = String(fkId)
+              const rel = (await database('nivaro_relations')
+                .where({ many_collection: collection, many_field: src.source_field })
+                .whereNull('junction_field')
+                .first()) as { one_collection: string } | undefined
+              intermediateCollection = rel?.one_collection ?? null
+            } else {
+              const rowId = working.id
+              if (rowId == null) continue
+              const rel = (await database('nivaro_relations')
+                .where({ one_collection: collection, one_field: src.source_field })
+                .whereNull('junction_field')
+                .first()) as { many_collection: string; many_field: string } | undefined
+              if (!rel?.many_collection) continue
+              const firstRec = (await database(rel.many_collection)
+                .where({ [rel.many_field]: String(rowId) })
+                .orderBy('id', 'asc')
+                .first()) as Record<string, unknown> | undefined
+              if (firstRec?.id == null) continue
+              intermediateId = String(firstRec.id)
+              intermediateCollection = rel.many_collection
+            }
+            if (!intermediateId || !intermediateCollection) continue
+            const fkRel = (await database('nivaro_relations')
+              .where({
+                many_collection: src.o2m_collection,
+                one_collection: intermediateCollection
+              })
+              .whereNull('junction_field')
+              .first()) as { many_field: string } | undefined
+            if (!fkRel?.many_field) continue
+            const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
+            const matchRec = (await database(src.o2m_collection)
+              .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
+              .orderBy('id', 'asc')
+              .first()) as Record<string, unknown> | undefined
+            const candidate = matchRec?.[src.source_related_field] ?? null
+            if (candidate != null) {
+              resolved = candidate
+              break
+            }
+          } else if (src.source_type === 'parent_m2o') {
+            if (!src.source_one_collection) continue
+            const fkId = parentContext[src.source_field]
+            if (fkId == null) continue
+            const relRec = (await database(src.source_one_collection)
+              .where({ id: String(fkId) })
+              .first()) as Record<string, unknown> | undefined
+            const candidate = relRec?.[src.source_related_field] ?? null
+            if (candidate != null) {
+              resolved = candidate
+              break
+            }
+          }
+        } catch {
+          continue
+        }
+      }
+      working[rule.target_field] = resolved
+    }
+  }
+
+  return working
+}

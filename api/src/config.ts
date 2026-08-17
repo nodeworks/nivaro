@@ -49,6 +49,12 @@ const schema = z.object({
     .default('false'),
   MIGRATION_LOCK_TIMEOUT_MS: z.coerce.number().default(60_000),
 
+  // Deploy preflight — comma-separated extension ids this deployment REQUIRES.
+  // An instance that boots without one of them looks healthy while silently
+  // doing none of that extension's work (EFP's volume-mounted efp-ops is the
+  // case this exists for). Empty = no expectation, which is the default.
+  REQUIRED_EXTENSIONS: z.string().optional(),
+
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
   SESSION_SECRET: cloudMode ? z.string().default('cloud-mode-session-secret-placeholder-32ch') : z.string().min(32),

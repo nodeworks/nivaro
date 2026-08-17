@@ -73,7 +73,7 @@ import {
   FieldPickerPanel,
   type PickedField
 } from '@/components/field-picker'
-import { FormulaBuilder } from '@/components/formula-builder'
+import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -921,17 +921,16 @@ function AddColumnForm({
                       onChange={setComputedFormula}
                     />
                   ) : (
-                    <textarea
+                    <RawFormulaEditor
+                      collection={table}
                       value={computedFormula}
-                      onChange={(e) => setComputedFormula(e.target.value)}
-                      rows={2}
+                      onChange={setComputedFormula}
                       placeholder={
                         computedType === 'read'
                           ? 'e.g. item.price * 1.2'
                           : 'e.g. concat(item.first_name, " ", item.last_name)'
                       }
-                      className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                      spellCheck={false}
+                      serverEvaluated={computedType === 'write'}
                     />
                   )}
                   <p className='mt-1 text-[11px] text-slate-400'>
@@ -1119,8 +1118,37 @@ function FieldsTab({
             isFirst={i === 0}
             isSystem={isSystem}
             canDrop={!isSystem || (extendMode && !!col.field_meta)}
-            onDrop={() => {
-              if (confirm(`Drop column "${col.name}"? This cannot be undone.`)) {
+            onDrop={async () => {
+              // Impact scan first: a field is referenced by layouts, formulas,
+              // rules, queues, owner filters, reports — and none of those fail
+              // loudly when the column vanishes. The confirm names what breaks.
+              let impactNote = ''
+              try {
+                const res = await api.get<{
+                  data: {
+                    total: number
+                    surfaces: Array<{ surface: string; hits: Array<{ ref: string }> }>
+                  }
+                }>(`/schema/impact/${tableName}/${col.name}`)
+                const impact = res.data.data
+                if (impact.total > 0) {
+                  const lines = impact.surfaces
+                    .map(
+                      (sf) =>
+                        `  • ${sf.surface}: ${sf.hits
+                          .slice(0, 3)
+                          .map((h) => h.ref)
+                          .join(', ')}${sf.hits.length > 3 ? ` +${sf.hits.length - 3} more` : ''}`
+                    )
+                    .join('\n')
+                  impactNote = `\n\n⚠ ${impact.total} configuration reference(s) will break:\n${lines}\n`
+                }
+              } catch {
+                impactNote = '\n\n(Impact scan unavailable — references were not checked.)'
+              }
+              if (
+                confirm(`Drop column "${col.name}"? This cannot be undone.${impactNote}`)
+              ) {
                 dropColumn.mutate(col.name)
               }
             }}
@@ -2189,17 +2217,16 @@ function FieldMetaEditor({
                       onChange={setComputedFormula}
                     />
                   ) : (
-                    <textarea
+                    <RawFormulaEditor
+                      collection={tableName}
                       value={computedFormula}
-                      onChange={(e) => setComputedFormula(e.target.value)}
-                      rows={3}
+                      onChange={setComputedFormula}
                       placeholder={
                         computedType === 'read'
                           ? 'e.g. item.price * 1.2'
                           : 'e.g. concat(item.first_name, " ", item.last_name)'
                       }
-                      className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                      spellCheck={false}
+                      serverEvaluated={computedType === 'write'}
                     />
                   )}
                   <p className='mt-1 text-[11px] text-slate-400'>
@@ -13970,6 +13997,7 @@ function LayoutsTab({
                           })
                         }
                       />
+                      <LayoutVersionsSection layoutId={selected.id} />
                     </div>
                   </>
                 )}
@@ -13995,6 +14023,83 @@ function LayoutsTab({
 }
 
 // ── LayoutTab ─────────────────────────────────────────────────────────────────
+
+/**
+ * Layout version history (migration 211). The editor auto-saves on a 400ms
+ * debounce — this is the undo it never had: every save captured a deduped
+ * snapshot, and restore is id-preserving and itself reversible (it snapshots
+ * 'before restore' first).
+ */
+function LayoutVersionsSection({ layoutId }: { layoutId: number }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const { data: versions = [] } = useQuery({
+    queryKey: ['layout-versions', layoutId],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; version: number; note: string | null; created_at: string; created_by_name: string | null }> }>(
+          `/collection-layouts/${layoutId}/versions`
+        )
+        .then((r) => r.data.data),
+    enabled: open
+  })
+  const restore = useMutation({
+    mutationFn: (versionId: number) =>
+      api.post(`/collection-layouts/${layoutId}/versions/${versionId}/restore`),
+    onSuccess: () => {
+      toast.success('Layout restored — reload the Layout tab to see it')
+      qc.invalidateQueries({ queryKey: ['layout-versions', layoutId] })
+      qc.invalidateQueries({ queryKey: ['collection-layouts'] })
+      qc.invalidateQueries() // assignments/groups queries key variously — broad refresh is correct here
+    },
+    onError: () => toast.error('Restore failed')
+  })
+
+  return (
+    <div className='border-t border-slate-200 pt-2 dark:border-border'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between text-[11px] font-medium text-slate-600 dark:text-slate-300'
+      >
+        Version history
+        <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className='mt-2 max-h-48 space-y-1 overflow-y-auto'>
+          {versions.length === 0 ? (
+            <p className='text-[11px] text-slate-400'>
+              No versions yet — one is captured before every save.
+            </p>
+          ) : (
+            versions.map((v) => (
+              <div
+                key={v.id}
+                className='flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1 text-[11px] dark:border-border/60'
+              >
+                <span className='min-w-0 truncate'>
+                  <span className='font-medium'>v{v.version}</span>{' '}
+                  <span className='text-slate-400'>
+                    {v.note} · {new Date(v.created_at).toLocaleString()}
+                    {v.created_by_name ? ` · ${v.created_by_name}` : ''}
+                  </span>
+                </span>
+                <button
+                  type='button'
+                  disabled={restore.isPending}
+                  onClick={() => restore.mutate(v.id)}
+                  className='shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
+                >
+                  Restore
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PdfFieldConfig({
   tableName,

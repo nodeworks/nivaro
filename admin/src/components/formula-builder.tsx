@@ -1,3 +1,4 @@
+import { FormulaEditor, type FormulaField } from '@nivaro/react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, FunctionSquare, Plus, RefreshCw, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -630,5 +631,74 @@ export function FormulaBuilder({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Raw-mode formula editing, backed by the shared expression engine.
+ *
+ * The raw mode used to be a bare textarea: no syntax check, no indication that
+ * a referenced field had been renamed, and no way to see what the expression
+ * produced without saving it and going to look at a record. All three are now
+ * answered while the formula is being written.
+ *
+ * The sample record is the first row of the collection — enough to show the
+ * shape of the answer. For write-computed and stored-rollup formulas the
+ * server is the real evaluator, so the preview is explicitly labelled as an
+ * approximation rather than quietly implying it is authoritative.
+ */
+export function RawFormulaEditor({
+  collection,
+  value,
+  onChange,
+  placeholder,
+  serverEvaluated
+}: {
+  collection: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  serverEvaluated?: boolean
+}) {
+  const { data: colMeta } = useQuery({
+    queryKey: ['collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 30_000
+  })
+
+  const { data: sample } = useQuery({
+    queryKey: ['formula-sample', collection],
+    queryFn: () =>
+      api
+        .get(`/items/${collection}`, { params: { limit: 1 } })
+        .then((r) => (r.data.data?.[0] as Record<string, unknown>) ?? null)
+        // A collection with no rows, or one the items API declines to serve,
+        // simply gets no preview — never a broken editor.
+        .catch(() => null),
+    enabled: !!collection,
+    staleTime: 60_000,
+    retry: false
+  })
+
+  const fields: FormulaField[] = ((colMeta?.fields ?? []) as Array<{
+    field: string
+    type?: string
+    hidden?: boolean
+  }>)
+    .filter((f) => !f.hidden)
+    .map((f) => ({ field: f.field, type: f.type }))
+
+  return (
+    <FormulaEditor
+      value={value}
+      onChange={onChange}
+      fields={fields}
+      sample={sample ?? null}
+      sampleLabel={sample?.id != null ? `#${String(sample.id)}` : undefined}
+      placeholder={placeholder}
+      serverEvaluated={serverEvaluated}
+      rows={2}
+    />
   )
 }

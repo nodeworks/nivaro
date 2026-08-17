@@ -18,6 +18,9 @@ export async function trackError(opts: {
   stack?: string | null
   userId?: string | null
   severity?: 'low' | 'medium' | 'high' | 'critical'
+  /** Session replay link — the recording (full or error clip) + offset of the error moment. */
+  recordingId?: string | null
+  recordingOffsetMs?: number | null
 }): Promise<void> {
   try {
     const message = (opts.message || 'Unknown error').slice(0, 400)
@@ -36,7 +39,15 @@ export async function trackError(opts: {
         .update({
           occurrence_count: db.raw('occurrence_count + 1'),
           last_seen_at: new Date(),
-          updated_at: new Date()
+          updated_at: new Date(),
+          // The LATEST occurrence's replay is the one support wants — an
+          // old link on a recurring issue points at a purged recording.
+          ...(opts.recordingId
+            ? {
+                recording_id: opts.recordingId,
+                recording_offset_ms: opts.recordingOffsetMs ?? null
+              }
+            : {})
         })
       return
     }
@@ -57,6 +68,8 @@ export async function trackError(opts: {
       fingerprint,
       occurrence_count: 1,
       last_seen_at: new Date(),
+      recording_id: opts.recordingId ?? null,
+      recording_offset_ms: opts.recordingOffsetMs ?? null,
       raised_by: opts.userId ?? null,
       created_at: new Date(),
       updated_at: new Date()

@@ -29,8 +29,8 @@ import {
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { Sheet, SheetContent } from '../ui/sheet'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { Sheet, SheetContent } from '../ui/sheet'
 import { Textarea } from '../ui/textarea'
 import type { ImportJob, ImportJobStatus } from './types'
 
@@ -209,7 +209,10 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
         ? 'text-amber-700 dark:text-amber-400'
         : 'text-slate-500'
   return (
-    <span className={cn('shrink-0 text-[10.5px] font-medium tabular-nums', tone)} title='AI mapping confidence'>
+    <span
+      className={cn('shrink-0 text-[10.5px] font-medium tabular-nums', tone)}
+      title='AI mapping confidence'
+    >
       AI {pct}%
     </span>
   )
@@ -589,12 +592,55 @@ function ImportWizard({
 
   const { headers, rows, rowCount } = useMemo(() => parseCsvPreview(csv), [csv])
 
-  const collectionsQuery = useQuery({
-    queryKey: ['import-collections'],
+  // Diff preview — the server classifies every row (new / unchanged /
+  // changed / conflict) against the live collection WITHOUT writing, using
+  // the same matching logic the import itself runs. Fetched only on the
+  // confirm step, re-fetched when any input that changes the answer changes.
+  const previewQuery = useQuery({
+    queryKey: [
+      'import-diff-preview',
+      collection,
+      idField,
+      strategy,
+      csv.length,
+      JSON.stringify(columnMap)
+    ],
     queryFn: () =>
       client.request(
-        get<{ data: { collection: string }[] }>('/collections')
+        post<{
+          data: {
+            total: number
+            truncated: boolean
+            new: number
+            unchanged: number
+            changed: number
+            conflicts: number
+            field_change_counts: Record<string, number>
+            diffs: Array<{
+              row: number
+              id: string
+              kind: 'changed' | 'conflict'
+              reason?: string
+              fields: Array<{ field: string; old: unknown; new: unknown }>
+            }>
+          }
+        }>('/imports/preview', {
+          collection,
+          csv_data: csv,
+          column_map: columnMap,
+          id_field: idField || null,
+          duplicate_strategy: strategy
+        })
       ),
+    enabled: step === 3 && !!collection && !!csv,
+    staleTime: 30_000,
+    retry: false
+  })
+  const preview = previewQuery.data?.data
+
+  const collectionsQuery = useQuery({
+    queryKey: ['import-collections'],
+    queryFn: () => client.request(get<{ data: { collection: string }[] }>('/collections')),
     staleTime: 60_000
   })
   const collectionOptions = (collectionsQuery.data?.data ?? [])
@@ -800,7 +846,11 @@ function ImportWizard({
                     className='h-8 shrink-0'
                     disabled={!url.trim() || fetchUrl.isPending}
                   >
-                    {fetchUrl.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Fetch'}
+                    {fetchUrl.isPending ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    ) : (
+                      'Fetch'
+                    )}
                   </Button>
                 </form>
                 <p className='text-[11px] leading-snug text-slate-400'>
@@ -894,7 +944,10 @@ function ImportWizard({
                 </thead>
                 <tbody>
                   {headers.map((h) => (
-                    <tr key={h} className='border-b border-slate-100 last:border-b-0 dark:border-border/60'>
+                    <tr
+                      key={h}
+                      className='border-b border-slate-100 last:border-b-0 dark:border-border/60'
+                    >
                       <td className='px-3 py-1.5 font-mono text-[11.5px] text-slate-600 dark:text-muted-foreground'>
                         {h}
                       </td>
@@ -973,6 +1026,99 @@ function ImportWizard({
 
         {step === 3 && (
           <div className='max-w-[620px] space-y-4'>
+            {previewQuery.isLoading && (
+              <p className='text-[12px] text-slate-400'>Comparing against the live data…</p>
+            )}
+            {preview && (
+              <div className='space-y-2'>
+                <div className='flex flex-wrap gap-2'>
+                  {[
+                    {
+                      label: 'new',
+                      n: preview.new,
+                      cls: 'border-emerald-300 text-emerald-700 dark:border-emerald-500/40 dark:text-emerald-400'
+                    },
+                    {
+                      label: 'changed',
+                      n: preview.changed,
+                      cls: 'border-amber-300 text-amber-700 dark:border-amber-500/40 dark:text-amber-400'
+                    },
+                    {
+                      label: preview.conflicts === 1 ? 'conflict' : 'conflicts',
+                      n: preview.conflicts,
+                      cls: 'border-red-300 text-red-700 dark:border-red-500/40 dark:text-red-400'
+                    },
+                    {
+                      label: 'unchanged',
+                      n: preview.unchanged,
+                      cls: 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
+                    }
+                  ].map((c) => (
+                    <span
+                      key={c.label}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-1 text-[12px] font-medium dark:bg-card',
+                        c.cls
+                      )}
+                    >
+                      <span className='tabular-nums'>{formatNumber(c.n)}</span> {c.label}
+                    </span>
+                  ))}
+                  {preview.truncated && (
+                    <span className='self-center text-[11px] text-slate-400'>
+                      (first {formatNumber(preview.total)} rows scanned)
+                    </span>
+                  )}
+                </div>
+                {preview.diffs.length > 0 && (
+                  <div className='max-h-56 overflow-y-auto rounded-md border border-slate-200 dark:border-border'>
+                    {preview.diffs.map((d) => (
+                      <div
+                        key={`${d.row}-${d.id}`}
+                        className='border-b border-slate-100 px-3 py-2 text-[12px] last:border-b-0 dark:border-border/60'
+                      >
+                        <p className='flex items-center gap-2'>
+                          <span
+                            className={cn(
+                              'rounded px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide',
+                              d.kind === 'conflict'
+                                ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                                : 'bg-amber-400/10 text-amber-600 dark:text-amber-400'
+                            )}
+                          >
+                            {d.kind}
+                          </span>
+                          <span className='font-mono text-[11.5px]'>{d.id}</span>
+                          <span className='text-[11px] text-slate-400'>row {d.row}</span>
+                        </p>
+                        {d.reason && (
+                          <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                            {d.reason}
+                          </p>
+                        )}
+                        {d.fields.map((f) => (
+                          <p key={f.field} className='mt-0.5 font-mono text-[11px]'>
+                            <span className='text-slate-400'>{f.field}:</span>{' '}
+                            <span className='text-red-600 line-through dark:text-red-400'>
+                              {String(f.old ?? '—')}
+                            </span>{' '}
+                            <span className='text-emerald-600 dark:text-emerald-400'>
+                              {String(f.new ?? '—')}
+                            </span>
+                          </p>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {preview.conflicts > 0 && (
+                  <p className='text-[11.5px] text-red-600 dark:text-red-400'>
+                    Conflicts need a look before you start — they are rows the import will silently
+                    drop or resolve by last-write-wins.
+                  </p>
+                )}
+              </div>
+            )}
             <div className='overflow-hidden rounded-md border border-slate-200 dark:border-border'>
               {[
                 { label: 'File', value: fileName || 'pasted.csv', mono: true },
@@ -988,7 +1134,11 @@ function ImportWizard({
                         ? 'Overwritten'
                         : 'Merged'
                 },
-                { label: 'Matched on', value: idField || 'nothing — every row is new', mono: !!idField }
+                {
+                  label: 'Matched on',
+                  value: idField || 'nothing — every row is new',
+                  mono: !!idField
+                }
               ].map((r) => (
                 <div
                   key={r.label}
@@ -1161,7 +1311,9 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                     <p
                       className={cn(
                         'text-[15px] font-semibold tabular-nums',
-                        s.bad ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-foreground'
+                        s.bad
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-slate-900 dark:text-foreground'
                       )}
                     >
                       {formatNumber(s.value)}
@@ -1177,7 +1329,10 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                 {[
                   { label: 'Duplicates', value: job.duplicate_strategy },
                   { label: 'Matched on', value: job.id_field ?? '— always create' },
-                  { label: 'Started', value: job.started_at ? formatDateTime(job.started_at) : '—' },
+                  {
+                    label: 'Started',
+                    value: job.started_at ? formatDateTime(job.started_at) : '—'
+                  },
                   {
                     label: 'Completed',
                     value: job.completed_at ? formatDateTime(job.completed_at) : '—'

@@ -145,12 +145,19 @@ function foldStepsSync(
         value = step.value
         break
       case 'wrap_richtext':
+        // Tiptap HTML, not an EditorJS doc — the 2026-08-13 rich-text
+        // conversion made HTML the storage format, and an object here reached
+        // the prefill draft as a literal "[object Object]" in the editor.
         if (value !== null && value !== undefined && value !== '') {
-          value = {
-            time: 0,
-            blocks: [{ type: 'paragraph', data: { text: String(value) } }],
-            version: '2.22.2'
-          }
+          const escaped = String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+          value = escaped
+            .split(/\r?\n/)
+            .filter((line) => line.trim() !== '')
+            .map((line) => `<p>${line}</p>`)
+            .join('')
         }
         break
       case 'lookup':

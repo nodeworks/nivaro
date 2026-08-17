@@ -76,6 +76,7 @@ interface ApiKeyRow {
   prefix: string
   user: string
   scopes: string | null
+  scope_restrictions: string | null
   expires_at: Date | string | null
   rate_limit_per_minute: number | null
   ip_allowlist: string | null
@@ -119,6 +120,12 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
   if (!user) throw httpError(401, 'API key owner is not active')
 
   await hydrateRole(req, user)
+  // Key-level row scoping: rides the user object so getUserScopeEnforcement
+  // (which never sees the request) can merge it with the owner's own scopes.
+  const restrictions = parseJsonArray<{ dimension: string; values: Array<string | number> }>(
+    key.scope_restrictions
+  ).filter((r) => r && typeof r.dimension === 'string' && Array.isArray(r.values))
+  if (restrictions.length > 0) user.api_key_scope_restrictions = restrictions
   req.apiKeyScopes = parseJsonArray<ApiKeyScope>(key.scopes)
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
 

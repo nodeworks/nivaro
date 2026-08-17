@@ -59,6 +59,35 @@ export function PipelineSkipCriteria({
     onError: () => toast.error('Failed to save skip criteria')
   })
 
+  const [impact, setImpact] = useState<{
+    evaluated: number
+    truncated: boolean
+    now_skipped: number
+    now_required: number
+    changes: Array<{
+      collection: string
+      item: string
+      proposed: boolean
+      proposed_reasons: string[]
+    }>
+  } | null>(null)
+
+  // Dry-run the DRAFT criteria against real records in active instances —
+  // "30 of 98 sampled records would newly skip this state" before Save,
+  // instead of finding out from the approval queue next week.
+  const preview = useMutation({
+    mutationFn: () =>
+      api
+        .post(`/pipelines/${templateId}/simulate-impact`, {
+          state_id: stateId,
+          skip_criteria: conditions.length ? { mode, conditions } : null,
+          limit: 200
+        })
+        .then((r) => r.data.data),
+    onSuccess: (data) => setImpact(data),
+    onError: () => toast.error('Impact preview failed')
+  })
+
   const addCondition = (type: SkipCondition['type']) => {
     let next: SkipCondition
     switch (type) {
@@ -467,6 +496,20 @@ export function PipelineSkipCriteria({
             <Button
               type='button'
               size='sm'
+              variant='outline'
+              className='text-[12px]'
+              disabled={preview.isPending}
+              onClick={() => preview.mutate()}
+            >
+              {preview.isPending ? (
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              ) : (
+                'Preview impact'
+              )}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
               className='text-[12px]'
               disabled={save.isPending}
               onClick={() => save.mutate({ mode, conditions })}
@@ -474,6 +517,38 @@ export function PipelineSkipCriteria({
               {save.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Save'}
             </Button>
           </div>
+          {impact && (
+            <div className='mt-2 rounded-md border border-slate-200 bg-slate-50 p-2.5 text-[12px] dark:border-border dark:bg-background'>
+              <p>
+                Across {impact.evaluated} active record(s)
+                {impact.truncated ? ' (sampled)' : ''}:{' '}
+                <span className='font-medium text-amber-600 dark:text-amber-400'>
+                  {impact.now_skipped} would newly skip
+                </span>
+                {' · '}
+                <span className='font-medium text-emerald-600 dark:text-emerald-400'>
+                  {impact.now_required} would newly require
+                </span>{' '}
+                this state under the draft criteria.
+              </p>
+              {impact.changes.slice(0, 6).map((c) => (
+                <p key={`${c.collection}-${c.item}`} className='mt-1 text-[11px] text-muted-foreground'>
+                  {c.collection}/{c.item}: {c.proposed ? 'skips' : 'requires'}
+                  {c.proposed_reasons[0] ? ` — ${c.proposed_reasons[0]}` : ''}
+                </p>
+              ))}
+              {impact.changes.length > 6 && (
+                <p className='mt-1 text-[11px] text-muted-foreground'>
+                  +{impact.changes.length - 6} more changed records
+                </p>
+              )}
+              {impact.now_skipped === 0 && impact.now_required === 0 && (
+                <p className='mt-1 text-[11px] text-muted-foreground'>
+                  No record's skip decision changes.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

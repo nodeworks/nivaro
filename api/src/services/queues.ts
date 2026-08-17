@@ -14,6 +14,7 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
+import { span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1422,7 +1423,7 @@ export async function resolveCollectionSource(
         if (listsStateless) q.whereExists(hasAnyInstance)
       }
     }
-    const rows = (await q) as Array<{ id: string | number }>
+    const rows = (await span('queue:match-ids', () => q)) as Array<{ id: string | number }>
     ids = rows.map((r) => String(r.id))
   } catch {
     return empty
@@ -1444,21 +1445,26 @@ export async function resolveCollectionSource(
     // `ids` is already state-filtered when the pushdown ran, so this fetches
     // instance rows for the MATCHED items (hundreds) rather than the whole
     // collection (tens of thousands) purely to throw most of them away.
-    instances = (await selectInChunks(ids, 2000, (chunk) =>
-      db('nivaro_workflow_instances as wi')
-        .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
-        .whereIn('wi.item', chunk)
-        .where('wi.collection', source.collection)
-        .orderBy('wi.started_at', 'desc')
-        .select(
-          'wi.id as instance_id',
-          'wi.item',
-          'wi.current_state',
-          's.key as state_key',
-          's.color as state_color',
-          'wi.template',
-          'wi.started_at'
-        )
+    instances = (await span(
+      'queue:instances',
+      () =>
+        selectInChunks(ids, 2000, (chunk) =>
+          db('nivaro_workflow_instances as wi')
+            .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+            .whereIn('wi.item', chunk)
+            .where('wi.collection', source.collection)
+            .orderBy('wi.started_at', 'desc')
+            .select(
+              'wi.id as instance_id',
+              'wi.item',
+              'wi.current_state',
+              's.key as state_key',
+              's.color as state_color',
+              'wi.template',
+              'wi.started_at'
+            )
+        ),
+      `${ids.length} ids`
     )) as InstanceRow[]
 
     // Fallback for anything the pushdown did not cover (no binding is the only
@@ -1478,8 +1484,8 @@ export async function resolveCollectionSource(
   // only case `instances` was ever populated); when there's no binding we pass undefined
   // so computeStatusBatch falls back to its own query, matching prior behavior exactly.
   const slaMap = ids.length
-    ? await computeStatusBatch(
-        source.collection,
+    ? await span('queue:sla', () => computeStatusBatch(
+        source.collection as string,
         ids,
         binding
           ? instances.map(
@@ -1492,7 +1498,7 @@ export async function resolveCollectionSource(
               })
             )
           : undefined
-      )
+      ))
     : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
   const afterSla = new Set(ids)
@@ -1546,14 +1552,27 @@ export async function resolveCollectionSource(
   // independent of each other's results — they only read `ids`/`instances`/
   // `source.collection` and are combined together in the final items.map() below. Run
   // them concurrently instead of sequentially awaiting each in turn.
+  // These four run concurrently, so their spans overlap in the trace — that is
+  // the point: a waterfall shows which branch the wall-clock is actually
+  // waiting on rather than implying they queue behind each other.
+  // Captured so the narrowing survives into the span callbacks — inside an
+  // arrow function TS re-widens `source.collection` back to `string | null`.
+  const sourceCollection = source.collection as string
   const [labels, ownersByItem, atRiskMap, extraResolved] = await Promise.all([
-    source.label_template
-      ? renderTemplateLabels(source.collection, ids, source.label_template)
-      : getLabels(new Map([[source.collection, new Set(ids)]])),
-    ownerRequests.length
-      ? resolveStateOwnersBatch(ownerRequests)
-      : Promise.resolve(new Map<string, ResolvedOwner[]>()),
-    (async (): Promise<ReturnType<typeof evaluateRows>> => {
+    span('queue:labels', () =>
+      source.label_template
+        ? renderTemplateLabels(sourceCollection, ids, source.label_template)
+        : getLabels(new Map([[sourceCollection, new Set(ids)]]))
+    ),
+    span(
+      'queue:owners',
+      () =>
+        ownerRequests.length
+          ? resolveStateOwnersBatch(ownerRequests)
+          : Promise.resolve(new Map<string, ResolvedOwner[]>()),
+      `${ownerRequests.length} records`
+    ),
+    span('queue:at-risk', async (): Promise<ReturnType<typeof evaluateRows>> => {
       const ruleRows = (await db('nivaro_at_risk_rules')
         .where({ collection: source.collection, is_active: true })
         .orderBy('id')) as AtRiskRuleRow[]
@@ -1567,8 +1586,8 @@ export async function resolveCollectionSource(
           .select([...fields])
       )
       return evaluateRows(riskRows as Record<string, unknown>[], rules)
-    })(),
-    (async (): Promise<{
+    }),
+    span('queue:extra-fields', async (): Promise<{
       extraById: Map<string, Record<string, unknown>>
       extraIdsById: Map<string, Record<string, string[]>>
     }> => {
@@ -1612,7 +1631,7 @@ export async function resolveCollectionSource(
         })
       )
       return { extraById, extraIdsById }
-    })()
+    })
   ])
 
   // Predictive risk: compare current time-in-state to the historical P80 for
@@ -1622,7 +1641,7 @@ export async function resolveCollectionSource(
     null
   try {
     const { getStateDurationStats } = await import('./predictive-sla.js')
-    durationStats = await getStateDurationStats()
+    durationStats = await span('queue:predictive-sla', () => getStateDurationStats())
   } catch {
     durationStats = null
   }
@@ -1946,13 +1965,19 @@ export async function fetchQueueItems(
     .orderBy('sort')) as QueueSourceRow[]
 
   const ceiling = options.ceiling ?? QUEUE_SANITY_CEILING
-  const results = await Promise.all(
-    sources.map((source) => {
-      if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
-      if (source.type === 'tasks') return resolveTasksSource(ceiling)
-      if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
-      return resolveOwnedByMeSource(user.id, ceiling)
-    })
+  // Outer span so the trace attributes time that falls between the per-stage
+  // spans inside the resolvers — otherwise a slow resolver tail reads as
+  // "unaccounted" and points nowhere.
+  const results = await span('queue:resolve-sources', () =>
+    Promise.all(
+      sources.map((source) => {
+        if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
+        if (source.type === 'tasks') return resolveTasksSource(ceiling)
+        if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
+        return resolveOwnedByMeSource(user.id, ceiling)
+      })
+    ),
+    `${sources.length} source(s)`
   )
 
   const truncated = results.some((r) => r.truncated)
@@ -1973,7 +1998,7 @@ export async function fetchQueueItems(
   const batches = results.map((r) => r.items)
 
   const merged = mergeSourceResults(batches)
-  const claims = await getClaims(queueId)
+  const claims = await span('queue:claims', () => getClaims(queueId))
   const withClaims = attachClaims(merged, claims)
   const scoped = applyScopeFilter(withClaims, scope, user.id)
   const availableValues = computeAvailableValues(scoped)

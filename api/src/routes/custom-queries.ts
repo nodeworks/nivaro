@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { buildFinalParams, execCustomQuerySql, type ParamDef, type ParamType } from '../services/custom-query-exec.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ function serialize(row: CustomQueryRow) {
     cache_ttl: row.cache_ttl,
     enabled: !!row.enabled,
     access: row.access,
+    scope_params: (row as { scope_params?: string | null }).scope_params ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -60,6 +62,83 @@ function serialize(row: CustomQueryRow) {
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 /** Delete every cached result for a slug (cq:<slug>:*) via SCAN. */
+interface ScopeParamDef {
+  dimension: string
+  /** 'id' (raw target ids, default) | 'display' (dimension display_field values). */
+  translate?: 'id' | 'display'
+}
+
+/**
+ * Inject the caller's restrict-mode scope allowance into declared params.
+ *
+ * Custom queries are raw SQL — the items-service scope enforcement can never
+ * reach inside them, so this is where the documented raw-SQL gap closes. Per
+ * declared param:
+ *   - admin, or no restriction on the dimension → untouched.
+ *   - param omitted → the full allowance is injected (comma-joined, the
+ *     STRING_SPLIT convention every EFP proc already uses).
+ *   - param provided → intersected with the allowance. An empty intersection
+ *     injects a value that matches nothing — a caller asking for a zone they
+ *     are not allowed gets zero rows, never everything.
+ *
+ * Runs BEFORE the cache key is built, so scoped and unscoped callers can
+ * never share a cached result.
+ */
+async function applyScopeParams(
+  scopeParamsRaw: string | null,
+  finalParams: Record<string, unknown>,
+  userId: string | null | undefined,
+  isAdmin: boolean
+): Promise<void> {
+  if (!scopeParamsRaw || isAdmin || !userId) return
+  const declared = parseJson<Record<string, ScopeParamDef>>(scopeParamsRaw)
+  if (!declared || typeof declared !== 'object') return
+
+  const entries = Object.entries(declared).filter(
+    ([, d]) => d && typeof d.dimension === 'string'
+  )
+  if (entries.length === 0) return
+
+  const [scopes, dimensions] = await Promise.all([getUserScopes(userId), listScopeDimensions()])
+
+  for (const [param, def] of entries) {
+    const restriction = scopes.find(
+      (s) => s.mode === 'restrict' && s.dimension === def.dimension && s.values.length > 0
+    )
+    if (!restriction) continue // unrestricted on this dimension
+
+    let allowed = restriction.values.map(String)
+    if (def.translate === 'display') {
+      const dim = dimensions.find((d) => d.name === def.dimension)
+      if (dim?.target_collection && dim.display_field) {
+        try {
+          const rows = (await db(dim.target_collection)
+            .whereIn('id', restriction.values)
+            .select(dim.display_field)) as Array<Record<string, unknown>>
+          allowed = rows.map((r) => String(r[dim.display_field as string])).filter(Boolean)
+        } catch {
+          // Translation failing must fail CLOSED for a restricted user —
+          // untranslatable allowance means no rows, not all rows.
+          allowed = []
+        }
+      }
+    }
+
+    const provided = finalParams[param]
+    if (provided == null || provided === '') {
+      finalParams[param] = allowed.length ? allowed.join(',') : '__scope_empty__'
+      continue
+    }
+    const requested = String(provided)
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+    const allowedSet = new Set(allowed.map((v) => v.toLowerCase()))
+    const kept = requested.filter((v) => allowedSet.has(v.toLowerCase()))
+    finalParams[param] = kept.length ? kept.join(',') : '__scope_empty__'
+  }
+}
+
 export async function bustCustomQueryCache(
   redis: { scanStream(o: { match: string; count: number }): NodeJS.ReadableStream; del(...k: string[]): Promise<number> } | null | undefined,
   slug: string
@@ -104,6 +183,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       cache_ttl?: number
       enabled?: boolean
       access?: string
+      scope_params?: Record<string, unknown> | string | null
     }
   }>('/', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body
@@ -121,6 +201,12 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         cache_ttl: body.cache_ttl ?? 0,
         enabled: body.enabled ?? true,
         access: body.access ?? 'authenticated',
+        scope_params:
+          body.scope_params == null
+            ? null
+            : typeof body.scope_params === 'string'
+              ? body.scope_params
+              : JSON.stringify(body.scope_params),
         created_at: now,
         updated_at: now
       })
@@ -154,6 +240,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       cache_ttl: number
       enabled: boolean
       access: string
+      scope_params: Record<string, unknown> | string | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -173,6 +260,14 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     if (body.cache_ttl !== undefined) patch.cache_ttl = body.cache_ttl
     if (body.enabled !== undefined) patch.enabled = body.enabled
     if (body.access !== undefined) patch.access = body.access
+    if (body.scope_params !== undefined) {
+      patch.scope_params =
+        body.scope_params == null
+          ? null
+          : typeof body.scope_params === 'string'
+            ? body.scope_params
+            : JSON.stringify(body.scope_params)
+    }
 
     await db('nivaro_custom_queries').where({ id }).update(patch)
     // Staleness guard: any change to the SQL, params, or slug invalidates every
@@ -182,7 +277,8 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       body.sql_text !== undefined ||
       body.params !== undefined ||
       body.slug !== undefined ||
-      body.enabled !== undefined
+      body.enabled !== undefined ||
+      body.scope_params !== undefined
     ) {
       await bustCustomQueryCache(app.redis, existing.slug).catch(() => {})
       if (body.slug !== undefined && body.slug !== existing.slug) {
@@ -262,6 +358,15 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       } catch (err) {
         return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
       }
+
+      // User-scope injection — must precede the cache key so scoped and
+      // unscoped callers never share a cached result.
+      await applyScopeParams(
+        (query as { scope_params?: string | null }).scope_params ?? null,
+        finalParams,
+        req.user?.id,
+        req.isAdmin ?? false
+      )
 
       // Cache check.
       const cacheKey = `cq:${slug}:${JSON.stringify(finalParams)}`

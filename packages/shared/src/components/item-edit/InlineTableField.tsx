@@ -58,6 +58,7 @@ export type AutoAllocateConfig = {
 }
 import { useNivaroClient, useParentDraft, useDrilldown, useReimportHandler, fieldDrilldownConfig } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import {
@@ -208,23 +209,18 @@ export interface RowBulkActionConfig {
  *  refuses to sum, since the set on screen is no longer the whole set. */
 const O2M_ROW_LIMIT = 200
 
+/**
+ * Numeric client-side formula for a grid row.
+ *
+ * Delegates to the shared expression engine (lib/expression.ts) rather than
+ * substituting values into the string and `eval`ing the result, which is what
+ * this did before: a token whose value was not a bare number could change the
+ * shape of the expression instead of just its inputs. `missing: 'zero'` keeps
+ * the previous behaviour for every formula already configured — an unset
+ * `allocated_total` still reads as 0, not as nothing.
+ */
 export function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
-  // Handles both `item.fieldname` and `{{fieldname}}` token syntax
-  let expr = formula.replace(/item\.(\w+)/g, (_, field) => {
-    const val = Number(row[field])
-    return Number.isNaN(val) ? '0' : String(val)
-  })
-  expr = expr.replace(/\{\{(\w+)\}\}/g, (_, field) => {
-    const val = Number(row[field])
-    return Number.isNaN(val) ? '0' : String(val)
-  })
-  if (!/^[\d\s+\-*/.()]+$/.test(expr)) return null
-  try {
-    // biome-ignore lint/security/noGlobalEval: safe — expr sanitized to digits+operators only
-    return eval(expr) as number
-  } catch {
-    return null
-  }
+  return evaluateNumeric(formula, row)
 }
 
 type CascadeRule = { parent_field: string; child_field: string }
@@ -255,7 +251,7 @@ function DeletedRowsSection({
       <button
         type='button'
         onClick={() => setOpen(o => !o)}
-        className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-slate-50'
+        className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-muted'
       >
         <ChevronRight className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', open && 'rotate-90')} />
         <span className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Deleted rows</span>
@@ -552,16 +548,12 @@ function AllocateDrawer({
     option: Record<string, unknown>,
     extras: Record<string, number>
   ): number | null {
-    const expr = formula.replace(/\{\{\s*([\w.]+|__\w+__)\s*\}\}/g, (_, ref: string) => {
-      if (ref in extras) return String(extras[ref])
-      const n = Number(walkPath(option, ref))
-      return String(Number.isFinite(n) ? n : 0)
-    })
-    if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return null
-    try {
-      const v = new Function(`"use strict"; return (${expr})`)() as unknown
-      return typeof v === 'number' && Number.isFinite(v) ? v : null
-    } catch { return null }
+    // `extras` (__input__ / __saved__ / __agg__) are resolved ahead of the
+    // option's own fields, which is what makes an Available-style column react
+    // as the user types.
+    return evaluateNumeric(formula, (ref) =>
+      ref in extras ? extras[ref] : walkPath(option, ref)
+    )
   }
 
   // {{__input__}} = the row's live input (draft, else saved); {{__saved__}} =
@@ -878,29 +870,14 @@ function RowBulkActionButton({
       let skipped = 0
       for (const row of rows) {
         const ctx = { ...row, __agg__: aggFor(row.id) }
-        if (config.guard) {
-          // The guard is a comparison, which evalClientFormula (arithmetic
-          // only) can't evaluate — reduce it to `left - right >= 0` style by
-          // splitting on the operator.
-          const m = config.guard.match(/^(.*?)(>=|<=|>|<|==)(.*)$/)
-          if (m) {
-            const left = evalClientFormula(m[1].trim(), ctx)
-            const right = evalClientFormula(m[3].trim(), ctx)
-            if (left == null || right == null) {
-              skipped++
-              continue
-            }
-            const ok =
-              m[2] === '>=' ? left >= right
-              : m[2] === '<=' ? left <= right
-              : m[2] === '>' ? left > right
-              : m[2] === '<' ? left < right
-              : left === right
-            if (!ok) {
-              skipped++
-              continue
-            }
-          }
+        // The guard is evaluated as a real comparison now. It used to be
+        // split on an operator regex and each half evaluated separately,
+        // because the old arithmetic-only evaluator could not compare — which
+        // silently failed on any guard the regex did not match (an `&&`, a
+        // parenthesised comparison, a `!=`) by treating it as no guard at all.
+        if (config.guard && !evaluateBoolean(config.guard, ctx)) {
+          skipped++
+          continue
         }
         const changes: Record<string, unknown> = {}
         for (const [field, formula] of Object.entries(config.set)) {
@@ -2693,19 +2670,13 @@ export function InlineTableField({
       const formula = typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
       if (!formula || !rowId) return <span className='text-slate-300'>—</span>
       const row = rows.find((r) => String(r.id) === rowId) ?? {}
-      const expr = formula.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, ref: string) => {
-        const raw = ref.includes('.')
+      // A dotted reference comes from the bulk resolve-paths response; a bare
+      // one is a plain column on the row.
+      const result = evaluateNumeric(formula, (ref) =>
+        ref.includes('.')
           ? resolvedPathData?.rows[rowId]?.[ref]?.value
           : (row as Record<string, unknown>)[ref]
-        const n = Number(raw)
-        return String(Number.isFinite(n) ? n : 0)
-      })
-      if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return <span className='text-slate-300'>—</span>
-      let result: number | null = null
-      try {
-        const v = new Function(`"use strict"; return (${expr})`)() as unknown
-        if (typeof v === 'number' && Number.isFinite(v)) result = v
-      } catch { /* unrenderable */ }
+      )
       if (result === null) return <span className='text-slate-300'>—</span>
       const formatted = result.toLocaleString(
         'en-US',
@@ -2737,19 +2708,16 @@ export function InlineTableField({
           ? matched.length
           : matched.reduce((sum, r) => sum + (Number(r[entry.cfg.valueField]) || 0), 0)
       if (entry.cfg.formula) {
-        const expr = entry.cfg.formula.replace(/\{\{\s*([\w.]+|__agg__)\s*\}\}/g, (_, ref: string) => {
-          if (ref === '__agg__') return String(agg)
-          const n = Number((gridRow as Record<string, unknown>)[ref])
-          return String(Number.isFinite(n) ? n : 0)
+        // `__agg__` is just another field to the expression engine, so the
+        // formula no longer needs its own regex, its own sanitizer and its own
+        // `new Function` — all of which substituted the aggregate's VALUE into
+        // the source text before parsing it.
+        const v = evaluateNumeric(entry.cfg.formula, {
+          ...(gridRow as Record<string, unknown>),
+          __agg__: agg
         })
-        if (!/^[-+*/(). 0-9eE]+$/.test(expr)) return <span className='text-slate-300'>—</span>
-        try {
-          const v = new Function(`"use strict"; return (${expr})`)() as unknown
-          if (typeof v === 'number' && Number.isFinite(v)) agg = v
-          else return <span className='text-slate-300'>—</span>
-        } catch {
-          return <span className='text-slate-300'>—</span>
-        }
+        if (v === null) return <span className='text-slate-300'>—</span>
+        agg = v
       }
       const formatted =
         agg.toLocaleString('en-US', numericIntlOptions(colOpts, entry.cfg.format as string | undefined))
@@ -3453,7 +3421,7 @@ export function InlineTableField({
                     ? lineError
                       ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
                       : ri % 2 === 0
-                        ? 'bg-white hover:bg-slate-50/80 cursor-pointer'
+                        ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
                         : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
                     : ''
                 )}>
@@ -3468,7 +3436,7 @@ export function InlineTableField({
                     {isPendingDelete
                       ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5'>Delete</span>
                       : isPendingEdit
-                        ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Edited</span>
+                        ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Edited</span>
                         : null
                     }
                   </td>
@@ -3766,12 +3734,12 @@ export function InlineTableField({
               )
               const rowChanged = isNewRow || changedFields.size > 0
               return (
-                <tr key={ri} className={rowChanged ? 'border-b border-amber-100 bg-amber-50/40' : 'border-b border-slate-100'}>
+                <tr key={ri} className={rowChanged ? 'border-b border-amber-100 bg-amber-50/40 dark:border-amber-500/25 dark:bg-amber-400/10' : 'border-b border-slate-100'}>
                   {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
                   {showLineNumbers && <td className={`w-8 px-2 align-middle text-[11px] select-none ${rowChanged ? 'text-amber-400' : 'text-slate-400'}`}>{ri + 1}</td>}
                   {isPendingMode && <td className='w-20' />}
                   {effectiveCols.map((c) => (
-                    <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900' : 'text-slate-700'}`}>
+                    <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900 dark:bg-amber-400/15 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'}`}>
                       {isSummaryCol(c) ? summaryCellContent(c, row) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
                     </td>
                   ))}
@@ -3824,7 +3792,7 @@ export function InlineTableField({
                   isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                   isEditing
                     ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                    : isPrefilled ? 'hover:bg-slate-50 cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 cursor-pointer'
+                    : isPrefilled ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
                 )}>
                 {enableReorder && (
                   <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
@@ -3836,7 +3804,7 @@ export function InlineTableField({
                 {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{rows.length + ri + 1}</td>}
                 <td className='px-3 py-1 align-middle w-16'>
                   {!isEditing && !isPrefilled && (
-                    <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5'>Pending</span>
+                    <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Pending</span>
                   )}
                   {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
                     <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>

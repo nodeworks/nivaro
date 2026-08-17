@@ -584,9 +584,18 @@ export async function getUserScopeEnforcement(
 ): Promise<ScopeEnforcement> {
   const none: ScopeEnforcement = { filters: [], deny: false }
   if (collection.startsWith('nivaro_') || collection.startsWith('directus_')) return none
-  if (await isAdminRole(user.role)) return none
-  const scopes = await getUserScopes(user.id)
-  const restricts = scopes.filter((s) => s.mode === 'restrict' && s.values.length > 0)
+  // API-key scope restrictions (migration 208) apply EVEN for an admin-owned
+  // key — restricting a key is the point of setting them, and integration
+  // keys are almost always minted by admins.
+  const keyRestrictions = user.api_key_scope_restrictions ?? []
+  if (keyRestrictions.length === 0 && (await isAdminRole(user.role))) return none
+  const scopes = keyRestrictions.length > 0 && (await isAdminRole(user.role))
+    ? [] // admin's own (empty) scopes; only the key's restrictions apply
+    : await getUserScopes(user.id)
+  const restricts: Array<{ dimension: string; values: Array<string | number> }> = [
+    ...scopes.filter((s) => s.mode === 'restrict' && s.values.length > 0),
+    ...keyRestrictions.filter((r) => r.values.length > 0)
+  ]
   if (restricts.length === 0) return none
   const dims = await listScopeDimensions()
   // A dimension TARGET table (divisions, regions, project_types, …) is shared

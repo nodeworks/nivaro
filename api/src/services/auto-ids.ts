@@ -133,10 +133,22 @@ async function resolveRelationToken(
     let value: unknown = ctx.values[seg0]
     if (Array.isArray(value)) value = value[0]
     let currentCollection = ctx.collection
+    // Which path segment the M2O hop loop below starts from. Plain tokens hop
+    // from segment 1; a resolved M2M token has already consumed segment 1 by
+    // reading it off the junction's target row.
+    let hopStart = 1
 
-    if (token.firstIsMany && (value === undefined || value === null)) {
-      // No draft value — resolve first junction value from the DB (needs recordId)
-      if (ctx.recordId === undefined || ctx.recordId === null) return ''
+    if (token.firstIsMany) {
+      // The alias relation is needed even when the draft supplies the id —
+      // its companion leg names the junction's TARGET collection, which is
+      // where the REST of the path resolves. The old code fell through to the
+      // generic hop loop, which went looking for an M2O column named after
+      // the alias on the PARENT collection; no such column exists, so every
+      // multi-segment M2M token ({regions[0].short_code}) rendered empty on
+      // recompute — which is how editing a workflow's description silently
+      // stripped the region prefix off its name. Single-segment tokens
+      // ({funding_years[0] % 100}) never hit the loop and always worked,
+      // which kept the bug half-invisible.
       const rels = await ctx.lookups.relationsFor(ctx.collection)
       const alias = rels.find(
         (r) =>
@@ -145,13 +157,39 @@ async function resolveRelationToken(
           (r.one_field === seg0 || r.many_collection === seg0)
       )
       if (!alias) return ''
-      value = await ctx.lookups.firstJunctionValue(
-        alias.many_collection,
-        alias.many_field,
-        ctx.recordId,
-        alias.junction_field as string
-      )
-    } else if (!token.firstIsMany && value === undefined && ctx.recordId != null) {
+
+      if (value === undefined || value === null) {
+        // No draft value — resolve first junction value from the DB
+        if (ctx.recordId === undefined || ctx.recordId === null) return ''
+        value = await ctx.lookups.firstJunctionValue(
+          alias.many_collection,
+          alias.many_field,
+          ctx.recordId,
+          alias.junction_field as string
+        )
+      }
+      if (value === undefined || value === null || value === '') return ''
+
+      if (token.path.length > 1) {
+        // Target collection = the junction leg the junction_field column
+        // belongs to. Junction legs carry junction_field as the pairing
+        // marker, so this lookup must NOT filter it null.
+        const junctionRels = await ctx.lookups.relationsFor(alias.many_collection)
+        const companion = junctionRels.find(
+          (r) =>
+            r.many_collection === alias.many_collection &&
+            r.many_field === alias.junction_field &&
+            r.one_collection != null
+        )
+        if (!companion?.one_collection) return ''
+        const row = await ctx.lookups.readRow(companion.one_collection, value, [token.path[1]])
+        if (!row) return ''
+        value = row[token.path[1]]
+        currentCollection = companion.one_collection
+        hopStart = 2
+        if (value === undefined || value === null) return ''
+      }
+    } else if (value === undefined && ctx.recordId != null) {
       // No draft value for a plain M2O token (draft key absent entirely, as
       // happens when items.ts's junction recompute passes mergedValues `{}`)
       // — fall back to the record's own current value. A draft that
@@ -164,7 +202,7 @@ async function resolveRelationToken(
 
     // Walk remaining segments as M2O hops. The value at each step is a FK id;
     // the segment names the FK field on the *current* collection for step > 0.
-    for (let i = 1; i < token.path.length; i++) {
+    for (let i = hopStart; i < token.path.length; i++) {
       const seg = token.path[i]
       const rels = await ctx.lookups.relationsFor(currentCollection)
       const hopField = i === 1 && !token.firstIsMany ? seg0 : token.path[i - 1]

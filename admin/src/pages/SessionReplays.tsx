@@ -79,7 +79,6 @@ async function downloadReplayScript(recordingId: string) {
   }
 }
 
-
 /**
  * Which environment a session happened on. The list is otherwise a wall of
  * near-identical rows, and this is the fact that decides whether a recording
@@ -125,7 +124,7 @@ function EnvironmentBadge({ origin }: { origin: string | null }) {
   )
 }
 
-function ReplayPlayer({ recordingId }: { recordingId: string }) {
+function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?: number | null }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
     play: (t?: number) => void
@@ -201,7 +200,14 @@ function ReplayPlayer({ recordingId }: { recordingId: string }) {
           setPlaying(false)
         })
         setReady(true)
-        replayer.play()
+        // ?t= deep link (issue log's Watch-replay): open AT the error moment,
+        // a few seconds early so the action that caused it is on screen.
+        const meta = replayer.getMetaData()
+        const seekTo =
+          startAt != null && Number.isFinite(startAt)
+            ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
+            : 0
+        replayer.play(seekTo)
         setPlaying(true)
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
@@ -355,22 +361,26 @@ interface PersonGroup {
 export function SessionReplaysPage() {
   const queryClient = useQueryClient()
   const [playing, setPlaying] = useState<Recording | null>(null)
+  const [startAt, setStartAt] = useState<number | null>(null)
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   // ?recording=<id> deep link — the chat online list links straight to
   // someone's live session, which is worthless if it only opens the list.
   const [searchParams] = useSearchParams()
   const deepLinkId = searchParams.get('recording')
+  const deepLinkT = searchParams.get('t')
   const deepLinkApplied = useRef(false)
   const [appFilter, setAppFilter] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
-  const { data: enabled } = useQuery({
+  const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
     queryFn: () =>
       api
-        .get<{ data: { enabled: boolean } }>('/session-recordings/enabled')
-        .then((r) => r.data.data.enabled)
+        .get<{ data: { enabled: boolean; error_replay?: boolean } }>('/session-recordings/enabled')
+        .then((r) => r.data.data)
   })
+  const enabled = modes?.enabled
+  const errorReplay = modes?.error_replay
 
   const { data: recordings = [], isLoading } = useQuery({
     queryKey: ['session-recordings'],
@@ -386,7 +396,8 @@ export function SessionReplaysPage() {
     if (!match) return
     deepLinkApplied.current = true
     setPlaying(match)
-  }, [deepLinkId, recordings])
+    if (deepLinkT && Number.isFinite(Number(deepLinkT))) setStartAt(Number(deepLinkT))
+  }, [deepLinkId, deepLinkT, recordings])
 
   const { data: settings } = useQuery({
     queryKey: ['session-recording-retention'],
@@ -407,9 +418,9 @@ export function SessionReplaysPage() {
   })
 
   const toggle = useMutation({
-    mutationFn: (value: boolean) => api.patch('/settings/', { session_recording_enabled: value }),
-    onSuccess: (_r, value) => {
-      toast.success(value ? 'Session recording enabled' : 'Session recording disabled')
+    mutationFn: (patch: Record<string, boolean>) => api.patch('/settings/', patch),
+    onSuccess: () => {
+      toast.success('Setting saved')
       queryClient.invalidateQueries({ queryKey: ['session-recording-enabled'] })
     },
     onError: () => toast.error('Could not update the setting')
@@ -544,7 +555,18 @@ export function SessionReplaysPage() {
             Recording {enabled ? 'on' : 'off'}
             <Switch
               checked={!!enabled}
-              onCheckedChange={(v) => toggle.mutate(v)}
+              onCheckedChange={(v) => toggle.mutate({ session_recording_enabled: v })}
+              disabled={toggle.isPending}
+            />
+          </label>
+          <label
+            className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'
+            title='Keeps a rolling in-memory buffer (last ~60s, inputs masked, nothing uploaded) and attaches it to the issue log when a client error is reported — support sees what happened without continuous recording.'
+          >
+            Error clips {errorReplay ? 'on' : 'off'}
+            <Switch
+              checked={!!errorReplay}
+              onCheckedChange={(v) => toggle.mutate({ error_replay_enabled: v })}
               disabled={toggle.isPending}
             />
           </label>
@@ -742,7 +764,7 @@ export function SessionReplaysPage() {
               </span>
             </SheetTitle>
           </SheetHeader>
-          {playing && <ReplayPlayer recordingId={playing.id} />}
+          {playing && <ReplayPlayer recordingId={playing.id} startAt={startAt} />}
         </SheetContent>
       </Sheet>
     </div>

@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronsLeft, ChevronsRight, Pin, RotateCw, Search } from 'lucide-react'
+import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, RotateCw, Search } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -3292,6 +3292,29 @@ export function CollectionBrowserView({
     }
   })
 
+  // ── View subscriptions — "tell me what enters this view" ──────────────────
+  // Backed by /view-subscriptions (migration 209): the nightly digest diffs
+  // the view's matched-id set and reports records that entered since the last
+  // run. The bell on an active view pill toggles it.
+  const { data: viewSubs = [] } = useQuery({
+    queryKey: ['cbv-view-subs'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; view_id: number }> }>(get('/view-subscriptions'))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  const subForView = (viewId: number) => viewSubs.find((s) => s.view_id === viewId)
+  const toggleViewSub = useMutation({
+    mutationFn: async (viewId: number) => {
+      const existing = subForView(viewId)
+      if (existing) return client.request(del(`/view-subscriptions/${existing.id}`))
+      return client.request(post('/view-subscriptions', { view_id: viewId, digest: 'daily' }))
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['cbv-view-subs'] })
+  })
+
   // ── CSV export (current filter, up to 2000 rows) ──────────────────────────
   const exportCsv = async () => {
     if (exporting) return
@@ -3955,6 +3978,25 @@ export function CollectionBrowserView({
             </button>
             {activeViewId === v.id && (
               <>
+                <button
+                  type='button'
+                  onClick={() => toggleViewSub.mutate(v.id)}
+                  title={
+                    subForView(v.id)
+                      ? 'Subscribed — a daily digest reports records that enter this view. Click to unsubscribe.'
+                      : 'Subscribe — get a daily digest of records that enter this view'
+                  }
+                  aria-label={`Toggle digest subscription for ${v.name}`}
+                  className={
+                    subForView(v.id) ? 'text-[#00a5cc]' : 'text-slate-400 hover:text-[#00a5cc]'
+                  }
+                >
+                  {subForView(v.id) ? (
+                    <Bell className='h-3 w-3' fill='currentColor' />
+                  ) : (
+                    <BellOff className='h-3 w-3' />
+                  )}
+                </button>
                 <button type='button' onClick={() => updateView.mutate(v.id)} title='Update with current state' aria-label={`Update ${v.name}`}>
                   ↺
                 </button>

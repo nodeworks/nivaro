@@ -39,6 +39,7 @@ type QueryForm = {
   cache_ttl: number
   enabled: boolean
   params: ParamDef[]
+  scope_params: string
 }
 
 type CustomQuery = {
@@ -51,6 +52,7 @@ type CustomQuery = {
   cache_ttl: number
   enabled: boolean
   params: ParamDef[] | null
+  scope_params: string | null
 }
 
 function slugify(name: string): string {
@@ -78,7 +80,8 @@ export function CustomQueryEditPage() {
     access: 'authenticated',
     cache_ttl: 0,
     enabled: true,
-    params: []
+    params: [],
+    scope_params: ''
   })
   const [slugTouched, setSlugTouched] = useState(false)
   const [testValues, setTestValues] = useState<Record<string, string>>({})
@@ -102,7 +105,8 @@ export function CustomQueryEditPage() {
         access: data.access ?? 'authenticated',
         cache_ttl: data.cache_ttl ?? 0,
         enabled: data.enabled ?? true,
-        params: data.params ?? []
+        params: data.params ?? [],
+        scope_params: data.scope_params ?? ''
       })
     }
   }, [data])
@@ -188,6 +192,7 @@ export function CustomQueryEditPage() {
       sql_text: form.sql_text,
       access: form.access,
       cache_ttl: form.cache_ttl,
+      scope_params: form.scope_params.trim() ? form.scope_params.trim() : null,
       enabled: form.enabled,
       params: form.params
     })
@@ -317,6 +322,25 @@ export function CustomQueryEditPage() {
                       }
                     />
                   </div>
+                </div>
+
+                <div className='space-y-1.5'>
+                  <Label htmlFor='cq-scope'>Scoped parameters (JSON, optional)</Label>
+                  <textarea
+                    id='cq-scope'
+                    value={form.scope_params}
+                    onChange={(e) => setForm((p) => ({ ...p, scope_params: e.target.value }))}
+                    rows={3}
+                    spellCheck={false}
+                    placeholder='{"divisions": {"dimension": "division", "translate": "display"}}'
+                    className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:border-border dark:bg-background'
+                  />
+                  <p className='text-[11px] text-slate-400'>
+                    Maps an execute-param to a User Scope dimension. A restrict-scoped user's
+                    allowance is injected (or intersected with their request) before the SQL runs —
+                    this is how a raw-SQL query honors User Scopes. translate: "id" passes target
+                    ids, "display" passes the dimension's display values (e.g. zone short names).
+                  </p>
                 </div>
 
                 <div className='flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3'>

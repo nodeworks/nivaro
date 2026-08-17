@@ -9,7 +9,8 @@ import {
   snapshotTemplateVersion
 } from '../services/workflow-template-versions.js'
 import { can } from '../services/permissions.js'
-import { resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
+import {
+  bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 import {
   evaluateTransitionRequirements,
@@ -286,6 +287,15 @@ function validateRequirements(value: unknown): string | null {
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 export async function pipelinesRoutes(app: FastifyInstance) {
+  // Owner-group config is cached in pipeline-engine (60s) — any successful
+  // mutation through this router that touches groups/users/bindings busts it,
+  // one hook so no mutation site can be missed (same pattern as the central
+  // metadata-cache hook in routes/index.ts).
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method === 'GET' || reply.statusCode >= 400) return
+    if (/owner-group|owner_group|bindings|restore/.test(req.url)) bustOwnerGroupCache()
+  })
+
   // ─── Template CRUD (admin only) ───────────────────────────────────────────
 
   // List templates with state/transition counts
@@ -935,6 +945,250 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           is_terminal: coerceBool(st.is_terminal)
         })),
         days: result
+      }
+    })
+  })
+
+  /**
+   * Approval brief — "what am I actually approving?"
+   *
+   * The transition confirm shows a comment box and nothing else, so approvers
+   * either approve blind or spend minutes digging through history. This
+   * answers the only question that matters at that moment: what changed on
+   * this record SINCE IT ENTERED THE CURRENT STATE — the window the approver
+   * is signing off on.
+   *
+   * Sources are all existing data: state entry time from workflow history,
+   * field changes from revision deltas in that window (old values from the
+   * last pre-window snapshot), comment count, and addendums raised. Read-only;
+   * requireAuth + instance visibility (same posture as the owners endpoints).
+   */
+  app.get(
+    '/instance/:collection/:item/approval-brief',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      const instance = (await db('nivaro_workflow_instances')
+        .where({ collection, item: String(item) })
+        .orderBy('started_at', 'desc')
+        .first()) as
+        | { id: string; current_state: string | null; started_at: Date }
+        | undefined
+      if (!instance) return reply.send({ data: null })
+
+      // When the record entered its CURRENT state: the latest history row
+      // whose to_state is the current state; a never-transitioned instance
+      // falls back to its start.
+      let enteredAt = new Date(instance.started_at)
+      if (instance.current_state) {
+        const entry = (await db('nivaro_workflow_history')
+          .where({ instance: instance.id, to_state: instance.current_state })
+          .orderBy('timestamp', 'desc')
+          .first('timestamp')) as { timestamp: Date } | undefined
+        if (entry) enteredAt = new Date(entry.timestamp)
+      }
+
+      const [inWindow, preWindow, commentCount, addendums] = await Promise.all([
+        db('nivaro_revisions as r')
+          .join('nivaro_activity as a', 'r.activity', 'a.id')
+          .where('a.collection', collection)
+          .where('a.item', String(item))
+          .where('a.action', 'update')
+          .where('a.timestamp', '>', enteredAt)
+          .orderBy('a.timestamp', 'asc')
+          .select('r.delta', 'a.timestamp', 'a.user') as Promise<
+          Array<{ delta: string | null; timestamp: Date; user: string | null }>
+        >,
+        db('nivaro_revisions as r')
+          .join('nivaro_activity as a', 'r.activity', 'a.id')
+          .where('a.collection', collection)
+          .where('a.item', String(item))
+          .where('a.timestamp', '<=', enteredAt)
+          .orderBy('a.timestamp', 'desc')
+          .first('r.data') as Promise<{ data: string | null } | undefined>,
+        db('nivaro_comments')
+          .where({ collection, item: String(item) })
+          .where('created_at', '>', enteredAt)
+          .count('* as c')
+          .first()
+          .catch(() => ({ c: 0 })) as Promise<{ c: number | string } | undefined>,
+        db('nivaro_addendums')
+          .where({ parent_collection: collection, parent_id: String(item) })
+          .where('created_at', '>', enteredAt)
+          .select('status', 'cost_impact')
+          .catch(() => []) as Promise<Array<{ status: string; cost_impact: number | null }>>
+      ])
+
+      // Merge deltas oldest→newest: first-write-wins for the OLD side would
+      // need the pre-window snapshot anyway; last-write-wins for NEW is what
+      // the approver will actually see on the record.
+      let oldRow: Record<string, unknown> = {}
+      try {
+        oldRow = preWindow?.data ? (JSON.parse(preWindow.data) as Record<string, unknown>) : {}
+      } catch {
+        oldRow = {}
+      }
+      const changed = new Map<string, unknown>()
+      const editors = new Set<string>()
+      for (const rev of inWindow) {
+        try {
+          const delta = rev.delta ? (JSON.parse(rev.delta) as Record<string, unknown>) : {}
+          for (const [k, v] of Object.entries(delta)) changed.set(k, v)
+          if (rev.user) editors.add(rev.user)
+        } catch {
+          /* one bad delta must not sink the brief */
+        }
+      }
+
+      const IGNORED = new Set(['date_updated', 'user_updated', 'changed', 'last_state_change'])
+      const fieldChanges = [...changed.entries()]
+        .filter(([k]) => !IGNORED.has(k))
+        .slice(0, 15)
+        .map(([field, next]) => ({
+          field,
+          old: field in oldRow ? (oldRow[field] ?? null) : undefined,
+          new: next ?? null
+        }))
+
+      let editorNames: string[] = []
+      if (editors.size > 0) {
+        const rows = (await db('nivaro_users')
+          .whereIn('id', [...editors])
+          .select('first_name', 'last_name', 'email')) as Array<{
+          first_name: string | null
+          last_name: string | null
+          email: string
+        }>
+        editorNames = rows.map(
+          (u) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+        )
+      }
+
+      return reply.send({
+        data: {
+          entered_at: enteredAt.toISOString(),
+          days_in_state: Math.floor((Date.now() - enteredAt.getTime()) / 86_400_000),
+          revisions: inWindow.length,
+          field_changes: fieldChanges,
+          changed_total: [...changed.keys()].filter((k) => !IGNORED.has(k)).length,
+          comments: Number(commentCount?.c ?? 0),
+          addendums: {
+            count: addendums.length,
+            cost_impact: addendums.reduce((sum, a) => sum + (Number(a.cost_impact) || 0), 0)
+          },
+          edited_by: editorNames
+        }
+      })
+    }
+  )
+
+  /**
+   * Impact preview for a PROPOSED skip-criteria change, before it is saved.  /**
+   * Impact preview for a PROPOSED skip-criteria change, before it is saved.
+   *
+   * Editing a state's skip criteria on a template with hundreds of live
+   * records is a blind change: the editor shows the config, never which
+   * records' approval paths flip. This evaluates the state's CURRENT criteria
+   * and the PROPOSED criteria against real records in active instances and
+   * returns only the ones whose skip decision CHANGES — the honest answer to
+   * "what happens if I save this".
+   *
+   * Read-only by construction (evaluateSkipCriteriaDetailed with an override
+   * — nothing is written), admin-only, capped: impact is a sample of the
+   * first `limit` active instances (default 200, max 1000) ordered newest
+   * first, and the response says when it was truncated.
+   */
+  app.post('/:id/simulate-impact', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id: templateId } = req.params as { id: string }
+    const body = req.body as {
+      state_id?: string
+      skip_criteria?: import('../services/workflow-transitions.js').SkipCriteria | null
+      skip_if_no_owners?: boolean
+      limit?: number
+    }
+    if (!body.state_id) return reply.code(400).send({ error: 'state_id is required' })
+
+    const state = await db('nivaro_workflow_states')
+      .where({ id: body.state_id, template: templateId })
+      .first()
+    if (!state) return reply.code(404).send({ error: 'State not found on this template' })
+
+    const limit = Math.min(Math.max(Number(body.limit) || 200, 1), 1000)
+    const instances = (await db('nivaro_workflow_instances as wi')
+      .join('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+      .where('wi.template', templateId)
+      .whereNot('s.is_terminal', true)
+      .orderBy('wi.started_at', 'desc')
+      .limit(limit + 1)
+      .select('wi.id as instance_id', 'wi.collection', 'wi.item')) as Array<{
+      instance_id: string
+      collection: string
+      item: string
+    }>
+    const truncated = instances.length > limit
+    const sample = instances.slice(0, limit)
+
+    const { evaluateSkipCriteriaDetailed } = await import(
+      '../services/workflow-transitions.js'
+    )
+
+    const changes: Array<{
+      collection: string
+      item: string
+      current: boolean
+      proposed: boolean
+      proposed_reasons: string[]
+    }> = []
+    let evaluated = 0
+    for (const inst of sample) {
+      let record: Record<string, unknown> | undefined
+      try {
+        record = (await db(inst.collection)
+          .where({ id: inst.item })
+          .first()) as Record<string, unknown> | undefined
+      } catch {
+        record = undefined
+      }
+      if (!record) continue
+      evaluated++
+      const [current, proposed] = await Promise.all([
+        evaluateSkipCriteriaDetailed(
+          body.state_id,
+          record,
+          inst.instance_id,
+          inst.collection,
+          inst.item,
+          db
+        ),
+        evaluateSkipCriteriaDetailed(
+          body.state_id,
+          record,
+          inst.instance_id,
+          inst.collection,
+          inst.item,
+          db,
+          { criteria: body.skip_criteria ?? null, skipIfNoOwners: body.skip_if_no_owners }
+        )
+      ])
+      if (current.skipped !== proposed.skipped) {
+        changes.push({
+          collection: inst.collection,
+          item: inst.item,
+          current: current.skipped,
+          proposed: proposed.skipped,
+          proposed_reasons: proposed.reasons
+        })
+      }
+    }
+
+    return reply.send({
+      data: {
+        state: { id: body.state_id, label: (state as { label?: string }).label },
+        evaluated,
+        truncated,
+        now_skipped: changes.filter((c) => c.proposed).length,
+        now_required: changes.filter((c) => !c.proposed).length,
+        changes: changes.slice(0, 100)
       }
     })
   })

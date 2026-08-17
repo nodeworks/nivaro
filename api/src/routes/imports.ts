@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { selectInChunks } from '../services/db-batch.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -373,6 +374,199 @@ export async function importsRoutes(app: FastifyInstance) {
   })
 
   // POST / — create import job and kick off processing
+  /**
+   * Diff preview — "42 new, 7 changed, 2 conflicts" BEFORE anything commits.
+   *
+   * Mirrors processImportJob's matching logic exactly (same id_field lookup,
+   * same strategy semantics) without writing a row, so the numbers on the
+   * confirm step are the numbers the import will produce. Classifications:
+   *
+   *   new        — no id_field, empty id value, or no existing match
+   *   unchanged  — match exists and every mapped value already agrees
+   *   changed    — match exists, values differ, strategy will update it
+   *   conflict   — one of two shapes an operator must LOOK at:
+   *                  · match exists + values differ + strategy is `skip` —
+   *                    the file carries data that will be silently dropped
+   *                  · the same id appears on multiple file rows — last write
+   *                    wins and the file is ambiguous about which that is
+   *
+   * Values compare as trimmed strings with a numeric-equality fallback
+   * ("100.0" vs 100 is not a change). Field-level old→new diffs return for
+   * the first 50 changed/conflicted rows.
+   */
+  app.post('/preview', async (req, reply) => {
+    const body = req.body as {
+      collection?: string
+      csv_data?: string
+      column_map?: Record<string, string>
+      id_field?: string | null
+      duplicate_strategy?: string
+    }
+    const collection = String(body.collection ?? '')
+    if (!collection || /^nivaro_/i.test(collection) || !/^[A-Za-z_][\w]*$/.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    if (!body.csv_data) return reply.code(400).send({ error: 'csv_data is required' })
+
+    const lines = String(body.csv_data)
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .filter((l) => l.trim())
+    if (lines.length < 2) {
+      return reply.code(400).send({ error: 'CSV needs a header row and at least one data row' })
+    }
+
+    const headers = parseCSVLine(lines[0])
+    const PREVIEW_CAP = 5000
+    const dataLines = lines.slice(1)
+    const truncated = dataLines.length > PREVIEW_CAP
+    const scanned = dataLines.slice(0, PREVIEW_CAP)
+    const columnMap = body.column_map ?? {}
+    const idField = body.id_field || null
+    const strategy = body.duplicate_strategy ?? 'skip'
+
+    // Map every row once.
+    const mapped: Array<Record<string, unknown>> = scanned.map((line) => {
+      const values = parseCSVLine(line)
+      const rowData: Record<string, unknown> = {}
+      for (const [csvCol, fieldName] of Object.entries(columnMap)) {
+        if (!fieldName) continue
+        const colIdx = headers.indexOf(csvCol)
+        if (colIdx >= 0) rowData[fieldName] = values[colIdx] ?? null
+      }
+      return rowData
+    })
+
+    const same = (a: unknown, b: unknown): boolean => {
+      const as = String(a ?? '').trim()
+      const bs = String(b ?? '').trim()
+      if (as === bs) return true
+      const an = Number(as)
+      const bn = Number(bs)
+      return as !== '' && bs !== '' && Number.isFinite(an) && Number.isFinite(bn) && an === bn
+    }
+
+    let newCount = 0
+    let unchanged = 0
+    let changed = 0
+    let conflicts = 0
+    const fieldChangeCounts: Record<string, number> = {}
+    const diffs: Array<{
+      row: number
+      id: string
+      kind: 'changed' | 'conflict'
+      reason?: string
+      fields: Array<{ field: string; old: unknown; new: unknown }>
+    }> = []
+
+    if (!idField) {
+      newCount = mapped.length
+    } else {
+      // Batch-fetch every existing match in chunks — the per-row lookup the
+      // real import does would make previewing a 5k file 5k round trips.
+      const idValues = mapped
+        .map((r) => r[idField])
+        .filter((v) => v != null && String(v).trim() !== '')
+        .map((v) => String(v))
+      const distinct = [...new Set(idValues)]
+      const mappedFields = [...new Set(Object.values(columnMap).filter(Boolean))]
+      let existingRows: Array<Record<string, unknown>> = []
+      try {
+        existingRows = await selectInChunks(distinct, 1000, (chunk) =>
+          db(collection)
+            .whereIn(idField, chunk)
+            .select([...new Set([idField, ...mappedFields])])
+        )
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: `Could not read ${collection}: ${(err as Error).message.slice(0, 200)}` })
+      }
+      const existingById = new Map(existingRows.map((r) => [String(r[idField]), r]))
+
+      // Duplicate ids WITHIN the file — ambiguous, always a conflict.
+      const seenInFile = new Map<string, number>()
+      for (const v of idValues) seenInFile.set(v, (seenInFile.get(v) ?? 0) + 1)
+
+      const dupReported = new Set<string>()
+      mapped.forEach((rowData, i) => {
+        const idVal = rowData[idField]
+        const idStr = idVal == null ? '' : String(idVal).trim()
+        if (!idStr) {
+          newCount++
+          return
+        }
+        if ((seenInFile.get(idStr) ?? 0) > 1 && !dupReported.has(idStr)) {
+          dupReported.add(idStr)
+          conflicts++
+          if (diffs.length < 50) {
+            diffs.push({
+              row: i + 2,
+              id: idStr,
+              kind: 'conflict',
+              reason: `id appears ${seenInFile.get(idStr)} times in the file — last row wins`,
+              fields: []
+            })
+          }
+          return
+        }
+        if (dupReported.has(idStr)) return // counted once per duplicated id
+
+        const existing = existingById.get(idStr)
+        if (!existing) {
+          newCount++
+          return
+        }
+        const fieldDiffs: Array<{ field: string; old: unknown; new: unknown }> = []
+        for (const f of mappedFields) {
+          if (f === idField) continue
+          if (!(f in rowData)) continue
+          if (!same(existing[f], rowData[f])) {
+            fieldDiffs.push({ field: f, old: existing[f] ?? null, new: rowData[f] ?? null })
+            fieldChangeCounts[f] = (fieldChangeCounts[f] ?? 0) + 1
+          }
+        }
+        if (fieldDiffs.length === 0) {
+          unchanged++
+          return
+        }
+        if (strategy === 'skip') {
+          // The file disagrees with the database and the strategy will DROP
+          // the file's version — the one outcome worth a hard look.
+          conflicts++
+          if (diffs.length < 50) {
+            diffs.push({
+              row: i + 2,
+              id: idStr,
+              kind: 'conflict',
+              reason: 'record exists and differs — strategy "skip" discards these values',
+              fields: fieldDiffs
+            })
+          }
+        } else {
+          changed++
+          if (diffs.length < 50) {
+            diffs.push({ row: i + 2, id: idStr, kind: 'changed', fields: fieldDiffs })
+          }
+        }
+      })
+    }
+
+    return reply.send({
+      data: {
+        total: mapped.length,
+        truncated,
+        new: newCount,
+        unchanged,
+        changed,
+        conflicts,
+        field_change_counts: fieldChangeCounts,
+        diffs
+      }
+    })
+  })
+
   app.post('/', async (req, reply) => {
     const body = req.body as {
       collection?: string

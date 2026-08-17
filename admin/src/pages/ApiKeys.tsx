@@ -202,6 +202,7 @@ interface FormState {
   scopes: ApiKeyScope[]
   ip_allowlist: string
   rate_limit_per_minute: string
+  scope_restrictions: string
 }
 
 const FORM_DEFAULTS: FormState = {
@@ -209,7 +210,8 @@ const FORM_DEFAULTS: FormState = {
   expires_at: '',
   scopes: [{ collection: ALL_COLLECTIONS, actions: ['*'] }],
   ip_allowlist: '',
-  rate_limit_per_minute: ''
+  rate_limit_per_minute: '',
+  scope_restrictions: ''
 }
 
 function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
@@ -287,12 +289,21 @@ export function ApiKeysPage() {
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean)
+    let scopeRestrictions: unknown = null
+    if (form.scope_restrictions.trim()) {
+      try {
+        scopeRestrictions = JSON.parse(form.scope_restrictions)
+      } catch {
+        return toast.error('Row scope must be valid JSON')
+      }
+    }
     createMut.mutate({
       name: form.name.trim(),
       scopes,
       expires_at: form.expires_at || null,
       ip_allowlist: allowlist,
-      rate_limit_per_minute: form.rate_limit_per_minute ? Number(form.rate_limit_per_minute) : null
+      rate_limit_per_minute: form.rate_limit_per_minute ? Number(form.rate_limit_per_minute) : null,
+      scope_restrictions: scopeRestrictions
     })
   }
 
@@ -480,6 +491,23 @@ export function ApiKeysPage() {
                 />
                 <p className='text-[11px] text-slate-400'>
                   Leave empty to allow requests from any IP. IPv4 only.
+                </p>
+              </div>
+
+              <div className='space-y-1.5'>
+                <Label htmlFor='key-rowscope'>Row scope (JSON, optional)</Label>
+                <Textarea
+                  id='key-rowscope'
+                  rows={2}
+                  value={form.scope_restrictions}
+                  onChange={(e) => setForm((f) => ({ ...f, scope_restrictions: e.target.value }))}
+                  placeholder='[{"dimension": "division", "values": [1]}]'
+                  className='font-mono text-[12px]'
+                />
+                <p className='text-[11px] text-slate-400'>
+                  Restricts the key to specific User Scope dimension values — rows outside them are
+                  invisible to the key, even though its owner is an admin. Dimension names come from
+                  /scope-dimensions; values are target-record ids.
                 </p>
               </div>
 

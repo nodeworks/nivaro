@@ -64,10 +64,13 @@ describe('runImportPipeline — header rules', () => {
     })
     const { values } = await runImportPipeline({
       config,
-      rows: [{ Note: 'Q-123' }],
+      rows: [{ Note: 'A <note> & more\nsecond line' }],
       lookup: NO_LOOKUP
     })
-    expect((values.objective as any).blocks[0].data.text).toBe('Q-123')
+    // Tiptap HTML (storage format since the 2026-08-13 conversion) — entities
+    // escaped, one <p> per line. An EditorJS object here renders as
+    // "[object Object]" in the prefill editor.
+    expect(values.objective).toBe('<p>A &lt;note&gt; &amp; more</p><p>second line</p>')
     expect(values.other).toBeUndefined()
   })
 })

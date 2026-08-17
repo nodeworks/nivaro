@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table'
+import { SlowTracesPanel } from '@/components/slow-traces'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
 
@@ -275,6 +276,10 @@ export function ApiAnalyticsPage() {
               </TableBody>
             </Table>
           </div>
+        </div>
+
+        <div className='mt-6'>
+          <SlowTracesPanel />
         </div>
       </div>
     </div>

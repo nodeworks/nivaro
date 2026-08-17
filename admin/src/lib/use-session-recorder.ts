@@ -4,26 +4,77 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
 /**
- * rrweb session recorder — runs only when Settings enables session recording.
+ * rrweb session recorder — two modes, one hook.
  *
- * Privacy defaults: every input masked, elements with .nvr-no-record blocked.
- * Events buffer client-side and flush every 10s (or 150 events); a full DOM
- * checkout every 60s keeps replays seekable. The server owns the size cap —
- * on 409/413 the recorder stops for the session.
+ * FULL mode (`session_recording_enabled`): events stream to the server
+ * continuously, exactly as before.
+ *
+ * ERROR-CLIP mode (`error_replay_enabled`, when full recording is off):
+ * rrweb records into a rolling IN-MEMORY buffer — two 30s checkout windows,
+ * so 30-60s of history — and uploads NOTHING. When an error is reported,
+ * `captureErrorClip()` flushes the buffer as a short recording labelled
+ * app='error-clip' and the issue row links to it. Support sees what the user
+ * did in the minute before the crash without anyone recording all day.
+ *
+ * Privacy is identical in both modes: every input masked, .nvr-no-record
+ * blocked. In buffer mode the events never leave the browser except on error.
+ *
+ * `captureErrorClip` is a module singleton (registerDmOpener precedent) so
+ * the error boundary — a class component far from this hook — can call it.
  */
 
 const FLUSH_MS = 10_000
 const FLUSH_COUNT = 150
+/** Buffer checkout window — two of these = the clip length ceiling. */
+const CLIP_WINDOW_MS = 30_000
+/** One clip per error burst: reuse a clip minted this recently. */
+const CLIP_REUSE_MS = 30_000
+
+export interface ErrorReplayLink {
+  recording_id: string
+  /** Milliseconds into the recording where the error happened. Null for
+   *  clips — the whole clip IS the error context. */
+  offset_ms: number | null
+}
+
+type ClipCapture = () => Promise<ErrorReplayLink | null>
+
+let captureFn: ClipCapture | null = null
+
+/**
+ * Grab the replay link for an error being reported right now. Resolves null
+ * when no recorder is active (both settings off, or recording failed) —
+ * error reporting must never wait on or break because of replay capture.
+ */
+// Dev-only test handle — lets an automated browser exercise the capture path
+// without needing to crash a real component.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __nvrCaptureErrorClip?: unknown }).__nvrCaptureErrorClip = () =>
+    captureErrorClip()
+}
+
+export async function captureErrorClip(): Promise<ErrorReplayLink | null> {
+  if (!captureFn) return null
+  try {
+    return await Promise.race([
+      captureFn(),
+      // An error report should not stall behind a slow clip upload.
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000))
+    ])
+  } catch {
+    return null
+  }
+}
 
 export function useSessionRecorder() {
   const { user } = useAuth()
 
-  const { data: enabled } = useQuery({
+  const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
     queryFn: () =>
       api
-        .get<{ data: { enabled: boolean } }>('/session-recordings/enabled')
-        .then((r) => r.data.data.enabled),
+        .get<{ data: { enabled: boolean; error_replay?: boolean } }>('/session-recordings/enabled')
+        .then((r) => r.data.data),
     enabled: !!user,
     staleTime: 5 * 60_000,
     retry: false
@@ -35,10 +86,27 @@ export function useSessionRecorder() {
     seq: number
     stop: (() => void) | null
     dead: boolean
-  }>({ recordingId: null, buffer: [], seq: 0, stop: null, dead: false })
+    startedAt: number
+    // Buffer mode: previous + current checkout windows.
+    prevWindow: unknown[]
+    lastClip: { at: number; link: ErrorReplayLink | null } | null
+  }>({
+    recordingId: null,
+    buffer: [],
+    seq: 0,
+    stop: null,
+    dead: false,
+    startedAt: 0,
+    prevWindow: [],
+    lastClip: null
+  })
 
+  const fullMode = modes?.enabled === true
+  const clipMode = !fullMode && modes?.error_replay === true
+
+  // ── Full recording (unchanged behaviour) ─────────────────────────────────
   useEffect(() => {
-    if (!enabled || !user) return
+    if (!fullMode || !user) return
     let cancelled = false
     const state = stateRef.current
     state.dead = false
@@ -53,7 +121,6 @@ export function useSessionRecorder() {
       } catch (err) {
         const status = (err as { response?: { status?: number } }).response?.status
         if (status === 409 || status === 413) {
-          // cap reached or closed — stop recording for this session
           state.dead = true
           state.stop?.()
         }
@@ -62,13 +129,12 @@ export function useSessionRecorder() {
 
     async function start() {
       try {
-        // Tell the server where this is happening — a replay list that cannot
-        // distinguish production from a developer's laptop is hard to act on.
         const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
           origin: window.location.origin
         })
         if (cancelled) return
         state.recordingId = r.data.data.id
+        state.startedAt = Date.now()
         const { record } = await import('rrweb')
         if (cancelled) return
         state.stop =
@@ -81,6 +147,15 @@ export function useSessionRecorder() {
             blockClass: 'nvr-no-record',
             checkoutEveryNms: 60_000
           }) ?? null
+
+        // A live full recording answers an error capture with itself + the
+        // error's offset, after pushing whatever is still buffered.
+        captureFn = async () => {
+          if (!state.recordingId) return null
+          const offset = Date.now() - state.startedAt
+          await flush().catch(() => {})
+          return { recording_id: state.recordingId, offset_ms: offset }
+        }
       } catch {
         /* recording is best-effort — never disturb the session */
       }
@@ -90,13 +165,13 @@ export function useSessionRecorder() {
     const timer = setInterval(() => void flush(), FLUSH_MS)
 
     const onHide = () => {
-      // last-gasp flush via beacon-ish fire and forget
       void flush()
     }
     document.addEventListener('visibilitychange', onHide)
 
     return () => {
       cancelled = true
+      captureFn = null
       document.removeEventListener('visibilitychange', onHide)
       clearInterval(timer)
       state.stop?.()
@@ -108,5 +183,69 @@ export function useSessionRecorder() {
         }
       })
     }
-  }, [enabled, user])
+  }, [fullMode, user])
+
+  // ── Error-clip buffer mode ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!clipMode || !user) return
+    let cancelled = false
+    const state = stateRef.current
+
+    async function start() {
+      try {
+        const { record } = await import('rrweb')
+        if (cancelled) return
+        state.buffer = []
+        state.prevWindow = []
+        state.stop =
+          record({
+            emit(event, isCheckout) {
+              if (isCheckout) {
+                // A checkout event is a full DOM snapshot — it starts a
+                // self-sufficient window, so the one before last can drop.
+                state.prevWindow = state.buffer
+                state.buffer = [event]
+              } else {
+                state.buffer.push(event)
+              }
+            },
+            maskAllInputs: true,
+            blockClass: 'nvr-no-record',
+            checkoutEveryNms: CLIP_WINDOW_MS
+          }) ?? null
+
+        captureFn = async () => {
+          // One clip per burst — a render-loop error must not mint dozens.
+          if (state.lastClip && Date.now() - state.lastClip.at < CLIP_REUSE_MS) {
+            return state.lastClip.link
+          }
+          state.lastClip = { at: Date.now(), link: null }
+          const events = [...state.prevWindow, ...state.buffer]
+          if (events.length === 0) return null
+          const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
+            clip: true,
+            origin: window.location.origin
+          })
+          const id = r.data.data.id
+          await api.post(`/session-recordings/${id}/events`, { seq: 0, events })
+          await api.post(`/session-recordings/${id}/end`).catch(() => {})
+          const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
+          state.lastClip = { at: Date.now(), link }
+          return link
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    void start()
+    return () => {
+      cancelled = true
+      captureFn = null
+      state.stop?.()
+      state.stop = null
+      state.buffer = []
+      state.prevWindow = []
+    }
+  }, [clipMode, user])
 }
