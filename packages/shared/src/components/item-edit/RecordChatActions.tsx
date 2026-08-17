@@ -110,7 +110,7 @@ export function RecordChatActions({
 
   return (
     <div ref={rootRef} className='relative'>
-      <div className='inline-flex h-8 items-stretch overflow-hidden rounded-md border border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
+      <div className='inline-flex h-9 items-stretch overflow-hidden rounded-md border border-input bg-background text-sm font-medium shadow-sm'>
         {/* Primary click = straight into the record's own room. No menu, no
             picking — the room IS the point of the button. */}
         <button
@@ -120,7 +120,7 @@ export function RecordChatActions({
             else setShareOpen((o) => !o)
           }}
           title="Open this record's chat room"
-          className='inline-flex items-center gap-1.5 px-2.5 text-[12px] hover:bg-muted'
+          className='inline-flex items-center gap-1.5 px-3 transition-colors hover:bg-accent hover:text-accent-foreground'
           data-record-chat
         >
           <MessageSquare className='h-3.5 w-3.5' strokeWidth={2} />
@@ -132,7 +132,7 @@ export function RecordChatActions({
             onClick={() => setShareOpen((o) => !o)}
             title='Send this record to a room'
             aria-label='Send this record to a room'
-            className='inline-flex items-center border-l border-slate-200 px-1 hover:bg-muted dark:border-border'
+            className='inline-flex items-center border-l border-input px-1.5 transition-colors hover:bg-accent hover:text-accent-foreground'
             data-record-chat-more
           >
             <ChevronDown className='h-3 w-3' strokeWidth={2} />

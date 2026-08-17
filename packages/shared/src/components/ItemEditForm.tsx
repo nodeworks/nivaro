@@ -4605,7 +4605,7 @@ export function ItemEditForm({
                     }
                     onDuplicate(prefill)
                   }}
-                  className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 hover:bg-muted dark:border-border dark:bg-card dark:text-slate-300'
+                  className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                   data-duplicate-record
                 >
                   <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
