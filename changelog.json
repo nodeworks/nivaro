@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-16T23:21:16.956Z",
+  "generated_at": "2026-08-17T00:10:15.503Z",
   "releases": [
+    {
+      "version": "0.1.54",
+      "tag": "v0.1.54",
+      "date": "2026-08-16T20:10:13-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "efp",
+              "text": "scope BOM categories by Zone and Project Type",
+              "hash": "28629e7c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "dropdown options were unreadable in dark mode",
+              "hash": "5e4079cb"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.53",
       "tag": "v0.1.53",
-      "date": "2026-08-16T19:21:15-04:00",
+      "date": "2026-08-16T19:21:17-04:00",
       "sections": [
         {
           "label": "Added",
