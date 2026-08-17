@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T21:21:38.090Z",
+  "generated_at": "2026-08-17T21:42:38.180Z",
   "releases": [
+    {
+      "version": "0.1.61",
+      "tag": "v0.1.61",
+      "date": "2026-08-17T17:42:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "scheduled OOO, field history, time travel, record links, make-task, Teams calls",
+              "hash": "c4460920"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.60",
       "tag": "v0.1.60",
-      "date": "2026-08-17T17:21:36-04:00",
+      "date": "2026-08-17T17:21:38-04:00",
       "sections": [
         {
           "label": "Added",
