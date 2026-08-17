@@ -1,10 +1,76 @@
 {
-  "generated_at": "2026-08-17T19:53:09.987Z",
+  "generated_at": "2026-08-17T21:21:38.090Z",
   "releases": [
+    {
+      "version": "0.1.60",
+      "tag": "v0.1.60",
+      "date": "2026-08-17T17:21:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "chat round 2 — pins, bot context/reminders/DM, room card, request access, last-touched",
+              "hash": "dc8cb38a"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "\"@efp is thinking…\" indicator while the chat bot works",
+              "hash": "689ba5f0"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "share-to-room popup survived picking a room",
+              "hash": "11cfd65f"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "record Chat button opens the record's room directly",
+              "hash": "cc60f71d"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "tooltip white-on-white in efp-new — slate-900 tips use literal hex",
+              "hash": "3225c591"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "dark-mode sweep — 24 floating/sticky surfaces missing dark variants",
+              "hash": "0804b057"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "import parse errors stop displacing the header; chat gets a Tips popover",
+              "hash": "93450812"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "chat notify bell alignment + export MyWorkView/UserAvatar/lightbox from @nivaro/react",
+              "hash": "0a373826"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.1.59",
       "tag": "v0.1.59",
-      "date": "2026-08-17T15:53:07-04:00",
+      "date": "2026-08-17T15:53:10-04:00",
       "sections": [
         {
           "label": "Added",
