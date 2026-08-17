@@ -597,7 +597,7 @@ export function ChatRoomView({
           <Search className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
         {roomInfo && (
-          <div className='relative'>
+          <div className='relative flex items-center'>
             <button
               type='button'
               onClick={() => setNotifyMenuOpen((o) => !o)}

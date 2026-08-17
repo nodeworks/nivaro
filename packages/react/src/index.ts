@@ -20,8 +20,12 @@ export type {
   ReportViewProps
 } from '@nivaro/shared'
 export {
+  canPreviewFile,
   CollectionBrowserView,
   CommentPanel,
+  FilePreviewLightbox,
+  MyWorkView,
+  UserAvatar,
   FormulaEditor,
   evaluateBoolean,
   evaluateExpression,
