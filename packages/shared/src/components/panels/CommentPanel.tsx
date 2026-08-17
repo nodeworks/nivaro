@@ -84,7 +84,12 @@ function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
-  const open = !!mention && debouncedQuery.length >= 2 && users.length > 0
+  // "@owners" is a pseudo-entry: it fans out server-side to whoever currently
+  // resolves as the record's pipeline owners.
+  const ownersMatch =
+    !!mention && debouncedQuery.length >= 2 && 'owners'.startsWith(debouncedQuery.toLowerCase())
+  const open = !!mention && debouncedQuery.length >= 2 && (users.length > 0 || ownersMatch)
+  const optionCount = users.length + (ownersMatch ? 1 : 0)
 
   // The menu portals to <body>: CommentPanel's rounded card is overflow-hidden
   // (and the drill-down sheet adds more clipping contexts), so an absolutely
@@ -120,10 +125,10 @@ function MentionTextarea({
     if (!next) setHighlight(0)
   }
 
-  function pick(u: MentionUser) {
+  function pick(u: MentionUser | '__owners__') {
     if (!mention || !ref.current) return
     const caret = ref.current.selectionStart ?? value.length
-    const inserted = `@${mentionHandle(u)} `
+    const inserted = u === '__owners__' ? '@owners ' : `@${mentionHandle(u)} `
     const next = value.slice(0, mention.start) + inserted + value.slice(caret)
     onChange(next)
     setMention(null)
@@ -139,13 +144,14 @@ function MentionTextarea({
     if (!open) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setHighlight((h) => (h + 1) % users.length)
+      setHighlight((h) => (h + 1) % optionCount)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setHighlight((h) => (h - 1 + users.length) % users.length)
+      setHighlight((h) => (h - 1 + optionCount) % optionCount)
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      pick(users[Math.min(highlight, users.length - 1)])
+      const idx = Math.min(highlight, optionCount - 1)
+      pick(ownersMatch && idx === 0 ? '__owners__' : users[ownersMatch ? idx - 1 : idx])
     } else if (e.key === 'Escape') {
       e.preventDefault()
       setMention(null)
@@ -177,7 +183,33 @@ function MentionTextarea({
             // scrollbar drags and item clicks must not trigger its onBlur.
             onMouseDown={(e) => e.preventDefault()}
           >
-            {users.map((u, i) => {
+            {ownersMatch && (
+              <button
+                type='button'
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  pick('__owners__')
+                }}
+                onMouseEnter={() => setHighlight(0)}
+                className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors ${
+                  highlight === 0 ? 'bg-nvr-cyan/10' : ''
+                }`}
+              >
+                <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy/80 dark:text-nvr-cyan'>
+                  ★
+                </span>
+                <span className='min-w-0 flex-1'>
+                  <span className='block truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                    Owners
+                  </span>
+                  <span className='block truncate text-[11px] text-slate-400'>
+                    Everyone currently assigned to this record
+                  </span>
+                </span>
+              </button>
+            )}
+            {users.map((u, rawIdx) => {
+              const i = ownersMatch ? rawIdx + 1 : rawIdx
               const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
               return (
                 <button
@@ -494,7 +526,8 @@ export function CommentPanel({
                 />
                 <div className='flex items-center justify-between'>
                   <p className='text-[11px] text-slate-400'>
-                    Type @ plus two letters to mention a teammate.
+                    Type @ plus two letters to mention a teammate, or @owners to
+                    notify everyone currently assigned.
                   </p>
                   <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
                     {create.isPending ? 'Posting…' : 'Comment'}

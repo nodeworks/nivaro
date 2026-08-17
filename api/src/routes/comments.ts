@@ -6,6 +6,7 @@ import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { can } from '../services/permissions.js'
+import { resolveStateOwners } from '../services/pipeline-engine.js'
 
 /** How a child row identifies itself, for "which forecast was this about". */
 const CHILD_LABEL_FIELDS = ['year', 'name', 'title', 'label', 'period', 'month', 'key', 'code']
@@ -116,6 +117,29 @@ interface MentionUserRow {
 }
 
 const MENTION_RE = /(@[a-zA-Z0-9._-]+)/g
+
+/** "@owners" in a comment fans out to whoever CURRENTLY resolves as the
+ *  record's pipeline owners — the author doesn't have to know their names. */
+const OWNERS_MENTION_RE = /(^|\s)@owners\b/i
+
+async function resolveOwnerMentions(
+  collection: string,
+  item: string
+): Promise<MentionUserRow[]> {
+  const instance = (await db('nivaro_workflow_instances')
+    .where({ collection, item: String(item) })
+    .whereNull('completed_at')
+    .orderBy('started_at', 'desc')
+    .first('id', 'current_state')) as { id: string; current_state: string } | undefined
+  if (!instance?.current_state) return []
+  const owners = await resolveStateOwners(instance.current_state, instance.id, collection, String(item))
+  return owners.map((o) => ({
+    id: o.id,
+    first_name: o.first_name,
+    last_name: o.last_name,
+    email: o.email
+  }))
+}
 
 // Resolve @mentions in text to nivaro_users by email prefix or first_name match.
 async function resolveMentions(text: string): Promise<MentionUserRow[]> {
@@ -586,8 +610,24 @@ export async function commentsRoutes(app: FastifyInstance) {
         updated_at: now
       })
 
-      // Resolve and persist mentions.
+      // Resolve and persist mentions. "@owners" expands to the record's
+      // current pipeline owners (resolved server-side, so the set is always
+      // the live one — never a stale name list); resolution failures degrade
+      // to no extra recipients rather than blocking the comment.
       const mentioned = await resolveMentions(body.text)
+      if (OWNERS_MENTION_RE.test(body.text)) {
+        try {
+          const owners = await resolveOwnerMentions(body.collection, body.item)
+          const seen = new Set(mentioned.map((u) => u.id))
+          for (const o of owners) {
+            if (seen.has(o.id)) continue
+            seen.add(o.id)
+            mentioned.push(o)
+          }
+        } catch {
+          /* owners are extra recipients, never a reason the note fails */
+        }
+      }
       for (const u of mentioned) {
         await db('nivaro_comment_mentions').insert({ comment: id, user: u.id })
 
