@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T16:21:53.504Z",
+  "generated_at": "2026-08-17T18:56:38.685Z",
   "releases": [
+    {
+      "version": "0.1.56",
+      "tag": "v0.1.56",
+      "date": "2026-08-17T14:56:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "LinX GraphQL compat + My Work inbox, omnisearch, avatars, actionable bell, duplicate",
+              "hash": "1e42befb"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.55",
       "tag": "v0.1.55",
-      "date": "2026-08-17T12:21:51-04:00",
+      "date": "2026-08-17T12:21:53-04:00",
       "sections": [
         {
           "label": "Added",
