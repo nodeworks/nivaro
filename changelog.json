@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T19:20:30.677Z",
+  "generated_at": "2026-08-17T19:53:09.987Z",
   "releases": [
+    {
+      "version": "0.1.59",
+      "tag": "v0.1.59",
+      "date": "2026-08-17T15:53:07-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "chat batch — reactions, edit/delete, attachments, unread divider, record cards, group DMs, AI bot",
+              "hash": "cabbed83"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.58",
       "tag": "v0.1.58",
-      "date": "2026-08-17T15:20:29-04:00",
+      "date": "2026-08-17T15:20:30-04:00",
       "sections": [
         {
           "label": "Added",
