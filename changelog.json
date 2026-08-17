@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-17T19:10:26.920Z",
+  "generated_at": "2026-08-17T19:20:30.677Z",
   "releases": [
+    {
+      "version": "0.1.58",
+      "tag": "v0.1.58",
+      "date": "2026-08-17T15:20:29-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "flow replay UI in FlowEdit",
+              "hash": "d5a9c09f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.57",
       "tag": "v0.1.57",
-      "date": "2026-08-17T15:10:25-04:00",
+      "date": "2026-08-17T15:10:26-04:00",
       "sections": [
         {
           "label": "Added",
