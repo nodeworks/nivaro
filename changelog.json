@@ -1,10 +1,64 @@
 {
-  "generated_at": "2026-08-17T21:42:38.180Z",
+  "generated_at": "2026-08-17T23:01:25.025Z",
   "releases": [
+    {
+      "version": "0.1.62",
+      "tag": "v0.1.62",
+      "date": "2026-08-17T19:01:23-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "@owners mention notifies whoever currently owns the record",
+              "hash": "e374c10e"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Duplicate copies M2M links and O2M child rows, not just scalars",
+              "hash": "a503008f"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "collapsed notes/tasks show count badge + latest preview; related-records picker polish",
+              "hash": "a74f8871"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "Chat/Duplicate header buttons match the row's Button styling",
+              "hash": "000d8a39"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "field-history icon always visible, not hover-revealed",
+              "hash": "2fdd7b63"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "field-history icon clearly visible in dark mode",
+              "hash": "9fe649d1"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.1.61",
       "tag": "v0.1.61",
-      "date": "2026-08-17T17:42:36-04:00",
+      "date": "2026-08-17T17:42:38-04:00",
       "sections": [
         {
           "label": "Added",
