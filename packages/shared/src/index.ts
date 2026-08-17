@@ -119,6 +119,7 @@ export { UserAvatar } from './components/UserAvatar'
 export { FilePreviewLightbox, canPreviewFile } from './components/FilePreviewLightbox'
 export { MyWorkView } from './components/MyWorkView'
 export { TipLayer } from './components/TipLayer'
+export { CellCopyLayer } from './components/CellCopyLayer'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { startApiVersionWatch, useApiUpdate, getApiUpdate, type ApiVersionInfo } from './lib/api-version'
 

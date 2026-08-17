@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search } from 'lucide-react'
+import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -22,6 +22,7 @@ import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
+import { CellCopyLayer } from './CellCopyLayer'
 import { TipLayer } from './TipLayer'
 
 /**
@@ -2596,6 +2597,46 @@ export function CollectionBrowserView({
       /* private mode */
     }
   }
+  // Ask the table — natural language → the server's /ai/query filter DSL,
+  // rendered as a one-off overlay result set (same posture as the admin
+  // classic browser's AI mode). Clearing the chip returns to the live query.
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiResult, setAiResult] = useState<{
+    rows: Array<Record<string, unknown>>
+    interpreted: string
+    total: number
+  } | null>(null)
+  const aiAsk = useMutation({
+    mutationFn: (prompt: string) =>
+      client.request<{
+        data: Array<Record<string, unknown>>
+        total: number
+        interpreted: string
+      }>(post('/ai/query', { collection, prompt, limit: 200 })),
+    onSuccess: (res) => {
+      setAiResult({
+        rows: res.data ?? [],
+        interpreted: res.interpreted ?? '',
+        total: res.total ?? res.data?.length ?? 0
+      })
+      setSelectedIds([])
+      setPage(1)
+    },
+    onError: (err) => {
+      const status = (err as { status?: number }).status
+      const msg = (err as { response?: { error?: string } }).response?.error
+      if (status === 503) {
+        toast.error('AI is not configured — add an Anthropic API key in Settings.')
+      } else {
+        toast.error(msg ?? 'Could not answer that question')
+      }
+    }
+  })
+  const clearAi = () => {
+    setAiResult(null)
+    setAiPrompt('')
+  }
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([])
   const [activeViewId, setActiveViewId] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -2939,8 +2980,8 @@ export function CollectionBrowserView({
     placeholderData: (prev) => prev,
     retry: false
   })
-  const rows = itemsRes?.data ?? []
-  const total = itemsRes?.total ?? 0
+  const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
+  const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
   // ── At-risk row highlighting (nivaro_at_risk_rules) ───────────────────────
@@ -2960,7 +3001,7 @@ export function CollectionBrowserView({
     staleTime: 60_000,
     retry: false
   })
-  const riskIdsKey = (itemsRes?.data ?? []).map((r) => String(r.id)).join(',')
+  const riskIdsKey = rows.map((r) => String(r.id)).join(',')
   const { data: riskMap = {} as Record<string, { at_risk: boolean; rule: string; color: string }> } =
     useQuery({
     queryKey: ['cbv-risk', collection, riskIdsKey],
@@ -2969,19 +3010,19 @@ export function CollectionBrowserView({
         .request<{ data: Record<string, { at_risk: boolean; rule: string; color: string }> }>(
           post('/at-risk/evaluate', {
             collection,
-            ids: (itemsRes?.data ?? []).map((r) => String(r.id))
+            ids: rows.map((r) => String(r.id))
           })
         )
         .then((r) => r.data ?? {})
         .catch(() => ({}) as Record<string, { at_risk: boolean; rule: string; color: string }>),
-    enabled: !!collection && riskRules.length > 0 && (itemsRes?.data ?? []).length > 0,
+    enabled: !!collection && riskRules.length > 0 && rows.length > 0,
     staleTime: 30_000,
     retry: false
   })
 
   // Ids of the rows currently rendered — pipeline state, owners and at-risk
   // are all resolved for just this page rather than the whole collection.
-  const pageIdsKey = (itemsRes?.data ?? []).map((r) => String(r.id)).join(',')
+  const pageIdsKey = rows.map((r) => String(r.id)).join(',')
 
   // ── Pipeline state column + bulk transitions ──────────────────────────────
   // Scoped to the visible page's ids: the unscoped endpoint returns every
@@ -3692,6 +3733,7 @@ export function CollectionBrowserView({
         }
       `}</style>
       <TipLayer />
+      <CellCopyLayer />
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
         <FilterBar
@@ -3717,6 +3759,63 @@ export function CollectionBrowserView({
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
+        <button
+          type='button'
+          onClick={() => setAiOpen((o) => !o)}
+          title='Ask the table a question'
+          className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+            aiOpen || aiResult
+              ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+          }`}
+        >
+          <Sparkles className='h-3.5 w-3.5' />
+          Ask
+        </button>
+        {aiOpen && (
+          <div className='order-last flex w-full items-center gap-2'>
+            <Sparkles className='h-4 w-4 shrink-0 text-[#00a5cc]' />
+            <input
+              autoFocus
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && aiPrompt.trim() && !aiAsk.isPending) {
+                  aiAsk.mutate(aiPrompt.trim())
+                }
+                if (e.key === 'Escape') setAiOpen(false)
+              }}
+              placeholder='Ask in plain language — "over 50k in Zone 1 still waiting on approval"'
+              className='h-8 flex-1 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] outline-none focus:border-[#00ceff80] focus:ring-2 focus:ring-[#00ceff4d] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+            />
+            <button
+              type='button'
+              disabled={!aiPrompt.trim() || aiAsk.isPending}
+              onClick={() => aiAsk.mutate(aiPrompt.trim())}
+              className='flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+            >
+              {aiAsk.isPending ? <RotateCw className='h-3.5 w-3.5 animate-spin' /> : 'Ask'}
+            </button>
+          </div>
+        )}
+        {aiResult && (
+          <span className='order-last inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#00ceff66] bg-[#00ceff14] py-1 pl-2.5 pr-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
+            <Sparkles className='h-3 w-3 shrink-0' />
+            <span className='min-w-0 truncate'>
+              {aiResult.interpreted || 'AI result'} · {fmtNum(aiResult.total)} match
+              {aiResult.total === 1 ? '' : 'es'}
+              {aiResult.total > aiResult.rows.length ? ` (showing first ${aiResult.rows.length})` : ''}
+            </span>
+            <button
+              type='button'
+              onClick={clearAi}
+              aria-label='Clear AI result'
+              className='rounded-full p-0.5 hover:bg-[#00ceff29]'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          </span>
+        )}
         <div className='relative' ref={groupRef}>
           <button
             type='button'
@@ -4253,6 +4352,7 @@ export function CollectionBrowserView({
               </div>
             ) : (
             <table
+              data-copy-cells=''
               className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
               style={{ fontVariantNumeric: 'tabular-nums' }}
             >
@@ -4667,7 +4767,7 @@ export function CollectionBrowserView({
             </p>
           )}
           {/* Pagination */}
-          {!groupBy && total > effPageSize && (
+          {!groupBy && !aiResult && total > effPageSize && (
             <div className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900'>
               <p className='text-[12px] tabular-nums text-slate-500 dark:text-slate-400'>
                 <span className='font-semibold text-slate-700 dark:text-slate-200'>

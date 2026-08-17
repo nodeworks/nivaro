@@ -18,6 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Skeleton } from './ui/skeleton'
 import { HScrollProxy } from './HScrollProxy'
+import { CellCopyLayer } from './CellCopyLayer'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -647,6 +648,7 @@ export function DataTable<T = Record<string, unknown>>({
 
   return (
     <>
+      <CellCopyLayer />
       {/* Error banner */}
       {isError && errorMessage && (
         <div className='mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700'>
@@ -724,7 +726,7 @@ export function DataTable<T = Record<string, unknown>>({
               )}
               style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
             >
-              <Table>
+              <Table data-copy-cells=''>
               <TableHeader>
                 <TableRow className='border-b border-slate-200 hover:bg-transparent'>
                   {onSelectionChange && (
