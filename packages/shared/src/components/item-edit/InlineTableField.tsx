@@ -2971,7 +2971,11 @@ export function InlineTableField({
     drawer?: ReactNode
     onDelete?: (e: React.MouseEvent) => void
   }) => (
-    <td colSpan={nestedColSpan} className='p-0'>
+    // Spans EVERY column — the leading grip/number/status cells are hidden
+    // while the panel renders (the panel header already says "Line N · …"),
+    // so nothing pushes the form to the right. Overshoot is clamped by the
+    // browser to the table's real column count.
+    <td colSpan={nestedColSpan + (showLineNumbers ? 2 : 1)} className='p-0'>
       <div
         className='my-1.5 rounded-lg border border-nvr-cyan/40 bg-white px-4 py-3 shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
         onClick={(e) => e.stopPropagation()}
@@ -3438,21 +3442,25 @@ export function InlineTableField({
                         : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
                     : ''
                 )}>
-                {enableReorder && (rowOrderField || isPendingMode) && (
-                  <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                    {rowOrderField && <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />}
-                  </td>
-                )}
-                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
-                {isPendingMode && (
-                  <td className='px-3 py-1 align-middle w-20'>
-                    {isPendingDelete
-                      ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5'>Delete</span>
-                      : isPendingEdit
-                        ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Edited</span>
-                        : null
-                    }
-                  </td>
+                {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
+                  <>
+                    {enableReorder && (rowOrderField || isPendingMode) && (
+                      <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
+                        {rowOrderField && <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />}
+                      </td>
+                    )}
+                    {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
+                    {isPendingMode && (
+                      <td className='px-3 py-1 align-middle w-20'>
+                        {isPendingDelete
+                          ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5'>Delete</span>
+                          : isPendingEdit
+                            ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Edited</span>
+                            : null
+                        }
+                      </td>
+                    )}
+                  </>
                 )}
                 {isEditing && !isPendingDelete && rowEditorMode === 'panel'
                   ? renderRowEditorPanel({
@@ -3605,17 +3613,21 @@ export function InlineTableField({
               staged pending ones: this is the row currently being typed. */}
           {isEditingNew && (
             <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
-              {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
-              {/* This row had no number cell at all, so every column after it
-                  sat one place left of its header. It also shows the number the
-                  row is about to take, continuing past the saved and staged
-                  rows, rather than nothing. */}
-              {showLineNumbers && (
-                <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
-                  {rows.length + pendingRows.length + 1}
-                </td>
+              {rowEditorMode !== 'panel' && (
+                <>
+                  {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
+                  {/* This row had no number cell at all, so every column after it
+                      sat one place left of its header. It also shows the number the
+                      row is about to take, continuing past the saved and staged
+                      rows, rather than nothing. */}
+                  {showLineNumbers && (
+                    <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                      {rows.length + pendingRows.length + 1}
+                    </td>
+                  )}
+                  {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
+                </>
               )}
-              {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
               {rowEditorMode === 'panel'
                 ? renderRowEditorPanel({
                     identity: `${showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}New line`,
@@ -3809,22 +3821,26 @@ export function InlineTableField({
                     ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                     : isPrefilled ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
                 )}>
-                {enableReorder && (
-                  <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                    <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
-                  </td>
+                {!(isEditing && rowEditorMode === 'panel') && (
+                  <>
+                    {enableReorder && (
+                      <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
+                        <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                      </td>
+                    )}
+                    {/* Continue the sequence rather than restarting: a new row
+                        showed "1" beside the saved row already numbered 1. */}
+                    {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{rows.length + ri + 1}</td>}
+                    <td className='px-3 py-1 align-middle w-16'>
+                      {!isEditing && !isPrefilled && (
+                        <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Pending</span>
+                      )}
+                      {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
+                        <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
+                      )}
+                    </td>
+                  </>
                 )}
-                {/* Continue the sequence rather than restarting: a new row
-                    showed "1" beside the saved row already numbered 1. */}
-                {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{rows.length + ri + 1}</td>}
-                <td className='px-3 py-1 align-middle w-16'>
-                  {!isEditing && !isPrefilled && (
-                    <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Pending</span>
-                  )}
-                  {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
-                    <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
-                  )}
-                </td>
                 {isEditing && rowEditorMode === 'panel'
                   ? renderRowEditorPanel({
                       identity: `${showLineNumbers ? `Line ${rows.length + ri + 1} · ` : ''}${rowIdentityLabel(isEditing ? editState!.draft : row)}`,
