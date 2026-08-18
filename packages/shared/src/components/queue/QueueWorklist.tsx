@@ -51,6 +51,7 @@ import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { titleCase, cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
+import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import {
   type Column,
@@ -553,6 +554,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     }
     return out
   }, [queue?.sources])
+  // Layout choices for the single-collection New button (slug-opt-in) —
+  // plain button when the collection has no alternative layouts.
+  const newItemLayouts = useNewItemLayouts(
+    creatableCollections.length === 1 ? creatableCollections[0] : null
+  )
 
   // Every queue defaults to priority order — the table's default order IS the
   // triage order. Materialized queues serve priority sorts from a narrow scan
@@ -2333,22 +2339,70 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               </button>
             )}
             {creatableCollections.length === 1 && (
-              <button
-                type='button'
-                onClick={() =>
-                  itemNav.open({
-                    collection: creatableCollections[0],
-                    itemId: 'new',
-                    // Open a new record on the same layout the queue opens
-                    // existing ones with, so creating and reviewing match.
-                    layoutSlug: displayConfig?.item_layout ?? null
-                  })
-                }
-                className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
-              >
-                <Plus className='h-3.5 w-3.5' />
-                New {titleCase(creatableCollections[0])}
-              </button>
+              newItemLayouts ? (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type='button'
+                      className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
+                    >
+                      <Plus className='h-3.5 w-3.5' />
+                      New {titleCase(creatableCollections[0])}
+                      <ChevronDown className='h-3 w-3 opacity-60' />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align='end' className='w-60 p-1'>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        itemNav.open({
+                          collection: creatableCollections[0],
+                          itemId: 'new',
+                          // Same layout the queue opens existing records with.
+                          layoutSlug: displayConfig?.item_layout ?? null
+                        })
+                      }
+                      className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                    >
+                      {newItemLayouts.active?.create_label ?? newItemLayouts.active?.name ?? 'Default layout'}
+                      <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>default</span>
+                    </button>
+                    {newItemLayouts.options.map((l) => (
+                      <button
+                        key={l.id}
+                        type='button'
+                        onClick={() =>
+                          itemNav.open({
+                            collection: creatableCollections[0],
+                            itemId: 'new',
+                            layoutSlug: l.slug
+                          })
+                        }
+                        className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                      >
+                        {l.create_label ?? l.name}
+                      </button>
+                    ))}
+                  </PopoverContent>
+                </Popover>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() =>
+                    itemNav.open({
+                      collection: creatableCollections[0],
+                      itemId: 'new',
+                      // Open a new record on the same layout the queue opens
+                      // existing ones with, so creating and reviewing match.
+                      layoutSlug: displayConfig?.item_layout ?? null
+                    })
+                  }
+                  className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
+                >
+                  <Plus className='h-3.5 w-3.5' />
+                  New {titleCase(creatableCollections[0])}
+                </button>
+              )
             )}
             {creatableCollections.length > 1 && (
               <Popover>

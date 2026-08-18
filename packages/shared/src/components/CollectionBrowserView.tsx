@@ -16,6 +16,7 @@ import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMy
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../lib/format-value'
 import { rowHighlightClass } from '../lib/row-highlight'
 import { cn } from '../lib/utils'
+import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { HScrollProxy } from './HScrollProxy'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
@@ -2766,6 +2767,19 @@ export function CollectionBrowserView({
   const enableCheckboxes = bc.checkbox_selection !== false
   const enableActions = bc.show_actions !== false
   const canCreate = showCreate && bc.allow_create !== false
+  // Layout choices for the New-item button (slug-opt-in, same rules as the
+  // classic admin browser) — plain button when none exist.
+  const newItemLayouts = useNewItemLayouts(canCreate && !meta?.singleton ? collection : null)
+  const [newItemMenuOpen, setNewItemMenuOpen] = useState(false)
+  const newItemMenuRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!newItemMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!newItemMenuRef.current?.contains(e.target as Node)) setNewItemMenuOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [newItemMenuOpen])
   const effPageSize = bc.page_size && bc.page_size > 0 ? Math.min(bc.page_size, 200) : pageSize
   const effQuickFilters = quickFilters.length > 0 ? quickFilters : (bc.quick_filters ?? [])
 
@@ -4342,13 +4356,56 @@ export function CollectionBrowserView({
           {exporting ? 'Exporting…' : 'Export'}
         </button>
         {canCreate && !meta?.singleton && (
-          <button
-            type='button'
-            onClick={() => openRow('new')}
-            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
-          >
-            + New item
-          </button>
+          newItemLayouts ? (
+            <div className='relative' data-cbv-newitem-menu ref={newItemMenuRef}>
+              <button
+                type='button'
+                onClick={() => setNewItemMenuOpen((v) => !v)}
+                className='flex h-8 items-center gap-1 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
+              >
+                + New item
+                <ChevronDown className='h-3.5 w-3.5' />
+              </button>
+              {newItemMenuOpen && (
+                <div className='absolute right-0 top-9 z-[60] w-60 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setNewItemMenuOpen(false)
+                      openRow('new')
+                    }}
+                    className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                  >
+                    {newItemLayouts.active?.create_label ?? newItemLayouts.active?.name ?? 'Default layout'}
+                    <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>default</span>
+                  </button>
+                  {newItemLayouts.options.map((l) => (
+                    <button
+                      key={l.id}
+                      type='button'
+                      onClick={() => {
+                        setNewItemMenuOpen(false)
+                        // Goes through openTarget (not onOpenItem) so the
+                        // layout slug rides the host's itemUrl mapping.
+                        openTarget({ collection, itemId: 'new', layoutSlug: l.slug })
+                      }}
+                      className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                    >
+                      {l.create_label ?? l.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type='button'
+              onClick={() => openRow('new')}
+              className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
+            >
+              + New item
+            </button>
+          )
         )}
       </div>
 
