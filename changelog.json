@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-18T01:33:33.563Z",
+  "generated_at": "2026-08-18T13:42:27.752Z",
   "releases": [
+    {
+      "version": "0.1.67",
+      "tag": "v0.1.67",
+      "date": "2026-08-18T09:42:25-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "every in-app notification is actionable — one resolver, no dead links",
+              "hash": "aff4d29d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.66",
       "tag": "v0.1.66",
-      "date": "2026-08-17T21:33:31-04:00",
+      "date": "2026-08-17T21:33:33-04:00",
       "sections": [
         {
           "label": "Added",
