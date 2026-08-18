@@ -7,6 +7,7 @@ import {
   Check,
   ChevronsUpDown,
   Copy,
+  Activity,
   Download,
   Eye,
   Globe,
@@ -71,7 +72,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  */
 
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'calc' | 'movers'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
@@ -347,6 +348,8 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'donut', label: 'Donut' },
   { id: 'table', label: 'Table' },
   { id: 'query', label: 'Query' },
+  { id: 'calc', label: 'Calculated' },
+  { id: 'movers', label: 'Top Movers' },
   { id: 'divider', label: 'Divider' }
 ]
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'null', 'nnull']
@@ -589,11 +592,13 @@ function FilterChip({
 function WidgetBody({
   widget,
   dateRange,
-  entityFilters
+  entityFilters,
+  reportId
 }: {
   widget: Widget
   dateRange: GlobalFilters['date_range']
   entityFilters: EntityFilter[]
+  reportId?: string
 }) {
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: [
@@ -606,19 +611,31 @@ function WidgetBody({
       entityFilters
     ],
     queryFn: () =>
-      api
-        .post<{ data: WidgetDataShape }>('/report-studio/preview', {
-          type: widget.type,
-          collection: widget.collection,
-          config: widget.config,
-          date_range: dateRange || null,
-          entity_filters: entityFilters
-        })
-        .then((r) => r.data.data),
+      // Calc widgets reference SIBLING widgets, which only the saved report
+      // knows — resolve through the report-scoped data route instead of the
+      // stateless preview.
+      widget.type === 'calc'
+        ? api
+            .post<{ data: WidgetDataShape }>(
+              `/report-studio/${reportId}/widgets/${widget.id}/data`,
+              { date_range: dateRange || null, entity_filters: entityFilters }
+            )
+            .then((r) => r.data.data)
+        : api
+            .post<{ data: WidgetDataShape }>('/report-studio/preview', {
+              type: widget.type,
+              collection: widget.collection,
+              config: widget.config,
+              date_range: dateRange || null,
+              entity_filters: entityFilters
+            })
+            .then((r) => r.data.data),
     enabled:
       widget.type !== 'divider' &&
       widget.type !== 'query' &&
-      (!!widget.collection || widget.type === 'kpi_group'),
+      (!!widget.collection ||
+        widget.type === 'kpi_group' ||
+        (widget.type === 'calc' && !!reportId)),
     staleTime: 60_000,
     retry: false
   })
@@ -636,7 +653,7 @@ function WidgetBody({
       </NivaroProvider>
     )
   }
-  if (!widget.collection && widget.type !== 'kpi_group') {
+  if (!widget.collection && widget.type !== 'kpi_group' && widget.type !== 'calc') {
     return <p className='px-1 text-[12px] text-slate-400'>Configure this widget to see data.</p>
   }
 
@@ -648,7 +665,39 @@ function WidgetBody({
       'Failed to load'
     body = <p className='px-1 text-[12px] text-red-400'>{msg}</p>
   } else if (data) {
-    if (widget.type === 'kpi') {
+    if (widget.type === 'movers') {
+      const rows = (data.rows ?? []) as unknown as Array<{
+        dim: string
+        current: number
+        previous: number
+        delta: number
+        delta_pct: number | null
+      }>
+      body =
+        rows.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No movement in this window.</p>
+        ) : (
+          <div className='h-full space-y-0.5 overflow-y-auto px-1'>
+            {rows.map((r) => (
+              <div key={r.dim} className='flex items-center gap-2 text-[11.5px]'>
+                <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>{r.dim}</span>
+                <span className='tabular-nums text-slate-400'>
+                  {r.previous.toLocaleString()} → {r.current.toLocaleString()}
+                </span>
+                <span
+                  className={cn(
+                    'w-[74px] shrink-0 text-right font-semibold tabular-nums',
+                    r.delta > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'
+                  )}
+                >
+                  {r.delta > 0 ? '+' : ''}
+                  {r.delta.toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
+    } else if (widget.type === 'kpi' || widget.type === 'calc') {
       body = (
         <div className='flex h-full flex-col justify-center px-1'>
           <div className='flex items-baseline gap-2'>
@@ -881,11 +930,13 @@ function WidgetBody({
 function ConfigSheet({
   widget,
   onChange,
-  onClose
+  onClose,
+  allWidgets
 }: {
   widget: Widget
   onChange: (w: Widget) => void
   onClose: () => void
+  allWidgets?: Widget[]
 }) {
   const { data: collections = [] } = useQuery({
     queryKey: ['collections-registry'],
@@ -919,7 +970,8 @@ function ConfigSheet({
     .map((c) => ({ id: c.collection, label: c.display_name || c.collection }))
 
   const aggregate = cfg.metric?.aggregate ?? 'count'
-  const isChart = widget.type === 'bar' || widget.type === 'line' || widget.type === 'donut'
+  const isChart =
+    widget.type === 'bar' || widget.type === 'line' || widget.type === 'donut' || widget.type === 'movers'
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
@@ -976,7 +1028,16 @@ function ConfigSheet({
             />
           )}
 
-          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && (
+          {widget.type === 'calc' && (
+            <CalcConfigEditor
+              cfg={cfg as WidgetConfig & { formula?: string; refs?: Record<string, string> }}
+              widgets={allWidgets ?? []}
+              selfId={widget.id}
+              onChange={(patch) => setCfg(patch as Partial<WidgetConfig>)}
+            />
+          )}
+
+          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && (
             <>
               <div className='space-y-1.5'>
                 <Label className='text-[11.5px]'>Collection</Label>
@@ -1134,9 +1195,9 @@ function ConfigSheet({
                 </div>
               )}
 
-              {(widget.type === 'bar' || widget.type === 'donut') && (
+              {(widget.type === 'bar' || widget.type === 'donut' || widget.type === 'movers') && (
                 <div className='flex items-center gap-2'>
-                  <Label className='text-[11.5px]'>Top N</Label>
+                  <Label className='text-[11.5px]'>{widget.type === 'movers' ? 'Movers each way' : 'Top N'}</Label>
                   <Input
                     type='number'
                     value={cfg.limit ?? 12}
@@ -1144,6 +1205,69 @@ function ConfigSheet({
                     className='h-7 w-16 text-[12px]'
                   />
                   <span className='text-[10.5px] text-slate-400'>groups (max 50)</span>
+                </div>
+              )}
+
+              {(widget.type === 'bar' || widget.type === 'line') && (
+                <div className='space-y-1.5'>
+                  <Label className='text-[11.5px]'>Second metric (right axis)</Label>
+                  <div className='flex items-center gap-1.5'>
+                    <select
+                      value={(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate ?? ''}
+                      onChange={(e) => {
+                        const agg = e.target.value
+                        if (!agg) {
+                          setCfg({ metric2: undefined } as never)
+                          return
+                        }
+                        const m2 = (cfg as { metric2?: { field?: string; label?: string } }).metric2
+                        setCfg({
+                          metric2: { aggregate: agg, field: m2?.field, label: m2?.label }
+                        } as never)
+                      }}
+                      className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                    >
+                      <option value=''>None</option>
+                      <option value='count'>Count</option>
+                      <option value='sum'>Sum</option>
+                      <option value='avg'>Avg</option>
+                      <option value='min'>Min</option>
+                      <option value='max'>Max</option>
+                    </select>
+                    {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate &&
+                      (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate !== 'count' && (
+                        <select
+                          value={(cfg as { metric2?: { field?: string } }).metric2?.field ?? ''}
+                          onChange={(e) => {
+                            const m2 = (cfg as { metric2?: { aggregate?: string; label?: string } }).metric2
+                            setCfg({
+                              metric2: { aggregate: m2?.aggregate ?? 'sum', field: e.target.value || undefined, label: m2?.label }
+                            } as never)
+                          }}
+                          className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                        >
+                          <option value=''>Pick a field…</option>
+                          {numericOpts.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate && (
+                      <Input
+                        value={(cfg as { metric2?: { label?: string } }).metric2?.label ?? ''}
+                        onChange={(e) => {
+                          const m2 = (cfg as { metric2?: { aggregate?: string; field?: string } }).metric2
+                          setCfg({
+                            metric2: { aggregate: m2?.aggregate ?? 'sum', field: m2?.field, label: e.target.value || undefined }
+                          } as never)
+                        }}
+                        placeholder='Label'
+                        className='h-7 w-24 text-[12px]'
+                      />
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2237,6 +2361,20 @@ function SubscribePopover({ reportId }: { reportId: string }) {
                 />
                 In-app
               </label>
+              <label className='flex items-center gap-1.5 text-[11px] text-slate-500'>
+                <Switch
+                  checked={(sub as { attach_pdf?: boolean }).attach_pdf === true}
+                  onCheckedChange={(v) =>
+                    save.mutate({
+                      cadence: sub.cadence,
+                      delivery_email: sub.delivery_email !== false,
+                      delivery_inapp: sub.delivery_inapp !== false,
+                      attach_pdf: v
+                    } as never)
+                  }
+                />
+                PDF
+              </label>
             </div>
             <div className='mt-2 border-t border-slate-100 pt-2 dark:border-border'>
               <p className='text-[11px] text-slate-500'>Also post to a chat room</p>
@@ -2272,6 +2410,203 @@ function SubscribePopover({ reportId }: { reportId: string }) {
         )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+// ── Report health check — errors, empties, slow widgets, before a meeting does ─
+
+function HealthCheckPanel({
+  widgets,
+  dateRange,
+  entityFilters,
+  reportId
+}: {
+  widgets: Widget[]
+  dateRange: GlobalFilters['date_range']
+  entityFilters: EntityFilter[]
+  reportId: string
+}) {
+  const [results, setResults] = useState<Array<{ title: string; status: string; ms: number }> | null>(null)
+  const [running, setRunning] = useState(false)
+  const run = async () => {
+    setRunning(true)
+    const out: Array<{ title: string; status: string; ms: number }> = []
+    for (const w of widgets) {
+      if (w.type === 'divider') continue
+      const t0 = performance.now()
+      try {
+        const r =
+          w.type === 'calc'
+            ? await api.post<{ data: WidgetDataShape }>(
+                `/report-studio/${reportId}/widgets/${w.id}/data`,
+                { date_range: dateRange || null, entity_filters: entityFilters }
+              )
+            : await api.post<{ data: WidgetDataShape }>('/report-studio/preview', {
+                type: w.type,
+                collection: w.collection,
+                config: w.config,
+                date_range: dateRange || null,
+                entity_filters: entityFilters
+              })
+        const d = r.data.data
+        const empty =
+          (d.value == null || d.value === 0) &&
+          !(d.series?.length ?? 0) &&
+          !(d.rows?.length ?? 0) &&
+          !(d.tiles?.length ?? 0)
+        out.push({
+          title: w.title || w.type,
+          status: empty ? 'empty' : 'ok',
+          ms: Math.round(performance.now() - t0)
+        })
+      } catch (err) {
+        out.push({
+          title: w.title || w.type,
+          status:
+            ((err as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'error').slice(0, 60),
+          ms: Math.round(performance.now() - t0)
+        })
+      }
+      setResults([...out])
+    }
+    setRunning(false)
+  }
+  const issues = (results ?? []).filter((r) => r.status !== 'ok' || r.ms > 5000)
+  return (
+    <div>
+      <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>Report health</p>
+      <p className='mt-0.5 text-[11px] text-slate-400'>
+        Runs every widget and flags errors, empty results, and anything over 5s.
+      </p>
+      <Button size='sm' className='mt-2 h-7 w-full text-[11.5px]' disabled={running} onClick={run}>
+        {running ? `Checking… ${results?.length ?? 0}/${widgets.filter((w) => w.type !== 'divider').length}` : 'Run check'}
+      </Button>
+      {results && !running && (
+        <p className='mt-2 text-[11.5px] text-slate-500'>
+          {issues.length === 0
+            ? `All ${results.length} widgets healthy.`
+            : `${issues.length} of ${results.length} widgets need attention:`}
+        </p>
+      )}
+      <div className='mt-1 max-h-56 space-y-0.5 overflow-y-auto'>
+        {(results ?? []).map((r, i) => (
+          <div key={i} className='flex items-center gap-2 text-[11px]'>
+            <span
+              className={cn(
+                'h-1.5 w-1.5 shrink-0 rounded-full',
+                r.status === 'ok' ? (r.ms > 5000 ? 'bg-amber-400' : 'bg-emerald-400') : r.status === 'empty' ? 'bg-amber-400' : 'bg-red-400'
+              )}
+            />
+            <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>{r.title}</span>
+            <span className='shrink-0 tabular-nums text-slate-400'>{r.ms}ms</span>
+            {r.status !== 'ok' && (
+              <span className='max-w-[110px] shrink-0 truncate text-red-400'>{r.status}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Calculated-KPI editor (formula over sibling widgets) ─────────────────────
+
+function CalcConfigEditor({
+  cfg,
+  widgets,
+  selfId,
+  onChange
+}: {
+  cfg: { formula?: string; refs?: Record<string, string>; format?: WidgetConfig['format'] }
+  widgets: Widget[]
+  selfId: string
+  onChange: (patch: Record<string, unknown>) => void
+}) {
+  const refs = cfg.refs ?? {}
+  const candidates = widgets.filter((w) => w.id !== selfId && w.type !== 'divider' && w.type !== 'calc')
+  const tokens = Object.keys(refs)
+  const nextToken = () => {
+    for (const c of 'abcdefgh') if (!tokens.includes(c)) return c
+    return `m${tokens.length}`
+  }
+  return (
+    <div className='space-y-2'>
+      <div className='space-y-1'>
+        <Label className='text-[11.5px]'>Formula</Label>
+        <Input
+          value={cfg.formula ?? ''}
+          onChange={(e) => onChange({ formula: e.target.value })}
+          placeholder='{{a}} / {{b}}'
+          className='h-8 font-mono text-[12.5px]'
+        />
+        <p className='text-[10.5px] text-slate-400'>
+          Arithmetic over the tokens below — each token is another widget's value.
+        </p>
+      </div>
+      <div className='space-y-1'>
+        <Label className='text-[11.5px]'>Tokens</Label>
+        {tokens.map((t) => (
+          <div key={t} className='flex items-center gap-1.5'>
+            <span className='w-8 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[11.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+              {t}
+            </span>
+            <select
+              value={refs[t] ?? ''}
+              onChange={(e) => onChange({ refs: { ...refs, [t]: e.target.value } })}
+              className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+            >
+              <option value=''>Pick a widget…</option>
+              {candidates.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.title || w.type}
+                </option>
+              ))}
+            </select>
+            <button
+              type='button'
+              onClick={() => {
+                const next = { ...refs }
+                delete next[t]
+                onChange({ refs: next })
+              }}
+              className='shrink-0 rounded p-1 text-slate-300 hover:text-red-500'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          </div>
+        ))}
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-6 px-2 text-[11px]'
+          onClick={() => onChange({ refs: { ...refs, [nextToken()]: '' } })}
+        >
+          <Plus className='mr-1 h-2.5 w-2.5' /> Add token
+        </Button>
+      </div>
+      <div className='flex items-center gap-2'>
+        <Label className='text-[11px] text-slate-400'>Prefix</Label>
+        <Input
+          value={cfg.format?.prefix ?? ''}
+          onChange={(e) => onChange({ format: { ...cfg.format, prefix: e.target.value || undefined } })}
+          className='h-7 w-14 text-[12px]'
+        />
+        <Label className='text-[11px] text-slate-400'>Decimals</Label>
+        <Input
+          type='number'
+          value={cfg.format?.decimals ?? ''}
+          onChange={(e) =>
+            onChange({
+              format: { ...cfg.format, decimals: e.target.value === '' ? undefined : Number(e.target.value) }
+            })
+          }
+          className='h-7 w-14 text-[12px]'
+        />
+      </div>
+      <p className='text-[10.5px] text-amber-600 dark:text-amber-400'>
+        Save the report before previewing — calculated widgets resolve against saved siblings.
+      </p>
+    </div>
   )
 }
 
@@ -2914,18 +3249,39 @@ export function ReportStudioEditPage() {
         id: crypto.randomUUID(),
         type,
         title:
-          type === 'divider' ? 'Section' : type === 'kpi_group' ? 'KPI Summary' : `New ${type}`,
+          type === 'divider'
+            ? 'Section'
+            : type === 'kpi_group'
+              ? 'KPI Summary'
+              : type === 'calc'
+                ? 'Calculated KPI'
+                : type === 'movers'
+                  ? 'Top movers'
+                  : `New ${type}`,
         collection: null,
         config:
           type === 'kpi_group'
             ? { metrics: [] }
             : type === 'query'
               ? { query: { slug: '', display: 'table' } }
-              : { metric: { aggregate: 'count' } },
+              : type === 'calc'
+                ? ({ formula: '{{a}} / {{b}}', refs: {} } as never)
+                : type === 'movers'
+                  ? { metric: { aggregate: 'count' }, compare: 'previous_period', limit: 5 }
+                  : { metric: { aggregate: 'count' } },
         x: 0,
         y: maxY,
-        w: type === 'kpi' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,
-        h: type === 'kpi' ? 2 : type === 'divider' ? 1 : type === 'kpi_group' ? 2 : type === 'query' ? 4 : 3
+        w: type === 'kpi' || type === 'calc' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,
+        h:
+          type === 'kpi' || type === 'calc'
+            ? 2
+            : type === 'divider'
+              ? 1
+              : type === 'kpi_group'
+                ? 2
+                : type === 'query'
+                  ? 4
+                  : 3
       }
     ])
     setEditMode(true)
@@ -3060,6 +3416,32 @@ export function ReportStudioEditPage() {
                   window.location.reload()
                 }}
               />
+            )}
+            {report.editable && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button size='sm' variant='outline' className='gap-1.5'>
+                    <Activity className='h-3.5 w-3.5' /> Health
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className='w-80 p-3' align='end'>
+                  <HealthCheckPanel widgets={widgets} dateRange={dateRange} entityFilters={entityFilters} reportId={report.id} />
+                </PopoverContent>
+              </Popover>
+            )}
+            {report.editable && (
+              <select
+                value={(report as { snapshot_schedule?: string | null }).snapshot_schedule ?? ''}
+                onChange={(e) =>
+                  patchReport.mutate({ snapshot_schedule: e.target.value || null } as never)
+                }
+                title='Automatic snapshots — vs-then comparisons accumulate on cadence'
+                className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+              >
+                <option value=''>No auto-snapshot</option>
+                <option value='weekly'>Snapshot weekly</option>
+                <option value='monthly'>Snapshot monthly</option>
+              </select>
             )}
             <SubscribePopover reportId={report.id} />
             <Button size='sm' variant='outline' className='gap-1.5' onClick={() => setAlertsFor(null)}>
@@ -3433,7 +3815,7 @@ export function ReportStudioEditPage() {
                       </span>
                     </div>
                     <div className='min-h-0 flex-1'>
-                      <WidgetBody widget={w} dateRange={dateRange} entityFilters={entityFilters} />
+                      <WidgetBody widget={w} dateRange={dateRange} entityFilters={entityFilters} reportId={report.id} />
                     </div>
                   </div>
                 )}
@@ -3448,6 +3830,7 @@ export function ReportStudioEditPage() {
       {configuringWidget && (
         <ConfigSheet
           widget={configuringWidget}
+          allWidgets={widgets}
           onChange={(next) => setWidgets((p) => p.map((w) => (w.id === next.id ? next : w)))}
           onClose={() => setConfiguring(null)}
         />

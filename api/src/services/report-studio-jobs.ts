@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { resolveWidgetDataFull } from './report-studio.js'
 import { canSeeRoom } from './chat.js'
 import { sendRawMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
@@ -228,6 +229,7 @@ export async function runReportSubscriptions(
     delivery_email: boolean
     delivery_inapp: boolean
     deliver_room: string | null
+    attach_pdf: boolean
   }>
   let sent = 0
   for (const sub of subs) {
@@ -247,9 +249,10 @@ export async function runReportSubscriptions(
         try {
           resolved.push({
             widget: w,
-            data: await resolveWidgetData(
+            data: await resolveWidgetDataFull(
               user,
-              { type: w.type, collection: w.collection, config: parseJson(w.config) },
+              report.id,
+              { id: w.id, type: w.type, collection: w.collection, config: parseJson(w.config) },
               dateRange
             )
           })
@@ -262,10 +265,30 @@ export async function runReportSubscriptions(
       }
 
       if (sub.delivery_email && user.email) {
+        const html = renderReportEmailHtml(report.name, resolved, config.ADMIN_URL, report.id)
+        let attachments: Array<{ filename: string; content: Buffer; contentType?: string }> | undefined
+        if (sub.attach_pdf) {
+          try {
+            const { htmlToPdf } = await import('./pdf-layout.js')
+            const pdf = await htmlToPdf(
+              `<html><body style="font-family:Arial,sans-serif;padding:24px">${html}</body></html>`
+            )
+            attachments = [
+              {
+                filename: `${String(report.name).replace(/[^\w-]+/g, '_').slice(0, 60)}.pdf`,
+                content: pdf,
+                contentType: 'application/pdf'
+              }
+            ]
+          } catch (err) {
+            app.log.warn({ err }, '[report-studio] pdf attachment failed — sending without')
+          }
+        }
         await sendRawMail({
           to: user.email,
           subject: `${report.name} — your ${cadence} report`,
-          html: renderReportEmailHtml(report.name, resolved, config.ADMIN_URL, report.id)
+          html,
+          ...(attachments ? { attachments } : {})
         })
       }
       if (sub.delivery_inapp) {
@@ -348,4 +371,80 @@ async function deliverReportToRoom(
   } catch {
     /* realtime nudge is best-effort */
   }
+}
+
+/**
+ * Scheduled snapshots: reports with snapshot_schedule auto-capture on cadence
+ * (as their OWNER — the queue-stats-snapshot identity precedent) and keep the
+ * newest 12 auto-created snapshots.
+ */
+export async function runScheduledReportSnapshots(
+  app: FastifyInstance,
+  cadence: 'weekly' | 'monthly'
+): Promise<{ taken: number }> {
+  const reports = (await db('nivaro_report_defs').where({ snapshot_schedule: cadence })) as Array<{
+    id: string
+    name: string
+    owner: string
+    global_filters: string | null
+  }>
+  let taken = 0
+  for (const report of reports) {
+    try {
+      const owner = await loadUser(report.owner)
+      if (!owner) continue
+      const widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .orderBy('sort')) as WidgetRow[]
+      if (widgets.length === 0) continue
+      const dateRange =
+        parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ?? null
+      const data: Record<string, { value: number | null }> = {}
+      for (const w of widgets) {
+        if (w.type === 'divider') continue
+        try {
+          const resolved = await resolveWidgetDataFull(
+            owner,
+            report.id,
+            { id: w.id, type: w.type, collection: w.collection, config: parseJson(w.config) },
+            dateRange
+          )
+          data[w.id] = { value: deriveAlertMetric('value', resolved) }
+        } catch {
+          data[w.id] = { value: null }
+        }
+      }
+      const now = new Date()
+      const name =
+        cadence === 'weekly'
+          ? `Week of ${now.toISOString().slice(0, 10)}`
+          : now.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+      await db('nivaro_report_snapshots').insert({
+        report: report.id,
+        name,
+        data: JSON.stringify(data),
+        taken_at: now,
+        created_by: null
+      })
+      // Prune auto-created (created_by null) snapshots to the newest 12.
+      const stale = (await db('nivaro_report_snapshots')
+        .where({ report: report.id })
+        .whereNull('created_by')
+        .orderBy('id', 'desc')
+        .offset(12)
+        .select('id')) as Array<{ id: number }>
+      if (stale.length > 0) {
+        await db('nivaro_report_snapshots')
+          .whereIn(
+            'id',
+            stale.map((r) => r.id)
+          )
+          .del()
+      }
+      taken++
+    } catch (err) {
+      app.log.warn({ err, report: report.id }, '[report-studio] scheduled snapshot failed')
+    }
+  }
+  return { taken }
 }

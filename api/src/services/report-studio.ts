@@ -33,6 +33,8 @@ export interface KpiMetricConfig {
 }
 
 export interface WidgetQueryConfig {
+  /** Dual-axis second metric on value-dimension charts. */
+  metric2?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string; label?: string }
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
   dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
   filters?: WidgetFilter[]
@@ -245,7 +247,7 @@ export interface WidgetData {
   prev_value?: number | null
   change_pct?: number | null
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown }>
+  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }>
   row_count?: number
   tiles?: Array<{
     label: string
@@ -334,6 +336,51 @@ export async function resolveWidgetData(
     ...widget,
     config: normalizeWidgetConfig(widget.config as never, widget.collection)
   }
+
+  if (widget.type === 'movers') {
+    const cfg = widget.config ?? {}
+    const dimField = cfg.dimension?.field
+    if (!widget.collection || !dimField) {
+      throw Object.assign(new Error('Movers widgets need a collection and dimension'), {
+        statusCode: 400
+      })
+    }
+    // Resolve as a value-dimension chart WITH compare — the delta table is
+    // just the diff of the two windows the compare machinery already aligns.
+    const chart = await resolveWidgetData(
+      user,
+      {
+        type: 'bar',
+        collection: widget.collection,
+        config: {
+          ...cfg,
+          compare: cfg.compare ?? 'previous_period',
+          limit: 50
+        }
+      },
+      dateRange,
+      entityFilters
+    )
+    const n = Math.min(10, Math.max(1, cfg.limit ?? 5))
+    const scored = (chart.series ?? [])
+      .filter((sv) => !(sv as { other?: boolean }).other)
+      .map((sv) => ({
+        dim: sv.dim,
+        current: sv.value,
+        previous: sv.prev ?? 0,
+        delta: sv.value - (sv.prev ?? 0),
+        delta_pct:
+          sv.prev != null && sv.prev !== 0 ? ((sv.value - sv.prev) / Math.abs(sv.prev)) * 100 : null
+      }))
+      .sort((a, b) => b.delta - a.delta)
+    const gainers = scored.filter((r) => r.delta > 0).slice(0, n)
+    const decliners = scored.filter((r) => r.delta < 0).slice(-n).reverse()
+    return {
+      rows: [...gainers, ...decliners] as unknown as Array<Record<string, unknown>>,
+      row_count: gainers.length + decliners.length
+    }
+  }
+
 
   // Multi-KPI summary — each tile is its own collection + aggregate
   if (widget.type === 'kpi_group') {
@@ -697,9 +744,14 @@ export async function resolveWidgetData(
   }
 
   const limit = Math.min(50, Math.max(1, cfg.limit ?? 12))
-  const rows = (await aggSelect(base().select({ dim: dim.field }).groupBy(dim.field))
-    .orderBy('value', 'desc')
-    .limit(limit)) as Array<{ dim: unknown; value: number | string }>
+  const allRows = (await aggSelect(base().select({ dim: dim.field }).groupBy(dim.field)).orderBy(
+    'value',
+    'desc'
+  )) as Array<{ dim: unknown; value: number | string }>
+  const rows = allRows.slice(0, limit)
+  // The tail folds into an explicit Other slice instead of silently vanishing
+  // — a truncated donut's total must still agree with the KPI beside it.
+  const tail = allRows.slice(limit)
   let raw = rows.map((r) => ({ dim: r.dim, value: Number(r.value), prev: undefined as number | undefined }))
   // Compare on value dimensions too — previous window grouped by the same
   // dimension, matched by raw key before labels are applied.
@@ -711,8 +763,115 @@ export async function resolveWidgetData(
     const prevMap = new Map(prevRows.map((r) => [String(r.dim), Number(r.value)]))
     raw = raw.map((r) => ({ ...r, prev: prevMap.get(String(r.dim)) }))
   }
-  const series = await labelizeDimension(collection, dim.field, raw)
+  const series: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }> =
+    await labelizeDimension(collection, dim.field, raw)
+  if (tail.length > 0) {
+    series.push({
+      dim: `Other (${tail.length})`,
+      value: tail.reduce((a, r) => a + (Number(r.value) || 0), 0),
+      raw: null,
+      other: true
+    })
+  }
+  // Dual-axis second metric — same grouping, independent aggregate/field.
+  const m2 = cfg.metric2
+  if (m2?.aggregate && (m2.aggregate === 'count' || (m2.field && valid.has(m2.field)))) {
+    const agg2 = (q: ReturnType<typeof db>) => {
+      if (m2.aggregate === 'count') return q.count({ value: '*' })
+      if (m2.aggregate === 'sum') return q.sum({ value: m2.field as string })
+      if (m2.aggregate === 'avg') return q.avg({ value: m2.field as string })
+      if (m2.aggregate === 'min') return q.min({ value: m2.field as string })
+      return q.max({ value: m2.field as string })
+    }
+    const rows2 = (await agg2(base().select({ dim: dim.field }).groupBy(dim.field))) as Array<{
+      dim: unknown
+      value: number | string
+    }>
+    const map2 = new Map(rows2.map((r) => [String(r.dim ?? ''), Number(r.value)]))
+    for (const pt of series) {
+      if (pt.other) continue
+      pt.value2 = map2.get(String((pt as { raw?: unknown }).raw ?? '')) ?? 0
+    }
+  }
   return { series }
+}
+
+/**
+ * Report-scoped widget resolution: handles the types that need SIBLING
+ * widgets — 'calc' (a formula over other widgets' derived metrics) and
+ * 'movers' (delta table vs the previous period) — and delegates everything
+ * else to resolveWidgetData. Use this wherever a reportId is in hand.
+ */
+export async function resolveWidgetDataFull(
+  user: User,
+  reportId: string,
+  widget: { id?: string; type: string; collection: string | null; config: WidgetQueryConfig | null },
+  dateRange: DateRange | null,
+  entityFilters: EntityFilter[] = [],
+  depth = 0
+): Promise<WidgetData> {
+  if (widget.type === 'calc') {
+    if (depth > 1) return { value: null }
+    const cfg = (widget.config ?? {}) as unknown as {
+      formula?: string
+      refs?: Record<string, string>
+    }
+    const formula = String(cfg.formula ?? '').trim()
+    if (!formula) return { value: null }
+    const refs = cfg.refs ?? {}
+    const values: Record<string, number> = {}
+    for (const [key, widgetId] of Object.entries(refs)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+      const ref = (await db('nivaro_report_widgets')
+        .where({ id: String(widgetId), report: reportId })
+        .first()) as WidgetRow | undefined
+      if (!ref) {
+        values[key] = 0
+        continue
+      }
+      try {
+        const sub = await resolveWidgetDataFull(
+          user,
+          reportId,
+          { id: ref.id, type: ref.type, collection: ref.collection, config: parseJson(ref.config) },
+          dateRange,
+          entityFilters,
+          depth + 1
+        )
+        const v =
+          sub.value ??
+          (sub.series ? sub.series.reduce((a, b) => a + (Number(b.value) || 0), 0) : null) ??
+          (sub.tiles ? Number(sub.tiles[0]?.value ?? 0) : null) ??
+          sub.row_count ??
+          0
+        values[key] = Number(v) || 0
+      } catch {
+        values[key] = 0
+      }
+    }
+    // Token-substitute then validate to bare arithmetic before evaluating —
+    // a ref value is always a number by construction, so the expression's
+    // SHAPE cannot be changed by data.
+    let expr = formula
+    for (const [k, v] of Object.entries(values)) {
+      expr = expr.split(`{{${k}}}`).join(`(${v})`)
+    }
+    if (!/^[\d\s+\-*/().eE]+$/.test(expr)) {
+      throw Object.assign(new Error('Calc formula has unresolved tokens or invalid characters'), {
+        statusCode: 400
+      })
+    }
+    try {
+      // eslint-disable-next-line no-new-func
+      const result = new Function(`return (${expr})`)() as number
+      return { value: Number.isFinite(result) ? result : null }
+    } catch {
+      return { value: null }
+    }
+  }
+
+
+  return resolveWidgetData(user, widget, dateRange, entityFilters)
 }
 
 // ─── Email rendering — inline-styled HTML, mail-client-safe ──────────────────

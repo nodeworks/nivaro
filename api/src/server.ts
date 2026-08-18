@@ -460,6 +460,24 @@ export async function buildServer() {
         app.log.warn({ err }, '[report-studio] daily digest failed')
       }
     })
+    app.cron.schedule('report-snapshots-weekly', '50 6 * * 1', async () => {
+      try {
+        const { runScheduledReportSnapshots } = await import('./services/report-studio-jobs.js')
+        const r = await runScheduledReportSnapshots(app, 'weekly')
+        if (r.taken > 0) app.log.info(r, '[report-studio] weekly snapshots')
+      } catch (err) {
+        app.log.warn({ err }, '[report-studio] weekly snapshots failed')
+      }
+    })
+    app.cron.schedule('report-snapshots-monthly', '50 6 1 * *', async () => {
+      try {
+        const { runScheduledReportSnapshots } = await import('./services/report-studio-jobs.js')
+        const r = await runScheduledReportSnapshots(app, 'monthly')
+        if (r.taken > 0) app.log.info(r, '[report-studio] monthly snapshots')
+      } catch (err) {
+        app.log.warn({ err }, '[report-studio] monthly snapshots failed')
+      }
+    })
     app.cron.schedule('report-studio-weekly', '0 7 * * 1', async () => {
       try {
         const { runReportSubscriptions } = await import('./services/report-studio-jobs.js')

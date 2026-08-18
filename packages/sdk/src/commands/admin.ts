@@ -784,6 +784,19 @@ export interface ReportWidgetConfig {
   }>
   /** type='query' widgets only. */
   query?: ReportQueryWidgetConfig
+  /** Dual-axis second metric on value-dimension charts. */
+  metric2?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string; label?: string }
+  /** type='calc' widgets: formula over sibling widgets' derived metrics. */
+  formula?: string
+  refs?: Record<string, UUID>
+  /** Table widgets: value rules → cell/row tints. */
+  format_rules?: Array<{
+    field: string
+    op: 'gt' | 'gte' | 'lt' | 'lte' | 'eq'
+    value: number
+    color: string
+    scope?: 'cell' | 'row'
+  }>
 }
 
 export type ReportWidgetType =
@@ -795,6 +808,8 @@ export type ReportWidgetType =
   | 'table'
   | 'divider'
   | 'query'
+  | 'calc'
+  | 'movers'
 
 export interface ReportWidget {
   id: UUID
@@ -858,6 +873,8 @@ export interface ReportDef {
   widget_count?: number
   widgets?: ReportWidget[]
   editable?: boolean
+  folder?: string | null
+  snapshot_schedule?: 'weekly' | 'monthly' | null
   updated_at: ISODate
 }
 
@@ -867,7 +884,7 @@ export interface ReportWidgetData {
   change_pct?: number | null
   row_count?: number
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number; prev?: number }>
+  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }>
   tiles?: Array<{
     label: string
     value: number | null

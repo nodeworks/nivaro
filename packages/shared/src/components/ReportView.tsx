@@ -27,7 +27,7 @@ import {
   toggleReportAlert
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Camera, Check, ChevronsUpDown, Info, Plus, RefreshCw, Sparkles, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
+import { Bell, Camera, Check, ChevronsUpDown, Download, Info, Plus, RefreshCw, Sigma, Sparkles, StickyNote, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Area,
@@ -35,11 +35,13 @@ import {
   Bar,
   BarChart,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -79,7 +81,8 @@ import {
   useOverlayState
 } from '../context'
 import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
-import { get, post } from '../lib/commands'
+import { del, get, post, put } from '../lib/commands'
+import { AddWidgetBar, WidgetConfigSheet, WidgetEditBar } from './ReportEditMode'
 import { cn } from '../lib/utils'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { TipLayer } from './TipLayer'
@@ -1405,19 +1408,59 @@ function clientWidgetMetric(data: ReportWidgetData | undefined): number | null {
   return null
 }
 
+/** Download a widget's underlying rows/series as CSV. */
+function downloadWidgetCsv(widget: ReportWidget, data: ReportWidgetData | undefined, extraRows?: Array<Record<string, unknown>>) {
+  const rows: Array<Record<string, unknown>> = extraRows ? [...extraRows] : []
+  if (rows.length === 0 && data?.rows?.length) rows.push(...data.rows)
+  if (rows.length === 0 && data?.series?.length) {
+    for (const sv of data.series) {
+      rows.push({ dim: sv.dim, value: sv.value, ...(sv.prev != null ? { previous: sv.prev } : {}), ...(sv.value2 != null ? { value2: sv.value2 } : {}) })
+    }
+  }
+  if (rows.length === 0 && data?.tiles?.length) {
+    for (const t of data.tiles) rows.push({ label: t.label, value: t.value })
+  }
+  if (rows.length === 0 && data?.value != null) rows.push({ value: data.value })
+  if (rows.length === 0) return
+  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))]
+  const escCsv = (v: unknown) => {
+    const t = String(v ?? '')
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+  }
+  const csv = [cols.join(','), ...rows.map((r) => cols.map((c) => escCsv(r[c])).join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `${(widget.title || 'widget').replace(/[^\w-]+/g, '_')}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+interface WidgetAnnotation {
+  id: number
+  widget: string
+  note: string
+  anchor_date: string | null
+  created_at: string
+  created_by: string | null
+  created_by_name: string | null
+}
+
 /** The records behind a number — top 50, click-through to the record. */
 function WidgetRecordsModal({
   collection,
   conditions,
   title,
   onClose,
-  onOpen
+  onOpen,
+  crossFilter
 }: {
   collection: string
   conditions: DrillCond[]
   title: string
   onClose: () => void
   onOpen: (t: { collection: string; itemId: string }) => void
+  crossFilter?: () => void
 }) {
   const client = useNivaroClient()
   const { data, isLoading } = useQuery({
@@ -1454,6 +1497,16 @@ function WidgetRecordsModal({
           <span className='text-[11.5px] tabular-nums text-slate-400'>
             {data ? `${rows.length}${(data.total ?? 0) > rows.length ? ` of ${data.total.toLocaleString()}` : ''} records` : ''}
           </span>
+          {crossFilter && (
+            <button
+              type='button'
+              onClick={crossFilter}
+              title='Apply this value as a filter across the whole report'
+              className='shrink-0 rounded-md border border-[#00ceff66] bg-[#00ceff14] px-2 py-0.5 text-[11px] font-medium text-[#007a99] hover:brightness-105 dark:text-nvr-cyan'
+            >
+              Filter report
+            </button>
+          )}
           <button type='button' onClick={onClose} className='rounded p-1 text-slate-400 hover:text-slate-600'>
             <X className='h-4 w-4' />
           </button>
@@ -1505,7 +1558,11 @@ const WidgetCard = memo(function WidgetCard({
   refetchInterval,
   filterBar = [],
   onDrill,
-  snapshot
+  snapshot,
+  annotations,
+  onAddAnnotation,
+  onDeleteAnnotation,
+  onCrossFilter
 }: {
   reportId: string
   widget: ReportWidget
@@ -1515,9 +1572,23 @@ const WidgetCard = memo(function WidgetCard({
   filterBar?: Array<{ field: string; label: string; options?: FilterOptionSource }>
   onDrill?: (t: { collection: string; itemId: string; title?: string }) => void
   snapshot?: { name: string; value: number | null } | null
+  annotations?: WidgetAnnotation[]
+  onAddAnnotation?: (widgetId: string, note: string, anchorDate: string | null) => void
+  onDeleteAnnotation?: (annId: number) => void
+  onCrossFilter?: (field: string, value: unknown, label: string) => void
 }) {
   const client = useNivaroClient()
-  const [recordsFor, setRecordsFor] = useState<{ conditions: DrillCond[]; title: string } | null>(null)
+  const [recordsFor, setRecordsFor] = useState<{
+    conditions: DrillCond[]
+    title: string
+    dimField?: string
+    dimRaw?: unknown
+    dimLabel?: string
+  } | null>(null)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [noteText, setNoteText] = useState('')
+  const [noteDate, setNoteDate] = useState('')
+  const [cumulative, setCumulative] = useState(false)
   const [explainOpen, setExplainOpen] = useState(false)
   const [explainText, setExplainText] = useState<string | null>(null)
   const [explainBusy, setExplainBusy] = useState(false)
@@ -1580,7 +1651,7 @@ const WidgetCard = memo(function WidgetCard({
       'Failed to load'
     body = <p className='px-1 text-[12px] text-red-400'>{msg}</p>
   } else if (data) {
-    if (widget.type === 'kpi') {
+    if (widget.type === 'kpi' || widget.type === 'calc') {
       body = (
         <div className='flex items-baseline gap-2'>
           <p
@@ -1628,6 +1699,46 @@ const WidgetCard = memo(function WidgetCard({
           ))}
         </div>
       )
+    } else if (widget.type === 'movers') {
+      const rows = (data.rows ?? []) as Array<{
+        dim: string
+        current: number
+        previous: number
+        delta: number
+        delta_pct: number | null
+      }>
+      body =
+        rows.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No movement in this window.</p>
+        ) : (
+          <div className='min-h-0 flex-1 space-y-0.5 overflow-y-auto'>
+            {rows.map((r) => (
+              <div key={r.dim} className='flex items-center gap-2 text-[11.5px]'>
+                <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+                  {r.dim}
+                </span>
+                <span className='tabular-nums text-slate-400'>
+                  {r.previous.toLocaleString()} → {r.current.toLocaleString()}
+                </span>
+                <span
+                  className={cn(
+                    'w-[74px] shrink-0 text-right font-semibold tabular-nums',
+                    r.delta > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'
+                  )}
+                >
+                  {r.delta > 0 ? '+' : ''}
+                  {r.delta.toLocaleString()}
+                  {r.delta_pct != null && (
+                    <span className='ml-1 text-[10px] font-normal text-slate-400'>
+                      {r.delta_pct > 0 ? '+' : ''}
+                      {r.delta_pct.toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
     } else if (widget.type === 'table') {
       const rows = data.rows ?? []
       const colDefs: ReportQueryColumn[] =
@@ -1708,7 +1819,30 @@ const WidgetCard = memo(function WidgetCard({
           </div>
         )
     } else {
-      const series = data.series ?? []
+      let series = data.series ?? []
+      const bucketed = !!(widget.config?.dimension as { bucket?: string } | undefined)?.bucket
+      if (cumulative && bucketed) {
+        let acc = 0
+        let accPrev = 0
+        let acc2 = 0
+        series = series.map((sv) => {
+          acc += sv.value
+          accPrev += sv.prev ?? 0
+          acc2 += sv.value2 ?? 0
+          return {
+            ...sv,
+            value: acc,
+            ...(sv.prev != null ? { prev: accPrev } : {}),
+            ...(sv.value2 != null ? { value2: acc2 } : {})
+          }
+        })
+      }
+      const hasValue2 = series.some((sv) => sv.value2 != null)
+      const metric2Label =
+        (widget.config?.metric2 as { label?: string } | undefined)?.label ?? 'secondary'
+      const anchorNotes = (annotations ?? []).filter(
+        (a) => a.anchor_date && series.some((sv) => sv.dim === a.anchor_date)
+      )
       if (series.length === 0) body = <p className='px-1 text-[12px] text-slate-400'>No data.</p>
       else if (widget.type === 'donut') {
         const total = series.reduce((a, s) => a + s.value, 0)
@@ -1726,17 +1860,25 @@ const WidgetCard = memo(function WidgetCard({
                     paddingAngle={2}
                     strokeWidth={0}
                     className={widget.collection ? 'cursor-pointer' : undefined}
-                    onClick={(entry: { payload?: { dim?: string; raw?: unknown } }) => {
+                    onClick={(entry: { payload?: { dim?: string; raw?: unknown; other?: boolean } }) => {
                       if (!widget.collection) return
                       const seg = entry?.payload
+                      if (seg?.other) return
+                      const dimField = (widget.config?.dimension as { field?: string } | undefined)?.field
                       setRecordsFor({
                         conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
-                        title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`
+                        title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
+                        dimField,
+                        dimRaw: seg?.raw ?? seg?.dim,
+                        dimLabel: seg?.dim
                       })
                     }}
                   >
                     {series.map((s, i) => (
-                      <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                      <Cell
+                        key={s.dim}
+                        fill={s.other ? '#94a3b8' : CHART_COLORS[i % CHART_COLORS.length]}
+                      />
                     ))}
                   </Pie>
                   <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
@@ -1769,7 +1911,7 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='min-h-[110px] flex-1'>
             <ResponsiveContainer width='100%' height='100%'>
-              <LineChart data={series} margin={{ top: 6, right: 8, left: -10, bottom: 0 }}>
+              <LineChart data={series} margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}>
                 <XAxis
                   dataKey='dim'
                   tick={{ fontSize: 10 }}
@@ -1777,6 +1919,25 @@ const WidgetCard = memo(function WidgetCard({
                   {...catAxisProps(series.length)}
                 />
                 <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
+                {hasValue2 && (
+                  <YAxis
+                    yAxisId='right'
+                    orientation='right'
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    tickFormatter={compactTick}
+                    width={44}
+                  />
+                )}
+                {anchorNotes.map((a) => (
+                  <ReferenceLine
+                    key={a.id}
+                    x={a.anchor_date as string}
+                    stroke='#f59e0b'
+                    strokeDasharray='4 3'
+                    label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                  />
+                ))}
                 <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 {widget.config?.compare && (
                   <Line
@@ -1796,6 +1957,17 @@ const WidgetCard = memo(function WidgetCard({
                   strokeWidth={2}
                   dot={false}
                 />
+                {hasValue2 && (
+                  <Line
+                    yAxisId='right'
+                    type='monotone'
+                    dataKey='value2'
+                    stroke='#8b5cf6'
+                    strokeWidth={1.5}
+                    dot={false}
+                    name={metric2Label}
+                  />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -1805,7 +1977,7 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='min-h-[110px] flex-1'>
             <ResponsiveContainer width='100%' height='100%'>
-              <BarChart
+              <ComposedChart
                 data={series}
                 layout={horizontal ? 'vertical' : 'horizontal'}
                 margin={{ top: 6, right: 8, left: horizontal ? 30 : -10, bottom: 0 }}
@@ -1830,8 +2002,28 @@ const WidgetCard = memo(function WidgetCard({
                       {...catAxisProps(series.length)}
                     />
                     <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
+                    {hasValue2 && (
+                      <YAxis
+                        yAxisId='right'
+                        orientation='right'
+                        tick={{ fontSize: 10 }}
+                        stroke='#94a3b8'
+                        tickFormatter={compactTick}
+                        width={44}
+                      />
+                    )}
                   </>
                 )}
+                {!horizontal &&
+                  anchorNotes.map((a) => (
+                    <ReferenceLine
+                      key={a.id}
+                      x={a.anchor_date as string}
+                      stroke='#f59e0b'
+                      strokeDasharray='4 3'
+                      label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                    />
+                  ))}
                 <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 {widget.config?.compare && (
                   <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
@@ -1841,16 +2033,36 @@ const WidgetCard = memo(function WidgetCard({
                   fill='#00ceff'
                   radius={[3, 3, 0, 0]}
                   className={widget.collection ? 'cursor-pointer' : undefined}
-                  onClick={(entry: { payload?: { dim?: string; raw?: unknown } } | undefined) => {
+                  onClick={(entry: { payload?: { dim?: string; raw?: unknown; other?: boolean } } | undefined) => {
                     if (!widget.collection) return
                     const seg = entry?.payload
+                    if (seg?.other) return
+                    const dimField = (widget.config?.dimension as { field?: string; bucket?: string } | undefined)
                     setRecordsFor({
                       conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
-                      title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`
+                      title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
+                      dimField: dimField?.bucket ? undefined : dimField?.field,
+                      dimRaw: seg?.raw ?? seg?.dim,
+                      dimLabel: seg?.dim
                     })
                   }}
-                />
-              </BarChart>
+                >
+                  {series.map((sv) => (
+                    <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : '#00ceff'} />
+                  ))}
+                </Bar>
+                {hasValue2 && (
+                  <Line
+                    yAxisId={horizontal ? undefined : 'right'}
+                    type='monotone'
+                    dataKey='value2'
+                    stroke='#8b5cf6'
+                    strokeWidth={1.5}
+                    dot={false}
+                    name={metric2Label}
+                  />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )
@@ -1935,6 +2147,40 @@ const WidgetCard = memo(function WidgetCard({
               <Sparkles className='h-3 w-3' />
             </button>
           )}
+          {(widget.config?.dimension as { bucket?: string } | undefined)?.bucket && (
+            <button
+              type='button'
+              title={cumulative ? 'Show per-period values' : 'Show running total'}
+              className={cn(
+                'rounded p-0.5',
+                cumulative ? 'text-[#00a5cc]' : 'text-slate-300 hover:text-slate-500'
+              )}
+              onClick={() => setCumulative((v) => !v)}
+            >
+              <Sigma className='h-3 w-3' />
+            </button>
+          )}
+          {onAddAnnotation && (
+            <button
+              type='button'
+              title='Notes on this widget'
+              className={cn(
+                'relative rounded p-0.5',
+                (annotations?.length ?? 0) > 0 ? 'text-amber-500' : 'text-slate-300 hover:text-slate-500'
+              )}
+              onClick={() => setNotesOpen((v) => !v)}
+            >
+              <StickyNote className='h-3 w-3' />
+            </button>
+          )}
+          <button
+            type='button'
+            title='Download as CSV'
+            className='rounded p-0.5 text-slate-300 hover:text-slate-500'
+            onClick={() => downloadWidgetCsv(widget, data)}
+          >
+            <Download className='h-3 w-3' />
+          </button>
           <AlertBell reportId={reportId} widget={widget} filterBar={filterBar} />
           <button
             type='button'
@@ -1946,6 +2192,60 @@ const WidgetCard = memo(function WidgetCard({
           </button>
         </span>
       </div>
+      {notesOpen && (
+        <div className='mb-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50/60 p-2 dark:border-amber-500/30 dark:bg-amber-500/10'>
+          {(annotations ?? []).map((a) => (
+            <div key={a.id} className='group/note flex items-start gap-1.5 text-[11px] text-slate-600 dark:text-slate-300'>
+              <span className='min-w-0 flex-1'>
+                {a.anchor_date && <span className='font-semibold text-amber-600 dark:text-amber-400'>{a.anchor_date} — </span>}
+                {a.note}
+                <span className='ml-1 text-[10px] text-slate-400'>{a.created_by_name ?? ''}</span>
+              </span>
+              {onDeleteAnnotation && (
+                <button
+                  type='button'
+                  onClick={() => onDeleteAnnotation(a.id)}
+                  className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 hover:text-red-500 group-hover/note:opacity-100'
+                >
+                  <X className='h-2.5 w-2.5' />
+                </button>
+              )}
+            </div>
+          ))}
+          {(annotations ?? []).length === 0 && (
+            <p className='text-[11px] text-slate-400'>No notes yet — record why a number moved.</p>
+          )}
+          {onAddAnnotation && (
+            <div className='flex items-center gap-1 pt-0.5'>
+              <input
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                placeholder='Add a note…'
+                className='h-6 min-w-0 flex-1 rounded border border-amber-200 bg-white px-1.5 text-[11px] dark:border-amber-500/30 dark:bg-card dark:text-slate-200'
+              />
+              <input
+                value={noteDate}
+                onChange={(e) => setNoteDate(e.target.value)}
+                placeholder='2026-03'
+                title='Optional chart anchor (YYYY-MM or YYYY-MM-DD bucket key)'
+                className='h-6 w-[76px] rounded border border-amber-200 bg-white px-1.5 text-[10.5px] dark:border-amber-500/30 dark:bg-card dark:text-slate-200'
+              />
+              <button
+                type='button'
+                disabled={!noteText.trim()}
+                onClick={() => {
+                  onAddAnnotation(widget.id, noteText.trim(), noteDate.trim() || null)
+                  setNoteText('')
+                  setNoteDate('')
+                }}
+                className='h-6 rounded bg-amber-500 px-2 text-[11px] font-medium text-white hover:brightness-105 disabled:opacity-40'
+              >
+                Add
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {snapshot && (
         (() => {
           const cur = clientWidgetMetric(data)
@@ -1985,6 +2285,18 @@ const WidgetCard = memo(function WidgetCard({
             setRecordsFor(null)
             onDrill?.(t)
           }}
+          crossFilter={
+            onCrossFilter && recordsFor.dimField && recordsFor.dimRaw != null
+              ? () => {
+                  onCrossFilter(
+                    recordsFor.dimField as string,
+                    recordsFor.dimRaw,
+                    recordsFor.dimLabel ?? String(recordsFor.dimRaw)
+                  )
+                  setRecordsFor(null)
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -2107,6 +2419,79 @@ export function ReportView({
     mutationFn: () => client.request(post(`/report-studio/${reportId}/snapshots`, {})),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-report-snaps', reportId] })
   })
+  // Widget annotations — "why did this number move".
+  const { data: allAnnotations = [] } = useQuery<WidgetAnnotation[]>({
+    queryKey: ['nvr-report-notes', reportId],
+    queryFn: () =>
+      client
+        .request<{ data: WidgetAnnotation[] }>(get(`/report-studio/${reportId}/annotations`))
+        .then((r) => r.data ?? []),
+    staleTime: 60_000,
+    retry: false
+  })
+  const invalidateNotes = () =>
+    void qc.invalidateQueries({ queryKey: ['nvr-report-notes', reportId] })
+  const addNote = useMutation({
+    mutationFn: (v: { widget: string; note: string; anchor_date: string | null }) =>
+      client.request(post(`/report-studio/${reportId}/annotations`, v)),
+    onSuccess: invalidateNotes
+  })
+  const deleteNote = useMutation({
+    mutationFn: (annId: number) =>
+      client.request(del(`/report-studio/${reportId}/annotations/${annId}`)),
+    onSuccess: invalidateNotes
+  })
+  // Cross-filter: a clicked segment's value applied report-wide as an entity
+  // filter — widgets without the column are simply unaffected (EFP semantics).
+  const applyCrossFilter = useCallback((field: string, value: unknown, label: string) => {
+    const entry: ReportEntityFilter = {
+      field,
+      values: [value as string | number],
+      labels: [label]
+    }
+    setEntityFilters((prev) => [...prev.filter((f) => f.field !== field), entry])
+    setDraftFilters((prev) => [...prev.filter((f) => f.field !== field), entry])
+  }, [])
+  // ── Edit mode (headless builder) — server decides editability ─────────────
+  const [editMode, setEditMode] = useState(false)
+  const [draftWidgets, setDraftWidgets] = useState<ReportWidget[] | null>(null)
+  const [configuring, setConfiguring] = useState<string | null>(null)
+  const saveWidgets = useMutation({
+    mutationFn: (ws: ReportWidget[]) =>
+      client.request(
+        put(`/report-studio/${reportId}/widgets`, {
+          widgets: ws.map((w, i) => ({ ...w, sort: i }))
+        })
+      ),
+    onSuccess: () => {
+      setEditMode(false)
+      setDraftWidgets(null)
+      setConfiguring(null)
+      void qc.invalidateQueries({ queryKey: ['nivaro-report', reportId] })
+      void qc.invalidateQueries({ queryKey: ['nivaro-report-widget'] })
+    }
+  })
+  const orderedForEdit = (ws: ReportWidget[]) =>
+    [...ws].sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+  const startEdit = () => {
+    setDraftWidgets(orderedForEdit(report?.widgets ?? []))
+    setEditMode(true)
+  }
+  const patchWidget = (next: ReportWidget) =>
+    setDraftWidgets((prev) => (prev ?? []).map((w) => (w.id === next.id ? next : w)))
+  const moveWidget = (id: string, dir: -1 | 1) =>
+    setDraftWidgets((prev) => {
+      const ws = [...(prev ?? [])]
+      const i = ws.findIndex((w) => w.id === id)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= ws.length) return ws
+      // Swap positions so the grid reflows — steppers, not drag.
+      const a = ws[i]
+      const b = ws[j]
+      ws[i] = { ...b, x: a.x, y: a.y }
+      ws[j] = { ...a, x: b.x, y: b.y }
+      return ws
+    })
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
@@ -2406,20 +2791,112 @@ export function ReportView({
         </div>
       )}
 
-      {widgets.length === 0 ? (
+      {entityFilters.filter((f) => !filterBar.some((b) => b.field === f.field)).length > 0 && (
+        <div className='flex flex-wrap items-center gap-1.5 px-1 pb-2'>
+          {entityFilters
+            .filter((f) => !filterBar.some((b) => b.field === f.field))
+            .map((f) => (
+              <span
+                key={f.field}
+                className='inline-flex items-center gap-1.5 rounded-full border border-[#00ceff66] bg-[#00ceff14] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#007a99] dark:text-nvr-cyan'
+              >
+                {f.field.replace(/_/g, ' ')}: {(f.labels ?? f.values.map(String)).join(', ')}
+                <button
+                  type='button'
+                  aria-label='Remove filter'
+                  onClick={() => {
+                    setEntityFilters((prev) => prev.filter((x) => x.field !== f.field))
+                    setDraftFilters((prev) => prev.filter((x) => x.field !== f.field))
+                  }}
+                  className='rounded-full p-0.5 hover:bg-[#00ceff29]'
+                >
+                  <X className='h-2.5 w-2.5' />
+                </button>
+              </span>
+            ))}
+        </div>
+      )}
+      {report?.editable && (
+        <div className='mb-2 flex items-center gap-1.5'>
+          {editMode ? (
+            <>
+              <button
+                type='button'
+                disabled={saveWidgets.isPending}
+                onClick={() => draftWidgets && saveWidgets.mutate(draftWidgets)}
+                className='rounded-md bg-nvr-cyan px-3 py-1 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+              >
+                {saveWidgets.isPending ? 'Saving…' : 'Save layout'}
+              </button>
+              <button
+                type='button'
+                onClick={() => {
+                  setEditMode(false)
+                  setDraftWidgets(null)
+                  setConfiguring(null)
+                }}
+                className='rounded-md border border-slate-200 px-3 py-1 text-[12px] text-slate-500 dark:border-border'
+              >
+                Cancel
+              </button>
+              <span className='text-[11px] text-slate-400'>
+                Changes apply when you save — a version is captured automatically.
+              </span>
+            </>
+          ) : (
+            <button
+              type='button'
+              onClick={startEdit}
+              className='rounded-md border border-slate-200 px-3 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+            >
+              Edit report
+            </button>
+          )}
+        </div>
+      )}
+      {editMode && draftWidgets && (
+        <div className='mb-3'>
+          <AddWidgetBar
+            maxY={Math.max(0, ...draftWidgets.map((w) => (w.y ?? 0) + (w.h ?? 1)))}
+            onAdd={(w) => setDraftWidgets((prev) => [...(prev ?? []), w])}
+          />
+        </div>
+      )}
+      {widgets.length === 0 && !editMode ? (
         <div className='p-6 text-[13px] text-slate-400'>
           {emptyState ?? 'This report has no widgets yet.'}
         </div>
       ) : (
         <div
           className='grid gap-3'
-          style={{ gridTemplateColumns: 'repeat(12, minmax(0, 1fr))', gridAutoRows: '72px' }}
+          style={{ gridTemplateColumns: 'repeat(12, minmax(0, 1fr))', gridAutoRows: editMode ? undefined : '72px' }}
         >
-          {[...widgets]
-            .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+          {orderedForEdit(editMode && draftWidgets ? draftWidgets : widgets)
             .map((w) => (
-              <WidgetCard
+              <div
                 key={w.id}
+                style={{
+                  gridColumn: `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
+                  gridRow: editMode ? undefined : undefined
+                }}
+                className={editMode ? '' : 'contents'}
+              >
+              {editMode && (
+                <WidgetEditBar
+                  widget={w}
+                  onConfigure={() => setConfiguring(w.id)}
+                  onDelete={() => setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))}
+                  onResize={(dw, dh) =>
+                    patchWidget({
+                      ...w,
+                      w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
+                      h: Math.min(8, Math.max(1, (w.h || 2) + dh))
+                    })
+                  }
+                  onMove={(dir) => moveWidget(w.id, dir)}
+                />
+              )}
+              <WidgetCard
                 reportId={reportId}
                 widget={w}
                 dateRange={effectiveRange}
@@ -2432,9 +2909,24 @@ export function ReportView({
                     ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
                     : null
                 }
+                annotations={allAnnotations.filter((a) => a.widget === w.id)}
+                onAddAnnotation={(widgetId, note, anchorDate) =>
+                  addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })
+                }
+                onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
+                onCrossFilter={applyCrossFilter}
               />
+              </div>
             ))}
         </div>
+      )}
+      {editMode && configuring && draftWidgets?.some((w) => w.id === configuring) && (
+        <WidgetConfigSheet
+          widget={draftWidgets.find((w) => w.id === configuring) as ReportWidget}
+          allWidgets={draftWidgets}
+          onChange={patchWidget}
+          onClose={() => setConfiguring(null)}
+        />
       )}
       <TipLayer />
       {!outerDrill && drillStack?.length ? (

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BarChart3, Globe, Plus } from 'lucide-react'
+import { BarChart3, FolderOpen, Globe, Pencil, Plus, Star } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -23,6 +23,7 @@ export interface ReportDef {
   is_shared: boolean
   role_id: string | null
   widget_count?: number
+  folder?: string | null
   updated_at: string
 }
 
@@ -49,6 +50,30 @@ export function ReportStudioPage() {
     staleTime: 60_000
   })
   const STALE_MS = 90 * 86_400_000
+  // Favorites ride the generic pinned-items table; folder is a report column.
+  const { data: pinned = [] } = useQuery({
+    queryKey: ['report-pins'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ item_id: string }> }>('/pinned/nivaro_report_defs')
+        .then((r) => (r.data.data ?? []).map((p) => String(p.item_id)))
+        .catch(() => [] as string[]),
+    staleTime: 30_000
+  })
+  const togglePin = useMutation({
+    mutationFn: (rid: string) => api.post(`/pinned/nivaro_report_defs/${rid}/toggle`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['report-pins'] })
+  })
+  const [editingFolder, setEditingFolder] = useState<string | null>(null)
+  const [folderDraft, setFolderDraft] = useState('')
+  const setFolder = useMutation({
+    mutationFn: ({ rid, folder }: { rid: string; folder: string | null }) =>
+      api.patch(`/report-studio/${rid}`, { folder }),
+    onSuccess: () => {
+      setEditingFolder(null)
+      queryClient.invalidateQueries({ queryKey: ['report-defs'] })
+    }
+  })
 
   const create = useMutation({
     mutationFn: () => api.post<{ data: ReportDef }>('/report-studio/', { name }),
@@ -122,13 +147,60 @@ export function ReportStudioPage() {
             </Button>
           </div>
         ) : (
-          <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-            {reports.map((r, i) => (
-              <button
+          <div className='space-y-4'>
+          {(() => {
+            const pinnedSet = new Set(pinned)
+            const favs = reports.filter((r) => pinnedSet.has(r.id))
+            const rest = reports.filter((r) => !pinnedSet.has(r.id))
+            const byFolder = new Map<string, ReportDef[]>()
+            for (const r of rest) {
+              const key = r.folder?.trim() || ''
+              const arr = byFolder.get(key) ?? []
+              arr.push(r)
+              byFolder.set(key, arr)
+            }
+            const folderKeys = [...byFolder.keys()].sort((a, b) => {
+              if (a === '') return 1
+              if (b === '') return -1
+              return a.localeCompare(b)
+            })
+            const sections: Array<{ label: string; icon: 'star' | 'folder' | null; items: ReportDef[] }> = []
+            if (favs.length > 0) sections.push({ label: 'Favorites', icon: 'star', items: favs })
+            for (const k of folderKeys)
+              sections.push({ label: k || (sections.length === 0 && folderKeys.length === 1 ? '' : 'Unfiled'), icon: k ? 'folder' : null, items: byFolder.get(k) ?? [] })
+            return sections.map((sec) => (
+              <div key={sec.label || '__all__'}>
+                {sec.label && (
+                  <p className='mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                    {sec.icon === 'star' ? <Star className='h-3 w-3 fill-amber-400 text-amber-400' /> : sec.icon === 'folder' ? <FolderOpen className='h-3 w-3' /> : null}
+                    {sec.label}
+                  </p>
+                )}
+                <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+                  {sec.items.map((r, i) => renderRow(r, i, pinnedSet))}
+                </div>
+              </div>
+            ))
+          })()}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  function renderRow(r: ReportDef, i: number, pinnedSet: Set<string>) {
+    return (
+      <div key={r.id} className='contents'>
+            {[r].map((r, _unused) => (
+              <div
                 key={r.id}
-                type='button'
+                role='button'
+                tabIndex={0}
                 onClick={() => navigate(`/report-studio/${r.id}`)}
-                className={`flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-muted/40 ${i > 0 ? 'border-t border-slate-100 dark:border-border/50' : ''}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') navigate(`/report-studio/${r.id}`)
+                }}
+                className={`flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-muted/40 ${i > 0 ? 'border-t border-slate-100 dark:border-border/50' : ''}`}
               >
                 <BarChart3 className='h-4 w-4 shrink-0 text-slate-300' />
                 <span className='min-w-0 flex-1'>
@@ -169,14 +241,61 @@ export function ReportStudioPage() {
                     </span>
                   )
                 })()}
+                <span
+                  className='shrink-0'
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  {editingFolder === r.id ? (
+                    <input
+                      autoFocus
+                      value={folderDraft}
+                      onChange={(e) => setFolderDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') setFolder.mutate({ rid: r.id, folder: folderDraft.trim() || null })
+                        if (e.key === 'Escape') setEditingFolder(null)
+                      }}
+                      onBlur={() => setFolder.mutate({ rid: r.id, folder: folderDraft.trim() || null })}
+                      placeholder='Folder'
+                      className='h-6 w-28 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
+                    />
+                  ) : (
+                    <button
+                      type='button'
+                      title={r.folder ? `Folder: ${r.folder}` : 'Put in a folder'}
+                      onClick={() => {
+                        setEditingFolder(r.id)
+                        setFolderDraft(r.folder ?? '')
+                      }}
+                      className='rounded p-1 text-slate-300 hover:text-slate-500'
+                    >
+                      <Pencil className='h-3 w-3' />
+                    </button>
+                  )}
+                </span>
+                <button
+                  type='button'
+                  title={pinnedSet.has(r.id) ? 'Unfavorite' : 'Favorite'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    togglePin.mutate(r.id)
+                  }}
+                  className='shrink-0 rounded p-1'
+                >
+                  <Star
+                    className={
+                      pinnedSet.has(r.id)
+                        ? 'h-3.5 w-3.5 fill-amber-400 text-amber-400'
+                        : 'h-3.5 w-3.5 text-slate-300 hover:text-amber-400'
+                    }
+                  />
+                </button>
                 <span className='w-24 shrink-0 text-right text-[11.5px] text-slate-400'>
                   {formatRelative(r.updated_at)}
                 </span>
-              </button>
+              </div>
             ))}
-          </div>
-        )}
       </div>
-    </div>
-  )
+    )
+  }
 }
