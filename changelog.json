@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-18T00:35:10.574Z",
+  "generated_at": "2026-08-18T01:05:04.243Z",
   "releases": [
+    {
+      "version": "0.1.65",
+      "tag": "v0.1.65",
+      "date": "2026-08-17T21:05:01-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "reporting batch 2 — cross-filter, calc KPIs, movers, auto-snapshots, CSV, annotations, folders, PDF digests, Other bucket, dual axis, cumulative, health check + headless builder",
+              "hash": "7f745ca8"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.64",
       "tag": "v0.1.64",
-      "date": "2026-08-17T20:35:08-04:00",
+      "date": "2026-08-17T20:35:10-04:00",
       "sections": [
         {
           "label": "Added",
