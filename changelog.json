@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-08-18T13:42:27.752Z",
+  "generated_at": "2026-08-18T15:52:40.259Z",
   "releases": [
+    {
+      "version": "0.1.68",
+      "tag": "v0.1.68",
+      "date": "2026-08-18T11:52:38-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "layout-aware New-item dropdown on browser and queue views",
+              "hash": "5ca51382"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "staged-aware rollups, widgets and review decisions",
+              "hash": "428f55ab"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "row editor panel spans the full grid width",
+              "hash": "5871701a"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "workflow lines row editor — duplicate unit panel, duplicate commit buttons, broken unit staging",
+              "hash": "492e178b"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.67",
       "tag": "v0.1.67",
-      "date": "2026-08-18T09:42:25-04:00",
+      "date": "2026-08-18T09:42:27-04:00",
       "sections": [
         {
           "label": "Added",
