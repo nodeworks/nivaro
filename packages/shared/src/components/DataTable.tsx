@@ -554,7 +554,11 @@ export function DataTable<T = Record<string, unknown>>({
     const p = pinPos[key]
     if (!pinsActive || !p) return undefined
     return cn(
-      header ? 'sticky z-[2]' : 'sticky z-[1] bg-inherit',
+      // dt-pinned: pinned headers offset via inline style (not left-0), so the
+      // fillHeight wrapper's z variants need a CLASS to elevate them above the
+      // other header cells — same-z siblings paint in DOM order and a later
+      // header scrolls OVER the pinned one otherwise.
+      header ? 'dt-pinned sticky z-[2]' : 'sticky z-[1] bg-inherit',
       p.side === 'left' && p.seam && 'border-r border-slate-200 dark:border-border',
       p.side === 'right' && p.seam && 'border-l border-slate-200 dark:border-border'
     )
@@ -722,7 +726,7 @@ export function DataTable<T = Record<string, unknown>>({
                 // header corner (left-0) tops the other header cells so
                 // horizontal scroll cannot bleed through it.
                 fillHeight &&
-                  'min-h-0 flex-1 overflow-y-auto [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[5] [&_thead_th.left-0]:z-[6]'
+                  'min-h-0 flex-1 overflow-y-auto [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[5] [&_thead_th.left-0]:z-[6] [&_thead_th.dt-pinned]:z-[6]'
               )}
               style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
             >
