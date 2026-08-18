@@ -677,6 +677,23 @@ async function applyChildWritebacks(
  * Idempotent via skip_if_exists (match on one column). EFP precedent: CAR
  * approval creating the project from workflow fields.
  */
+/** Rule-engine entry: run a create_record action for a record OUTSIDE a
+ *  transition (a create-time automation rule). Guards are the caller's job. */
+export async function runCreateRecordForRecord(
+  action: TransitionActionDef,
+  collection: string,
+  itemId: string
+): Promise<void> {
+  let record: Record<string, unknown> = {}
+  try {
+    record = ((await db(collection).where({ id: itemId }).first()) ?? {}) as Record<string, unknown>
+  } catch {
+    return
+  }
+  if (record.id == null) return
+  await runCreateRecordAction(action, collection, itemId, record, null, [])
+}
+
 async function runCreateRecordAction(
   action: TransitionActionDef,
   collection: string,

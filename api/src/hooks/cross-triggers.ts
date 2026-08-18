@@ -45,6 +45,14 @@ export interface ExecProcedureAction {
   args?: Record<string, string>
 }
 
+/** Full create_record config (same shape as a transition action) run from a
+ *  rule — context queries, Liquid payload, junctions, link_field,
+ *  skip_if_exists. Executed by the workflow-actions engine. */
+export interface CreateRecordRuleAction {
+  type: 'create_record'
+  [key: string]: unknown
+}
+
 export interface CrossTriggerAction {
   type: 'cross_collection'
   target_collection: string
@@ -54,6 +62,9 @@ export interface CrossTriggerAction {
   // Multi-field match for updates: { targetColumn: 'template {{source_field}}' }.
   // All must match (AND). Wins over match_field when present.
   match_map?: Record<string, string>
+  /** Drop entries that render EMPTY instead of writing '' over the target's
+   *  value — a sync rule must not blank a date because the source's is null. */
+  omit_empty?: boolean
 }
 
 interface RuleRow {
@@ -71,7 +82,7 @@ interface ParsedRule {
   name: string
   trigger: string
   conditions: CrossTriggerCondition[]
-  actions: Array<CrossTriggerAction | ExecProcedureAction>
+  actions: Array<CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction>
 }
 
 // ─── Rule cache (60s per source collection) ──────────────────────────────────
@@ -95,11 +106,13 @@ function parseJson<T = unknown>(val: string | null | undefined): T | null {
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
-function extractCrossActions(raw: string | null): Array<CrossTriggerAction | ExecProcedureAction> {
+function extractCrossActions(
+  raw: string | null
+): Array<CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction> {
   const parsed = parseJson<unknown>(raw)
   if (!parsed) return []
   const list = Array.isArray(parsed) ? parsed : [parsed]
-  return list.filter((a): a is CrossTriggerAction | ExecProcedureAction => {
+  return list.filter((a): a is CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction => {
     if (!a || typeof a !== 'object') return false
     const t = (a as { type?: string }).type
     if (t === 'cross_collection') {
@@ -111,6 +124,10 @@ function extractCrossActions(raw: string | null): Array<CrossTriggerAction | Exe
     if (t === 'exec_procedure') {
       const proc = (a as { procedure?: unknown }).procedure
       return typeof proc === 'string' && IDENT_RE.test(proc)
+    }
+    if (t === 'create_record') {
+      const target = (a as { target_collection?: unknown }).target_collection
+      return typeof target === 'string' && IDENT_RE.test(target) && !/^nivaro_/i.test(target)
     }
     return false
   })
@@ -261,6 +278,23 @@ async function processCrossTriggers(ctx: HookContext) {
             continue
           }
 
+          if (act.type === 'create_record') {
+            // Full create_record semantics (junctions, link-back, idempotent
+            // skip_if_exists) via the transition-action engine — lazy import
+            // breaks the executor→items→hooks cycle.
+            try {
+              const { runCreateRecordForRecord } = await import('../services/workflow-actions.js')
+              await runCreateRecordForRecord(
+                act as unknown as Parameters<typeof runCreateRecordForRecord>[0],
+                collection,
+                String(ctx.keys?.[0] ?? (data as Record<string, unknown>).id ?? '')
+              )
+            } catch (err) {
+              logError(err, { rule: rule.id, action: 'create_record' })
+            }
+            continue
+          }
+
           const target = act.target_collection
           if (!target || target.startsWith('nivaro_')) {
             logError(new Error('Target collection not allowed'), { rule: rule.id, target })
@@ -269,7 +303,9 @@ async function processCrossTriggers(ctx: HookContext) {
 
           const record: Record<string, unknown> = {}
           for (const [targetField, template] of Object.entries(act.field_map ?? {})) {
-            record[targetField] = renderTemplate(String(template), data)
+            const rendered = renderTemplate(String(template), data)
+            if (act.omit_empty && rendered === '') continue
+            record[targetField] = rendered
           }
           if (Object.keys(record).length === 0) continue
 

@@ -11,7 +11,7 @@ import { computeLiveRollup, parseRollupSources } from '../item-edit/live-rollups
 import { O2MStagingContext } from '../item-edit/O2MStagingContext'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
-import { ChevronDown, FileDiff, Paperclip } from 'lucide-react'
+import { ChevronDown, FileDiff, Loader2, Paperclip, Upload } from 'lucide-react'
 import { Button } from '../ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
@@ -136,6 +136,76 @@ function withLiveDelta(
   }
 }
 
+// ─── DeltaAmountField ─────────────────────────────────────────────────────────
+// EFP PUB-addendum entry: the reviewer types the amount to increase/decrease
+// BY (negative decreases); the proposed value stored is current + delta, and
+// the strip previews Current → New total live.
+
+function DeltaAmountField({
+  current,
+  value,
+  onChange,
+  currentLabel,
+  newLabel
+}: {
+  current: number
+  value: unknown
+  onChange: (v: unknown) => void
+  currentLabel?: string
+  newLabel?: string
+}) {
+  const [text, setText] = useState(() => {
+    const v = Number(value)
+    if (!Number.isFinite(v) || Math.round(v * 100) === Math.round(current * 100)) return ''
+    return String(Math.round((v - current) * 100) / 100)
+  })
+  const delta = text.trim() === '' ? 0 : Number(text)
+  const validDelta = Number.isFinite(delta)
+  const proposed = validDelta ? Math.round((current + delta) * 100) / 100 : current
+  const fmt = (n: number) =>
+    n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  return (
+    <div className='space-y-1.5'>
+      <div className='flex items-center gap-0'>
+        <span className='flex h-9 items-center rounded-l-md border border-r-0 border-slate-200 bg-slate-50 px-2.5 text-[13px] text-slate-500 dark:border-border dark:bg-muted'>
+          $
+        </span>
+        <Input
+          value={text}
+          onChange={(e) => {
+            const t = e.target.value
+            setText(t)
+            const d = t.trim() === '' ? 0 : Number(t)
+            if (!Number.isFinite(d)) return
+            onChange(Math.round((current + d) * 100) / 100)
+          }}
+          placeholder='Negative numbers to decrease'
+          className='h-9 rounded-l-none text-[13px]'
+        />
+      </div>
+      <p className='text-[12px]'>
+        <span className='font-medium text-slate-600 dark:text-slate-300'>{currentLabel ?? 'Current REQ Amount'}:</span>{' '}
+        <span className='tabular-nums text-slate-700 dark:text-slate-200'>{fmt(current)}</span>
+        <span className='mx-2 text-slate-300'>·</span>
+        <span className='font-medium text-slate-600 dark:text-slate-300'>{newLabel ?? 'New REQ Total'}:</span>{' '}
+        <span
+          className={
+            'tabular-nums font-semibold ' +
+            (proposed > current
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : proposed < current
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-slate-700 dark:text-slate-200')
+          }
+        >
+          {fmt(proposed)}
+        </span>
+        {!validDelta && <span className='ml-2 text-[11px] text-red-500'>Enter a number</span>}
+      </p>
+    </div>
+  )
+}
+
 // ─── ProposedChangesForm ───────────────────────────────────────────────────────
 // Isolated so title/description keystrokes don't re-render FieldRenderers.
 
@@ -147,6 +217,7 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
   relations,
   collection,
   prefillParentId,
+  parentData,
 }: {
   configuredFields: LayoutAssignment[]
   fieldMap: Record<string, CMSField>
@@ -155,6 +226,7 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
   relations: CMSRelation[]
   collection: string
   prefillParentId: string
+  parentData?: Record<string, unknown>
 }) {
   // The addendum's own grid publishes its staged rows into the record form's
   // LiveRowsContext, so a rollup on the amendment can be totalled from the
@@ -188,6 +260,28 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
                   value={String(formData[a.field] ?? '')}
                   onChange={(e) => onFieldChange(a.field, e.target.value)}
                   className='h-8 text-[12px]'
+                />
+              </div>
+            )
+          }
+          // Delta entry (overrides.options.entry_mode = 'delta'): type the
+          // change, not the new total — EFP PUB addendum semantics.
+          const aOv =
+            typeof a.overrides === 'string'
+              ? (() => { try { return JSON.parse(a.overrides) as Record<string, unknown> } catch { return {} } })()
+              : ((a.overrides ?? {}) as Record<string, unknown>)
+          const aOvOpts = (aOv.options ?? {}) as Record<string, unknown>
+          if (aOvOpts.entry_mode === 'delta') {
+            const cur = Number(parentData?.[a.field] ?? 0)
+            return (
+              <div key={a.field}>
+                <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>{label}</Label>
+                <DeltaAmountField
+                  current={Number.isFinite(cur) ? cur : 0}
+                  value={formData[a.field]}
+                  onChange={(v) => onFieldChange(a.field, v)}
+                  currentLabel={typeof aOvOpts.current_label === 'string' ? aOvOpts.current_label : undefined}
+                  newLabel={typeof aOvOpts.new_label === 'string' ? aOvOpts.new_label : undefined}
                 />
               </div>
             )
@@ -413,6 +507,26 @@ function AddendumCreateSheet({
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  // Supporting files: uploaded immediately (nivaro_files), ids ride the
+  // create payload. An abandoned form leaves orphan files — same accepted
+  // trade-off as the chat composer.
+  const [attachments, setAttachments] = useState<Array<{ id: string; name: string }>>([])
+  const [uploadingCount, setUploadingCount] = useState(0)
+  const attachInputRef = useRef<HTMLInputElement | null>(null)
+  const uploadAttachment = async (files: File[]) => {
+    if (files.length === 0) return
+    setUploadingCount((n) => n + files.length)
+    for (const f of files) {
+      try {
+        const result = await (client as unknown as { upload: (f: File) => Promise<{ id: string }> }).upload(f)
+        setAttachments((prev) => [...prev, { id: String(result.id), name: f.name }])
+      } catch {
+        toast.error(`Failed to upload ${f.name}`)
+      } finally {
+        setUploadingCount((n) => n - 1)
+      }
+    }
+  }
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const pre: Record<string, unknown> = {}
     for (const a of configuredFields) {
@@ -502,6 +616,7 @@ function AddendumCreateSheet({
           addendum_layout_id: resolvedLayoutId,
           data: mergedData,
           fields_schema: configuredFields.map((a) => a.field),
+          attachments: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
         })
       )
     },
@@ -549,9 +664,50 @@ function AddendumCreateSheet({
               placeholder='Why is this change needed?'
             />
           </div>
+          <div>
+            <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>Attachments</Label>
+            <input
+              ref={attachInputRef}
+              type='file'
+              multiple
+              className='hidden'
+              onChange={(e) => {
+                void uploadAttachment(Array.from(e.target.files ?? []))
+                e.target.value = ''
+              }}
+            />
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {attachments.map((a) => (
+                <span
+                  key={a.id}
+                  className='inline-flex max-w-[240px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
+                >
+                  <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
+                  <span className='truncate'>{a.name}</span>
+                  <button
+                    type='button'
+                    onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                    className='shrink-0 text-slate-400 hover:text-red-500'
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button
+                type='button'
+                onClick={() => attachInputRef.current?.click()}
+                disabled={uploadingCount > 0}
+                className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-slate-300 dark:hover:text-slate-100'
+              >
+                {uploadingCount > 0 ? <Loader2 className='h-3 w-3 animate-spin' /> : <Upload className='h-3 w-3' />}
+                {uploadingCount > 0 ? 'Uploading…' : 'Upload'}
+              </button>
+            </div>
+          </div>
         </div>
 
         <ProposedChangesForm
+          parentData={parentData}
           configuredFields={configuredFields}
           fieldMap={fieldMap}
           formData={formData}

@@ -145,6 +145,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       cost_impact?: number | null
       timeline_impact_days?: number | null
       addendum_layout_id?: number | null
+      attachments?: unknown
     }
 
     if (!body.parent_collection || !body.parent_id || !body.title) {
@@ -231,6 +232,11 @@ export async function addendumsRoutes(app: FastifyInstance) {
         cost_impact: body.cost_impact ?? null,
         timeline_impact_days: body.timeline_impact_days ?? null,
         addendum_layout_id: body.addendum_layout_id ?? null,
+        // Supporting files uploaded from the create form — file ids only.
+        attachments:
+          Array.isArray(body.attachments) && body.attachments.length > 0
+            ? JSON.stringify(body.attachments.map(String).slice(0, 50))
+            : null,
         status: 'draft',
         created_by: req.user!.id,
         created_at: now,
