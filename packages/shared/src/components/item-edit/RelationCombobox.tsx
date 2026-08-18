@@ -509,13 +509,22 @@ export function RelatedItemLabel({
 }) {
   const client = useNivaroClient()
   const isFiles = collection === 'nivaro_files' || collection === 'directus_files'
+  // A dotted display template needs the nested expansion — the bare row only
+  // carries FK ids and every such label rendered as '-'.
+  const nestedFields = (() => {
+    if (!displayTemplate || !displayTemplate.includes('.')) return null
+    const tokens = [...displayTemplate.matchAll(/\{\{([^}]+)\}\}/g)].map((m) => m[1].trim())
+    return tokens.length > 0 ? ['id', ...tokens].join(',') : null
+  })()
   const { data, isLoading } = useQuery<Record<string, unknown>>({
-    queryKey: ['relation-single', collection, String(id)],
+    queryKey: ['relation-single', collection, String(id), nestedFields ?? ''],
     queryFn: () =>
       isFiles
         ? client.request<{ data: Record<string, unknown> }>(get(`/files/${id}`)).then((r) => r.data)
         : client
-            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+            .request<{ data: Record<string, unknown> }>(
+              get(`/items/${collection}/${id}`, nestedFields ? { fields: nestedFields } : {})
+            )
             .then((r) => r.data),
     enabled: !!id && !!collection,
     staleTime: 60_000

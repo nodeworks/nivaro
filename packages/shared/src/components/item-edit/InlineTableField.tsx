@@ -3229,11 +3229,20 @@ export function InlineTableField({
             in — as inputs' neighbours they read like fields left blank. They
             get their own strip above the form, the way a record's header
             summarises it. */}
-        {effectiveCols.some((c) => isPanelReadOnly(c)) && (() => {
+        {(() => {
+          // The derived-values strip is PRESET-INDEPENDENT: a preset narrows
+          // the table's columns, but the panel always summarises what the row
+          // computes to (Line $, Allocated, Available) — hiding Allocated
+          // from the "Line" view must not strip it from the editor.
+          const stripCols = [
+            ...displayCols.filter(isPanelReadOnly),
+            ...effectiveCols.filter((c) => isSummaryCol(c))
+          ]
+          return stripCols.length > 0 && (() => {
           const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
           return (
           <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
-            {effectiveCols.filter(isPanelReadOnly).map((c) => {
+            {stripCols.map((c) => {
               const label = c.label || titleCase(c.field)
               const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
               // options may arrive as a JSON string — parse like renderCell does
@@ -3280,6 +3289,7 @@ export function InlineTableField({
             })}
           </div>
           )
+        })()
         })()}
         <div
           className='grid items-start gap-x-4 gap-y-3'

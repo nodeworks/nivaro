@@ -1531,15 +1531,42 @@ export function ItemEditForm({
 
   // New records: stamp the resolved layout's default_values onto the draft,
   // once, filling only keys the draft doesn't already have a value for.
+  // Array values whose key is an M2M alias stage junction links instead —
+  // the pickers read staged links, never a draft array.
   useEffect(() => {
     if (!isNew || activeLayoutData === undefined || appliedLayoutDefaultsRef.current) return
-    appliedLayoutDefaultsRef.current = true
     const defaults = activeLayoutData?.layout?.default_values
-    if (!defaults) return
-    const next = applyLayoutDefaults(draftRef.current, defaults)
+    if (!defaults) {
+      appliedLayoutDefaultsRef.current = true
+      return
+    }
+    // An alias default can't resolve until relations arrive — wait, don't burn
+    // the once-only flag on a pass that would drop it.
+    if (Object.values(defaults).some(Array.isArray) && !relationsFetched) return
+    appliedLayoutDefaultsRef.current = true
+    const scalar: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(defaults)) {
+      if (Array.isArray(value)) {
+        const m2mRel =
+          relations.find(
+            (r) => r.one_collection === collection && r.one_field === key && r.junction_field != null
+          ) ??
+          relations.find(
+            (r) =>
+              r.one_collection === collection && r.many_collection === key && r.junction_field != null
+          )
+        if (m2mRel) {
+          const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+          for (const id of value) m2mStagingCtx.stageLink(stagingKey, id)
+          continue
+        }
+      }
+      scalar[key] = value
+    }
+    const next = applyLayoutDefaults(draftRef.current, scalar)
     draftRef.current = next
     setDraft(next)
-  }, [isNew, activeLayoutData])
+  }, [isNew, activeLayoutData, relations, relationsFetched, collection, m2mStagingCtx])
 
   // Relation-path fields ('purchase_order.workflow.workflow_id'): read-only
   // values reached through M2O hops, resolved server-side in one batched call

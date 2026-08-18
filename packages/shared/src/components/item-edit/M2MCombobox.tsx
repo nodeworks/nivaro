@@ -16,6 +16,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { useStaleTip } from './RelationCombobox'
 import { useM2MStaging } from './M2MStagingContext'
+import { applyDisplayTemplate } from './helpers'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSRelation } from './types'
 
@@ -135,8 +136,15 @@ export function M2MCombobox({
     : redactionFilter
   const filterParam = effectiveFilter ? JSON.stringify(effectiveFilter) : undefined
   const serverSort = optionSort && !/^-?label$/.test(optionSort) ? optionSort : undefined
+  const templateNestedFields = (() => {
+    const tmpl2 = colMeta?.display_template
+    if (!tmpl2 || !tmpl2.includes('.')) return null
+    const tokens = [...tmpl2.matchAll(/\{\{([^}]+)\}\}/g)].map((mm) => mm[1].trim())
+    if (tokens.length === 0) return null
+    return ['id', ...tokens].join(',')
+  })()
   const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? ''],
+    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? '', templateNestedFields ?? ''],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -145,6 +153,9 @@ export function M2MCombobox({
             search: search || undefined,
             filter: filterParam,
             picker: '1',
+            // A dotted display template ({{core_category.name}}) needs the
+            // nested expansion — a bare row only carries the FK id.
+            ...(templateNestedFields ? { fields: templateNestedFields } : {}),
             ...(serverSort ? { sort: serverSort } : {})
           })
         )
@@ -211,7 +222,9 @@ export function M2MCombobox({
   function getLabel(item: Record<string, unknown>) {
     const tmpl = colMeta?.display_template ?? null
     if (!tmpl) return String(item._display ?? item.id ?? '')
-    return tmpl.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => String(item[k.trim()] ?? ''))
+    // Dotted tokens ({{core_category.name}}) walk nested objects — the raw
+    // per-key replace rendered every such option as '-'.
+    return applyDisplayTemplate(tmpl, item)
   }
 
   if (requiredParent) {
@@ -477,8 +490,15 @@ export function M2MSingleSelectCombobox({
     : redactionFilter
   const filterParam = effectiveFilter ? JSON.stringify(effectiveFilter) : undefined
   const serverSort = optionSort && !/^-?label$/.test(optionSort) ? optionSort : undefined
+  const templateNestedFields = (() => {
+    const tmpl2 = colMeta?.display_template
+    if (!tmpl2 || !tmpl2.includes('.')) return null
+    const tokens = [...tmpl2.matchAll(/\{\{([^}]+)\}\}/g)].map((mm) => mm[1].trim())
+    if (tokens.length === 0) return null
+    return ['id', ...tokens].join(',')
+  })()
   const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? ''],
+    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? '', templateNestedFields ?? ''],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -487,6 +507,9 @@ export function M2MSingleSelectCombobox({
             search: search || undefined,
             filter: filterParam,
             picker: '1',
+            // A dotted display template ({{core_category.name}}) needs the
+            // nested expansion — a bare row only carries the FK id.
+            ...(templateNestedFields ? { fields: templateNestedFields } : {}),
             ...(serverSort ? { sort: serverSort } : {})
           })
         )
@@ -548,7 +571,7 @@ export function M2MSingleSelectCombobox({
   const tmpl = colMeta?.display_template ?? null
   function getLabel(item: Record<string, unknown>) {
     return tmpl
-      ? tmpl.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => String(item[k.trim()] ?? ''))
+      ? applyDisplayTemplate(tmpl, item)
       : String(item.name ?? item.title ?? item.label ?? item.id ?? '')
   }
   const currentOpt =
