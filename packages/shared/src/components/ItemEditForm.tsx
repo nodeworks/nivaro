@@ -32,6 +32,9 @@ import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingCon
 import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
 import {
   LiveRowsContext,
+  StagedRelationsContext,
+  type StagedRelationsCtx,
+  type StagedRelOps,
   type LiveRowsCtx,
   O2MStagingContext,
   type O2MStagingCtx
@@ -2155,6 +2158,36 @@ export function ItemEditForm({
     [liveRowsByRelation, reportLiveRows]
   )
 
+  // Staged grandchild ops (unit allocations under pending/queued lines),
+  // published by grids so record-scoped widgets (Deployments rollup) can
+  // reflect unsaved changes. Signature-guarded like reportLiveRows — grids
+  // rebuild their ops object every render.
+  const [stagedRelsByGrid, setStagedRelsByGrid] = useState<Map<string, Record<string, StagedRelOps>>>(
+    new Map()
+  )
+  const stagedRelsSigRef = useRef(new Map<string, string>())
+  const reportStagedRels = useCallback<StagedRelationsCtx['report']>((gridKey, byCollection) => {
+    if (byCollection === null) {
+      if (!stagedRelsSigRef.current.has(gridKey)) return
+      stagedRelsSigRef.current.delete(gridKey)
+      setStagedRelsByGrid((prev) => {
+        if (!prev.has(gridKey)) return prev
+        const next = new Map(prev)
+        next.delete(gridKey)
+        return next
+      })
+      return
+    }
+    const sig = JSON.stringify(byCollection)
+    if (stagedRelsSigRef.current.get(gridKey) === sig) return
+    stagedRelsSigRef.current.set(gridKey, sig)
+    setStagedRelsByGrid((prev) => new Map(prev).set(gridKey, byCollection))
+  }, [])
+  const stagedRelsCtx = useMemo<StagedRelationsCtx>(
+    () => ({ report: reportStagedRels, byGrid: stagedRelsByGrid }),
+    [reportStagedRels, stagedRelsByGrid]
+  )
+
   // A grid only publishes rows while it is mounted, so on a tabbed form the
   // total would stay blank until the user visited the lines tab. On a NEW
   // record we do not need the grid at all: every child row is staged right
@@ -3450,6 +3483,10 @@ export function ItemEditForm({
         qc.invalidateQueries({ queryKey: ['o2m-rows', rc, mf, id] })
       }
       setPendingO2MRows(new Map())
+      // Staged grandchild ops just flushed — the widget registry must stop
+      // reporting them (a grid unmounted on another tab can't re-report).
+      stagedRelsSigRef.current.clear()
+      setStagedRelsByGrid(new Map())
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
       // Refresh the attached document so it reflects what was just saved.
@@ -4443,6 +4480,7 @@ export function ItemEditForm({
     <StaleFieldReportContext.Provider value={reportStaleField}>
     <O2MStagingContext.Provider value={o2mStagingCtx}>
     <LiveRowsContext.Provider value={liveRowsCtx}>
+    <StagedRelationsContext.Provider value={stagedRelsCtx}>
     <M2MStagingContext.Provider value={m2mStagingCtx}>
       {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
@@ -5258,6 +5296,7 @@ export function ItemEditForm({
         </div>
       </div>
     </M2MStagingContext.Provider>
+    </StagedRelationsContext.Provider>
     </LiveRowsContext.Provider>
     </O2MStagingContext.Provider>
     </StaleFieldReportContext.Provider>

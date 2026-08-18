@@ -41,3 +41,29 @@ export const LiveRowsContext = createContext<LiveRowsCtx | null>(null)
 export function useLiveRows() {
   return useContext(LiveRowsContext)
 }
+
+/**
+ * Client-staged (unsaved) changes to a grid's GRANDCHILD relation rows
+ * (unit allocations under workflow lines), published per grid and grouped by
+ * grandchild collection — so a record-scoped widget (the Deployments rollup)
+ * can reflect pending rows and queued allocation edits before the parent
+ * record saves. Created rows may carry literal dotted keys
+ * ('workflow_line.deployment_type') giving the parent-line context when the
+ * line itself is unsaved.
+ */
+export interface StagedRelOps {
+  created: Record<string, unknown>[]
+  updated: Array<{ id: string | number; values: Record<string, unknown> }>
+  deleted: Array<string | number>
+}
+
+export interface StagedRelationsCtx {
+  report: (gridKey: string, byCollection: Record<string, StagedRelOps> | null) => void
+  byGrid: Map<string, Record<string, StagedRelOps>>
+}
+
+export const StagedRelationsContext = createContext<StagedRelationsCtx | null>(null)
+
+export function useStagedRelations() {
+  return useContext(StagedRelationsContext)
+}

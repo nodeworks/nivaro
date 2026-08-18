@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Pencil, X } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatNumber, titleCase } from '../../lib/utils'
@@ -37,6 +37,9 @@ interface NestedRelationEditorProps {
   // Stage ops instead of writing live — outer grid is under saveMode='pending' and this parent
   // row is already saved. Only meaningful when parentRowId != null.
   deferred?: boolean
+  /** Reports the editor's CURRENT rows (saved+staged overlay) upward so the
+   *  parent can live-compute rollups (Allocated / Available to Allocate). */
+  onRowsChange?: (rows: Array<Record<string, unknown>>) => void
   stagedOps?: NestedOps
   onStagedOpsChange?: (ops: NestedOps) => void
   /** Match mode: rows come from an arbitrary collection selected by a filter
@@ -90,6 +93,7 @@ export function NestedRelationEditor({
   readOnly = false,
   outerGridInvalidateKey,
   deferred = false,
+  onRowsChange,
   stagedOps,
   onStagedOpsChange,
   matchCollection,
@@ -197,6 +201,18 @@ export function NestedRelationEditor({
     }
     return (stagedMembers ?? []).map((m, i) => ({ key: `staged:${i}`, data: m }))
   }, [parentRowId, grandRows, stagedMembers, deferred, stagedOps])
+
+  // Content-signature guard: the rows memo's identity churns every render
+  // (defaulted array props), so report upward only on real changes.
+  const rowsSigRef = useRef('')
+  useEffect(() => {
+    if (!onRowsChange) return
+    const sig = JSON.stringify(rows.map((r) => r.data))
+    if (sig === rowsSigRef.current) return
+    rowsSigRef.current = sig
+    onRowsChange(rows.map((r) => r.data))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, onRowsChange])
 
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})

@@ -1,7 +1,7 @@
 import { AlertCircle, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
-import { patch } from '../../lib/commands'
+import { patch, post } from '../../lib/commands'
 import { formatDate, formatDateTime } from '../../lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
@@ -14,6 +14,8 @@ export interface ReviewListStatusOption {
   value: string
   label: string
   color: string
+  /** Picking this option first asks the reviewer for a note (required). */
+  require_note?: boolean
 }
 
 export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime' | 'flag'
@@ -42,6 +44,11 @@ export interface ReviewListConfig {
     empty_color?: string | null
     stamp_user_field?: string | null
     stamp_date_field?: string | null
+    /** POST this endpoint with {ids, status, note, workflow_id} instead of
+     *  per-row PATCHes — lets a deployment route decisions through an
+     *  endpoint that owns stamping, authorization, notes and notifications
+     *  (EFP: /efp/invoice-approvals/decide). */
+    action_endpoint?: string | null
   }
 }
 
@@ -196,6 +203,9 @@ export interface ReviewListWidgetProps {
   loading?: boolean
   error?: string | null
   onRefetch: () => void
+  /** Host record id (the workflow the widget is slotted on) — forwarded to
+   *  action_endpoint as workflow_id so a rejection note can anchor to it. */
+  hostRecordId?: string | number | null
 }
 
 export function ReviewListWidget({
@@ -203,13 +213,16 @@ export function ReviewListWidget({
   config,
   loading,
   error,
-  onRefetch
+  onRefetch,
+  hostRecordId
 }: ReviewListWidgetProps) {
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [actingGroup, setActingGroup] = useState<string | null>(null)
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({})
+  const [noteAsk, setNoteAsk] = useState<{ group: ReviewGroup; option: ReviewListStatusOption } | null>(null)
+  const [noteText, setNoteText] = useState('')
 
   const groups = useMemo(
     () => (data ? buildGroups(data, config.aggregate_sum) : []),
@@ -243,36 +256,75 @@ export function ReviewListWidget({
     })
   }
 
-  const handleAction = async (group: ReviewGroup, option: ReviewListStatusOption) => {
+  const handleAction = (group: ReviewGroup, option: ReviewListStatusOption) => {
+    // A decision that requires a reason (rejections) collects it FIRST — the
+    // status must never land without the note that explains it.
+    if (option.require_note) {
+      setNoteText('')
+      setNoteAsk({ group, option })
+      return
+    }
+    void performAction(group, option, null)
+  }
+
+  const performAction = async (
+    group: ReviewGroup,
+    option: ReviewListStatusOption,
+    note: string | null
+  ) => {
     setActingGroup(group.key)
-    const stampDate = config.status.stamp_date_field ? new Date().toISOString() : undefined
-    const results = await Promise.all(
-      group.rows.map(async (row) => {
-        const body: Record<string, unknown> = { [config.status.field]: option.value }
-        if (config.status.stamp_user_field && userId) {
-          body[config.status.stamp_user_field] = userId
-        }
-        if (config.status.stamp_date_field) {
-          body[config.status.stamp_date_field] = stampDate
-        }
-        try {
-          await client.request(patch(`/items/${config.collection}/${row.id}`, body))
-          return { ok: true as const }
-        } catch (err) {
-          const resp = (err as { response?: { error?: string } })?.response
-          return { ok: false as const, error: resp?.error ?? 'Failed to update' }
-        }
-      })
-    )
+    let failureMsg: string | null = null
+    if (config.status.action_endpoint) {
+      // One call for the whole group — the endpoint owns stamping, per-invoice
+      // authorization, the rejection note and any notifications.
+      try {
+        await client.request(
+          post(config.status.action_endpoint, {
+            ids: group.rows.map((r) => r.id),
+            status: option.value,
+            ...(note ? { note } : {}),
+            ...(hostRecordId != null && hostRecordId !== ''
+              ? { workflow_id: Number(hostRecordId) }
+              : {})
+          })
+        )
+      } catch (err) {
+        const resp = (err as { response?: { error?: string } })?.response
+        failureMsg = resp?.error ?? 'Failed to update'
+      }
+    } else {
+      const stampDate = config.status.stamp_date_field ? new Date().toISOString() : undefined
+      const results = await Promise.all(
+        group.rows.map(async (row) => {
+          const body: Record<string, unknown> = { [config.status.field]: option.value }
+          if (config.status.stamp_user_field && userId) {
+            body[config.status.stamp_user_field] = userId
+          }
+          if (config.status.stamp_date_field) {
+            body[config.status.stamp_date_field] = stampDate
+          }
+          // No endpoint configured: the note still reaches the audit trail as
+          // the write's change reason.
+          if (note) body._change_reason = note
+          try {
+            await client.request(patch(`/items/${config.collection}/${row.id}`, body))
+            return { ok: true as const }
+          } catch (err) {
+            const resp = (err as { response?: { error?: string } })?.response
+            return { ok: false as const, error: resp?.error ?? 'Failed to update' }
+          }
+        })
+      )
+      const failures = results.filter((r) => !r.ok)
+      if (failures.length > 0) {
+        failureMsg = `${failures.length} of ${group.rows.length} row(s) failed to update`
+      }
+    }
     setActingGroup(null)
-    const failures = results.filter((r) => !r.ok)
     setGroupErrors((prev) => {
       const next = { ...prev }
-      if (failures.length > 0) {
-        next[group.key] = `${failures.length} of ${group.rows.length} row(s) failed to update`
-      } else {
-        delete next[group.key]
-      }
+      if (failureMsg) next[group.key] = failureMsg
+      else delete next[group.key]
       return next
     })
     onRefetch()
@@ -427,6 +479,53 @@ export function ReviewListWidget({
             </div>
           )
         })}
+        {noteAsk && (
+          <div
+            className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'
+            onClick={() => setNoteAsk(null)}
+          >
+            <div
+              className='w-full max-w-md rounded-lg border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
+                {noteAsk.option.label} — add a note
+              </p>
+              <p className='mt-0.5 text-[11px] text-slate-500'>
+                A reason is required for this decision. It is recorded with the record.
+              </p>
+              <textarea
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                rows={3}
+                autoFocus
+                className='mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] dark:border-border dark:bg-background dark:text-slate-200'
+                placeholder='Why is this being rejected?'
+              />
+              <div className='mt-3 flex items-center justify-end gap-1.5'>
+                <button
+                  type='button'
+                  onClick={() => setNoteAsk(null)}
+                  className='rounded px-2.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
+                >
+                  Cancel
+                </button>
+                <button
+                  type='button'
+                  disabled={!noteText.trim()}
+                  onClick={() => {
+                    const ask = noteAsk
+                    setNoteAsk(null)
+                    void performAction(ask.group, ask.option, noteText.trim())
+                  }}
+                  className='rounded bg-red-600 px-3 py-1 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+                >
+                  {noteAsk.option.label}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </TooltipProvider>
   )

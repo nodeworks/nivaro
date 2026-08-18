@@ -67,7 +67,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '../ui/sheet'
-import { type LiveRowsCtx, useLiveRows, useO2MStaging } from './O2MStagingContext'
+import { type LiveRowsCtx, type StagedRelOps, useLiveRows, useO2MStaging, useStagedRelations } from './O2MStagingContext'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -1187,6 +1187,7 @@ export function InlineTableField({
   const qc = useQueryClient()
   const staging = useO2MStaging()
   const liveRows = useLiveRows()
+  const stagedRels = useStagedRelations()
   const addendumO2MEntries = useAddendumO2M()[parentFieldKey ?? ''] ?? []
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
@@ -1445,7 +1446,7 @@ export function InlineTableField({
     [rowDefaults]
   )
 
-  const { data: rawRows = [], isLoading: rowsLoading } = useQuery<Record<string, unknown>[]>({
+  const { data: rawRows = [], isLoading: rowsLoading, dataUpdatedAt: rowsUpdatedAt } = useQuery<Record<string, unknown>[]>({
     queryKey: ['o2m-rows', relatedCollection, manyField, parentId, rowFilterClause ? JSON.stringify(rowFilterClause) : ''],
     queryFn: () =>
       client
@@ -1508,6 +1509,19 @@ export function InlineTableField({
   const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
 
   const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
+
+  /** Live drawer snapshots, keyed `${rowKey}|${relationField}` — the full
+   *  member list a row's nested editor last reported (staged overlay
+   *  included). Feeds rollup/formula overlays and summary columns. */
+  const [drawerLiveRows, setDrawerLiveRows] = useState<Record<string, Array<Record<string, unknown>>>>({})
+  // A fresh rows fetch means stored rollups are current again (queued edits
+  // flushed / drawer writes recalced) — retire the snapshots so external
+  // changes can't be shadowed. Never mid-edit: the open panel's live sums
+  // must survive a background refetch.
+  useEffect(() => {
+    if (!editStateRef.current) setDrawerLiveRows({})
+  }, [rowsUpdatedAt])
+
   const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
 
   // Relation-path columns ('purchase_order.workflow.workflow_id'): read-only
@@ -1993,6 +2007,75 @@ export function InlineTableField({
     return map
   }, [summaryRelationFields, summaryGrandRels, summaryMembersQueries])
 
+  // Publish staged GRANDCHILD changes (unit allocations under pending/queued
+  // lines) so record-scoped widgets (the Deployments rollup) reflect them
+  // before the parent record saves. Created members under an UNSAVED line
+  // carry the line's own values as literal dotted keys ('workflow_line.x') —
+  // the server resolves those instead of an FK it doesn't have yet.
+  const reportStagedRels = stagedRels?.report
+  useEffect(() => {
+    if (!reportStagedRels || !drawerRelations || drawerRelations.length === 0) return
+    const gridKey = `${relatedCollection}.${manyField}`
+    const primitiveEntries = (row: Record<string, unknown>, fk: string): Record<string, unknown> => {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(row)) {
+        if (k.startsWith('__') || k === 'id') continue
+        if (v !== null && typeof v === 'object') continue
+        out[`${fk}.${k}`] = v
+      }
+      return out
+    }
+    const byCollection: Record<string, StagedRelOps> = {}
+    for (const dr of drawerRelations) {
+      const relField = typeof dr === 'string' ? dr : dr.field
+      const grandRel = childRelations.find(
+        (r) => r.one_collection === relatedCollection && r.one_field === relField
+      )
+      if (!grandRel?.many_collection || !grandRel.many_field) continue
+      const fk = grandRel.many_field
+      const ops: StagedRelOps = { created: [], updated: [], deleted: [] }
+      // New (pending) lines: their staged members + the line draft as context.
+      for (const row of pendingRows) {
+        const members = row[`__o2m_${relField}`]
+        if (!Array.isArray(members)) continue
+        const lineCtx = primitiveEntries(applyComputedFields(row as Record<string, unknown>), fk)
+        for (const m of members as Record<string, unknown>[]) ops.created.push({ ...m, ...lineCtx })
+      }
+      // Queued edits on saved lines: nested ops ride the queued change set.
+      for (const [rowId, changes] of pendingEdits) {
+        const nested = changes[`__nested_ops_${relField}`] as NestedOps | undefined
+        if (!nested) continue
+        const baseRow = rows.find((r) => String(r.id) === rowId)
+        const lineCtx = primitiveEntries(
+          applyComputedFields({ ...(baseRow ?? {}), ...changes }),
+          fk
+        )
+        for (const m of nested.created ?? []) ops.created.push({ ...m, [fk]: rowId, ...lineCtx })
+        for (const u of nested.updated ?? []) ops.updated.push({ id: u.id, values: u.changes })
+        for (const d of nested.deleted ?? []) ops.deleted.push(d)
+      }
+      // Queued line DELETES: drop their members (ids from the summary batch
+      // when it's loaded — best effort, the flush makes it exact).
+      if (pendingDeletes.size > 0) {
+        const byRow = summaryMembersByRelation.get(relField)
+        for (const rid of pendingDeletes) {
+          for (const m of byRow?.get(String(rid)) ?? []) {
+            if (m.id != null) ops.deleted.push(m.id as string | number)
+          }
+        }
+      }
+      if (ops.created.length || ops.updated.length || ops.deleted.length) {
+        byCollection[grandRel.many_collection] = ops
+      }
+    }
+    reportStagedRels(gridKey, Object.keys(byCollection).length > 0 ? byCollection : null)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: pendingRows/pendingEdits/pendingDeletes are fresh getters per render; the report is signature-guarded upstream
+  })
+  // No unmount withdrawal here (unlike live rows): the report mirrors QUEUED
+  // staging, which survives the grid unmounting on a tab switch — the widget
+  // must keep reflecting it. ItemEditForm clears the registry when staging
+  // flushes or is discarded.
+
   // Batched M2O label resolution for summary member fields — same batched/shared-cache
   // approach as m2oDisplays below, scoped to grandchild collections + pending-row drafts.
   const summaryM2oLookupIds = useMemo(() => {
@@ -2021,10 +2104,30 @@ export function InlineTableField({
           }
         }
       }
+      // Staged member changes on SAVED rows (queued nested ops + live drawer
+      // snapshots) may reference records the fetched members never did —
+      // their labels must resolve too.
+      for (const [, changes] of pendingEdits) {
+        const ops = changes[`__nested_ops_${relationField}`] as NestedOps | undefined
+        if (!ops) continue
+        for (const m of [...(ops.created ?? []), ...(ops.updated ?? []).map((u) => u.changes)]) {
+          for (const [memberField, rel] of fieldMap) {
+            if (rel.one_collection) push(rel.one_collection, (m as Record<string, unknown>)[memberField])
+          }
+        }
+      }
+      for (const [key, snapRows] of Object.entries(drawerLiveRows)) {
+        if (!key.endsWith(`|${relationField}`)) continue
+        for (const m of snapRows) {
+          for (const [memberField, rel] of fieldMap) {
+            if (rel.one_collection) push(rel.one_collection, m[memberField])
+          }
+        }
+      }
     }
     for (const [k, ids] of result) result.set(k, [...new Set(ids)].sort())
     return result
-  }, [summaryMembersByRelation, grandM2oRelMaps, pendingRows])
+  }, [summaryMembersByRelation, grandM2oRelMaps, pendingRows, pendingEdits, drawerLiveRows])
 
   const { data: summaryM2oDisplays = {} } = useQuery<Record<string, Record<string, string>>>({
     queryKey: ['summary-m2o-display', relatedCollection, ...Array.from(summaryM2oLookupIds.entries()).flat(2)],
@@ -2083,6 +2186,36 @@ export function InlineTableField({
     return c.type === 'presentation' && c.field.includes('.')
   }
 
+  /** A row's CURRENT member list for a relation, staged-aware: pending rows
+   *  read their `__o2m_` draft, saved rows prefer the live drawer snapshot,
+   *  then the fetched members overlaid with any queued `__nested_ops_`
+   *  (created/updated/deleted) — so the Deployment summary columns reflect
+   *  unit/allocation changes before the parent saves. */
+  function effectiveMembersFor(
+    relationField: string,
+    sourceRow: Record<string, unknown>,
+    isPendingRow: boolean
+  ): Record<string, unknown>[] {
+    if (isPendingRow) {
+      const staged = sourceRow[`__o2m_${relationField}`]
+      return Array.isArray(staged) ? (staged as Record<string, unknown>[]) : []
+    }
+    const rid = String(sourceRow.id)
+    const snap = drawerLiveRows[`${rid}|${relationField}`]
+    if (snap) return snap
+    const base = summaryMembersByRelation.get(relationField)?.get(rid) ?? []
+    const ops = pendingEdits.get(rid)?.[`__nested_ops_${relationField}`] as NestedOps | undefined
+    if (!ops) return base
+    const deleted = new Set((ops.deleted ?? []).map(String))
+    const updatedById = new Map((ops.updated ?? []).map((u) => [String(u.id), u.changes]))
+    return [
+      ...base
+        .filter((m) => !deleted.has(String(m.id)))
+        .map((m) => (updatedById.has(String(m.id)) ? { ...m, ...updatedById.get(String(m.id)) } : m)),
+      ...(ops.created ?? [])
+    ]
+  }
+
   // Joined ', ' display for a summary column against one row. Saved rows read the batched
   // members query; pending (unsaved) rows read their staged `__o2m_<relationField>` draft.
   function summaryCellValue(c: CMSField, sourceRow: Record<string, unknown>, isPendingRow: boolean): string {
@@ -2090,10 +2223,7 @@ export function InlineTableField({
     if (dot < 0) return '—'
     const relationField = c.field.slice(0, dot)
     const memberField = c.field.slice(dot + 1)
-    const staged = sourceRow[`__o2m_${relationField}`]
-    const members = isPendingRow
-      ? (Array.isArray(staged) ? staged as Record<string, unknown>[] : [])
-      : (summaryMembersByRelation.get(relationField)?.get(String(sourceRow.id)) ?? [])
+    const members = effectiveMembersFor(relationField, sourceRow, isPendingRow)
     if (members.length === 0) return '—'
     const rel = grandM2oRelMaps.get(relationField)?.get(memberField)
     const parts = members
@@ -2116,7 +2246,7 @@ export function InlineTableField({
     if (dot < 0) return '—'
     const relationField = c.field.slice(0, dot)
     const memberField = c.field.slice(dot + 1)
-    const members = summaryMembersByRelation.get(relationField)?.get(String(sourceRow.id)) ?? []
+    const members = effectiveMembersFor(relationField, sourceRow, false)
     if (members.length === 0) return '—'
     const rel = grandM2oRelMaps.get(relationField)?.get(memberField)
     if (!rel?.one_collection || !drill) return summaryCellValue(c, sourceRow, false)
@@ -2361,8 +2491,21 @@ export function InlineTableField({
   }
 
   function cancelEdit() {
+    const canceled = editStateRef.current?.rowId
     setEditState(null)
     setUniqueError(null)
+    // Cancel discards this row's staged drawer changes — its live snapshot
+    // must die with them. Other rows' snapshots stay (they still describe
+    // queued edits waiting on the parent save).
+    setDrawerLiveRows((prev) => {
+      const next: typeof prev = {}
+      for (const [k, v] of Object.entries(prev)) {
+        if (canceled && k.startsWith(`${canceled}|`)) continue
+        if (k.startsWith('__new__|')) continue
+        next[k] = v
+      }
+      return next
+    })
   }
 
   function setDraftField(k: string, v: unknown) {
@@ -2641,7 +2784,9 @@ export function InlineTableField({
     const id = row.id
     if (isPendingMode && staging) {
       staging.queueDelete(relatedCollection, manyField, String(id))
-      if (editState?.rowId === String(id)) setEditState(null)
+      if (editState?.rowId === String(id)) {
+        setEditState(null)
+      }
       // Capture now — hidden while still in pendingDeletes, visible after parent save flushes the delete
       if (showRowRevisions) setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
       return
@@ -2649,7 +2794,9 @@ export function InlineTableField({
     try {
       await client.request(del(`/items/${relatedCollection}/${id}${pCtx}`))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
-      if (editState?.rowId === String(id)) setEditState(null)
+      if (editState?.rowId === String(id)) {
+        setEditState(null)
+      }
       if (showRowRevisions) {
         setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
         void refetchDeleted()
@@ -2659,22 +2806,24 @@ export function InlineTableField({
     }
   }
 
-  function renderCell(col: CMSField, val: unknown, rowId?: string) {
+  function renderCell(col: CMSField, val: unknown, rowId?: string, rowData?: Record<string, unknown>) {
     const colOpts = col.options
       ? ((typeof col.options === 'string' ? (() => { try { return JSON.parse(col.options as string) } catch { return {} } })() : col.options) as Record<string, unknown>)
       : {}
 
     // Formula column: arithmetic over {{col}} (row values) + {{dotted.path}}
-    // (bulk-resolved path values) — display-only, computed at render.
+    // (bulk-resolved path values) — display-only, computed at render. An
+    // unsaved (pending) row isn't in `rows`, so its caller passes the row
+    // object directly via rowData.
     if (col.interface === 'formula-column') {
       const formula = typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
-      if (!formula || !rowId) return <span className='text-slate-300'>—</span>
-      const row = rows.find((r) => String(r.id) === rowId) ?? {}
+      if (!formula || (!rowId && !rowData)) return <span className='text-slate-300'>—</span>
+      const row = rowData ?? rows.find((r) => String(r.id) === rowId) ?? {}
       // A dotted reference comes from the bulk resolve-paths response; a bare
       // one is a plain column on the row.
       const result = evaluateNumeric(formula, (ref) =>
         ref.includes('.')
-          ? resolvedPathData?.rows[rowId]?.[ref]?.value
+          ? (rowId ? resolvedPathData?.rows[rowId]?.[ref]?.value : undefined)
           : (row as Record<string, unknown>)[ref]
       )
       if (result === null) return <span className='text-slate-300'>—</span>
@@ -2853,6 +3002,11 @@ export function InlineTableField({
     return <span className='block truncate'>{String(val)}</span>
   }
 
+  // Live rows per drawer relation — feeds the panel strip's rollup/formula
+  // values so Allocated / Available react to allocation edits in real time.
+  // MUST sit above the loading early-return, or the hook order shifts once
+  // data arrives.
+
   if (colsLoading || (!isNew && rowsLoading))
     return <div className='py-3 text-center text-[12px] text-slate-400'><Loader2 className='h-4 w-4 animate-spin inline' /></div>
 
@@ -2889,9 +3043,12 @@ export function InlineTableField({
     for (const c of effectiveCols) {
       if (isSummaryCol(c)) continue
       const v = row[c.field]
-      if (typeof v === 'string' && v.trim() !== '') return v.length > 60 ? `${v.slice(0, 60)}…` : v
+      // A bare number is an FK id or a typed amount, not an identity —
+      // showing it reads as a mystery ("Line 1 · 2").
+      if (typeof v === 'string' && v.trim() !== '' && !/^-?\d+(\.\d+)?$/.test(v.trim()))
+        return v.length > 60 ? `${v.slice(0, 60)}…` : v
     }
-    return row.id != null ? `#${row.id}` : 'New row'
+    return row.id != null ? `#${row.id}` : 'New line'
   }
 
   /** Derived or non-editable in the panel: shown as a value, ordered last. */
@@ -2901,6 +3058,60 @@ export function InlineTableField({
    * elevated panel — a row's children belong with the row being edited, not
    * stranded in a strip below it.
    */
+  /** Overlay the draft with LIVE values: client-side rollups summed from the
+   *  drawer's current rows, so dependent formulas recompute per keystroke.
+   *  `useLive: false` (collapsed rows) reads only the row's OWN staged
+   *  `__o2m_<field>` members — drawerLiveRows belongs to whichever row's
+   *  drawer is currently mounted and would leak across rows. */
+  const liveOverlayDraft = (
+    draft: Record<string, unknown>,
+    opts?: { rowKey?: string }
+  ): Record<string, unknown> => {
+    const rowKey = opts?.rowKey ?? '__new__'
+    const overlay = { ...draft }
+    for (const c of effectiveCols) {
+      if (c.computed_type !== 'rollup' || !c.computed_formula) continue
+      let cfg: { sources?: Array<{ related_collection?: string; aggregate?: string; value_field?: string }> } | null = null
+      try {
+        const parsed = JSON.parse(String(c.computed_formula))
+        cfg = parsed?.sources ? parsed : { sources: [parsed] }
+      } catch {
+        continue
+      }
+      let total: number | null = null
+      for (const src of cfg?.sources ?? []) {
+        // Heuristic match: the drawer field usually IS the related collection
+        // name (unit_workflows); a single-drawer grid matches by default.
+        const relFields = (drawerRelations ?? []).map((d) => (typeof d === 'string' ? d : d.field))
+        const relField =
+          relFields.find((f) => f === src.related_collection) ??
+          (relFields.length === 1 ? relFields[0] : undefined)
+        const staged = relField ? (draft[`__o2m_${relField}`] as Array<Record<string, unknown>> | undefined) : undefined
+        const liveRows = (relField ? drawerLiveRows[`${rowKey}|${relField}`] : undefined) ?? staged
+        if (!liveRows) continue
+        const agg = src.aggregate ?? 'sum'
+        if (agg === 'count') total = (total ?? 0) + liveRows.length
+        else {
+          const vals = liveRows.map((r) => Number(r[src.value_field ?? ''] ?? 0)).filter(Number.isFinite)
+          if (agg === 'sum') total = (total ?? 0) + vals.reduce((a, b) => a + b, 0)
+          else if (agg === 'avg') total = (total ?? 0) + (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0)
+          else if (agg === 'min') total = (total ?? 0) + (vals.length ? Math.min(...vals) : 0)
+          else if (agg === 'max') total = (total ?? 0) + (vals.length ? Math.max(...vals) : 0)
+        }
+      }
+      if (total != null) overlay[c.field] = total
+    }
+    // Computed-write fields feed dependent formulas at their LIVE value too
+    // (amount = price × quantity must move before Available can).
+    for (const c of effectiveCols) {
+      if (c.computed_type === 'write' && c.computed_formula) {
+        const v = evalClientFormula(c.computed_formula as string, overlay)
+        if (v != null) overlay[c.field] = v
+      }
+    }
+    return overlay
+  }
+
   const renderDrawerRelations = (rowId: string | undefined, draft: Record<string, unknown>) => {
     if (!drawerRelations || drawerRelations.length === 0) return null
     return (
@@ -2920,6 +3131,9 @@ export function InlineTableField({
               parentRowId={rowId ?? null}
               parentDraft={draft}
               hint={relHint}
+              onRowsChange={(liveRows) =>
+                setDrawerLiveRows((prev) => ({ ...prev, [`${rowId ?? '__new__'}|${relField}`]: liveRows }))
+              }
               outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
               {...(relMatch
                 ? {
@@ -3015,11 +3229,29 @@ export function InlineTableField({
             in — as inputs' neighbours they read like fields left blank. They
             get their own strip above the form, the way a record's header
             summarises it. */}
-        {effectiveCols.some((c) => isPanelReadOnly(c)) && (
+        {effectiveCols.some((c) => isPanelReadOnly(c)) && (() => {
+          const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
+          return (
           <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
             {effectiveCols.filter(isPanelReadOnly).map((c) => {
               const label = c.label || titleCase(c.field)
               const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+              // options may arrive as a JSON string — parse like renderCell does
+              const colOpts = c.options
+                ? ((typeof c.options === 'string'
+                    ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })()
+                    : c.options) as Record<string, unknown>)
+                : {}
+              const colFormula =
+                typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
+              const liveFormulaVal =
+                c.interface === 'formula-column' && colFormula
+                  ? evaluateNumeric(colFormula, (ref) =>
+                      ref.includes('.')
+                        ? resolvedPathData?.rows[args.rowId ?? '']?.[ref]?.value
+                        : overlay[ref]
+                    )
+                  : null
               return (
                 <div key={c.field} className='flex min-w-0 flex-col justify-start'>
                   <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
@@ -3027,19 +3259,28 @@ export function InlineTableField({
                   </span>
                   <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
                     {isComputedWrite
-                      ? renderCell(
-                          c,
-                          evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field]
-                        )
-                      : isSummaryCol(c)
-                        ? summaryCellValue(c, args.draft, true)
-                        : renderCell(c, args.draft[c.field], args.rowId)}
+                      ? renderCell(c, overlay[c.field] ?? args.draft[c.field])
+                      : liveFormulaVal != null
+                        ? (
+                            <span className='tabular-nums'>
+                              {liveFormulaVal.toLocaleString(
+                                'en-US',
+                                numericIntlOptions(colOpts, colOpts.format as string | undefined)
+                              )}
+                            </span>
+                          )
+                        : c.computed_type === 'rollup'
+                          ? renderCell(c, overlay[c.field] ?? args.draft[c.field], args.rowId)
+                          : isSummaryCol(c)
+                            ? summaryCellValue(c, args.draft, true)
+                            : renderCell(c, args.draft[c.field], args.rowId)}
                   </span>
                 </div>
               )
             })}
           </div>
-        )}
+          )
+        })()}
         <div
           className='grid items-start gap-x-4 gap-y-3'
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
@@ -3467,11 +3708,16 @@ export function InlineTableField({
                       identity: `${showLineNumbers ? `Line ${ri + 1} · ` : ''}${rowIdentityLabel(displayRow)}`,
                       draft: editState?.draft ?? displayRow,
                       rowId: id,
-                      saveLabel: isPendingMode ? 'Queue' : 'Save',
+                      saveLabel: 'Save',
                       onDelete: (e) => deleteRow(row, e),
                       drawer: renderDrawerRelations(id, editState?.draft ?? displayRow)
                     })
-                  : effectiveCols.map((c) => {
+                  : (() => {
+                  // Staged drawer edits (pending mode) haven't reached the
+                  // stored rollup yet — overlay this row's live drawer
+                  // snapshot so Allocated / Available read true.
+                  const rowOverlay = liveOverlayDraft(displayRow, { rowKey: id })
+                  return effectiveCols.map((c) => {
                   if (isSummaryCol(c)) {
                     return (
                       <td key={c.field} className='px-2 py-1 align-top'>
@@ -3500,19 +3746,24 @@ export function InlineTableField({
                             displayOnly={!isEditing || isPendingDelete}
                           />
                         </div>
+                      ) : c.interface === 'formula-column' ? (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field], row.id != null ? String(row.id) : undefined, rowOverlay)}</div>
+                      ) : c.computed_type === 'rollup' ? (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field] ?? displayRow[c.field], row.id != null ? String(row.id) : undefined)}</div>
                       ) : (
                         <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field], row.id != null ? String(row.id) : undefined)}</div>
                       )}
                     </td>
                   )
-                })}
+                })
+                })()}
                 {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
                 <td className='px-1 py-1 align-middle'>
                   {isEditing && !isPendingDelete ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
                       <button type='button' disabled={saving} onClick={saveEdit}
                         className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : isPendingMode ? 'Queue' : 'Save'}
+                        {saving ? '…' : 'Save'}
                       </button>
                       <button type='button' onClick={cancelEdit}
                         className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
@@ -3531,7 +3782,17 @@ export function InlineTableField({
                         <>
                           {isPendingEdit && (
                             <button type='button' title='Undo edit'
-                              onClick={(e) => { e.stopPropagation(); staging?.cancelPendingEdit(relatedCollection, manyField, id) }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                staging?.cancelPendingEdit(relatedCollection, manyField, id)
+                                // The queued edit carried this row's staged unit/allocation
+                                // ops — undoing it must revert those overlays too.
+                                setDrawerLiveRows((prev) => {
+                                  const next: typeof prev = {}
+                                  for (const [k, v] of Object.entries(prev)) if (!k.startsWith(`${id}|`)) next[k] = v
+                                  return next
+                                })
+                              }}
                               className='rounded p-0.5 text-amber-400 hover:text-amber-600 text-[10px]'>
                               ↩
                             </button>
@@ -3633,7 +3894,7 @@ export function InlineTableField({
                     identity: `${showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}New line`,
                     draft: editState!.draft,
                     rowId: undefined,
-                    saveLabel: isPendingMode || isNew ? 'Queue' : 'Save',
+                    saveLabel: 'Save',
                     drawer: renderDrawerRelations(undefined, editState!.draft)
                   })
                 : effectiveCols.map((c) => {
@@ -3846,7 +4107,7 @@ export function InlineTableField({
                       identity: `${showLineNumbers ? `Line ${rows.length + ri + 1} · ` : ''}${rowIdentityLabel(isEditing ? editState!.draft : row)}`,
                       draft: editState?.draft ?? row,
                       rowId: pendingRowId,
-                      saveLabel: 'Queue',
+                      saveLabel: 'Save',
                       onDelete: (e) => {
                         e.stopPropagation()
                         staging?.removeRow(relatedCollection, manyField, ri)
@@ -3855,7 +4116,12 @@ export function InlineTableField({
                       // draft, so there is no row id to pass yet.
                       drawer: renderDrawerRelations(undefined, editState?.draft ?? row)
                     })
-                  : effectiveCols.map((c) => {
+                  : (() => {
+                  // Collapsed pending row: rollups/formulas have no stored
+                  // value yet — derive them from the row's own staged data so
+                  // Allocated / Available read true before the parent saves.
+                  const rowOverlay = liveOverlayDraft(isEditing ? editState!.draft : row, { rowKey: pendingRowId })
+                  return effectiveCols.map((c) => {
                   if (isSummaryCol(c)) {
                     return (
                       <td key={c.field} className='px-2 py-1 align-top'>
@@ -3897,19 +4163,24 @@ export function InlineTableField({
                             cascadeFilter={fieldCascadeFilters[c.field]}
                           />
                         </div>
+                      ) : c.interface === 'formula-column' ? (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field], undefined, rowOverlay)}</div>
+                      ) : c.computed_type === 'rollup' ? (
+                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field] ?? row[c.field], String(row.id))}</div>
                       ) : (
                         <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field], String(row.id))}</div>
                       )}
                     </td>
                   )
-                })}
+                })
+                })()}
                 {!(isEditing && rowEditorMode === 'panel') && (
                 <td className='px-1 py-1 align-middle'>
                   {isEditing ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
                       <button type='button' disabled={saving} onClick={saveEdit}
                         className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : isPendingMode ? 'Queue' : 'Save'}
+                        {saving ? '…' : 'Save'}
                       </button>
                       <button type='button' onClick={cancelEdit}
                         className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
@@ -3978,9 +4249,11 @@ export function InlineTableField({
             ...(rows ?? []).filter(r => !pendingDeletes.has(String(r.id))).map(r => {
               const rid = String(r.id)
               const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
-              return applyComputedFields(merged as Record<string, unknown>)
+              return liveOverlayDraft(applyComputedFields(merged as Record<string, unknown>), { rowKey: rid })
             }),
-            ...pendingRows.map(r => applyComputedFields(r as Record<string, unknown>))
+            // Pending rows have no stored rollup values — derive them from
+            // their staged members so Allocated sums true before save.
+            ...pendingRows.map((r, i) => liveOverlayDraft(applyComputedFields(r as Record<string, unknown>), { rowKey: `pending:${i}` }))
           ]
           return (
             <tfoot>
@@ -3993,7 +4266,25 @@ export function InlineTableField({
                   const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
                   const agg = opts.aggregate as string | undefined
                   if (!agg) return <td key={c.field} className='px-3 py-1.5' />
-                  const nums = allRows.map(r => Number(r[c.field])).filter(n => !Number.isNaN(n))
+                  // A formula column has no stored value — evaluate it per row
+                  // (bare refs off the row, dotted refs off resolve-paths).
+                  const colFormula =
+                    c.interface === 'formula-column' && typeof opts.column_formula === 'string'
+                      ? opts.column_formula
+                      : null
+                  const nums = allRows
+                    .map(r => {
+                      if (colFormula) {
+                        const v = evaluateNumeric(colFormula, (ref) =>
+                          ref.includes('.')
+                            ? resolvedPathData?.rows[String(r.id)]?.[ref]?.value
+                            : r[ref]
+                        )
+                        return v == null ? NaN : v
+                      }
+                      return Number(r[c.field])
+                    })
+                    .filter(n => !Number.isNaN(n))
                   let result: number | null = null
                   if (agg === 'count') result = allRows.length
                   else if (nums.length > 0) {

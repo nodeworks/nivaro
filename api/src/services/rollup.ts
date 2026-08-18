@@ -74,6 +74,18 @@ export interface RollupRow {
   level_labels: Array<string | null>
   values: Record<string, unknown>
   measures: Record<string, number>
+  /** Row reflects client-staged (unsaved) changes. */
+  pending?: boolean
+}
+
+/** Client-staged (unsaved) target-collection changes merged into the render so
+ *  a rollup widget reflects grid edits before the parent record saves.
+ *  Created rows may carry literal dotted keys ('workflow_line.deployment_type')
+ *  when their parent row is itself unsaved and has no FK id to resolve through. */
+export interface RollupStaged {
+  created?: Array<Record<string, unknown>>
+  updated?: Array<{ id: string | number; values: Record<string, unknown> }>
+  deleted?: Array<string | number>
 }
 
 export interface RollupResult {
@@ -277,7 +289,8 @@ export async function resolveRollupRows(
   database: Knex,
   config: RollupConfig,
   recordId: string,
-  logger: Logger = consoleLogger
+  logger: Logger = consoleLogger,
+  staged?: RollupStaged
 ): Promise<RollupResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -342,6 +355,42 @@ export async function resolveRollupRows(
     }
   }
 
+  // Staged (unsaved) changes merge BEFORE dot/label resolution so created
+  // rows' FK values resolve labels exactly like saved ones. Keys are
+  // whitelisted against the config's own field set — nothing client-invented
+  // reaches grouping — and values must be primitives.
+  const pendingIds = new Set<string>()
+  if (staged) {
+    const allowedKeys = new Set<string>([...selectFields, ...allSpecs])
+    const sanitize = (v: Record<string, unknown>): Record<string, unknown> => {
+      const out: Record<string, unknown> = {}
+      for (const [k, val] of Object.entries(v)) {
+        if (!allowedKeys.has(k)) continue
+        if (val !== null && typeof val === 'object') continue
+        out[k] = val
+      }
+      return out
+    }
+    const del = new Set((staged.deleted ?? []).slice(0, 500).map(String))
+    if (del.size) targetRows = targetRows.filter((r) => !del.has(String(r.id)))
+    const upd = new Map(
+      (staged.updated ?? []).slice(0, 500).map((u) => [String(u.id), sanitize(u.values ?? {})])
+    )
+    if (upd.size) {
+      targetRows = targetRows.map((r) => {
+        const v = upd.get(String(r.id))
+        if (!v) return r
+        pendingIds.add(String(r.id))
+        return { ...r, ...v }
+      })
+    }
+    ;(staged.created ?? []).slice(0, 200).forEach((v, i) => {
+      const row = { ...sanitize(v ?? {}), id: `__staged_${i}` }
+      pendingIds.add(String(row.id))
+      targetRows.push(row)
+    })
+  }
+
   const dotValueMaps = await resolveDotSpecValues(
     database,
     config.collection,
@@ -355,6 +404,9 @@ export async function resolveRollupRows(
   const getRaw = (row: Record<string, unknown>, field: string): unknown => {
     const dot = dotSpecByRaw.get(field)
     if (dot) {
+      // A staged row whose parent is itself unsaved has no FK to resolve
+      // through — it carries the dotted value as a literal key instead.
+      if (row[field] !== undefined) return row[field]
       const raw = row[dot.fkField]
       const map = dotValueMaps.get(`${dot.fkField}.${dot.subField}`)
       return raw == null ? null : (map?.get(String(raw)) ?? raw)
@@ -424,7 +476,8 @@ export async function resolveRollupRows(
       levels,
       level_labels,
       values,
-      measures
+      measures,
+      ...(pendingIds.has(String(row.id)) ? { pending: true } : {})
     }
   })
 

@@ -64,7 +64,8 @@ import {
   XCircle,
   Zap
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { useApiFetchConfig, useDrilldown } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { Button } from './ui/button'
@@ -1039,6 +1040,28 @@ export function WidgetSlot({
   }
   const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }
 
+  // Staged grandchild changes published by the form's grids (unit allocations
+  // under pending/queued lines). A rollup widget targeting that collection
+  // sends them with the render so its tree reflects unsaved work.
+  const stagedRels = useStagedRelations()
+  const rollupStaged = useMemo(() => {
+    if (widget?.widget_type !== 'rollup' || !stagedRels) return null
+    const cfg = widget.config as { collection?: string } | undefined
+    const target = cfg?.collection
+    if (!target) return null
+    const merged = { created: [] as Record<string, unknown>[], updated: [] as Array<{ id: string | number; values: Record<string, unknown> }>, deleted: [] as Array<string | number> }
+    for (const byCollection of stagedRels.byGrid.values()) {
+      const ops = byCollection[target]
+      if (!ops) continue
+      merged.created.push(...ops.created)
+      merged.updated.push(...ops.updated)
+      merged.deleted.push(...ops.deleted)
+    }
+    if (!merged.created.length && !merged.updated.length && !merged.deleted.length) return null
+    return merged
+  }, [widget, stagedRels])
+  const rollupStagedKey = useMemo(() => (rollupStaged ? JSON.stringify(rollupStaged) : ''), [rollupStaged])
+
   // Config-driven drill-down: a widget may declare which record its numbers
   // describe, making the whole cell clickable into the standard record sheet.
   // `id_input` names the resolved input carrying the id; when that input holds
@@ -1111,7 +1134,7 @@ export function WidgetSlot({
     const hostId = itemDraft.id
     if (hostId != null && hostId !== '') inputs.record_id = hostId
   }
-  const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '')
+  const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '') + rollupStagedKey
   // Every scalar draft field feeds inputs, so inputsKey changes per keystroke
   // while editing the parent form — debounce so render refetches settle.
   const debouncedInputsKey = useDebounced(inputsKey, 400)
@@ -1191,7 +1214,7 @@ export function WidgetSlot({
           credentials: fetchCfg.credentials,
           headers: buildHeaders(),
           body: JSON.stringify({
-            inputs,
+            inputs: rollupStaged ? { ...inputs, staged: rollupStaged } : inputs,
             draft: itemDraft,
             bindings: inputBindings,
             item_collection: itemCollection
@@ -1462,6 +1485,7 @@ export function WidgetSlot({
             data={renderData as unknown as ReviewListResult}
             config={(widget.config ?? {}) as unknown as ReviewListConfig}
             onRefetch={() => setRefetchTick((t) => t + 1)}
+            hostRecordId={inputs.record_id as string | number | null}
           />
         )}
         {widget.widget_type === 'rollup' && (

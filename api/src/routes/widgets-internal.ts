@@ -160,7 +160,16 @@ async function renderWidget(
       throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
     }
 
-    return await resolveRollupRows(db, cfg, String(recordId))
+    // Client-staged grid changes (pending rows / queued allocation edits) ride
+    // along so the widget reflects them before the record saves. Shape is
+    // whitelisted field-by-field inside resolveRollupRows.
+    const rawStaged = inputs.staged
+    const staged =
+      rawStaged && typeof rawStaged === 'object' && !Array.isArray(rawStaged)
+        ? (rawStaged as { created?: Array<Record<string, unknown>>; updated?: Array<{ id: string | number; values: Record<string, unknown> }>; deleted?: Array<string | number> })
+        : undefined
+
+    return await resolveRollupRows(db, cfg, String(recordId), undefined, staged)
   }
 
   if (type === 'custom-query') {

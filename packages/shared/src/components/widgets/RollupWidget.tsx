@@ -53,6 +53,8 @@ export interface RollupRow {
   level_labels: Array<string | null>
   values: Record<string, unknown>
   measures: Record<string, number>
+  /** Row reflects client-staged (unsaved) changes. */
+  pending?: boolean
 }
 
 export interface RollupResult {
@@ -104,6 +106,8 @@ export interface RollupTreeLeaf {
   ids: Array<string | number>
   values: Record<string, unknown>
   measures: Record<string, number>
+  /** Any contributing row reflects unsaved (client-staged) changes. */
+  pending?: boolean
 }
 
 export interface RollupTreeNode {
@@ -175,7 +179,8 @@ function buildLeaves(
     return rows.map((row) => ({
       ids: [row.id],
       values: row.values,
-      measures: rowMeasuresWithTotal(row, measureKeys)
+      measures: rowMeasuresWithTotal(row, measureKeys),
+      ...(row.pending ? { pending: true } : {})
     }))
   }
   const groups = new Map<string, RollupRow[]>()
@@ -199,7 +204,8 @@ function buildLeaves(
     return {
       ids: groupRows.map((r) => r.id),
       values: groupRows[0].values,
-      measures
+      measures,
+      ...(groupRows.some((r) => r.pending) ? { pending: true } : {})
     }
   })
 }
@@ -376,7 +382,10 @@ export function RollupWidget({ data, config, loading, error }: RollupWidgetProps
     return (
       <tr
         key={String(leaf.ids[0])}
-        className='border-b border-slate-100 last:border-b-0 dark:border-border/50'
+        className={`border-b border-slate-100 last:border-b-0 dark:border-border/50 ${
+          leaf.pending ? 'bg-amber-50/50 dark:bg-amber-400/10' : ''
+        }`}
+        {...(leaf.pending ? { 'data-tip': 'Includes unsaved changes' } : {})}
       >
         {leafCols.length > 0 ? (
           leafCols.map((c, i) => (
