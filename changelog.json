@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-08-18T15:52:40.259Z",
+  "generated_at": "2026-08-18T17:38:43.766Z",
   "releases": [
+    {
+      "version": "0.1.69",
+      "tag": "v0.1.69",
+      "date": "2026-08-18T13:38:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "per-field layout defaults, manual entry for computed fields, header/body chip collision fix",
+              "hash": "1e684fbf"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "PUB addendum delta form, addendum attachments, rule-driven project sync",
+              "hash": "f3022be1"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "dotted display templates in M2M pickers, preset-proof panel strip, M2M layout defaults",
+              "hash": "f693ff84"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.68",
       "tag": "v0.1.68",
-      "date": "2026-08-18T11:52:38-04:00",
+      "date": "2026-08-18T11:52:40-04:00",
       "sections": [
         {
           "label": "Added",
