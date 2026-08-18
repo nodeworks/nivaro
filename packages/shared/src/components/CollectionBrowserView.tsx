@@ -981,11 +981,44 @@ function RelationColFilter({
     enabled: active && !!meta,
     retry: false
   })
+  // Selected ids missing from the alphabetical options page would render as
+  // raw internal ids — fetch their labels explicitly and merge them in.
+  const missing = selected.filter((v) => !options.some((o) => String(o.value) === String(v)))
+  const missingKey = missing.map(String).join(',')
+  const { data: selectedOpts = [] } = useQuery({
+    queryKey: ['cbv-filter-selected-labels', target, labelField, template ?? '', missingKey],
+    queryFn: () => {
+      const fields = optionFieldsFor(template, labelField)
+      return client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${target}`, {
+            limit: missing.length,
+            filter: JSON.stringify({ id: { _in: missing } }),
+            ...(fields ? { fields } : {})
+          })
+        )
+        .then((r) =>
+          (r.data ?? []).map((row) => ({
+            value: row.id as string | number,
+            label:
+              (template ? renderDisplayTemplate(template, row) : '') ||
+              String(row[labelField] ?? row.id ?? '')
+          }))
+        )
+    },
+    enabled: active && !!meta && !isLoading && missing.length > 0,
+    staleTime: 10 * 60_000,
+    retry: false
+  })
+  const mergedOptions =
+    selectedOpts.length > 0
+      ? [...options, ...selectedOpts.filter((o) => !options.some((x) => String(x.value) === String(o.value)))]
+      : options
   return (
     <MultiPick
       block
       label={label ?? 'All'}
-      options={options}
+      options={mergedOptions}
       selected={selected}
       onChange={onChange}
       loading={isLoading}
@@ -3854,9 +3887,15 @@ export function CollectionBrowserView({
       `}</style>
       <TipLayer />
       <CellCopyLayer />
-      {cellMenu && (
+      {cellMenu &&
+        createPortal(
         <div
-          style={{ position: 'fixed', left: cellMenu.x, top: cellMenu.y, zIndex: 125 }}
+          style={{
+            position: 'fixed',
+            left: Math.min(cellMenu.x, window.innerWidth - 236),
+            top: Math.min(cellMenu.y, window.innerHeight - 132),
+            zIndex: 125
+          }}
           className='w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -3897,7 +3936,8 @@ export function CollectionBrowserView({
                 Group by {cellMenu.key === '__state__' ? 'State' : columnLabel(cellMenu.key)}
               </button>
             )}
-        </div>
+        </div>,
+        document.body
       )}
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
