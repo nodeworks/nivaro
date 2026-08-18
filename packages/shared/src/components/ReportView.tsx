@@ -584,6 +584,28 @@ function TreeWidget({
   return <div className='min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1'>{nodes.map(renderNode)}</div>
 }
 
+/** Automatic drill for query rows — the server infers which record a row's
+ *  identifier columns point at (permission-checked); a miss just doesn't drill. */
+function useAutoDrill(onDrill?: (t: { collection: string; itemId: string }) => void) {
+  const client = useNivaroClient()
+  const busyRef = useRef(false)
+  return async (row: Record<string, unknown>) => {
+    if (!onDrill || busyRef.current) return
+    busyRef.current = true
+    try {
+      const r = await client.request<{
+        data: { collection?: string; item_id?: string; resolved?: boolean }
+      }>(post('/report-studio/drill-row', { values: row }))
+      const d = r.data
+      if (d?.collection && d.item_id) onDrill({ collection: d.collection, itemId: d.item_id })
+    } catch {
+      /* silent — not every row identifies a record */
+    } finally {
+      busyRef.current = false
+    }
+  }
+}
+
 export function QueryWidgetBody({
   cfg,
   dateRange,
@@ -600,6 +622,10 @@ export function QueryWidgetBody({
   onDrill?: (t: { collection: string; itemId: string; title?: string }) => void
 }) {
   const client = useNivaroClient()
+  const drillRow = useAutoDrill(onDrill)
+  const [tableSearch, setTableSearch] = useState('')
+  const [tablePage, setTablePage] = useState(0)
+  const [segRows, setSegRows] = useState<{ label: string; rows: Array<Record<string, unknown>> } | null>(null)
   const params = resolveQueryParams(cfg, dateRange, entityFilters)
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['nivaro-report-query', cfg.slug, params],
@@ -704,7 +730,36 @@ export function QueryWidgetBody({
 
   if (cfg.display === 'table') {
     const numericCols = columns.filter((c) => NUMERIC_FORMATS.has(c.format ?? ''))
+    const q = tableSearch.trim().toLowerCase()
+    const searched = q
+      ? rows.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+      : rows
+    const PAGE = 12
+    const pages = Math.max(1, Math.ceil(searched.length / PAGE))
+    const page = Math.min(tablePage, pages - 1)
+    const visible = searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
     return (
+      <div className='flex min-h-0 flex-1 flex-col'>
+      {rows.length > PAGE && (
+        <div className='mb-1 flex items-center gap-2'>
+          <input
+            value={tableSearch}
+            onChange={(e) => {
+              setTableSearch(e.target.value)
+              setTablePage(0)
+            }}
+            placeholder='Search rows…'
+            className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
+          />
+          {pages > 1 && (
+            <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
+              <button type='button' disabled={page <= 0} onClick={() => setTablePage(page - 1)} className='rounded px-1 disabled:opacity-30'>←</button>
+              {page + 1}/{pages}
+              <button type='button' disabled={page >= pages - 1} onClick={() => setTablePage(page + 1)} className='rounded px-1 disabled:opacity-30'>→</button>
+            </span>
+          )}
+        </div>
+      )}
       <div className='min-h-0 flex-1 overflow-auto'>
         <table className='w-full text-[11.5px]'>
           <thead className='sticky top-0 z-[1] bg-white dark:bg-card'>
@@ -723,8 +778,13 @@ export function QueryWidgetBody({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i}>
+            {visible.map((r, i) => (
+              <tr
+                key={i}
+                className={onDrill ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60' : undefined}
+                onClick={() => void drillRow(r)}
+                title={onDrill ? 'Open the record behind this row' : undefined}
+              >
                 {columns.map((c) => (
                   <td
                     key={c.field}
@@ -766,6 +826,7 @@ export function QueryWidgetBody({
           )}
         </table>
       </div>
+      </div>
     )
   }
 
@@ -789,6 +850,67 @@ export function QueryWidgetBody({
   const tipFmt = (v: number | string) => fmtCell(v, cfg.value_format ?? 'number')
   const horizontal = cfg.display === 'hbar' || (cfg.display === 'stacked_bar' && cfg.horizontal)
 
+  // Segment click on a query chart: no collection to rebuild filters from, but
+  // the PRE-aggregation rows are right here — show the matching rows and let
+  // each one auto-drill.
+  const openSegment = (dimValue: string) => {
+    if (!onDrill) return
+    const matching = (data ?? []).filter((r) => String(r[xField] ?? '') === dimValue)
+    if (matching.length > 0) setSegRows({ label: dimValue, rows: matching })
+  }
+  const segModal = segRows ? (
+    <div
+      className='fixed inset-0 z-[126] flex items-center justify-center bg-black/30 p-6'
+      onClick={() => setSegRows(null)}
+    >
+      <div
+        className='flex max-h-[70vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border'>
+          <p className='min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            {segRows.label}
+          </p>
+          <span className='text-[11.5px] text-slate-400'>{segRows.rows.length} rows — click one to open its record</span>
+          <button type='button' onClick={() => setSegRows(null)} className='rounded p-1 text-slate-400 hover:text-slate-600'>
+            <X className='h-4 w-4' />
+          </button>
+        </div>
+        <div className='min-h-0 flex-1 overflow-auto p-2'>
+          <table className='w-full text-[11px]'>
+            <thead>
+              <tr>
+                {Object.keys(segRows.rows[0] ?? {}).slice(0, 7).map((c) => (
+                  <th key={c} className='border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border'>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {segRows.rows.slice(0, 100).map((r, i) => (
+                <tr
+                  key={i}
+                  className='cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60'
+                  onClick={() => {
+                    setSegRows(null)
+                    void drillRow(r)
+                  }}
+                >
+                  {Object.keys(segRows.rows[0] ?? {}).slice(0, 7).map((c) => (
+                    <td key={c} className='max-w-[160px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-600 dark:border-border/40 dark:text-slate-300'>
+                      {String(r[c] ?? '')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   if (cfg.display === 'donut') {
     const s0 = series[0]?.field ?? ''
     const donutData = chartRows.map((r) => ({ dim: String(r[xField]), value: Number(r[s0]) || 0 }))
@@ -806,6 +928,11 @@ export function QueryWidgetBody({
                 outerRadius='88%'
                 paddingAngle={2}
                 strokeWidth={0}
+                className={onDrill ? 'cursor-pointer' : undefined}
+                onClick={(entry: { payload?: { dim?: string } }) => {
+                  const d = entry?.payload?.dim
+                  if (d) openSegment(String(d))
+                }}
               >
                 {donutData.map((s, i) => (
                   <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
@@ -833,6 +960,7 @@ export function QueryWidgetBody({
             </div>
           ))}
         </div>
+        {segModal}
       </div>
     )
   }
@@ -866,6 +994,7 @@ export function QueryWidgetBody({
             ))}
           </AreaChart>
         </ResponsiveContainer>
+        {segModal}
       </div>
     )
   }
@@ -911,6 +1040,11 @@ export function QueryWidgetBody({
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
           {series.map((s, i) => (
             <Bar
+                className={onDrill ? 'cursor-pointer' : undefined}
+                onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
+                  const d = entry?.payload?.[xField]
+                  if (d != null) openSegment(String(d))
+                }}
               key={s.field}
               dataKey={s.field}
               name={s.label ?? s.field}
@@ -927,6 +1061,7 @@ export function QueryWidgetBody({
           ))}
         </BarChart>
       </ResponsiveContainer>
+      {segModal}
     </div>
   )
 }
@@ -1562,7 +1697,9 @@ const WidgetCard = memo(function WidgetCard({
   annotations,
   onAddAnnotation,
   onDeleteAnnotation,
-  onCrossFilter
+  onCrossFilter,
+  reportUrl,
+  currentFilters
 }: {
   reportId: string
   widget: ReportWidget
@@ -1576,8 +1713,12 @@ const WidgetCard = memo(function WidgetCard({
   onAddAnnotation?: (widgetId: string, note: string, anchorDate: string | null) => void
   onDeleteAnnotation?: (annId: number) => void
   onCrossFilter?: (field: string, value: unknown, label: string) => void
+  reportUrl?: (id: string) => string
+  currentFilters?: ReportEntityFilter[]
 }) {
   const client = useNivaroClient()
+  const [tableSearch, setTableSearch] = useState('')
+  const [tablePage, setTablePage] = useState(0)
   const [recordsFor, setRecordsFor] = useState<{
     conditions: DrillCond[]
     title: string
@@ -1673,6 +1814,23 @@ const WidgetCard = memo(function WidgetCard({
           <Delta pct={data.change_pct} />
         </div>
       )
+      if (data.spark && data.spark.length >= 3) {
+        const sv = data.spark
+        const maxV = Math.max(...sv.map((p) => p.value), 1)
+        const minV = Math.min(...sv.map((p) => p.value), 0)
+        const span = Math.max(maxV - minV, 1)
+        const pts = sv
+          .map((p, i) => `${(i / (sv.length - 1)) * 100},${28 - ((p.value - minV) / span) * 26}`)
+          .join(' ')
+        body = (
+          <div className='flex min-h-0 flex-1 flex-col justify-center'>
+            {body}
+            <svg viewBox='0 0 100 30' preserveAspectRatio='none' className='mt-1.5 h-7 w-full'>
+              <polyline points={pts} fill='none' stroke='#00ceff' strokeWidth='2' vectorEffect='non-scaling-stroke' />
+            </svg>
+          </div>
+        )
+      }
     } else if (widget.type === 'kpi_group') {
       const tiles = data.tiles ?? []
       body = (
@@ -1698,6 +1856,114 @@ const WidgetCard = memo(function WidgetCard({
             </div>
           ))}
         </div>
+      )
+    } else if (widget.type === 'narrative') {
+      body = (
+        <div className='min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+          {(data.narrative ?? '').split(/(\*\*[^*]+\*\*)/g).map((seg, i) =>
+            seg.startsWith('**') && seg.endsWith('**') ? (
+              <strong key={i} className='font-semibold text-slate-900 dark:text-foreground'>
+                {seg.slice(2, -2)}
+              </strong>
+            ) : (
+              <span key={i}>{seg}</span>
+            )
+          )}
+        </div>
+      )
+    } else if (widget.type === 'heatmap') {
+      const cells = data.cells ?? []
+      const rowsD = [...new Set(cells.map((c) => c.dim))]
+      const colsD = [...new Set(cells.map((c) => c.dim2))]
+      const maxV = Math.max(1, ...cells.map((c) => c.value))
+      const cellOf = (r: string, c: string) => cells.find((x) => x.dim === r && x.dim2 === c)
+      body =
+        cells.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          <div className='min-h-0 flex-1 overflow-auto'>
+            <table className='w-full text-[10.5px]'>
+              <thead>
+                <tr>
+                  <th />
+                  {colsD.map((c) => (
+                    <th key={c} className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'>
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rowsD.map((r) => (
+                  <tr key={r}>
+                    <td className='max-w-[110px] truncate pr-1.5 text-slate-500 dark:text-slate-400'>{r}</td>
+                    {colsD.map((c) => {
+                      const cell = cellOf(r, c)
+                      const pct = cell ? cell.value / maxV : 0
+                      return (
+                        <td key={c} className='p-0.5'>
+                          <div
+                            data-tip={cell ? `${r} × ${c}: ${cell.value.toLocaleString()}` : undefined}
+                            className='flex h-6 items-center justify-center rounded text-[9.5px] tabular-nums'
+                            style={{
+                              backgroundColor: cell ? `rgba(0, 165, 204, ${0.08 + pct * 0.85})` : 'transparent',
+                              color: pct > 0.55 ? '#fff' : undefined,
+                              border: cell ? undefined : '1px dashed rgba(148,163,184,0.25)'
+                            }}
+                          >
+                            {cell ? compactTick(Math.round(cell.value)) : ''}
+                          </div>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+    } else if (widget.type === 'waterfall') {
+      const wf = data.waterfall
+      body = !wf ? (
+        <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+      ) : (
+        (() => {
+          const points: Array<{ label: string; from: number; to: number; kind: 'total' | 'up' | 'down' }> = []
+          points.push({ label: 'Previous', from: 0, to: wf.start, kind: 'total' })
+          let run = wf.start
+          for (const st of wf.steps) {
+            points.push({ label: st.dim, from: run, to: run + st.delta, kind: st.delta >= 0 ? 'up' : 'down' })
+            run += st.delta
+          }
+          points.push({ label: 'Current', from: 0, to: wf.end, kind: 'total' })
+          const maxTop = Math.max(1, ...points.map((pt) => Math.max(pt.from, pt.to)))
+          return (
+            <div className='flex min-h-0 flex-1 items-end gap-1 overflow-x-auto px-1 pb-4'>
+              {points.map((pt, i) => {
+                const top = (Math.max(pt.from, pt.to) / maxTop) * 100
+                const height = (Math.abs(pt.to - pt.from) / maxTop) * 100
+                return (
+                  <div key={i} className='relative flex h-full min-w-[46px] flex-1 flex-col justify-end'>
+                    <div style={{ height: `${Math.max(top, 0.5)}%` }} className='relative w-full'>
+                      <div
+                        data-tip={`${pt.label}: ${(pt.to - pt.from).toLocaleString()}`}
+                        className='absolute inset-x-0 top-0 rounded-sm'
+                        style={{
+                          height: `${Math.max((height / Math.max(top, 0.001)) * 100, 2)}%`,
+                          backgroundColor:
+                            pt.kind === 'total' ? '#172940' : pt.kind === 'up' ? '#10b981' : '#ef4444'
+                        }}
+                      />
+                    </div>
+                    <p className='absolute -bottom-4 left-0 right-0 truncate text-center text-[9px] text-slate-400'>
+                      {pt.label}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()
       )
     } else if (widget.type === 'movers') {
       const rows = (data.rows ?? []) as Array<{
@@ -1768,10 +2034,39 @@ const WidgetCard = memo(function WidgetCard({
         }
         return null
       }
+      const q = tableSearch.trim().toLowerCase()
+      const searched = q
+        ? rows.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+        : rows
+      const PAGE = 12
+      const pages = Math.max(1, Math.ceil(searched.length / PAGE))
+      const page = Math.min(tablePage, pages - 1)
+      const visibleRows = searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
       body =
         rows.length === 0 ? (
           <p className='px-1 text-[12px] text-slate-400'>No rows.</p>
         ) : (
+          <div className='flex min-h-0 flex-1 flex-col'>
+          {rows.length > PAGE && (
+            <div className='mb-1 flex items-center gap-2'>
+              <input
+                value={tableSearch}
+                onChange={(e) => {
+                  setTableSearch(e.target.value)
+                  setTablePage(0)
+                }}
+                placeholder='Search rows…'
+                className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
+              />
+              {pages > 1 && (
+                <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
+                  <button type='button' disabled={page <= 0} onClick={() => setTablePage(page - 1)} className='rounded px-1 disabled:opacity-30'>←</button>
+                  {page + 1}/{pages}
+                  <button type='button' disabled={page >= pages - 1} onClick={() => setTablePage(page + 1)} className='rounded px-1 disabled:opacity-30'>→</button>
+                </span>
+              )}
+            </div>
+          )}
           <div className='min-h-0 flex-1 overflow-auto'>
             <table className='w-full text-[11.5px]'>
               <thead className='sticky top-0 bg-white dark:bg-card'>
@@ -1787,7 +2082,7 @@ const WidgetCard = memo(function WidgetCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {visibleRows.map((r) => (
                   <tr
                     key={String(r.id)}
                     className={cn(
@@ -1817,6 +2112,7 @@ const WidgetCard = memo(function WidgetCard({
               </tbody>
             </table>
           </div>
+          </div>
         )
     } else {
       let series = data.series ?? []
@@ -1840,6 +2136,16 @@ const WidgetCard = memo(function WidgetCard({
       const hasValue2 = series.some((sv) => sv.value2 != null)
       const metric2Label =
         (widget.config?.metric2 as { label?: string } | undefined)?.label ?? 'secondary'
+      const hasBand = series.some((sv) => sv.band != null)
+      // Anomaly flags: bucketed series of 8+ points mark values beyond 2σ.
+      const anomalySet = (() => {
+        if (!bucketed || cumulative || series.length < 8) return new Set<string>()
+        const vals = series.map((sv) => sv.value)
+        const mean = vals.reduce((a, b) => a + b, 0) / vals.length
+        const std = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length)
+        if (std === 0) return new Set<string>()
+        return new Set(series.filter((sv) => Math.abs(sv.value - mean) > 2 * std).map((sv) => sv.dim))
+      })()
       const anchorNotes = (annotations ?? []).filter(
         (a) => a.anchor_date && series.some((sv) => sv.dim === a.anchor_date)
       )
@@ -1911,7 +2217,7 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='min-h-[110px] flex-1'>
             <ResponsiveContainer width='100%' height='100%'>
-              <LineChart data={series} margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}>
+              <ComposedChart data={series} margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}>
                 <XAxis
                   dataKey='dim'
                   tick={{ fontSize: 10 }}
@@ -1939,6 +2245,17 @@ const WidgetCard = memo(function WidgetCard({
                   />
                 ))}
                 <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+                {hasBand && (
+                  <Area
+                    type='monotone'
+                    dataKey='band'
+                    stroke='none'
+                    fill='#94a3b8'
+                    fillOpacity={0.15}
+                    name='typical range'
+                    activeDot={false}
+                  />
+                )}
                 {widget.config?.compare && (
                   <Line
                     type='monotone'
@@ -1955,7 +2272,21 @@ const WidgetCard = memo(function WidgetCard({
                   dataKey='value'
                   stroke='#00ceff'
                   strokeWidth={2}
-                  dot={false}
+                  dot={(props: { cx?: number; cy?: number; payload?: { dim?: string } }) =>
+                    anomalySet.has(props.payload?.dim ?? '') ? (
+                      <circle
+                        key={props.payload?.dim}
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={3.5}
+                        fill='#ef4444'
+                        stroke='#fff'
+                        strokeWidth={1}
+                      />
+                    ) : (
+                      <g key={props.payload?.dim} />
+                    )
+                  }
                 />
                 {hasValue2 && (
                   <Line
@@ -1968,7 +2299,7 @@ const WidgetCard = memo(function WidgetCard({
                     name={metric2Label}
                   />
                 )}
-              </LineChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )
@@ -2076,9 +2407,35 @@ const WidgetCard = memo(function WidgetCard({
       style={gridStyle}
     >
       <div className='mb-1.5 flex items-center gap-1.5'>
-        <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
-          {widget.title}
-        </p>
+        {(() => {
+          const link = (widget.config as { link_report?: { report_id?: string } } | null)?.link_report
+          if (link?.report_id && reportUrl) {
+            return (
+              <a
+                href={reportUrl(link.report_id)}
+                onClick={() => {
+                  try {
+                    sessionStorage.setItem(
+                      `nvr-report-xf:${link.report_id}`,
+                      JSON.stringify(currentFilters ?? [])
+                    )
+                  } catch {
+                    /* handoff is best-effort */
+                  }
+                }}
+                title='Open the linked report (carries your current filters)'
+                className='truncate text-[11.5px] font-medium uppercase tracking-wide text-[#00a5cc] underline decoration-dotted underline-offset-2 hover:text-[#007a99]'
+              >
+                {widget.title} ↗
+              </a>
+            )
+          }
+          return (
+            <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
+              {widget.title}
+            </p>
+          )
+        })()}
         <span
           data-tip={describeWidgetConfig(widget)}
           className='shrink-0 cursor-help text-slate-300 hover:text-slate-500'
@@ -2312,8 +2669,9 @@ export function ReportView({
   initialEntityFilters = [],
   refetchInterval,
   className,
-  emptyState
-}: ReportViewProps) {
+  emptyState,
+  reportUrl
+}: ReportViewProps & { reportUrl?: (id: string) => string }) {
   const client = useNivaroClient()
   const outerDrill = useDrilldown()
   // The drill stack lives in the host's overlay history when one is provided,
@@ -2473,9 +2831,55 @@ export function ReportView({
   })
   const orderedForEdit = (ws: ReportWidget[]) =>
     [...ws].sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+  // Freshness: stamped at mount and on Refresh-all.
+  const [dataAsOf, setDataAsOf] = useState(() => new Date())
+  const refreshAll = () => {
+    void qc.invalidateQueries({ queryKey: ['nivaro-report-widget', reportId] })
+    void qc.invalidateQueries({ queryKey: ['nivaro-report-query'] })
+    setDataAsOf(new Date())
+  }
+  // Currently-firing alerts — the report wears its own red strip.
+  const { data: firing = [] } = useQuery({
+    queryKey: ['nvr-report-firing', reportId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ alert_id: string; name: string; widget: string; since: string }> }>(
+          get(`/report-studio/${reportId}/firing`)
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    retry: false
+  })
+  // Side-by-side comparison: one filter field, two values, every widget twice.
+  const [compare, setCompare] = useState<{ field: string; a: string; b: string } | null>(null)
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [cmpField, setCmpField] = useState('')
+  const [cmpA, setCmpA] = useState('')
+  const [cmpB, setCmpB] = useState('')
+  // Drill-to-report handoff: a linking widget stored filters for us to adopt.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(`nvr-report-xf:${reportId}`)
+      if (raw) {
+        sessionStorage.removeItem(`nvr-report-xf:${reportId}`)
+        const fs = JSON.parse(raw) as ReportEntityFilter[]
+        if (Array.isArray(fs) && fs.length > 0) {
+          setEntityFilters(fs)
+          setDraftFilters(fs)
+        }
+      }
+    } catch {
+      /* a bad handoff just opens the report unfiltered */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportId])
   const startEdit = () => {
     setDraftWidgets(orderedForEdit(report?.widgets ?? []))
     setEditMode(true)
+    // The config sheet's copy-to-report needs the source report id.
+    ;(window as unknown as { __nvrReportId?: string }).__nvrReportId = reportId
   }
   const patchWidget = (next: ReportWidget) =>
     setDraftWidgets((prev) => (prev ?? []).map((w) => (w.id === next.id ? next : w)))
@@ -2791,6 +3195,86 @@ export function ReportView({
         </div>
       )}
 
+      {firing.length > 0 && (
+        <div className='mb-2 flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 dark:border-red-500/40 dark:bg-red-500/10'>
+          <Bell className='h-3.5 w-3.5 shrink-0 text-red-500' />
+          <p className='min-w-0 flex-1 truncate text-[12px] text-red-700 dark:text-red-300'>
+            {firing.length === 1
+              ? `Alert firing: ${firing[0].name}`
+              : `${firing.length} alerts firing: ${firing.map((f) => f.name).join(' · ')}`}
+          </p>
+        </div>
+      )}
+      <div className='mb-2 flex flex-wrap items-center gap-2'>
+        <span className='text-[10.5px] text-slate-400'>
+          Data as of {dataAsOf.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+        <button
+          type='button'
+          onClick={refreshAll}
+          className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+        >
+          <RefreshCw className='h-2.5 w-2.5' /> Refresh all
+        </button>
+        <span className='relative'>
+          <button
+            type='button'
+            onClick={() => setCompareOpen((o) => !o)}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
+              compare
+                ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-[#007a99] dark:text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
+            )}
+          >
+            {compare ? `Comparing ${compare.a} vs ${compare.b}` : 'Compare A/B'}
+            {compare && (
+              <X
+                className='h-2.5 w-2.5'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setCompare(null)
+                }}
+              />
+            )}
+          </button>
+          {compareOpen && (
+            <span className='absolute left-0 top-full z-50 mt-1 flex w-72 flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg dark:border-border dark:bg-card'>
+              <input
+                value={cmpField}
+                onChange={(e) => setCmpField(e.target.value)}
+                placeholder='Filter field (e.g. division)'
+                className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+              />
+              <span className='flex gap-1.5'>
+                <input
+                  value={cmpA}
+                  onChange={(e) => setCmpA(e.target.value)}
+                  placeholder='Value A'
+                  className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                />
+                <input
+                  value={cmpB}
+                  onChange={(e) => setCmpB(e.target.value)}
+                  placeholder='Value B'
+                  className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                />
+              </span>
+              <button
+                type='button'
+                disabled={!cmpField.trim() || !cmpA.trim() || !cmpB.trim()}
+                onClick={() => {
+                  setCompare({ field: cmpField.trim(), a: cmpA.trim(), b: cmpB.trim() })
+                  setCompareOpen(false)
+                }}
+                className='h-7 rounded-md bg-nvr-cyan text-[11.5px] font-semibold text-white hover:brightness-110 disabled:opacity-40'
+              >
+                Compare
+              </button>
+            </span>
+          )}
+        </span>
+      </div>
       {entityFilters.filter((f) => !filterBar.some((b) => b.field === f.field)).length > 0 && (
         <div className='flex flex-wrap items-center gap-1.5 px-1 pb-2'>
           {entityFilters
@@ -2876,11 +3360,37 @@ export function ReportView({
               <div
                 key={w.id}
                 style={{
-                  gridColumn: `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
+                  gridColumn: compare
+                    ? `1 / -1`
+                    : `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
                   gridRow: editMode ? undefined : undefined
                 }}
-                className={editMode ? '' : 'contents'}
+                className={editMode || compare ? '' : 'contents'}
               >
+              {compare && !editMode && w.type !== 'divider' ? (
+                <div className='grid grid-cols-2 gap-3'>
+                  {[compare.a, compare.b].map((val, side) => (
+                    <div key={side} className='flex min-h-[160px] flex-col'>
+                      <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[#007a99] dark:text-nvr-cyan'>
+                        {compare.field.replace(/_/g, ' ')}: {val}
+                      </p>
+                      <WidgetCard
+                        reportId={reportId}
+                        widget={w}
+                        dateRange={effectiveRange}
+                        entityFilters={[
+                          ...entityFilters.filter((f) => f.field !== compare.field),
+                          { field: compare.field, values: [val], labels: [val] }
+                        ]}
+                        refetchInterval={refetchInterval}
+                        filterBar={filterBar}
+                        onDrill={openDrill}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+              <>
               {editMode && (
                 <WidgetEditBar
                   widget={w}
@@ -2915,7 +3425,11 @@ export function ReportView({
                 }
                 onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
                 onCrossFilter={applyCrossFilter}
+                reportUrl={reportUrl}
+                currentFilters={entityFilters}
               />
+              </>
+              )}
               </div>
             ))}
         </div>

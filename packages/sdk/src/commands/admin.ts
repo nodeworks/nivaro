@@ -797,6 +797,16 @@ export interface ReportWidgetConfig {
     color: string
     scope?: 'cell' | 'row'
   }>
+  /** KPI mini trend line under the number (needs date_field). */
+  sparkline?: boolean
+  /** Heatmap column dimension (rows come from `dimension`). */
+  dimension2?: { field: string } | null
+  /** Line charts: shaded min/max band from the prior 4 same-length windows. */
+  benchmark?: boolean
+  /** Narrative widgets: markdown-lite text with {{token}} value refs. */
+  text?: string
+  /** Drill-to-report: clicking navigates to another report, carrying the value. */
+  link_report?: { report_id: string; filter_field?: string } | null
 }
 
 export type ReportWidgetType =
@@ -810,6 +820,9 @@ export type ReportWidgetType =
   | 'query'
   | 'calc'
   | 'movers'
+  | 'heatmap'
+  | 'waterfall'
+  | 'narrative'
 
 export interface ReportWidget {
   id: UUID
@@ -884,7 +897,20 @@ export interface ReportWidgetData {
   change_pct?: number | null
   row_count?: number
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }>
+  series?: Array<{
+    dim: string
+    value: number
+    prev?: number
+    raw?: unknown
+    value2?: number
+    other?: boolean
+    band?: [number, number]
+    band_avg?: number
+  }>
+  spark?: Array<{ dim: string; value: number }>
+  cells?: Array<{ dim: string; dim2: string; value: number }>
+  waterfall?: { start: number; end: number; steps: Array<{ dim: string; delta: number }> }
+  narrative?: string
   tiles?: Array<{
     label: string
     value: number | null

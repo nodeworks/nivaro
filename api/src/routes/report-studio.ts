@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { inferDrillTarget } from '../services/report-drill.js'
 import { restoreReportVersion, snapshotReportVersion } from '../services/report-versions.js'
 import { deriveAlertMetric } from '../services/report-studio-jobs.js'
 import { can } from '../services/permissions.js'
@@ -354,7 +355,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const incoming = Array.isArray(req.body?.widgets) ? req.body.widgets : []
     if (incoming.length > 40) return reply.code(400).send({ error: 'Max 40 widgets per report' })
 
-    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider', 'query', 'calc', 'movers'])
+    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider', 'query', 'calc', 'movers', 'heatmap', 'waterfall', 'narrative'])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
       report: report.id,
@@ -543,6 +544,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       .first()
     const bodyRoom = (req.body as { deliver_room?: string | null }).deliver_room
     const bodyPdf = (req.body as { attach_pdf?: boolean }).attach_pdf
+    const bodyTeams = (req.body as { deliver_teams?: boolean }).deliver_teams
     const values = {
       cadence,
       delivery_email: req.body.delivery_email !== false,
@@ -550,7 +552,8 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       ...(bodyRoom !== undefined
         ? { deliver_room: bodyRoom ? String(bodyRoom).slice(0, 200) : null }
         : {}),
-      ...(bodyPdf !== undefined ? { attach_pdf: !!bodyPdf } : {})
+      ...(bodyPdf !== undefined ? { attach_pdf: !!bodyPdf } : {}),
+      ...(bodyTeams !== undefined ? { deliver_teams: !!bodyTeams } : {})
     }
     if (existing) {
       await db('nivaro_report_subscriptions').where({ id: existing.id }).update(values)
@@ -1436,6 +1439,213 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available �
       }
       await db('nivaro_report_annotations').where({ id: row.id }).del()
       return reply.send({ data: { deleted: true } })
+    }
+  )
+
+  // ── Automatic drill for query widgets — infer the record behind a row ──────
+
+  app.post<{ Body: { values?: Record<string, unknown> } }>(
+    '/drill-row',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const values = req.body?.values
+      if (!values || typeof values !== 'object') {
+        return reply.code(400).send({ error: 'values object is required' })
+      }
+      const target = await inferDrillTarget(req.user!, values)
+      return reply.send({ data: target ?? { resolved: false } })
+    }
+  )
+
+  // ── Whole-report templates ─────────────────────────────────────────────────
+
+  app.get('/templates', { preHandler: requireAuth }, async (_req, reply) => {
+    const rows = await db('nivaro_report_templates')
+      .orderBy('name')
+      .select('id', 'name', 'description', 'created_at')
+    return reply.send({ data: rows })
+  })
+
+  app.post<{ Params: { id: string }; Body: { name?: string; description?: string } }>(
+    '/:id/save-template',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .orderBy('sort')) as WidgetRow[]
+      const name = String(req.body?.name ?? '').trim().slice(0, 120) || `${report.name} template`
+      const [inserted] = await db('nivaro_report_templates')
+        .insert({
+          name,
+          description: String(req.body?.description ?? '').trim().slice(0, 500) || null,
+          snapshot: JSON.stringify({
+            global_filters: report.global_filters,
+            widgets: widgets.map((w) => ({
+              type: w.type,
+              title: w.title,
+              collection: w.collection,
+              config: w.config,
+              x: w.x,
+              y: w.y,
+              w: w.w,
+              h: w.h,
+              sort: w.sort
+            }))
+          }),
+          created_by: req.user!.id,
+          created_at: new Date()
+        })
+        .returning('id')
+      const id =
+        typeof inserted === 'object' && inserted !== null
+          ? (inserted as { id: number }).id
+          : (inserted as number)
+      await logActivity({
+        action: 'report-template-create',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req,
+        comment: name
+      })
+      return reply.code(201).send({ data: { id, name } })
+    }
+  )
+
+  app.post<{ Body: { template_id?: number; name?: string } }>(
+    '/from-template',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const tpl = await db('nivaro_report_templates')
+        .where({ id: Number(req.body?.template_id) })
+        .first()
+      if (!tpl) return reply.code(404).send({ error: 'Template not found' })
+      const snap = parseJson<{
+        global_filters?: string | null
+        widgets?: Array<Record<string, unknown>>
+      }>(tpl.snapshot)
+      const newId = randomUUID()
+      await db('nivaro_report_defs').insert({
+        id: newId,
+        name: String(req.body?.name ?? '').trim().slice(0, 255) || String(tpl.name),
+        owner: req.user!.id,
+        is_shared: false,
+        global_filters: snap?.global_filters ?? null,
+        created_at: new Date(),
+        updated_at: new Date()
+      })
+      const widgets = snap?.widgets ?? []
+      if (widgets.length > 0) {
+        await db('nivaro_report_widgets').insert(
+          widgets.map((w, i) => ({
+            id: randomUUID(),
+            report: newId,
+            type: w.type ?? 'kpi',
+            title: w.title ?? '',
+            collection: w.collection ?? null,
+            config: w.config ?? null,
+            x: Number(w.x ?? 0),
+            y: Number(w.y ?? 0),
+            w: Number(w.w ?? 4),
+            h: Number(w.h ?? 3),
+            sort: Number(w.sort ?? i)
+          }))
+        )
+      }
+      await logActivity({
+        action: 'report-create',
+        collection: 'nivaro_report_defs',
+        item: newId,
+        user: req.user!.id,
+        req,
+        comment: `from template ${tpl.name}`
+      })
+      return reply.code(201).send({ data: { id: newId } })
+    }
+  )
+
+  app.delete<{ Params: { templateId: string } }>(
+    '/templates/:templateId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const tpl = await db('nivaro_report_templates')
+        .where({ id: Number(req.params.templateId) })
+        .first()
+      if (!tpl) return reply.code(404).send({ error: 'Not found' })
+      if (tpl.created_by !== req.user!.id && !req.isAdmin) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      await db('nivaro_report_templates').where({ id: tpl.id }).del()
+      return reply.send({ data: { deleted: true } })
+    }
+  )
+
+  // ── Copy a widget into another report ──────────────────────────────────────
+
+  app.post<{ Params: { id: string; widgetId: string }; Body: { target_report_id?: string } }>(
+    '/:id/widgets/:widgetId/copy',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const target = await loadReport(String(req.body?.target_report_id ?? ''))
+      if (!target) return reply.code(404).send({ error: 'Target report not found' })
+      if (!canEditReport(target, req)) {
+        return reply.code(403).send({ error: 'No edit access to the target report' })
+      }
+      const widget = (await db('nivaro_report_widgets')
+        .where({ id: req.params.widgetId, report: report.id })
+        .first()) as WidgetRow | undefined
+      if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+      await snapshotReportVersion(target.id, 'before widget copy', req.user!.id)
+      const maxRow = (await db('nivaro_report_widgets')
+        .where({ report: target.id })
+        .max({ y: 'y' })
+        .max({ sort: 'sort' })
+        .first()) as { y: number | null; sort: number | null } | undefined
+      const newId = randomUUID()
+      await db('nivaro_report_widgets').insert({
+        id: newId,
+        report: target.id,
+        type: widget.type,
+        title: widget.title,
+        collection: widget.collection,
+        config: widget.config,
+        x: 0,
+        y: Number(maxRow?.y ?? 0) + 4,
+        w: widget.w,
+        h: widget.h,
+        sort: Number(maxRow?.sort ?? 0) + 1
+      })
+      return reply.code(201).send({ data: { id: newId, report: target.id } })
+    }
+  )
+
+  // ── Currently-firing alerts (the report's own red strip) ───────────────────
+
+  app.get<{ Params: { id: string } }>(
+    '/:id/firing',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const rows = await db('nivaro_report_alert_log as l')
+        .join('nivaro_report_alerts as a', 'l.alert', 'a.id')
+        .where({ 'a.report': report.id, 'l.status': 'firing' })
+        .select('a.id as alert_id', 'a.name', 'a.widget', 'l.fired_at')
+      return reply.send({
+        data: rows.map((r) => ({
+          alert_id: r.alert_id,
+          name: r.name,
+          widget: r.widget,
+          since: r.fired_at
+        }))
+      })
     }
   )
 }

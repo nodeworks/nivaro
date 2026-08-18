@@ -35,6 +35,17 @@ export interface KpiMetricConfig {
 export interface WidgetQueryConfig {
   /** Dual-axis second metric on value-dimension charts. */
   metric2?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string; label?: string }
+  /** KPI mini trend line under the number (needs date_field). */
+  sparkline?: boolean
+  /** Heatmap column dimension (rows come from `dimension`). */
+  dimension2?: { field: string } | null
+  /** Line charts: shaded min/max band from the prior 4 same-length windows. */
+  benchmark?: boolean
+  /** Narrative widgets: markdown-lite text with {{token}} value refs. */
+  text?: string
+  refs?: Record<string, string>
+  /** Drill-to-report: clicking navigates to another report, carrying the value. */
+  link_report?: { report_id: string; filter_field?: string } | null
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
   dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
   filters?: WidgetFilter[]
@@ -247,7 +258,28 @@ export interface WidgetData {
   prev_value?: number | null
   change_pct?: number | null
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }>
+  series?: Array<{
+    dim: string
+    value: number
+    prev?: number
+    raw?: unknown
+    value2?: number
+    other?: boolean
+    band?: [number, number]
+    band_avg?: number
+  }>
+  /** KPI sparkline mini-series (month buckets over the active range). */
+  spark?: Array<{ dim: string; value: number }>
+  /** Heatmap cells: row dim × column dim → value. */
+  cells?: Array<{ dim: string; dim2: string; value: number }>
+  /** Waterfall: start/end totals + per-dimension steps. */
+  waterfall?: {
+    start: number
+    end: number
+    steps: Array<{ dim: string; delta: number }>
+  }
+  /** Narrative widgets: rendered text with values substituted. */
+  narrative?: string
   row_count?: number
   tiles?: Array<{
     label: string
@@ -552,7 +584,87 @@ export async function resolveWidgetData(
       prev_value = prevRow?.value != null ? Number(prevRow.value) : null
       change_pct = pctChange(value, prev_value)
     }
-    return { value, prev_value, change_pct, row_count: Number(count?.n ?? 0) }
+    let spark: WidgetData['spark']
+    if (cfg.sparkline && cfg.date_field && valid.has(cfg.date_field)) {
+      try {
+        const sparkRows = (await aggSelect(
+          base()
+            .select(db.raw(`FORMAT(??, 'yyyy-MM') as dim`, [cfg.date_field]))
+            .groupBy(db.raw(`FORMAT(??, 'yyyy-MM')`, [cfg.date_field]))
+            .orderBy('dim', 'asc')
+        )) as unknown as Array<{ dim: unknown; value: number | string }>
+        spark = sparkRows
+          .filter((r) => r.dim != null)
+          .slice(-12)
+          .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
+      } catch {
+        /* the trend line is decoration */
+      }
+    }
+    return { value, prev_value, change_pct, row_count: Number(count?.n ?? 0), spark }
+  }
+
+  // Heatmap — two dimensions × metric, both labelized
+  if (widget.type === 'heatmap') {
+    const dimA = cfg.dimension?.field
+    const dimB = cfg.dimension2?.field
+    if (!dimA || !valid.has(dimA) || !dimB || !valid.has(dimB)) {
+      throw Object.assign(new Error('Heatmaps need two valid dimension fields'), {
+        statusCode: 400
+      })
+    }
+    const rows = (await aggSelect(
+      base().select({ dim: dimA, dim2: dimB }).groupBy(dimA, dimB)
+    )) as unknown as Array<{ dim: unknown; dim2: unknown; value: number | string }>
+    const capped = rows.slice(0, 400)
+    const aLab = await labelizeDimension(
+      collection,
+      dimA,
+      capped.map((r) => ({ dim: r.dim, value: 0, k: r }))
+    )
+    const bLab = await labelizeDimension(
+      collection,
+      dimB,
+      capped.map((r) => ({ dim: r.dim2, value: 0, k: r }))
+    )
+    const cells = capped.map((r, i) => ({
+      dim: aLab[i].dim,
+      dim2: bLab[i].dim,
+      value: Number(r.value)
+    }))
+    return { cells, row_count: cells.length }
+  }
+
+  // Waterfall — the movers computation shaped as a bridge
+  if (widget.type === 'waterfall') {
+    const dimField = cfg.dimension?.field
+    if (!dimField || !valid.has(dimField)) {
+      throw Object.assign(new Error('Waterfall widgets need a dimension field'), {
+        statusCode: 400
+      })
+    }
+    const chart = await resolveWidgetData(
+      user,
+      {
+        type: 'bar',
+        collection,
+        config: { ...cfg, compare: cfg.compare ?? 'previous_period', limit: 50 }
+      },
+      dateRange,
+      entityFilters
+    )
+    const pts = (chart.series ?? []).filter((sv) => !sv.other)
+    const start = pts.reduce((a, b) => a + (b.prev ?? 0), 0)
+    const end = pts.reduce((a, b) => a + b.value, 0)
+    const n = Math.min(8, Math.max(2, cfg.limit ?? 6))
+    const scored = pts
+      .map((sv) => ({ dim: sv.dim, delta: sv.value - (sv.prev ?? 0) }))
+      .filter((r) => r.delta !== 0)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    const top = scored.slice(0, n)
+    const restDelta = scored.slice(n).reduce((a, b) => a + b.delta, 0)
+    const steps = [...top, ...(restDelta !== 0 ? [{ dim: 'Everything else', delta: restDelta }] : [])]
+    return { waterfall: { start, end, steps }, row_count: steps.length }
   }
 
   if (widget.type === 'table') {
@@ -566,7 +678,7 @@ export async function resolveWidgetData(
     const sortField = desc ? sortRaw.slice(1) : sortRaw
     if (sortField && valid.has(sortField)) q.orderBy(sortField, desc ? 'desc' : 'asc')
     else q.orderBy('id', 'desc')
-    const rows = (await q.limit(Math.min(100, Math.max(1, cfg.limit ?? 10)))) as Array<
+    const rows = (await q.limit(Math.min(500, Math.max(1, cfg.limit ?? 10)))) as Array<
       Record<string, unknown>
     >
     // Resolve FK columns to display labels so tables read like the source app
@@ -642,7 +754,7 @@ export async function resolveWidgetData(
           .orderBy('dim', 'asc')
       )) as never
     }
-    let series: Array<{ dim: string; value: number; prev?: number }> = rows
+    let series: Array<{ dim: string; value: number; prev?: number; band?: [number, number]; band_avg?: number }> = rows
       .filter((r) => r.dim != null)
       .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
     const range = resolveDateRange(dateRange)
@@ -740,6 +852,33 @@ export async function resolveWidgetData(
         })
       }
     }
+    // Benchmark band: min/max/avg per bucket POSITION across the prior 4
+    // same-length windows — "is this month normal" answers itself.
+    if (cfg.benchmark && range && cfg.date_field && valid.has(cfg.date_field) && fmt) {
+      try {
+        const windows: number[][] = []
+        let win = { start: new Date(range.start), end: new Date(range.end) }
+        for (let k = 0; k < 4; k++) {
+          win = previousRange(win, 'previous_period')
+          const wRows = (await aggSelect(
+            base(win)
+              .select(db.raw(`FORMAT(??, '${fmt}') as dim`, [dim.field]))
+              .groupBy(db.raw(`FORMAT(??, '${fmt}')`, [dim.field]))
+              .orderBy('dim', 'asc')
+          )) as unknown as Array<{ dim: unknown; value: number | string }>
+          windows.push(wRows.filter((r) => r.dim != null).map((r) => Number(r.value)))
+        }
+        for (let i = 0; i < series.length; i++) {
+          const vals = windows.map((w) => w[i]).filter((v) => v != null && Number.isFinite(v))
+          if (vals.length >= 2) {
+            series[i].band = [Math.min(...vals), Math.max(...vals)]
+            series[i].band_avg = vals.reduce((a, b) => a + b, 0) / vals.length
+          }
+        }
+      } catch {
+        /* the band is decoration */
+      }
+    }
     return { series }
   }
 
@@ -810,6 +949,55 @@ export async function resolveWidgetDataFull(
   entityFilters: EntityFilter[] = [],
   depth = 0
 ): Promise<WidgetData> {
+  // Narrative — markdown-lite text with {{token}} refs substituted by sibling
+  // widgets' formatted values. Commentary that can never go stale.
+  if (widget.type === 'narrative') {
+    if (depth > 1) return { narrative: '' }
+    const cfg = (widget.config ?? {}) as unknown as {
+      text?: string
+      refs?: Record<string, string>
+    }
+    let text = String(cfg.text ?? '')
+    for (const [key, widgetId] of Object.entries(cfg.refs ?? {})) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+      let rendered = '—'
+      try {
+        const ref = (await db('nivaro_report_widgets')
+          .where({ id: String(widgetId), report: reportId })
+          .first()) as WidgetRow | undefined
+        if (ref) {
+          const sub = await resolveWidgetDataFull(
+            user,
+            reportId,
+            { id: ref.id, type: ref.type, collection: ref.collection, config: parseJson(ref.config) },
+            dateRange,
+            entityFilters,
+            depth + 1
+          )
+          const v =
+            sub.value ??
+            (sub.series ? sub.series.reduce((a, b) => a + (Number(b.value) || 0), 0) : null) ??
+            sub.row_count ??
+            null
+          if (v != null && Number.isFinite(Number(v))) {
+            const refCfg = parseJson<WidgetQueryConfig>(ref.config)
+            const f = refCfg?.format
+            const n = Number(v)
+            const body = (f?.decimals != null ? n.toFixed(f.decimals) : Number.isInteger(n) ? String(n) : n.toFixed(2)).replace(
+              /\B(?=(\d{3})+(?!\d))/g,
+              ','
+            )
+            rendered = `${f?.prefix ?? ''}${body}${f?.suffix ?? ''}`
+          }
+        }
+      } catch {
+        /* an unresolvable token renders as a dash, never breaks the paragraph */
+      }
+      text = text.split(`{{${key}}}`).join(rendered)
+    }
+    return { narrative: text }
+  }
+
   if (widget.type === 'calc') {
     if (depth > 1) return { value: null }
     const cfg = (widget.config ?? {}) as unknown as {

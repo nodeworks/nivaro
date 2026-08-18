@@ -72,7 +72,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  */
 
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'calc' | 'movers'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
@@ -350,6 +350,9 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'query', label: 'Query' },
   { id: 'calc', label: 'Calculated' },
   { id: 'movers', label: 'Top Movers' },
+  { id: 'heatmap', label: 'Heatmap' },
+  { id: 'waterfall', label: 'Waterfall' },
+  { id: 'narrative', label: 'Narrative' },
   { id: 'divider', label: 'Divider' }
 ]
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'null', 'nnull']
@@ -614,7 +617,7 @@ function WidgetBody({
       // Calc widgets reference SIBLING widgets, which only the saved report
       // knows — resolve through the report-scoped data route instead of the
       // stateless preview.
-      widget.type === 'calc'
+      widget.type === 'calc' || widget.type === 'narrative'
         ? api
             .post<{ data: WidgetDataShape }>(
               `/report-studio/${reportId}/widgets/${widget.id}/data`,
@@ -635,7 +638,7 @@ function WidgetBody({
       widget.type !== 'query' &&
       (!!widget.collection ||
         widget.type === 'kpi_group' ||
-        (widget.type === 'calc' && !!reportId)),
+        ((widget.type === 'calc' || widget.type === 'narrative') && !!reportId)),
     staleTime: 60_000,
     retry: false
   })
@@ -653,7 +656,12 @@ function WidgetBody({
       </NivaroProvider>
     )
   }
-  if (!widget.collection && widget.type !== 'kpi_group' && widget.type !== 'calc') {
+  if (
+    !widget.collection &&
+    widget.type !== 'kpi_group' &&
+    widget.type !== 'calc' &&
+    widget.type !== 'narrative'
+  ) {
     return <p className='px-1 text-[12px] text-slate-400'>Configure this widget to see data.</p>
   }
 
@@ -665,7 +673,77 @@ function WidgetBody({
       'Failed to load'
     body = <p className='px-1 text-[12px] text-red-400'>{msg}</p>
   } else if (data) {
-    if (widget.type === 'movers') {
+    if (widget.type === 'narrative') {
+      body = (
+        <div className='h-full overflow-y-auto whitespace-pre-wrap px-1 text-[12.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+          {String((data as { narrative?: string }).narrative ?? '')}
+        </div>
+      )
+    } else if (widget.type === 'heatmap') {
+      const cells = ((data as { cells?: Array<{ dim: string; dim2: string; value: number }> }).cells ?? [])
+      const rowsD = [...new Set(cells.map((c) => c.dim))]
+      const colsD = [...new Set(cells.map((c) => c.dim2))]
+      const maxV = Math.max(1, ...cells.map((c) => c.value))
+      body =
+        cells.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          <div className='h-full overflow-auto'>
+            <table className='w-full text-[10.5px]'>
+              <thead>
+                <tr>
+                  <th />
+                  {colsD.map((c) => (
+                    <th key={c} className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rowsD.map((r) => (
+                  <tr key={r}>
+                    <td className='max-w-[110px] truncate pr-1.5 text-slate-500'>{r}</td>
+                    {colsD.map((c) => {
+                      const cell = cells.find((x) => x.dim === r && x.dim2 === c)
+                      const pct = cell ? cell.value / maxV : 0
+                      return (
+                        <td key={c} className='p-0.5'>
+                          <div
+                            className='flex h-6 items-center justify-center rounded text-[9.5px] tabular-nums'
+                            style={{
+                              backgroundColor: cell ? `rgba(0,165,204,${0.08 + pct * 0.85})` : 'transparent',
+                              color: pct > 0.55 ? '#fff' : undefined
+                            }}
+                          >
+                            {cell ? Math.round(cell.value).toLocaleString() : ''}
+                          </div>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+    } else if (widget.type === 'waterfall') {
+      const wf = (data as { waterfall?: { start: number; end: number; steps: Array<{ dim: string; delta: number }> } }).waterfall
+      body = !wf ? (
+        <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+      ) : (
+        <div className='flex h-full flex-col justify-center gap-0.5 overflow-y-auto px-1 text-[11px]'>
+          <div className='flex justify-between text-slate-500'><span>Previous</span><span className='tabular-nums'>{wf.start.toLocaleString()}</span></div>
+          {wf.steps.map((st) => (
+            <div key={st.dim} className='flex justify-between'>
+              <span className='truncate text-slate-600 dark:text-slate-300'>{st.dim}</span>
+              <span className={cn('tabular-nums font-medium', st.delta >= 0 ? 'text-emerald-600' : 'text-red-500')}>
+                {st.delta >= 0 ? '+' : ''}{st.delta.toLocaleString()}
+              </span>
+            </div>
+          ))}
+          <div className='flex justify-between border-t border-slate-200 pt-0.5 font-semibold text-slate-800 dark:border-border dark:text-slate-200'><span>Current</span><span className='tabular-nums'>{wf.end.toLocaleString()}</span></div>
+        </div>
+      )
+    } else if (widget.type === 'movers') {
       const rows = (data.rows ?? []) as unknown as Array<{
         dim: string
         current: number
@@ -971,7 +1049,12 @@ function ConfigSheet({
 
   const aggregate = cfg.metric?.aggregate ?? 'count'
   const isChart =
-    widget.type === 'bar' || widget.type === 'line' || widget.type === 'donut' || widget.type === 'movers'
+    widget.type === 'bar' ||
+    widget.type === 'line' ||
+    widget.type === 'donut' ||
+    widget.type === 'movers' ||
+    widget.type === 'heatmap' ||
+    widget.type === 'waterfall'
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
@@ -1037,7 +1120,26 @@ function ConfigSheet({
             />
           )}
 
-          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && (
+          {widget.type === 'narrative' && (
+            <div className='space-y-1.5'>
+              <Label className='text-[11.5px]'>Text ({'{{token}}'} substitutes widget values)</Label>
+              <textarea
+                value={((cfg as Record<string, unknown>).text as string) ?? ''}
+                onChange={(e) => setCfg({ text: e.target.value } as never)}
+                rows={4}
+                className='w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+              />
+              <CalcConfigEditor
+                cfg={cfg as WidgetConfig & { formula?: string; refs?: Record<string, string> }}
+                widgets={allWidgets ?? []}
+                selfId={widget.id}
+                onChange={(patch) => setCfg(patch as Partial<WidgetConfig>)}
+                refsOnly
+              />
+            </div>
+          )}
+
+          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && widget.type !== 'narrative' && (
             <>
               <div className='space-y-1.5'>
                 <Label className='text-[11.5px]'>Collection</Label>
@@ -2515,12 +2617,14 @@ function CalcConfigEditor({
   cfg,
   widgets,
   selfId,
-  onChange
+  onChange,
+  refsOnly = false
 }: {
   cfg: { formula?: string; refs?: Record<string, string>; format?: WidgetConfig['format'] }
   widgets: Widget[]
   selfId: string
   onChange: (patch: Record<string, unknown>) => void
+  refsOnly?: boolean
 }) {
   const refs = cfg.refs ?? {}
   const candidates = widgets.filter((w) => w.id !== selfId && w.type !== 'divider' && w.type !== 'calc')
@@ -2531,6 +2635,7 @@ function CalcConfigEditor({
   }
   return (
     <div className='space-y-2'>
+      {!refsOnly && (
       <div className='space-y-1'>
         <Label className='text-[11.5px]'>Formula</Label>
         <Input
@@ -2543,6 +2648,7 @@ function CalcConfigEditor({
           Arithmetic over the tokens below — each token is another widget's value.
         </p>
       </div>
+      )}
       <div className='space-y-1'>
         <Label className='text-[11.5px]'>Tokens</Label>
         {tokens.map((t) => (
@@ -3266,9 +3372,11 @@ export function ReportStudioEditPage() {
               ? { query: { slug: '', display: 'table' } }
               : type === 'calc'
                 ? ({ formula: '{{a}} / {{b}}', refs: {} } as never)
-                : type === 'movers'
-                  ? { metric: { aggregate: 'count' }, compare: 'previous_period', limit: 5 }
-                  : { metric: { aggregate: 'count' } },
+                : type === 'narrative'
+                  ? ({ text: 'Spend reached {{a}} this period.', refs: {} } as never)
+                  : type === 'movers'
+                    ? { metric: { aggregate: 'count' }, compare: 'previous_period', limit: 5 }
+                    : { metric: { aggregate: 'count' } },
         x: 0,
         y: maxY,
         w: type === 'kpi' || type === 'calc' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,

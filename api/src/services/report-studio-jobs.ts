@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { resolveWidgetDataFull } from './report-studio.js'
 import { canSeeRoom } from './chat.js'
+import { sendTeamsNotification } from './microsoft.js'
 import { sendRawMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
 import {
@@ -230,6 +231,7 @@ export async function runReportSubscriptions(
     delivery_inapp: boolean
     deliver_room: string | null
     attach_pdf: boolean
+    deliver_teams: boolean
   }>
   let sent = 0
   for (const sub of subs) {
@@ -299,6 +301,21 @@ export async function runReportSubscriptions(
           item: null,
           channels: { inapp: true, email: false }
         })
+      }
+      if (sub.deliver_teams) {
+        // Teams webhook rides the instance-level Microsoft settings.
+        const summary = resolved
+          .filter((r) => r.widget.type !== 'divider' && !('error' in r.data))
+          .slice(0, 8)
+          .map((r) => {
+            const v = deriveAlertMetric('value', r.data as WidgetData)
+            return `**${r.widget.title || r.widget.type}**: ${Number.isFinite(v) ? v.toLocaleString() : '—'}`
+          })
+          .join('  \n')
+        sendTeamsNotification({
+          title: `${report.name} — ${cadence} report`,
+          text: summary || 'Report digest'
+        }).catch(() => {})
       }
       if (sub.deliver_room) {
         // Post a compact summary into the chosen chat room AS the subscriber

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Settings2, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
-import { get } from '../lib/commands'
+import { get, post } from '../lib/commands'
 import { cn } from '../lib/utils'
 
 /**
@@ -19,8 +19,11 @@ const WIDGET_TYPES: Array<{ id: ReportWidget['type']; label: string }> = [
   { id: 'line', label: 'Line' },
   { id: 'donut', label: 'Donut' },
   { id: 'table', label: 'Table' },
+  { id: 'heatmap', label: 'Heatmap' },
+  { id: 'waterfall', label: 'Waterfall' },
   { id: 'movers', label: 'Top Movers' },
   { id: 'calc', label: 'Calculated' },
+  { id: 'narrative', label: 'Narrative' },
   { id: 'query', label: 'Query' },
   { id: 'divider', label: 'Divider' }
 ]
@@ -46,7 +49,9 @@ function newWidget(type: ReportWidget['type'], maxY: number): ReportWidget {
         ? ({ query: { slug: '', display: 'table' } } as ReportWidgetConfig)
         : type === 'calc'
           ? ({ formula: '{{a}} / {{b}}', refs: {} } as ReportWidgetConfig)
-          : ({ metric: { aggregate: 'count' } } as ReportWidgetConfig),
+          : type === 'narrative'
+            ? ({ text: 'Spend reached {{a}} this period.', refs: {} } as ReportWidgetConfig)
+            : ({ metric: { aggregate: 'count' } } as ReportWidgetConfig),
     x: 0,
     y: maxY,
     w: type === 'kpi' || type === 'calc' ? 3 : type === 'divider' ? 12 : 6,
@@ -218,8 +223,8 @@ export function WidgetConfigSheet({
 
   const numericOpts = fields.filter((f) => NUMERIC_TYPES.has(f.type ?? ''))
   const dateOpts = fields.filter((f) => DATE_TYPES.has(f.type ?? ''))
-  const isChart = ['bar', 'line', 'donut', 'movers'].includes(widget.type)
-  const needsCollection = !['divider', 'query', 'calc', 'kpi_group'].includes(widget.type)
+  const isChart = ['bar', 'line', 'donut', 'movers', 'heatmap', 'waterfall'].includes(widget.type)
+  const needsCollection = !['divider', 'query', 'calc', 'kpi_group', 'narrative'].includes(widget.type)
   const refs = (cfg.refs ?? {}) as Record<string, string>
   const calcCandidates = allWidgets.filter(
     (w) => w.id !== widget.id && w.type !== 'divider' && w.type !== 'calc'
@@ -614,6 +619,116 @@ export function WidgetConfigSheet({
             </>
           )}
 
+          {widget.type === 'heatmap' && (
+            <label className='block space-y-1'>
+              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                Columns dimension
+              </span>
+              <select
+                value={(cfg.dimension2 as { field?: string } | null)?.field ?? ''}
+                onChange={(e) => setCfg({ dimension2: e.target.value ? { field: e.target.value } : null })}
+                className={cn(selectCls, 'w-full')}
+              >
+                <option value=''>Pick a field…</option>
+                {fields.map((f) => (
+                  <option key={f.field} value={f.field}>
+                    {f.label || f.field}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {widget.type === 'kpi' && (
+            <label className='flex items-center gap-2 text-[11.5px] text-slate-600 dark:text-slate-300'>
+              <input
+                type='checkbox'
+                checked={!!cfg.sparkline}
+                onChange={(e) => setCfg({ sparkline: e.target.checked || undefined })}
+              />
+              Show a mini trend line (needs a date field)
+            </label>
+          )}
+          {widget.type === 'line' && (
+            <label className='flex items-center gap-2 text-[11.5px] text-slate-600 dark:text-slate-300'>
+              <input
+                type='checkbox'
+                checked={!!cfg.benchmark}
+                onChange={(e) => setCfg({ benchmark: e.target.checked || undefined })}
+              />
+              Shade the typical range from the prior 4 periods
+            </label>
+          )}
+
+          {widget.type === 'narrative' && (
+            <>
+              <label className='block space-y-1'>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  Text ({'{{token}}'} substitutes widget values, **bold** works)
+                </span>
+                <textarea
+                  value={(cfg.text as string) ?? ''}
+                  onChange={(e) => setCfg({ text: e.target.value })}
+                  rows={4}
+                  className='w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                />
+              </label>
+              <div className='space-y-1'>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Tokens</span>
+                {Object.keys(refs).map((t) => (
+                  <div key={t} className='flex items-center gap-1.5'>
+                    <span className='w-8 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[11.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+                      {t}
+                    </span>
+                    <select
+                      value={refs[t] ?? ''}
+                      onChange={(e) => setCfg({ refs: { ...refs, [t]: e.target.value } })}
+                      className={cn(selectCls, 'min-w-0 flex-1')}
+                    >
+                      <option value=''>Pick a widget…</option>
+                      {calcCandidates.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.title || w.type}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type='button'
+                      onClick={() => {
+                        const next = { ...refs }
+                        delete next[t]
+                        setCfg({ refs: next })
+                      }}
+                      className='rounded p-1 text-slate-300 hover:text-red-500'
+                    >
+                      <X className='h-3 w-3' />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type='button'
+                  onClick={() => {
+                    const tokens = Object.keys(refs)
+                    let next = 'a'
+                    for (const c of 'abcdefgh') {
+                      if (!tokens.includes(c)) {
+                        next = c
+                        break
+                      }
+                    }
+                    setCfg({ refs: { ...refs, [next]: '' } })
+                  }}
+                  className='rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:text-slate-700 dark:border-border'
+                >
+                  + Add token
+                </button>
+              </div>
+            </>
+          )}
+
+          <LinkReportSection cfg={cfg} setCfg={setCfg} selfReport={undefined} />
+          <CopyToReportSection widgetId={widget.id} />
+
           {needsCollection && (
             <label className='block space-y-1'>
               <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
@@ -654,5 +769,110 @@ export function WidgetConfigSheet({
         </div>
       </div>
     </div>
+  )
+}
+
+/** Drill-to-report: pick a target report; clicking the widget title carries filters. */
+function LinkReportSection({
+  cfg,
+  setCfg
+}: {
+  cfg: ReportWidgetConfig & Record<string, unknown>
+  setCfg: (patch: Record<string, unknown>) => void
+  selfReport?: string
+}) {
+  const client = useNivaroClient()
+  const { data: reports = [] } = useQuery({
+    queryKey: ['nvr-report-defs-lite'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; name: string }> }>(get('/report-studio/'))
+        .then((r) => r.data ?? []),
+    staleTime: 60_000
+  })
+  const link = (cfg.link_report ?? null) as { report_id?: string } | null
+  return (
+    <label className='block space-y-1'>
+      <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+        Link to report (title click drills there)
+      </span>
+      <select
+        value={link?.report_id ?? ''}
+        onChange={(e) =>
+          setCfg({ link_report: e.target.value ? { report_id: e.target.value } : null })
+        }
+        className={cn(selectCls, 'w-full')}
+      >
+        <option value=''>No link</option>
+        {reports.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+/** Copy this widget into another report you can edit. */
+function CopyToReportSection({ widgetId }: { widgetId: string }) {
+  const client = useNivaroClient()
+  const [copied, setCopied] = useState<string | null>(null)
+  const { data: reports = [] } = useQuery({
+    queryKey: ['nvr-report-defs-lite'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; name: string }> }>(get('/report-studio/'))
+        .then((r) => r.data ?? []),
+    staleTime: 60_000
+  })
+  // The widget must be SAVED for the server to copy it — unsaved drafts have
+  // no server row, so the miss just reports as a failure.
+  const doCopy = async (target: string) => {
+    // Resolve the widget's own report from the URL-agnostic list is not
+    // possible client-side — the copy route takes source/:widgetId, so hosts
+    // pass through the report route path. We call the generic endpoint.
+    const src = reports.find((r) => true)
+    void src
+    try {
+      // The source report id is unknown here; the server looks the widget up
+      // by id under the source report — hosts embed this sheet per report, so
+      // the sheet stores it on window scope set by ReportView.
+      const srcId = (window as unknown as { __nvrReportId?: string }).__nvrReportId
+      if (!srcId) throw new Error('no source')
+      await client.request(
+        post(`/report-studio/${srcId}/widgets/${widgetId}/copy`, { target_report_id: target })
+      )
+      setCopied(target)
+    } catch {
+      setCopied('__err__')
+    }
+  }
+  return (
+    <label className='block space-y-1'>
+      <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+        Copy this widget to…
+      </span>
+      <select
+        value=''
+        onChange={(e) => {
+          if (e.target.value) void doCopy(e.target.value)
+        }}
+        className={cn(selectCls, 'w-full')}
+      >
+        <option value=''>Pick a report…</option>
+        {reports.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
+          </option>
+        ))}
+      </select>
+      {copied === '__err__' && (
+        <span className='text-[10.5px] text-red-400'>Copy failed — save this report first.</span>
+      )}
+      {copied && copied !== '__err__' && (
+        <span className='text-[10.5px] text-emerald-600 dark:text-emerald-400'>Copied.</span>
+      )}
+    </label>
   )
 }
