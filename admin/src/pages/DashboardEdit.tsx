@@ -215,7 +215,7 @@ function ChartWrapper({
           <XAxis dataKey='date' tick={{ fontSize: 10 }} tickFormatter={(v: string) => v.slice(5)} />
           <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
           <Tooltip
-            contentStyle={{ fontSize: 12 }}
+            contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }}
             formatter={(v) => [formatNumber(Number(v ?? 0)), 'Count']}
           />
           <Bar dataKey='count' fill='#00ceff' radius={[3, 3, 0, 0]} />
@@ -231,7 +231,7 @@ function ChartWrapper({
         <XAxis dataKey='date' tick={{ fontSize: 10 }} tickFormatter={(v: string) => v.slice(5)} />
         <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
         <Tooltip
-          contentStyle={{ fontSize: 12 }}
+          contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }}
           formatter={(v) => [formatNumber(Number(v ?? 0)), 'Count']}
         />
         <Line type='monotone' dataKey='count' stroke='#00ceff' strokeWidth={2} dot={false} />

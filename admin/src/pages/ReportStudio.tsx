@@ -36,6 +36,19 @@ export function ReportStudioPage() {
     queryKey: ['report-defs'],
     queryFn: () => api.get<{ data: ReportDef[] }>('/report-studio/').then((r) => r.data.data)
   })
+  // Admin-only usage rollup — non-admins get a silent 403 and no usage column.
+  const { data: usage = {} as Record<string, { last_viewed: string; views_30d: number; viewers_30d: number }> } = useQuery({
+    queryKey: ['report-usage'],
+    queryFn: () =>
+      api
+        .get<{ data: Record<string, { last_viewed: string; views_30d: number; viewers_30d: number } > }>(
+          '/report-studio/usage'
+        )
+        .then((r) => r.data.data)
+        .catch(() => ({}) as Record<string, { last_viewed: string; views_30d: number; viewers_30d: number }>),
+    staleTime: 60_000
+  })
+  const STALE_MS = 90 * 86_400_000
 
   const create = useMutation({
     mutationFn: () => api.post<{ data: ReportDef }>('/report-studio/', { name }),
@@ -136,6 +149,26 @@ export function ReportStudioPage() {
                 <span className='shrink-0 text-[11.5px] text-slate-400'>
                   {r.widget_count ?? 0} widget{(r.widget_count ?? 0) === 1 ? '' : 's'}
                 </span>
+                {(() => {
+                  const u = usage[r.id]
+                  if (Object.keys(usage).length === 0) return null
+                  if (!u || Date.now() - new Date(u.last_viewed).getTime() > STALE_MS) {
+                    return (
+                      <Badge
+                        variant='outline'
+                        className='h-4 shrink-0 border-amber-300 px-1.5 text-[10px] text-amber-600 dark:border-amber-500/50 dark:text-amber-400'
+                      >
+                        {u ? 'unused 90d+' : 'never viewed'}
+                      </Badge>
+                    )
+                  }
+                  return (
+                    <span className='shrink-0 text-[11px] text-slate-400'>
+                      {u.views_30d} view{u.views_30d === 1 ? '' : 's'} · {u.viewers_30d}{' '}
+                      {u.viewers_30d === 1 ? 'person' : 'people'} (30d)
+                    </span>
+                  )
+                })()}
                 <span className='w-24 shrink-0 text-right text-[11.5px] text-slate-400'>
                   {formatRelative(r.updated_at)}
                 </span>

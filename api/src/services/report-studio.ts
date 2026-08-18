@@ -233,6 +233,9 @@ async function labelizeDimension<T extends { dim: unknown; value: number }>(
   )
   return rows.map((r) => ({
     ...r,
+    // raw carries the FK for drill-through — the label alone cannot rebuild
+    // the filter that produced the segment.
+    raw: r.dim == null ? null : r.dim,
     dim: r.dim == null ? '(none)' : (label.get(String(r.dim)) ?? String(r.dim))
   }))
 }
@@ -242,7 +245,7 @@ export interface WidgetData {
   prev_value?: number | null
   change_pct?: number | null
   rows?: Array<Record<string, unknown>>
-  series?: Array<{ dim: string; value: number; prev?: number }>
+  series?: Array<{ dim: string; value: number; prev?: number; raw?: unknown }>
   row_count?: number
   tiles?: Array<{
     label: string

@@ -27,7 +27,7 @@ import {
   toggleReportAlert
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
+import { Bell, Camera, Check, ChevronsUpDown, Info, Plus, RefreshCw, Sparkles, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Area,
@@ -79,8 +79,10 @@ import {
   useOverlayState
 } from '../context'
 import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
+import { get, post } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
+import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -806,7 +808,7 @@ export function QueryWidgetBody({
                   <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v) => tipFmt(v as number)} />
+              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
             </PieChart>
           </ResponsiveContainer>
           <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -844,7 +846,7 @@ export function QueryWidgetBody({
               {...catAxisProps(chartRows.length)}
             />
             <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
-            <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v) => tipFmt(v as number)} />
+            <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
             {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
             {series.map((s, i) => (
               <Area
@@ -902,7 +904,7 @@ export function QueryWidgetBody({
               <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
             </>
           )}
-          <Tooltip contentStyle={{ fontSize: 12 }} formatter={(v) => tipFmt(v as number)} />
+          <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
           {series.map((s, i) => (
             <Bar
@@ -1313,6 +1315,188 @@ export function AlertBell({
 
 // ── Widget card ───────────────────────────────────────────────────────────────
 
+// ── Drill-through / explain / dictionary helpers ─────────────────────────────
+
+const FILTER_OP_MAP: Record<string, string> = {
+  eq: '_eq', neq: '_neq', gt: '_gt', gte: '_gte', lt: '_lt', lte: '_lte',
+  in: '_in', contains: '_contains', null: '_null', nnull: '_nnull'
+}
+
+type DrillCond = { path: string[]; op: string; value: unknown }
+
+/** Rebuild the record-level conditions a native widget's number came from. */
+function widgetDrillConditions(
+  widget: ReportWidget,
+  entityFilters: ReportEntityFilter[],
+  dateRange: ReportDateRange | null,
+  dimRaw?: unknown
+): DrillCond[] {
+  const cfg = (widget.config ?? {}) as Record<string, unknown>
+  const conds: DrillCond[] = []
+  for (const f of (cfg.filters as Array<{ field: string; op: string; value?: unknown }>) ?? []) {
+    const op = FILTER_OP_MAP[f.op]
+    if (!op) continue
+    let value: unknown = f.value
+    if (f.op === 'in' && typeof value === 'string') value = value.split(',').map((v) => v.trim())
+    conds.push({ path: [f.field], op, value })
+  }
+  for (const ef of entityFilters) {
+    if (ef.values?.length) conds.push({ path: [ef.field], op: '_in', value: ef.values })
+  }
+  const dateField = (cfg.date_field as string) || ((cfg.dimension as { bucket?: string; field?: string })?.bucket ? (cfg.dimension as { field?: string }).field : null)
+  const range = resolveRangeDates(dateRange)
+  if (range && dateField) {
+    conds.push({ path: [dateField], op: '_gte', value: range.start })
+    conds.push({ path: [dateField], op: '_lte', value: `${range.end}T23:59:59` })
+  }
+  const dim = cfg.dimension as { field?: string; bucket?: string } | undefined
+  if (dimRaw !== undefined && dim?.field) {
+    if (dim.bucket) {
+      // bucket key ("2026-03" / "2026-03-14") → date window on the dim field
+      const key = String(dimRaw)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+        conds.push({ path: [dim.field], op: '_gte', value: key })
+        conds.push({ path: [dim.field], op: '_lte', value: `${key}T23:59:59` })
+      } else if (/^\d{4}-\d{2}$/.test(key)) {
+        const [y, m] = key.split('-').map(Number)
+        const last = new Date(y, m, 0).getDate()
+        conds.push({ path: [dim.field], op: '_gte', value: `${key}-01` })
+        conds.push({ path: [dim.field], op: '_lte', value: `${key}-${String(last).padStart(2, '0')}T23:59:59` })
+      }
+    } else if (dimRaw === null) {
+      conds.push({ path: [dim.field], op: '_null', value: true })
+    } else {
+      conds.push({ path: [dim.field], op: '_eq', value: dimRaw })
+    }
+  }
+  return conds
+}
+
+/** Human summary of how a widget's number is computed — the metric dictionary. */
+function describeWidgetConfig(widget: ReportWidget): string {
+  const cfg = (widget.config ?? {}) as Record<string, unknown>
+  const parts: string[] = []
+  const q = cfg.query as { slug?: string } | undefined
+  if (widget.type === 'query' && q?.slug) {
+    parts.push(`Custom query: ${q.slug}`)
+  } else if (widget.collection) {
+    const metric = cfg.metric as { aggregate?: string; field?: string } | undefined
+    const agg = metric?.aggregate ?? 'count'
+    parts.push(
+      `${agg === 'count' ? 'Count of' : `${agg.toUpperCase()} of ${metric?.field ?? '?'} on`} ${widget.collection.replace(/_/g, ' ')}`
+    )
+    const dim = cfg.dimension as { field?: string; bucket?: string } | undefined
+    if (dim?.field) parts.push(`by ${dim.field}${dim.bucket ? ` (${dim.bucket})` : ''}`)
+    const filters = (cfg.filters as Array<{ field: string; op: string; value?: unknown }>) ?? []
+    for (const f of filters) parts.push(`${f.field} ${f.op} ${String(f.value ?? '')}`)
+    if (cfg.date_field) parts.push(`dated by ${cfg.date_field}`)
+    if (cfg.compare) parts.push(`compared to ${String(cfg.compare).replace(/_/g, ' ')}`)
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'No configuration details'
+}
+
+/** Client-side mirror of the server's per-widget metric (for snapshot deltas). */
+function clientWidgetMetric(data: ReportWidgetData | undefined): number | null {
+  if (!data) return null
+  if (data.value != null) return Number(data.value)
+  if (data.series) return data.series.reduce((a, b) => a + (Number(b.value) || 0), 0)
+  if (data.tiles?.length) return Number(data.tiles[0]?.value ?? 0)
+  if (data.row_count != null) return Number(data.row_count)
+  return null
+}
+
+/** The records behind a number — top 50, click-through to the record. */
+function WidgetRecordsModal({
+  collection,
+  conditions,
+  title,
+  onClose,
+  onOpen
+}: {
+  collection: string
+  conditions: DrillCond[]
+  title: string
+  onClose: () => void
+  onOpen: (t: { collection: string; itemId: string }) => void
+}) {
+  const client = useNivaroClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['nvr-report-drill', collection, JSON.stringify(conditions)],
+    queryFn: () =>
+      client.request<{ data: Array<Record<string, unknown>>; total: number }>(
+        get(`/items/${collection}`, { limit: 50, conditions: JSON.stringify(conditions) })
+      ),
+    staleTime: 30_000,
+    retry: false
+  })
+  const rows = data?.data ?? []
+  const label = (r: Record<string, unknown>) => {
+    for (const k of ['title', 'name', 'label', 'subject', 'workflow_id', 'project_id', 'description']) {
+      const v = r[k]
+      if (typeof v === 'string' && v.trim()) return v.slice(0, 90)
+    }
+    const firstStr = Object.entries(r).find(([k, v]) => k !== 'id' && typeof v === 'string' && v.trim())
+    return firstStr ? String(firstStr[1]).slice(0, 90) : `#${r.id}`
+  }
+  return (
+    <div
+      className='fixed inset-0 z-[126] flex items-center justify-center bg-black/30 p-6'
+      onClick={onClose}
+    >
+      <div
+        className='flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border'>
+          <p className='min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            {title}
+          </p>
+          <span className='text-[11.5px] tabular-nums text-slate-400'>
+            {data ? `${rows.length}${(data.total ?? 0) > rows.length ? ` of ${data.total.toLocaleString()}` : ''} records` : ''}
+          </span>
+          <button type='button' onClick={onClose} className='rounded p-1 text-slate-400 hover:text-slate-600'>
+            <X className='h-4 w-4' />
+          </button>
+        </div>
+        <div className='min-h-0 flex-1 overflow-y-auto p-1.5'>
+          {isLoading && <p className='px-2.5 py-3 text-[12px] text-slate-400'>Loading…</p>}
+          {!isLoading && rows.length === 0 && (
+            <p className='px-2.5 py-3 text-[12px] text-slate-400'>No records match.</p>
+          )}
+          {rows.map((r) => (
+            <button
+              key={String(r.id)}
+              type='button'
+              onClick={() => onOpen({ collection, itemId: String(r.id) })}
+              className='block w-full truncate rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-muted'
+            >
+              {label(r)}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Table-widget conditional formatting: value rules → cell/row tints. */
+type FormatRule = { field: string; op: 'gt' | 'gte' | 'lt' | 'lte' | 'eq'; value: number; color: string; scope?: 'cell' | 'row' }
+const RULE_TINTS: Record<string, { cell: string; row: string }> = {
+  red: { cell: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300', row: 'bg-red-50/70 dark:bg-red-500/10' },
+  amber: { cell: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300', row: 'bg-amber-50/70 dark:bg-amber-500/10' },
+  green: { cell: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300', row: 'bg-emerald-50/70 dark:bg-emerald-500/10' },
+  blue: { cell: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300', row: 'bg-sky-50/70 dark:bg-sky-500/10' }
+}
+function ruleMatches(rule: FormatRule, v: unknown): boolean {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return false
+  if (rule.op === 'gt') return n > rule.value
+  if (rule.op === 'gte') return n >= rule.value
+  if (rule.op === 'lt') return n < rule.value
+  if (rule.op === 'lte') return n <= rule.value
+  return n === rule.value
+}
+
 const WidgetCard = memo(function WidgetCard({
   reportId,
   widget,
@@ -1320,7 +1504,8 @@ const WidgetCard = memo(function WidgetCard({
   entityFilters,
   refetchInterval,
   filterBar = [],
-  onDrill
+  onDrill,
+  snapshot
 }: {
   reportId: string
   widget: ReportWidget
@@ -1329,8 +1514,13 @@ const WidgetCard = memo(function WidgetCard({
   refetchInterval?: number
   filterBar?: Array<{ field: string; label: string; options?: FilterOptionSource }>
   onDrill?: (t: { collection: string; itemId: string; title?: string }) => void
+  snapshot?: { name: string; value: number | null } | null
 }) {
   const client = useNivaroClient()
+  const [recordsFor, setRecordsFor] = useState<{ conditions: DrillCond[]; title: string } | null>(null)
+  const [explainOpen, setExplainOpen] = useState(false)
+  const [explainText, setExplainText] = useState<string | null>(null)
+  const [explainBusy, setExplainBusy] = useState(false)
   const { data, isLoading, error, refetch, isFetching } = useQuery<ReportWidgetData>({
     queryKey: ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
     queryFn: () =>
@@ -1342,7 +1532,10 @@ const WidgetCard = memo(function WidgetCard({
           })
         )
         .then((r) => (r as { data: ReportWidgetData }).data),
-    enabled: widget.type !== 'divider' && widget.type !== 'query',
+    // Query widgets resolve client-side in QueryWidgetBody — but when a
+    // snapshot comparison is active, the server-resolved value (the same
+    // number the snapshot stored) is fetched so the delta badge can render.
+    enabled: widget.type !== 'divider' && (widget.type !== 'query' || !!snapshot),
     staleTime: 60_000,
     refetchInterval,
     retry: false
@@ -1390,7 +1583,20 @@ const WidgetCard = memo(function WidgetCard({
     if (widget.type === 'kpi') {
       body = (
         <div className='flex items-baseline gap-2'>
-          <p className='text-[28px] font-semibold leading-none tracking-tight text-slate-900 dark:text-foreground'>
+          <p
+            className={cn(
+              'text-[28px] font-semibold leading-none tracking-tight text-slate-900 dark:text-foreground',
+              widget.collection && 'cursor-pointer decoration-dotted underline-offset-4 hover:underline'
+            )}
+            title={widget.collection ? 'See the records behind this number' : undefined}
+            onClick={() => {
+              if (!widget.collection) return
+              setRecordsFor({
+                conditions: widgetDrillConditions(widget, entityFilters, dateRange),
+                title: widget.title || widget.collection
+              })
+            }}
+          >
             {fmt(data.value, format)}
           </p>
           <Delta pct={data.change_pct} />
@@ -1434,6 +1640,23 @@ const WidgetCard = memo(function WidgetCard({
             : []
       const cols = colDefs.map((c) => c.field)
       const defFor = (f: string) => colDefs.find((c) => c.field === f)
+      const rules = ((widget.config as Record<string, unknown> | null)?.format_rules ?? []) as FormatRule[]
+      const rowTint = (r: Record<string, unknown>) => {
+        for (const rule of rules) {
+          if ((rule.scope ?? 'cell') === 'row' && ruleMatches(rule, r[rule.field])) {
+            return RULE_TINTS[rule.color]?.row ?? null
+          }
+        }
+        return null
+      }
+      const cellTint = (r: Record<string, unknown>, c: string) => {
+        for (const rule of rules) {
+          if ((rule.scope ?? 'cell') === 'cell' && rule.field === c && ruleMatches(rule, r[c])) {
+            return RULE_TINTS[rule.color]?.cell ?? null
+          }
+        }
+        return null
+      }
       body =
         rows.length === 0 ? (
           <p className='px-1 text-[12px] text-slate-400'>No rows.</p>
@@ -1454,14 +1677,25 @@ const WidgetCard = memo(function WidgetCard({
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={String(r.id)}>
+                  <tr
+                    key={String(r.id)}
+                    className={cn(
+                      rowTint(r),
+                      widget.collection && r.id != null && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60'
+                    )}
+                    onClick={() => {
+                      if (widget.collection && r.id != null)
+                        onDrill?.({ collection: widget.collection, itemId: String(r.id) })
+                    }}
+                  >
                     {cols.map((c) => (
                       <td
                         key={c}
                         className={cn(
                           'max-w-[180px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-700 dark:border-border/40 dark:text-slate-300',
                           (typeof r[c] === 'number' || NUMERIC_FORMATS.has(defFor(c)?.format ?? '')) &&
-                            'text-right tabular-nums'
+                            'text-right tabular-nums',
+                          cellTint(r, c)
                         )}
                       >
                         {defFor(c)?.format ? fmtCell(r[c], defFor(c)?.format, defFor(c)?.decimals) : String(r[c] ?? '')}
@@ -1491,12 +1725,21 @@ const WidgetCard = memo(function WidgetCard({
                     outerRadius='88%'
                     paddingAngle={2}
                     strokeWidth={0}
+                    className={widget.collection ? 'cursor-pointer' : undefined}
+                    onClick={(entry: { payload?: { dim?: string; raw?: unknown } }) => {
+                      if (!widget.collection) return
+                      const seg = entry?.payload
+                      setRecordsFor({
+                        conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
+                        title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`
+                      })
+                    }}
                   >
                     {series.map((s, i) => (
                       <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 </PieChart>
               </ResponsiveContainer>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -1534,7 +1777,7 @@ const WidgetCard = memo(function WidgetCard({
                   {...catAxisProps(series.length)}
                 />
                 <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 {widget.config?.compare && (
                   <Line
                     type='monotone'
@@ -1589,11 +1832,24 @@ const WidgetCard = memo(function WidgetCard({
                     <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
                   </>
                 )}
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 {widget.config?.compare && (
                   <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
                 )}
-                <Bar dataKey='value' fill='#00ceff' radius={[3, 3, 0, 0]} />
+                <Bar
+                  dataKey='value'
+                  fill='#00ceff'
+                  radius={[3, 3, 0, 0]}
+                  className={widget.collection ? 'cursor-pointer' : undefined}
+                  onClick={(entry: { payload?: { dim?: string; raw?: unknown } } | undefined) => {
+                    if (!widget.collection) return
+                    const seg = entry?.payload
+                    setRecordsFor({
+                      conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
+                      title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`
+                    })
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1611,7 +1867,74 @@ const WidgetCard = memo(function WidgetCard({
         <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
           {widget.title}
         </p>
+        <span
+          data-tip={describeWidgetConfig(widget)}
+          className='shrink-0 cursor-help text-slate-300 hover:text-slate-500'
+        >
+          <Info className='h-3 w-3' />
+        </span>
         <span className='ml-auto flex items-center gap-0.5'>
+          {(
+            <button
+              type='button'
+              title='Explain this number'
+              className='rounded p-0.5 text-slate-300 hover:text-[#00a5cc]'
+              onClick={() => {
+                if (explainOpen) {
+                  setExplainOpen(false)
+                  return
+                }
+                setExplainOpen(true)
+                if (explainText || explainBusy) return
+                setExplainBusy(true)
+                // Query widgets resolve their data inside QueryWidgetBody — fetch
+                // the server-resolved equivalent so the AI has real numbers.
+                const dataP: Promise<ReportWidgetData | undefined> = data
+                  ? Promise.resolve(data)
+                  : client
+                      .request(
+                        readReportWidgetData(reportId, widget.id, {
+                          date_range: dateRange,
+                          entity_filters: entityFilters
+                        })
+                      )
+                      .then((r) => (r as { data: ReportWidgetData }).data)
+                      .catch(() => undefined)
+                dataP
+                  .then((d) => {
+                    const context = {
+                      widget: widget.title,
+                      how_computed: describeWidgetConfig(widget),
+                      value: d?.value ?? null,
+                      previous_value: d?.prev_value ?? null,
+                      change_pct: d?.change_pct ?? null,
+                      row_count: d?.row_count ?? null,
+                      series: (d?.series ?? []).slice(0, 15),
+                      rows: (d?.rows ?? []).slice(0, 10),
+                      tiles: d?.tiles ?? null
+                    }
+                    return client.request<{ data?: { text?: string }; text?: string }>(
+                      post('/ai/brief', {
+                        context: JSON.stringify(context),
+                        instructions:
+                          'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
+                      })
+                    )
+                  })
+                  .then((r) => {
+                    const t =
+                      (r as { data?: { brief?: string; text?: string } }).data?.brief ??
+                      (r as { data?: { text?: string } }).data?.text ??
+                      null
+                    setExplainText(t || 'No explanation available.')
+                  })
+                  .catch(() => setExplainText('AI is not configured or unavailable.'))
+                  .finally(() => setExplainBusy(false))
+              }}
+            >
+              <Sparkles className='h-3 w-3' />
+            </button>
+          )}
           <AlertBell reportId={reportId} widget={widget} filterBar={filterBar} />
           <button
             type='button'
@@ -1623,7 +1946,47 @@ const WidgetCard = memo(function WidgetCard({
           </button>
         </span>
       </div>
+      {snapshot && (
+        (() => {
+          const cur = clientWidgetMetric(data)
+          const prev = snapshot.value
+          if (cur == null || prev == null) return null
+          const delta = prev === 0 ? null : ((cur - prev) / Math.abs(prev)) * 100
+          return (
+            <p className='mb-1 flex items-center gap-1 text-[10.5px] text-slate-400'>
+              <Camera className='h-2.5 w-2.5' />
+              vs {snapshot.name}: {prev.toLocaleString()} →{' '}
+              <span
+                className={cn(
+                  'font-semibold',
+                  delta != null && delta > 0 && 'text-emerald-600 dark:text-emerald-400',
+                  delta != null && delta < 0 && 'text-red-500'
+                )}
+              >
+                {delta == null ? '—' : `${delta > 0 ? '+' : ''}${delta.toFixed(1)}%`}
+              </span>
+            </p>
+          )
+        })()
+      )}
+      {explainOpen && (
+        <div className='mb-1.5 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+          {explainBusy ? 'Thinking…' : explainText}
+        </div>
+      )}
       <div className='flex min-h-0 flex-1 flex-col'>{body}</div>
+      {recordsFor && (
+        <WidgetRecordsModal
+          collection={widget.collection ?? ''}
+          conditions={recordsFor.conditions}
+          title={recordsFor.title}
+          onClose={() => setRecordsFor(null)}
+          onOpen={(t) => {
+            setRecordsFor(null)
+            onDrill?.(t)
+          }}
+        />
+      )}
     </div>
   )
 })
@@ -1715,6 +2078,35 @@ export function ReportView({
   })
   const [presetName, setPresetName] = useState('')
   const [savingPreset, setSavingPreset] = useState(false)
+  // Point-in-time snapshots — pick one and every widget shows a delta badge.
+  const [snapId, setSnapId] = useState<number | null>(null)
+  const { data: snapshots = [] } = useQuery({
+    queryKey: ['nvr-report-snaps', reportId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string; taken_at: string }> }>(
+          get(`/report-studio/${reportId}/snapshots`)
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 60_000,
+    retry: false
+  })
+  const { data: snapDetail } = useQuery({
+    queryKey: ['nvr-report-snap', reportId, snapId],
+    queryFn: () =>
+      client
+        .request<{ data: { name: string; data: Record<string, { value: number | null }> } }>(
+          get(`/report-studio/${reportId}/snapshots/${snapId}`)
+        )
+        .then((r) => r.data),
+    enabled: snapId != null,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const takeSnapshot = useMutation({
+    mutationFn: () => client.request(post(`/report-studio/${reportId}/snapshots`, {})),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-report-snaps', reportId] })
+  })
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
@@ -1960,6 +2352,33 @@ export function ReportView({
                 <Plus className='h-2.5 w-2.5' /> Save preset
               </button>
             )}
+            <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
+            <button
+              type='button'
+              title='Save the current numbers as a snapshot to compare against later'
+              disabled={takeSnapshot.isPending}
+              onClick={() => takeSnapshot.mutate()}
+              className='inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-slate-200 px-2 text-[11px] text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 dark:border-border'
+            >
+              <Camera className='h-2.5 w-2.5' /> {takeSnapshot.isPending ? 'Saving…' : 'Snapshot'}
+            </button>
+            {snapshots.map((sn) => (
+              <button
+                key={sn.id}
+                type='button'
+                title={`Compare against ${sn.name} (${new Date(sn.taken_at).toLocaleDateString()})`}
+                onClick={() => setSnapId((cur) => (cur === sn.id ? null : sn.id))}
+                className={cn(
+                  'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
+                  snapId === sn.id
+                    ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-[#007a99] dark:text-nvr-cyan'
+                    : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                )}
+              >
+                <Camera className='h-2.5 w-2.5' /> {sn.name}
+                {snapId === sn.id && <X className='h-2.5 w-2.5' />}
+              </button>
+            ))}
 
             <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
             <span className='inline-flex h-7 min-w-[240px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-card sm:max-w-[420px]'>
@@ -2008,10 +2427,16 @@ export function ReportView({
                 refetchInterval={refetchInterval}
                 filterBar={filterBar}
                 onDrill={openDrill}
+                snapshot={
+                  snapDetail && snapDetail.data[w.id] !== undefined
+                    ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
+                    : null
+                }
               />
             ))}
         </div>
       )}
+      <TipLayer />
       {!outerDrill && drillStack?.length ? (
         <RecordDrilldownSheet
           collection={drillStack[0].collection}

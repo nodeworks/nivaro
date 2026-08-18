@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { logActivity } from './activity.js'
+import { canSeeRoom } from './chat.js'
 import { sendRawMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
 import {
@@ -225,6 +227,7 @@ export async function runReportSubscriptions(
     user: string
     delivery_email: boolean
     delivery_inapp: boolean
+    deliver_room: string | null
   }>
   let sent = 0
   for (const sub of subs) {
@@ -274,6 +277,16 @@ export async function runReportSubscriptions(
           channels: { inapp: true, email: false }
         })
       }
+      if (sub.deliver_room) {
+        // Post a compact summary into the chosen chat room AS the subscriber
+        // — visibility is re-checked at delivery time, so a room they can no
+        // longer see just skips.
+        try {
+          await deliverReportToRoom(app, user, sub.deliver_room, report.name, report.id, resolved)
+        } catch (err) {
+          app.log.warn({ err, sub: sub.id }, '[report-studio] chat delivery failed')
+        }
+      }
       await db('nivaro_report_subscriptions')
         .where({ id: sub.id })
         .update({ last_sent_at: new Date() })
@@ -283,4 +296,56 @@ export async function runReportSubscriptions(
     }
   }
   return { sent }
+}
+
+/** Compact per-widget summary lines posted into a chat room on cadence. */
+async function deliverReportToRoom(
+  app: FastifyInstance,
+  user: { id: string; first_name?: string | null; last_name?: string | null; email?: string | null },
+  room: string,
+  reportName: string,
+  reportId: string,
+  resolved: Array<{ widget: WidgetRow; data: WidgetData | { error: string } }>
+): Promise<void> {
+  const visible = await canSeeRoom(
+    { id: user.id, role: null, admin_access: false } as never,
+    room
+  ).catch(() => false)
+  if (!visible) return
+  const lines: string[] = [`\u{1F4CA} ${reportName}`]
+  for (const r of resolved.slice(0, 8)) {
+    if (r.widget.type === 'divider') continue
+    if ('error' in r.data) continue
+    const v = deriveAlertMetric('value', r.data)
+    const label = r.widget.title || r.widget.type
+    lines.push(`\u2022 ${label}: ${Number.isFinite(v) ? v.toLocaleString() : '\u2014'}`)
+  }
+  lines.push(`/reports/${reportId}`)
+  const senderName =
+    [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Report digest'
+  const [inserted] = await db('chat_messages')
+    .insert({
+      room,
+      message: lines.join('\n').slice(0, 4000),
+      sender: user.id,
+      sender_name: senderName,
+      date_created: new Date()
+    })
+    .returning('id')
+  const id =
+    typeof inserted === 'object' && inserted !== null
+      ? (inserted as { id: number }).id
+      : (inserted as number)
+  void logActivity({
+    action: 'create',
+    collection: 'chat_messages',
+    item: String(id),
+    user: user.id,
+    comment: `report digest \u2192 ${room}`
+  })
+  try {
+    app.io?.to(`chat:${room}`).emit('chat:message', { room })
+  } catch {
+    /* realtime nudge is best-effort */
+  }
 }

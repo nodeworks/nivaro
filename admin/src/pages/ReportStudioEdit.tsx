@@ -11,6 +11,7 @@ import {
   Eye,
   Globe,
   GripVertical,
+  History,
   Loader2,
   Mail,
   Pencil,
@@ -760,7 +761,7 @@ function WidgetBody({
                       <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                 </PieChart>
               </ResponsiveContainer>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -797,7 +798,7 @@ function WidgetBody({
                 {...catAxisProps(series.length)}
               />
               <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
-              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
               {widget.config?.compare && (
                 <Line
                   type='monotone'
@@ -844,7 +845,7 @@ function WidgetBody({
                   <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
                 </>
               )}
-              <Tooltip contentStyle={{ fontSize: 12 }} />
+              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
               {widget.config?.compare && (
                 <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
               )}
@@ -1119,6 +1120,16 @@ function ConfigSheet({
                       onChange={(e) => setCfg({ limit: Number(e.target.value) || 10 })}
                       className='h-7 w-16 text-[12px]'
                     />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11.5px]'>Highlight rules (JSON)</Label>
+                    <FormatRulesEditor
+                      value={(cfg as Record<string, unknown>).format_rules}
+                      onChange={(rules) => setCfg({ format_rules: rules } as never)}
+                    />
+                    <p className='text-[10.5px] text-slate-400'>
+                      {`[{"field":"amount","op":"gt","value":50000,"color":"red","scope":"cell"}] — ops gt/gte/lt/lte/eq, colors red/amber/green/blue, scope cell or row.`}
+                    </p>
                   </div>
                 </div>
               )}
@@ -2138,13 +2149,33 @@ function SubscribePopover({ reportId }: { reportId: string }) {
     queryFn: () =>
       api
         .get<{
-          data: { cadence: string; delivery_email?: boolean; delivery_inapp?: boolean } | null
+          data: {
+            cadence: string
+            delivery_email?: boolean
+            delivery_inapp?: boolean
+            deliver_room?: string | null
+          } | null
         }>(`/report-studio/${reportId}/subscription`)
         .then((r) => r.data.data)
   })
+  // Rooms the subscriber can post the digest into (their own chat sidebar).
+  const { data: rooms = [] } = useQuery({
+    queryKey: ['rs-sub-rooms'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ room: string; label: string; kind: string }> }>('/chat/rooms')
+        .then((r) => (r.data.data ?? []).filter((x) => x.kind !== 'entity'))
+        .catch(() => []),
+    staleTime: 60_000
+  })
   const save = useMutation({
     mutationFn: (
-      body: { cadence: string; delivery_email?: boolean; delivery_inapp?: boolean } | null
+      body: {
+        cadence: string
+        delivery_email?: boolean
+        delivery_inapp?: boolean
+        deliver_room?: string | null
+      } | null
     ) => api.put(`/report-studio/${reportId}/subscription`, body),
     onSuccess: (_r, body) => {
       toast.success(body ? `Subscribed — ${body.cadence} email digest` : 'Unsubscribed')
@@ -2207,6 +2238,28 @@ function SubscribePopover({ reportId }: { reportId: string }) {
                 In-app
               </label>
             </div>
+            <div className='mt-2 border-t border-slate-100 pt-2 dark:border-border'>
+              <p className='text-[11px] text-slate-500'>Also post to a chat room</p>
+              <select
+                value={sub.deliver_room ?? ''}
+                onChange={(e) =>
+                  save.mutate({
+                    cadence: sub.cadence,
+                    delivery_email: sub.delivery_email !== false,
+                    delivery_inapp: sub.delivery_inapp !== false,
+                    deliver_room: e.target.value || null
+                  })
+                }
+                className='mt-1 h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[11.5px] dark:border-border dark:bg-card dark:text-slate-200'
+              >
+                <option value=''>No room delivery</option>
+                {rooms.map((r) => (
+                  <option key={r.room} value={r.room}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <Button
               size='sm'
               variant='ghost'
@@ -2217,6 +2270,151 @@ function SubscribePopover({ reportId }: { reportId: string }) {
             </Button>
           </>
         )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ── Table highlight-rules editor (commit-on-valid JSON) ───────────────────────
+
+function FormatRulesEditor({
+  value,
+  onChange
+}: {
+  value: unknown
+  onChange: (rules: unknown[]) => void
+}) {
+  const [text, setText] = useState(() => (value ? JSON.stringify(value, null, 0) : ''))
+  const [invalid, setInvalid] = useState(false)
+  return (
+    <textarea
+      value={text}
+      onChange={(e) => {
+        const t = e.target.value
+        setText(t)
+        if (!t.trim()) {
+          setInvalid(false)
+          onChange([])
+          return
+        }
+        try {
+          const parsed = JSON.parse(t)
+          if (Array.isArray(parsed)) {
+            setInvalid(false)
+            onChange(parsed)
+          } else setInvalid(true)
+        } catch {
+          setInvalid(true)
+        }
+      }}
+      rows={2}
+      spellCheck={false}
+      className={cn(
+        'w-full rounded-md border bg-white px-2 py-1 font-mono text-[11px] dark:bg-card dark:text-slate-200',
+        invalid ? 'border-red-400' : 'border-slate-200 dark:border-border'
+      )}
+    />
+  )
+}
+
+// ── Version history popover ───────────────────────────────────────────────────
+
+function VersionsPopover({ reportId, onRestored }: { reportId: string; onRestored: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [confirmId, setConfirmId] = useState<number | null>(null)
+  const { data: versions = [] } = useQuery({
+    queryKey: ['rs-versions', reportId],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            id: number
+            version: number
+            note: string | null
+            created_at: string
+            created_by_name: string | null
+          }>
+        }>(`/report-studio/${reportId}/versions`)
+        .then((r) => r.data.data ?? []),
+    enabled: open,
+    staleTime: 15_000
+  })
+  const restore = useMutation({
+    mutationFn: (versionId: number) =>
+      api.post(`/report-studio/${reportId}/versions/${versionId}/restore`),
+    onSuccess: () => {
+      toast.success('Version restored')
+      setConfirmId(null)
+      setOpen(false)
+      onRestored()
+    },
+    onError: () => toast.error('Restore failed')
+  })
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size='sm' variant='outline' className='gap-1.5'>
+          <History className='h-3.5 w-3.5' /> Versions
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className='w-80 p-2' align='end'>
+        <p className='px-1 pb-1 text-[12px] font-medium text-slate-700 dark:text-foreground'>
+          Version history
+        </p>
+        <p className='px-1 pb-1.5 text-[11px] text-slate-400'>
+          A snapshot is captured before every save — restore rolls the whole
+          report (widgets included) back.
+        </p>
+        <div className='max-h-72 space-y-1 overflow-y-auto'>
+          {versions.length === 0 && (
+            <p className='px-1 py-2 text-[11.5px] text-slate-400'>No versions yet.</p>
+          )}
+          {versions.map((v) => (
+            <div
+              key={v.id}
+              className='flex items-center gap-2 rounded-md border border-slate-100 px-2 py-1.5 dark:border-border/60'
+            >
+              <div className='min-w-0 flex-1'>
+                <p className='text-[11.5px] font-medium text-slate-700 dark:text-slate-200'>
+                  v{v.version} · {v.note ?? 'snapshot'}
+                </p>
+                <p className='text-[10.5px] text-slate-400'>
+                  {new Date(v.created_at).toLocaleString()}
+                  {v.created_by_name ? ` · ${v.created_by_name}` : ''}
+                </p>
+              </div>
+              {confirmId === v.id ? (
+                <span className='flex gap-1'>
+                  <Button
+                    size='sm'
+                    className='h-6 px-2 text-[11px]'
+                    disabled={restore.isPending}
+                    onClick={() => restore.mutate(v.id)}
+                  >
+                    Confirm
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-6 px-1.5 text-[11px]'
+                    onClick={() => setConfirmId(null)}
+                  >
+                    ✕
+                  </Button>
+                </span>
+              ) : (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-6 px-2 text-[11px]'
+                  onClick={() => setConfirmId(v.id)}
+                >
+                  Restore
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
       </PopoverContent>
     </Popover>
   )
@@ -2854,6 +3052,15 @@ export function ReportStudioEditPage() {
 
           <div className='ml-auto flex items-center gap-1.5'>
             {report.editable && <AiBuildPopover reportId={report.id} onWidgets={setWidgets} />}
+            {report.editable && (
+              <VersionsPopover
+                reportId={report.id}
+                onRestored={() => {
+                  void queryClient.invalidateQueries()
+                  window.location.reload()
+                }}
+              />
+            )}
             <SubscribePopover reportId={report.id} />
             <Button size='sm' variant='outline' className='gap-1.5' onClick={() => setAlertsFor(null)}>
               <Bell className='h-3.5 w-3.5' /> Alerts

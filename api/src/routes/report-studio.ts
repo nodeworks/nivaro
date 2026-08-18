@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { logActivity } from '../services/activity.js'
+import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { restoreReportVersion, snapshotReportVersion } from '../services/report-versions.js'
+import { deriveAlertMetric } from '../services/report-studio-jobs.js'
 import { can } from '../services/permissions.js'
 import {
   type DateRange,
@@ -248,6 +250,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const widgets = (await db('nivaro_report_widgets')
       .where({ report: report.id })
       .orderBy('sort')) as WidgetRow[]
+    // Usage tracking: one row per viewer per report per hour — feeds
+    // GET /report-studio/usage ("nobody has opened this in 90 days").
+    void logActivityThrottled(app.redis, `report-view:${report.id}:${req.user!.id}`, 3600, {
+      action: 'report-view',
+      collection: 'nivaro_report_defs',
+      item: report.id,
+      user: req.user!.id
+    })
     return reply.send({ data: { ...formatReport(report, widgets), editable: canEditReport(report, req) } })
   })
 
@@ -265,6 +275,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
     if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+    await snapshotReportVersion(report.id, 'before settings change', req.user!.id)
     const b = req.body ?? {}
     const patch: Record<string, unknown> = { updated_at: new Date() }
     if (b.name !== undefined) patch.name = String(b.name).trim().slice(0, 255)
@@ -330,6 +341,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
     if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+    await snapshotReportVersion(report.id, 'before widgets save', req.user!.id)
     const incoming = Array.isArray(req.body?.widgets) ? req.body.widgets : []
     if (incoming.length > 40) return reply.code(400).send({ error: 'Max 40 widgets per report' })
 
@@ -492,7 +504,12 @@ export async function reportStudioRoutes(app: FastifyInstance) {
 
   app.put<{
     Params: { id: string }
-    Body: { cadence?: string; delivery_email?: boolean; delivery_inapp?: boolean } | null
+    Body: {
+      cadence?: string
+      delivery_email?: boolean
+      delivery_inapp?: boolean
+      deliver_room?: string | null
+    } | null
   }>('/:id/subscription', { preHandler: requireAuth }, async (req, reply) => {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
@@ -514,10 +531,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_report_subscriptions')
       .where({ report: report.id, user: req.user!.id })
       .first()
+    const bodyRoom = (req.body as { deliver_room?: string | null }).deliver_room
     const values = {
       cadence,
       delivery_email: req.body.delivery_email !== false,
-      delivery_inapp: req.body.delivery_inapp !== false
+      delivery_inapp: req.body.delivery_inapp !== false,
+      ...(bodyRoom !== undefined
+        ? { deliver_room: bodyRoom ? String(bodyRoom).slice(0, 200) : null }
+        : {})
     }
     if (existing) {
       await db('nivaro_report_subscriptions').where({ id: existing.id }).update(values)
@@ -1133,4 +1154,197 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available �
       }
     }
   )
+
+  // ── Config versions (restore after a bad edit / AI build) ──────────────────
+
+  app.get<{ Params: { id: string } }>(
+    '/:id/versions',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const rows = await db('nivaro_report_versions as v')
+        .leftJoin('nivaro_users as u', 'v.created_by', 'u.id')
+        .where({ 'v.report': report.id })
+        .orderBy('v.version', 'desc')
+        .limit(30)
+        .select('v.id', 'v.version', 'v.note', 'v.created_at', 'u.first_name', 'u.last_name')
+      return reply.send({
+        data: rows.map((r) => ({
+          id: r.id,
+          version: r.version,
+          note: r.note,
+          created_at: r.created_at,
+          created_by_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || null
+        }))
+      })
+    }
+  )
+
+  app.post<{ Params: { id: string; versionId: string } }>(
+    '/:id/versions/:versionId/restore',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const result = await restoreReportVersion(report.id, Number(req.params.versionId), req.user!.id)
+      if ('error' in result) return reply.code(400).send({ error: result.error })
+      await logActivity({
+        action: 'report-version-restore',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req,
+        comment: `version ${req.params.versionId}`
+      })
+      return reply.send({ data: result })
+    }
+  )
+
+  // ── Point-in-time snapshots ("vs Aug 1") ───────────────────────────────────
+  // Stores one derived metric per widget (deriveAlertMetric — total by
+  // construction), resolved AS THE CALLER with the report's own date range.
+
+  app.post<{ Params: { id: string }; Body: { name?: string } }>(
+    '/:id/snapshots',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .orderBy('sort')) as WidgetRow[]
+      const dateRange =
+        parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ?? null
+      const data: Record<string, { value: number | null }> = {}
+      for (const w of widgets) {
+        if (w.type === 'divider') continue
+        try {
+          const resolved = await resolveWidgetData(
+            req.user!,
+            { type: w.type, collection: w.collection, config: parseJson(w.config) },
+            dateRange
+          )
+          data[w.id] = { value: deriveAlertMetric('value', resolved) }
+        } catch {
+          data[w.id] = { value: null }
+        }
+      }
+      const name =
+        String(req.body?.name ?? '').trim().slice(0, 120) ||
+        new Date().toISOString().slice(0, 10)
+      const [inserted] = await db('nivaro_report_snapshots')
+        .insert({
+          report: report.id,
+          name,
+          data: JSON.stringify(data),
+          taken_at: new Date(),
+          created_by: req.user!.id
+        })
+        .returning('id')
+      await logActivity({
+        action: 'report-snapshot',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req,
+        comment: name
+      })
+      const id =
+        typeof inserted === 'object' && inserted !== null
+          ? (inserted as { id: number }).id
+          : (inserted as number)
+      return reply.code(201).send({ data: { id, name } })
+    }
+  )
+
+  app.get<{ Params: { id: string } }>(
+    '/:id/snapshots',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const rows = await db('nivaro_report_snapshots')
+        .where({ report: report.id })
+        .orderBy('id', 'desc')
+        .limit(30)
+        .select('id', 'name', 'taken_at')
+      return reply.send({ data: rows })
+    }
+  )
+
+  app.get<{ Params: { id: string; snapId: string } }>(
+    '/:id/snapshots/:snapId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const row = await db('nivaro_report_snapshots')
+        .where({ report: report.id, id: Number(req.params.snapId) })
+        .first()
+      if (!row) return reply.code(404).send({ error: 'Snapshot not found' })
+      return reply.send({
+        data: {
+          id: row.id,
+          name: row.name,
+          taken_at: row.taken_at,
+          data: parseJson(row.data) ?? {}
+        }
+      })
+    }
+  )
+
+  app.delete<{ Params: { id: string; snapId: string } }>(
+    '/:id/snapshots/:snapId',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const report = await loadReport(req.params.id)
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      await db('nivaro_report_snapshots')
+        .where({ report: report.id, id: Number(req.params.snapId) })
+        .del()
+      return reply.send({ data: { deleted: true } })
+    }
+  )
+
+  // ── Usage — which reports are actually read (admin cleanup view) ───────────
+
+  app.get('/usage', { preHandler: requireAuth }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const since30 = new Date(Date.now() - 30 * 86_400_000)
+    const rows = (await db('nivaro_activity')
+      .where({ action: 'report-view', collection: 'nivaro_report_defs' })
+      .groupBy('item')
+      .select('item')
+      .max({ last_viewed: 'timestamp' })) as Array<{ item: string; last_viewed: Date }>
+    const recent = (await db('nivaro_activity')
+      .where({ action: 'report-view', collection: 'nivaro_report_defs' })
+      .where('timestamp', '>', since30)
+      .groupBy('item')
+      .select('item')
+      .count({ views_30d: '*' })
+      .countDistinct({ viewers_30d: 'user' })) as Array<{
+      item: string
+      views_30d: number | string
+      viewers_30d: number | string
+    }>
+    const recentMap = new Map(recent.map((r) => [String(r.item), r]))
+    const usage: Record<string, { last_viewed: string; views_30d: number; viewers_30d: number }> =
+      {}
+    for (const r of rows) {
+      const rec = recentMap.get(String(r.item))
+      usage[String(r.item)] = {
+        last_viewed: new Date(r.last_viewed).toISOString(),
+        views_30d: Number(rec?.views_30d ?? 0),
+        viewers_30d: Number(rec?.viewers_30d ?? 0)
+      }
+    }
+    return reply.send({ data: usage })
+  })
 }
