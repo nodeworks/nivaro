@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-18T01:05:04.243Z",
+  "generated_at": "2026-08-18T01:33:33.563Z",
   "releases": [
+    {
+      "version": "0.1.66",
+      "tag": "v0.1.66",
+      "date": "2026-08-17T21:33:31-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "reporting batch 3 — 14 features + automatic drill for query widgets",
+              "hash": "ebb095c3"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.65",
       "tag": "v0.1.65",
-      "date": "2026-08-17T21:05:01-04:00",
+      "date": "2026-08-17T21:05:04-04:00",
       "sections": [
         {
           "label": "Added",
