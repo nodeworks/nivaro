@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApiFetchConfig, useItemNavigation } from '../context'
 import { UserAvatar } from './UserAvatar'
+import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '../lib/notification-target'
 
 /**
  * My Work — the personal actionable inbox: records whose current pipeline
@@ -102,7 +103,15 @@ function Tile({ label, value, tone }: { label: string; value: number; tone?: str
   )
 }
 
-export function MyWorkView() {
+export function MyWorkView({
+  notificationRoutes,
+  onOpenPath
+}: {
+  /** Host page map so notification clicks land on real pages (reports, queues,
+   *  alerts…); without it only record targets are clickable. */
+  notificationRoutes?: NotificationRouteMap
+  onOpenPath?: (path: string) => void
+} = {}) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const { open: openItem } = useItemNavigation()
   const qc = useQueryClient()
@@ -143,7 +152,33 @@ export function MyWorkView() {
   })
 
   const open = (collection: string | null, item: string | null) => {
-    if (collection && item) openItem({ collection, itemId: item })
+    const routes: NotificationRouteMap = {
+      record: (c, i) => {
+        // Record targets always work — openItem is the host's record router.
+        openItem({ collection: c, itemId: i })
+        return null
+      },
+      ...notificationRoutes
+    }
+    const target = resolveNotificationTarget(collection, item, {
+      ...routes,
+      record: (c, i) => notificationRoutes?.record?.(c, i) ?? null
+    })
+    if (target) {
+      runNotificationTarget(target, (path) => onOpenPath?.(path))
+      return
+    }
+    // No resolvable page-level target — fall back to the record route.
+    if (collection && item && !/^nivaro_/i.test(collection) && collection !== '__chat__') {
+      openItem({ collection, itemId: item })
+    }
+  }
+  const notificationTargetFor = (collection: string | null, item: string | null) => {
+    if (collection && item && !/^nivaro_/i.test(collection) && collection !== '__chat__') return true
+    return !!resolveNotificationTarget(collection, item, {
+      record: () => null,
+      ...notificationRoutes
+    })
   }
 
   if (isLoading || !data) {
@@ -294,7 +329,11 @@ export function MyWorkView() {
                   <button
                     type='button'
                     onClick={() => open(n.collection, n.item)}
-                    className='min-w-0 flex-1 text-left'
+                    className={
+                      notificationTargetFor(n.collection, n.item)
+                        ? 'min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
+                        : 'min-w-0 flex-1 cursor-default text-left'
+                    }
                   >
                     <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
                     {n.message && (

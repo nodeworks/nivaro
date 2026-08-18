@@ -36,8 +36,9 @@ async function notifyAssignment(
     message: `You have been assigned issue #${issue.id} (${issue.severity}): ${issue.title}`,
     status: 'inbox',
     timestamp: new Date(),
-    collection: issue.collection,
-    item: issue.item ?? String(issue.id)
+    // An issue without a source record still has a home — the issue log.
+    collection: issue.collection ?? 'nivaro_issues',
+    item: issue.collection ? (issue.item ?? String(issue.id)) : String(issue.id)
   }
   try {
     await db('nivaro_notifications').insert(notification)

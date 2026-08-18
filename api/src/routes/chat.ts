@@ -204,7 +204,11 @@ export async function chatRoutes(app: FastifyInstance) {
       await notifyUser(app, String(target), {
         subject: `${senderName ?? 'Someone'} mentioned you in chat`,
         message: message.slice(0, 300),
-        sender: req.user?.id ?? null
+        sender: req.user?.id ?? null,
+        // Pseudo-collection: clients resolve '__chat__' + room into opening
+        // the chat room rather than a record route.
+        collection: '__chat__',
+        item: room
       })
     }
 

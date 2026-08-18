@@ -30,7 +30,19 @@ export function MyWorkPage() {
               itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
             }}
           >
-            <MyWorkView />
+            <MyWorkView
+              notificationRoutes={{
+                record: (c, i) => `/collections/${c}/${i}`,
+                list: (c) => `/collections/${c}`,
+                report: (id) => `/report-studio/${id}`,
+                queue: (id) => `/queues/${id}`,
+                dashboard: (id) => `/dashboards/${id}`,
+                alerts: () => '/alert-manager',
+                imports: () => '/imports',
+                issues: () => '/issues'
+              }}
+              onOpenPath={(p) => navigate(p)}
+            />
           </NavigationContext.Provider>
         </NivaroProvider>
       </div>

@@ -179,3 +179,4 @@ export { ApiUpdateBanner, TipLayer, startApiVersionWatch, useApiUpdate, getApiUp
 export type { ApiVersionInfo } from '@nivaro/shared'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from '@nivaro/shared'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from '@nivaro/shared'
+export { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap, type NotificationTarget } from '../../shared/src/lib/notification-target'

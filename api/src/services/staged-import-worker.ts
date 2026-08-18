@@ -124,7 +124,13 @@ async function notifyCreator(
   const recipient = row.created_by ? String(row.created_by) : null
   if (!recipient) return
   try {
-    await notifyUser(app, recipient, { subject, message })
+    await notifyUser(app, recipient, {
+      subject,
+      message,
+      // Clients resolve nivaro_import_queue into the imports console.
+      collection: 'nivaro_import_queue',
+      item: null
+    })
   } catch {
     // Never let a notification failure mark a finished import as broken.
   }

@@ -390,7 +390,7 @@ export async function buildServer() {
       const due = (await db('nivaro_reminders')
         .where('sent', false)
         .where('remind_at', '<=', new Date())
-        .limit(50)) as Array<{ id: number; user: string; note: string }>
+        .limit(50)) as Array<{ id: number; user: string; note: string; room: string | null }>
       if (due.length === 0) return
       const { notifyUser } = await import('./services/notification-channels.js')
       for (const r of due) {
@@ -398,7 +398,9 @@ export async function buildServer() {
           await notifyUser(app, String(r.user), {
             subject: 'Reminder',
             message: r.note,
-            sender: null
+            sender: null,
+            collection: r.room ? '__chat__' : null,
+            item: r.room ? String(r.room) : null
           })
           await db('nivaro_reminders').where('id', r.id).update({ sent: true })
         } catch (err) {

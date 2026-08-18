@@ -297,8 +297,8 @@ export async function runReportSubscriptions(
         await notifyUser(app, user.id, {
           subject: `${report.name} is ready`,
           message: `Your ${cadence} report digest is ready to view.`,
-          collection: null,
-          item: null,
+          collection: 'nivaro_report_defs',
+          item: String(report.id),
           channels: { inapp: true, email: false }
         })
       }

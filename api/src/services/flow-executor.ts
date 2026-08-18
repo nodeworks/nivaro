@@ -256,6 +256,19 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     }
   }
 
+  // A meaningful click target: explicit op options win (templated), else the
+  // triggering record's collection + first key — a flow notification about a
+  // record should open that record.
+  const linkCollection =
+    resolveTemplate((opts.collection as string) ?? '', data) ||
+    (typeof data.collection === 'string' ? data.collection : '') ||
+    null
+  const keys = data.keys as unknown[] | undefined
+  const linkItem =
+    resolveTemplate((opts.item as string) ?? '', data) ||
+    (data.item != null ? String(data.item) : '') ||
+    (Array.isArray(keys) && keys.length > 0 ? String(keys[0]) : '') ||
+    null
   try {
     await db('nivaro_notifications').insert({
       recipient,
@@ -264,8 +277,8 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
       status: 'inbox',
       timestamp: new Date(),
       sender: ctx.userId ?? null,
-      collection: null,
-      item: null
+      collection: linkCollection,
+      item: linkCollection ? linkItem : null
     })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, recipient }, 'Notification sent')
     return { status: 'resolve' as const, output: data }

@@ -4,6 +4,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
+import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '@nivaro/react'
+
+/** Where a notification's click lands in the admin app. */
+const NOTIF_ROUTES: NotificationRouteMap = {
+  record: (c, i) => `/collections/${c}/${i}`,
+  list: (c) => `/collections/${c}`,
+  report: (id) => `/report-studio/${id}`,
+  queue: (id) => `/queues/${id}`,
+  dashboard: (id) => `/dashboards/${id}`,
+  alerts: () => '/alert-manager',
+  imports: () => '/imports',
+  issues: () => '/issues'
+}
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   type CMSNotification,
@@ -160,7 +173,8 @@ export function NotificationBell({
           ) : (
             groups.map((g) => {
               const unreadIds = g.rows.filter((n) => !n.read).map((n) => n.id)
-              const hasRecord = !!(g.collection && g.item)
+              const target = resolveNotificationTarget(g.collection, g.item, NOTIF_ROUTES)
+              const hasRecord = !!target
               return (
                 <div
                   key={g.key}
@@ -169,7 +183,9 @@ export function NotificationBell({
                   {hasRecord && (
                     <div className='flex items-center gap-1.5 px-3 pt-2'>
                       <span className='truncate text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                        {String(g.collection).replace(/_/g, ' ')} · {g.item}
+                        {String(g.collection) === '__chat__'
+                          ? 'Chat'
+                          : `${String(g.collection).replace(/_/g, ' ')} · ${g.item ?? ''}`}
                         {g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
                       </span>
                       <span className='ml-auto flex items-center gap-0.5'>
@@ -178,7 +194,7 @@ export function NotificationBell({
                           title='Open record'
                           onClick={() => {
                             if (unreadIds.length) void markGroup(unreadIds)
-                            navigate(`/collections/${g.collection}/${g.item}`)
+                            runNotificationTarget(target, navigate)
                           }}
                           className='rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
                         >
@@ -203,9 +219,12 @@ export function NotificationBell({
                       key={n.id}
                       onClick={() => {
                         void handleClick(n)
-                        if (hasRecord) navigate(`/collections/${g.collection}/${g.item}`)
+                        runNotificationTarget(target, navigate)
                       }}
-                      className='flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted'
+                      className={cn(
+                        'flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors',
+                        hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'
+                      )}
                     >
                       <span
                         className={cn(

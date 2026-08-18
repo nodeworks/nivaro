@@ -6,6 +6,19 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
+import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '@nivaro/react'
+
+/** Where a notification's click lands in the admin app. */
+const NOTIF_ROUTES: NotificationRouteMap = {
+  record: (c, i) => `/collections/${c}/${i}`,
+  list: (c) => `/collections/${c}`,
+  report: (id) => `/report-studio/${id}`,
+  queue: (id) => `/queues/${id}`,
+  dashboard: (id) => `/dashboards/${id}`,
+  alerts: () => '/alert-manager',
+  imports: () => '/imports',
+  issues: () => '/issues'
+}
 
 const PAGE_SIZE = 25
 
@@ -90,9 +103,7 @@ export function NotificationsCenterPage() {
         /* non-fatal */
       }
     }
-    if (n.collection && n.item) {
-      navigate(`/collections/${n.collection}/${n.item}`)
-    }
+    runNotificationTarget(resolveNotificationTarget(n.collection, n.item, NOTIF_ROUTES), navigate)
   }
 
   return (
@@ -201,14 +212,29 @@ export function NotificationsCenterPage() {
                           From {n.sender_name ?? n.sender}
                         </span>
                       )}
-                      {n.collection && n.item && (
-                        <Link
-                          to={`/collections/${n.collection}/${n.item}`}
-                          className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 font-mono text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                        >
-                          {n.collection} #{n.item}
-                        </Link>
-                      )}
+                      {(() => {
+                        const target = resolveNotificationTarget(n.collection, n.item, NOTIF_ROUTES)
+                        if (!target) return null
+                        if (target.type === 'chat') {
+                          return (
+                            <button
+                              type='button'
+                              onClick={() => runNotificationTarget(target, navigate)}
+                              className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                            >
+                              Open chat
+                            </button>
+                          )
+                        }
+                        return (
+                          <Link
+                            to={target.path}
+                            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 font-mono text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                          >
+                            {n.collection === '__chat__' ? 'Chat' : `${n.collection}${n.item ? ` #${n.item}` : ''}`}
+                          </Link>
+                        )
+                      })()}
                     </div>
                   </div>
                   {/* Delete with inline confirm */}
