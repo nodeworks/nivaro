@@ -252,11 +252,23 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
           note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
           hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
           // base.readonly already carries the derived-field rule. A layout
-          // override cannot switch it back on for a computed field: the layout
-          // editor writes this key wholesale with its defaults, so a `false`
-          // here is serialization, not a decision to make a rollup typable.
+          // override cannot switch it back on for a computed field via the
+          // wholesale `readonly` key (the layout editor writes it with its
+          // defaults — a `false` there is serialization, not a decision).
+          // `editable_computed` is the EXPLICIT opt-in: it lifts only the
+          // derived-field rule, letting a layout accept manual entry for a
+          // rollup (a PUB workflow's Total REQ Amount, entered by hand
+          // because no lines exist to sum). The next contributor write still
+          // recalculates a stored rollup — the flag is per-layout curation,
+          // not a change to what the field IS.
           readonly:
-            base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
+            ov?.editable_computed === true &&
+            (base.computed_type === 'rollup' || base.computed_type === 'write')
+              ? // Only the FIELD's own explicit readonly still binds — the
+                // override's readonly is the derived state serialized back by
+                // the settings sheet, which is exactly what this flag lifts.
+                !!row.readonly
+              : base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
           required: ov?.required !== undefined ? !!ov.required : base.required,
           interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
           placeholder: ov?.placeholder !== undefined ? (ov.placeholder as string | null) : (base as Record<string, unknown>).placeholder ?? null,

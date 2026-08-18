@@ -75,6 +75,8 @@ import {
 } from '@/components/field-picker'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
+import { RelationLabel } from '@/components/relation-label'
+import { RelationPicker } from '@/components/relation-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -5766,6 +5768,10 @@ interface FieldSettings {
     layout_id?: number | null
     width?: number | string | null
   } | null
+  /** Server-computed field kind (rollup/write/read) — read-only context. */
+  computed_type?: string | null
+  /** Layout opt-in: let this computed field accept manual entry here. */
+  editable_computed?: boolean
 }
 
 // ── Cascade Filters ───────────────────────────────────────────────────────────
@@ -8852,6 +8858,180 @@ function PipelineStateConditionRow({
   )
 }
 
+/** Per-field slice of the layout's default_values, edited from the field
+ *  chip's settings — relation fields pick records by display label. Saves
+ *  straight onto the layout row; the layout-level Settings list shows the
+ *  same data. */
+function FieldDefaultValueSection({
+  layoutId,
+  collection,
+  fieldName,
+  isM2O,
+  isM2M,
+  relatedCollection,
+  settings,
+  abstractType
+}: {
+  layoutId: number
+  collection: string
+  fieldName: string
+  isM2O?: boolean
+  isM2M?: boolean
+  relatedCollection?: string | null
+  settings: FieldSettings
+  abstractType?: string
+}) {
+  const qc = useQueryClient()
+  const { data: layouts = [] } = useQuery<Array<{ id: number; default_values?: Record<string, unknown> | string | null }>>({
+    queryKey: ['collection-layouts', collection],
+    queryFn: () =>
+      api.get('/collection-layouts', { params: { collection } }).then((r) => r.data.data ?? []),
+    enabled: !!collection
+  })
+  const layoutRow = layouts.find((l) => l.id === layoutId)
+  const dv = useMemo(() => {
+    const raw = layoutRow?.default_values
+    const parsed = typeof raw === 'string' ? (() => { try { return JSON.parse(raw) } catch { return null } })() : raw
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {}
+  }, [layoutRow?.default_values])
+  const value = dv[fieldName]
+
+  const saveMut = useMutation({
+    mutationFn: (next: Record<string, unknown> | null) =>
+      api.patch(`/collection-layouts/${layoutId}`, { default_values: next }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['collection-layouts', collection] })
+  })
+  const setValue = (v: unknown) => {
+    const next = { ...dv }
+    if (v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) {
+      delete next[fieldName]
+    } else {
+      next[fieldName] = v
+    }
+    saveMut.mutate(Object.keys(next).length ? next : null)
+  }
+
+  let control: ReactNode
+  if (isM2M && relatedCollection) {
+    const ids = Array.isArray(value) ? (value as Array<string | number>) : []
+    control = (
+      <div className='space-y-1'>
+        {ids.length > 0 && (
+          <div className='flex flex-wrap gap-1'>
+            {ids.map((id) => (
+              <span
+                key={String(id)}
+                className='inline-flex max-w-full items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700'
+              >
+                <span className='truncate'>
+                  <RelationLabel relatedCollection={relatedCollection} id={id} />
+                </span>
+                <button
+                  type='button'
+                  onClick={() => setValue(ids.filter((x) => String(x) !== String(id)))}
+                  className='shrink-0 text-slate-400 hover:text-red-500'
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <RelationPicker
+          relatedCollection={relatedCollection}
+          value={null}
+          onChange={(id) => {
+            if (id == null || id === '') return
+            if (ids.some((x) => String(x) === String(id))) return
+            setValue([...ids, id as string | number])
+          }}
+          placeholder='Add…'
+        />
+      </div>
+    )
+  } else if (isM2O && relatedCollection) {
+    control = (
+      <RelationPicker
+        relatedCollection={relatedCollection}
+        value={value ?? null}
+        onChange={(id) => setValue(id ?? null)}
+        placeholder='Pick a record…'
+      />
+    )
+  } else if (abstractType === 'boolean') {
+    control = (
+      <select
+        value={value === true ? 'true' : value === false ? 'false' : ''}
+        onChange={(e) => setValue(e.target.value === '' ? null : e.target.value === 'true')}
+        className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+      >
+        <option value=''>—</option>
+        <option value='true'>Yes</option>
+        <option value='false'>No</option>
+      </select>
+    )
+  } else {
+    const opts = (() => {
+      const raw = settings.options as unknown
+      if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+      if (typeof raw === 'string') { try { return JSON.parse(raw) as Record<string, unknown> } catch { return {} } }
+      return {}
+    })()
+    const choices = Array.isArray(opts.choices)
+      ? (opts.choices as Array<{ text?: string; value?: unknown }>)
+      : null
+    if ((settings.interface ?? '') === 'select-dropdown' && choices && choices.length > 0) {
+      control = (
+        <select
+          value={value != null ? String(value) : ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw === '') return setValue(null)
+            const match = choices.find((c) => String(c.value) === raw)
+            setValue(match?.value ?? raw)
+          }}
+          className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+        >
+          <option value=''>—</option>
+          {choices.map((c) => (
+            <option key={String(c.value)} value={String(c.value)}>
+              {c.text ?? String(c.value)}
+            </option>
+          ))}
+        </select>
+      )
+    } else {
+      const numeric = abstractType === 'integer' || abstractType === 'decimal' || abstractType === 'float' || abstractType === 'number'
+      control = (
+        <Input
+          value={value != null ? String(value) : ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw === '') return setValue(null)
+            setValue(numeric && !Number.isNaN(Number(raw)) ? Number(raw) : raw)
+          }}
+          placeholder='No default'
+          className='h-7 text-[11px]'
+        />
+      )
+    }
+  }
+
+  return (
+    <div className='space-y-2'>
+      <p className='border-t border-slate-100 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+        Default value
+      </p>
+      {control}
+      <p className='text-[10.5px] leading-relaxed text-slate-400'>
+        Pre-filled when creating a new record on this layout. Optional.
+      </p>
+    </div>
+  )
+}
+
 function FieldSettingsPopover({
   fieldName,
   abstractType,
@@ -8872,7 +9052,8 @@ function FieldSettingsPopover({
   onInlineDisplayChange,
   collection,
   prefillFromParent,
-  onPrefillFromParentChange
+  onPrefillFromParentChange,
+  layoutId
 }: {
   fieldName: string
   abstractType?: string
@@ -8901,6 +9082,9 @@ function FieldSettingsPopover({
   collection?: string
   prefillFromParent?: boolean
   onPrefillFromParentChange?: (v: boolean) => void
+  /** When set, the popover offers a per-field Default value editor writing
+   *  the layout's default_values. */
+  layoutId?: number | null
 }) {
   const [open, setOpen] = useState(false)
   const [rowRulePortalContainer, setRowRulePortalContainer] = useState<HTMLDivElement | null>(null)
@@ -8914,6 +9098,7 @@ function FieldSettingsPopover({
   const [required, setRequired] = useState(settings.required)
   const [hidden, setHidden] = useState(settings.hidden)
   const [readonly, setReadonly] = useState(settings.readonly)
+  const [editableComputed, setEditableComputed] = useState(settings.editable_computed === true)
   // Drill-down config (M2O / M2M / relation-path): overrides.drilldown
   const ddQualifies = isM2O || isM2M || (settings.interface ?? '') === 'relation-path'
   const [ddEnabled, setDdEnabled] = useState(
@@ -9341,6 +9526,7 @@ function FieldSettingsPopover({
       setRequired(settings.required)
       setHidden(settings.hidden)
       setReadonly(settings.readonly)
+      setEditableComputed(settings.editable_computed === true)
       setInlineRelation(settings.inline_relation)
       setMaxValues(settings.max_values != null ? String(settings.max_values) : '')
       // dependencyConfig is already a parsed object from the API — use directly
@@ -9631,6 +9817,9 @@ function FieldSettingsPopover({
       required,
       hidden,
       readonly,
+      ...(layoutId != null && (settings.computed_type === 'rollup' || settings.computed_type === 'write')
+        ? { editable_computed: editableComputed }
+        : {}),
       inline_relation: inlineRelation,
       max_values: maxV && maxV > 0 ? maxV : null
     }
@@ -9756,6 +9945,19 @@ function FieldSettingsPopover({
                       onCheckedChange={setInlineRelation}
                       className='scale-90'
                     />
+                  </div>
+                )}
+                {layoutId != null && (settings.computed_type === 'rollup' || settings.computed_type === 'write') && (
+                  <div className='flex items-center justify-between gap-3 px-3 py-2'>
+                    <div className='min-w-0'>
+                      <span className='text-[12px] text-slate-700'>Allow manual entry</span>
+                      <p className='text-[10.5px] leading-snug text-slate-400'>
+                        This field is computed ({settings.computed_type}) and normally read-only.
+                        On this layout, let people type a value — the next recalculation still
+                        overwrites it{settings.computed_type === 'write' ? ' on every save' : ' when its source rows change'}.
+                      </p>
+                    </div>
+                    <Switch checked={editableComputed} onCheckedChange={setEditableComputed} className='scale-90 shrink-0' />
                   </div>
                 )}
               </div>
@@ -9919,6 +10121,20 @@ function FieldSettingsPopover({
                   requested delivery date where the time carries no meaning.
                 </p>
               </div>
+            )}
+
+            {/* ── Default value (layout default_values) ── */}
+            {layoutId != null && collection && (
+              <FieldDefaultValueSection
+                layoutId={layoutId}
+                collection={collection}
+                fieldName={fieldName}
+                isM2O={isM2O}
+                isM2M={isM2M}
+                relatedCollection={relatedCollection}
+                settings={settings}
+                abstractType={abstractType}
+              />
             )}
 
             {/* ── Option sort (M2O / M2M pickers) ── */}
@@ -10847,7 +11063,8 @@ function FieldChip({
   collection,
   compact,
   prefillFromParent,
-  onPrefillFromParentChange
+  onPrefillFromParentChange,
+  layoutId
 }: {
   fieldName: string
   displayName?: string
@@ -10886,6 +11103,7 @@ function FieldChip({
   compact?: boolean
   prefillFromParent?: boolean
   onPrefillFromParentChange?: (v: boolean) => void
+  layoutId?: number | null
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find((w) => w.span === colSpan)?.label ?? 'Full'
@@ -10980,6 +11198,7 @@ function FieldChip({
           collection={collection}
           prefillFromParent={prefillFromParent}
           onPrefillFromParentChange={onPrefillFromParentChange}
+          layoutId={layoutId}
         />
       )}
 
@@ -11096,7 +11315,8 @@ function SortableFieldChip({
   collection,
   compact,
   prefillFromParent,
-  onPrefillFromParentChange
+  onPrefillFromParentChange,
+  layoutId
 }: {
   fieldName: string
   displayName?: string
@@ -11134,6 +11354,7 @@ function SortableFieldChip({
   compact?: boolean
   prefillFromParent?: boolean
   onPrefillFromParentChange?: (v: boolean) => void
+  layoutId?: number | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? fieldName,
@@ -11179,6 +11400,7 @@ function SortableFieldChip({
         compact={compact}
         prefillFromParent={prefillFromParent}
         onPrefillFromParentChange={onPrefillFromParentChange}
+        layoutId={layoutId}
       />
     </div>
   )
@@ -11223,6 +11445,8 @@ function SortableUngroupedZone({
   collection,
   getPrefillFromParent,
   onPrefillFromParent
+,
+  layoutId
 }: {
   localFieldOrder: Record<string, string[]>
   allFields: Array<{ field: string; type?: string; options?: string | null }>
@@ -11261,6 +11485,7 @@ function SortableUngroupedZone({
   collection?: string
   getPrefillFromParent?: (f: string) => boolean
   onPrefillFromParent?: (f: string, v: boolean) => void
+  layoutId?: number | null
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: 'group:__ungrouped__'
@@ -11397,6 +11622,7 @@ function SortableUngroupedZone({
                       isTableMode ? undefined : (span) => patchField(f, { col_span: span })
                     }
                     fieldSettings={settings}
+                    layoutId={layoutId}
                     onSettings={(patch) => handleFieldSettings(f, patch)}
                     m2oFields={
                       kind === 'M2O' || kind === 'M2M' || kind === 'O2M'
@@ -11761,6 +11987,8 @@ function SortableGroupCard({
   collection,
   getPrefillFromParent,
   onPrefillFromParent
+,
+  layoutId
 }: {
   group: FieldGroup
   fieldNames: string[]
@@ -11824,6 +12052,7 @@ function SortableGroupCard({
   collection?: string
   getPrefillFromParent?: (f: string) => boolean
   onPrefillFromParent?: (f: string, v: boolean) => void
+  layoutId?: number | null
 }) {
   const [editing, setEditing] = useState(false)
   const [labelDraft, setLabelDraft] = useState(group.label)
@@ -12341,6 +12570,7 @@ function SortableGroupCard({
                       colSpan={getColSpan(f)}
                       onColSpan={(span) => onColSpan(f, span)}
                       fieldSettings={settings}
+                      layoutId={layoutId}
                       onSettings={
                         onFieldSettings ? (patch) => onFieldSettings(f, patch) : undefined
                       }
@@ -12627,6 +12857,154 @@ function safeJsonParse(raw: string): unknown {
   }
 }
 
+/** Typed editor for one layout default value: relation fields pick records by
+ *  their display labels (M2M as a chip list), select fields list their
+ *  choices, booleans toggle — anything else stays a text input. */
+function LayoutDefaultValueInput({
+  tableName,
+  field,
+  value,
+  onChange,
+  fieldMeta,
+  relations
+}: {
+  tableName: string
+  field: string
+  value: unknown
+  onChange: (v: unknown) => void
+  fieldMeta: Array<{ field: string; type?: string | null; interface?: string | null; options?: unknown }>
+  relations: Array<{ many_collection: string | null; many_field: string | null; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+}) {
+  const meta = fieldMeta.find((f) => f.field === field)
+  const opts =
+    typeof meta?.options === 'string'
+      ? (() => { try { return JSON.parse(meta.options as string) as Record<string, unknown> } catch { return {} } })()
+      : ((meta?.options ?? {}) as Record<string, unknown>)
+
+  // M2M alias: the relation whose one_field (or legacy junction-name) is this
+  // field; the target collection comes from the junction's companion leg.
+  const m2mRel =
+    relations.find((r) => r.one_collection === tableName && r.one_field === field && r.junction_field != null) ??
+    relations.find((r) => r.one_collection === tableName && r.many_collection === field && r.junction_field != null)
+  const m2mTarget = m2mRel
+    ? relations.find(
+        (cr) => cr.many_collection === m2mRel.many_collection && cr.many_field === m2mRel.junction_field
+      )?.one_collection ?? null
+    : null
+  if (m2mRel && m2mTarget) {
+    const ids = Array.isArray(value) ? (value as Array<string | number>) : []
+    return (
+      <div className='min-w-0 flex-1 space-y-1'>
+        {ids.length > 0 && (
+          <div className='flex flex-wrap gap-1'>
+            {ids.map((id) => (
+              <span
+                key={String(id)}
+                className='inline-flex max-w-full items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
+              >
+                <span className='truncate'>
+                  <RelationLabel relatedCollection={m2mTarget} id={id} />
+                </span>
+                <button
+                  type='button'
+                  onClick={() => onChange(ids.filter((x) => String(x) !== String(id)))}
+                  className='shrink-0 text-slate-400 hover:text-red-500'
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <RelationPicker
+          relatedCollection={m2mTarget}
+          value={null}
+          onChange={(id) => {
+            if (id == null || id === '') return
+            if (ids.some((x) => String(x) === String(id))) return
+            onChange([...ids, id as string | number])
+          }}
+          placeholder='Add…'
+        />
+      </div>
+    )
+  }
+
+  // Plain M2O FK on this collection.
+  const m2oRel = relations.find(
+    (r) =>
+      r.many_collection === tableName &&
+      r.many_field === field &&
+      r.junction_field == null &&
+      !!r.one_collection
+  )
+  if (m2oRel?.one_collection) {
+    return (
+      <div className='min-w-0 flex-1'>
+        <RelationPicker
+          relatedCollection={m2oRel.one_collection}
+          value={value ?? null}
+          onChange={(id) => onChange(id ?? null)}
+          placeholder='Pick a record…'
+        />
+      </div>
+    )
+  }
+
+  if (meta?.type === 'boolean') {
+    return (
+      <select
+        value={value === true ? 'true' : value === false ? 'false' : ''}
+        onChange={(e) => onChange(e.target.value === '' ? null : e.target.value === 'true')}
+        className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+      >
+        <option value=''>—</option>
+        <option value='true'>Yes</option>
+        <option value='false'>No</option>
+      </select>
+    )
+  }
+
+  const choices = Array.isArray(opts.choices)
+    ? (opts.choices as Array<{ text?: string; value?: unknown }>)
+    : null
+  if (meta?.interface === 'select-dropdown' && choices && choices.length > 0) {
+    return (
+      <select
+        value={value != null ? String(value) : ''}
+        onChange={(e) => {
+          const raw = e.target.value
+          if (raw === '') return onChange(null)
+          const match = choices.find((c) => String(c.value) === raw)
+          onChange(match?.value ?? raw)
+        }}
+        className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+      >
+        <option value=''>—</option>
+        {choices.map((c) => (
+          <option key={String(c.value)} value={String(c.value)}>
+            {c.text ?? String(c.value)}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  const numeric = meta?.type === 'integer' || meta?.type === 'decimal' || meta?.type === 'float'
+  return (
+    <Input
+      value={value != null ? String(value) : ''}
+      onChange={(e) => {
+        const raw = e.target.value
+        if (raw === '') return onChange(null)
+        onChange(numeric && !Number.isNaN(Number(raw)) ? Number(raw) : raw)
+      }}
+      placeholder='value'
+      className='h-7 min-w-0 flex-1 text-[11px]'
+    />
+  )
+}
+
 function LayoutsTab({
   tableName,
   dbColumns
@@ -12659,6 +13037,26 @@ function LayoutsTab({
   const { data: workflowTemplates = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['workflow-templates-list'],
     queryFn: () => api.get('/pipelines').then((r) => r.data.data ?? [])
+  })
+
+  // Field metadata + relations, so the defaults editor can render the right
+  // control per field (relation pickers with friendly labels, choice lists,
+  // booleans) instead of a raw text input.
+  const { data: layoutFieldMeta = [] } = useQuery<
+    Array<{ field: string; type?: string | null; interface?: string | null; options?: unknown; label?: string | null }>
+  >({
+    queryKey: ['layouts-field-config', tableName],
+    queryFn: () => api.get(`/field-config/${tableName}`).then((r) => r.data.data ?? []),
+    enabled: !!tableName,
+    staleTime: 60_000
+  })
+  const { data: layoutRelations = [] } = useQuery<
+    Array<{ id: number; many_collection: string | null; many_field: string | null; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+  >({
+    queryKey: ['layouts-relations', tableName],
+    queryFn: () => api.get(`/data-model/relations/for/${tableName}`).then((r) => r.data.data ?? []),
+    enabled: !!tableName,
+    staleTime: 60_000
   })
 
   const { data: addendumLayouts = [] } = useQuery<Array<{ id: number; name: string }>>({
@@ -12815,7 +13213,7 @@ function LayoutsTab({
   const [conditionRows, setConditionRows] = useState<
     Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
   >([])
-  const [defaultValueRows, setDefaultValueRows] = useState<Array<{ field: string; value: string }>>(
+  const [defaultValueRows, setDefaultValueRows] = useState<Array<{ field: string; value: unknown }>>(
     []
   )
 
@@ -12839,7 +13237,9 @@ function LayoutsTab({
       parsedDefaults && typeof parsedDefaults === 'object' && !Array.isArray(parsedDefaults)
         ? Object.entries(parsedDefaults as Record<string, unknown>).map(([field, value]) => ({
             field,
-            value: value != null ? String(value) : ''
+            // Keep raw: an M2M default is an id array, an FK default a real
+            // id — String() would corrupt both for the typed editors.
+            value
           }))
         : []
     )
@@ -12861,15 +13261,22 @@ function LayoutsTab({
     patchLayoutMut.mutate({ id: selected.id, record_conditions: rules.length ? rules : null })
   }
 
-  const updateDefaultValueRow = (idx: number, patch: Partial<{ field: string; value: string }>) =>
+  const updateDefaultValueRow = (idx: number, patch: Partial<{ field: string; value: unknown }>) =>
     setDefaultValueRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   const addDefaultValueRow = () =>
-    setDefaultValueRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', value: '' }])
+    setDefaultValueRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', value: null }])
   const removeDefaultValueRow = (idx: number) =>
     setDefaultValueRows((rows) => rows.filter((_, i) => i !== idx))
   const saveDefaultValueRows = () => {
     if (!selected) return
-    const entries = defaultValueRows.filter((r) => r.field)
+    const entries = defaultValueRows.filter(
+      (r) =>
+        r.field &&
+        r.value !== null &&
+        r.value !== undefined &&
+        r.value !== '' &&
+        !(Array.isArray(r.value) && r.value.length === 0)
+    )
     patchLayoutMut.mutate({
       id: selected.id,
       default_values: entries.length
@@ -12877,6 +13284,19 @@ function LayoutsTab({
         : null
     })
   }
+
+  // Field choices for the defaults editor: physical columns plus M2M alias
+  // fields (their defaults stage junction links on create).
+  const defaultFieldOptions = useMemo(() => {
+    const names = dbColumns.map((c) => c.name)
+    for (const r of layoutRelations) {
+      if (r.one_collection === tableName && r.junction_field != null) {
+        const alias = r.one_field ?? r.many_collection
+        if (alias && !names.includes(alias)) names.push(alias)
+      }
+    }
+    return names
+  }, [dbColumns, layoutRelations, tableName])
 
   return (
     <div className='flex min-h-0 gap-4'>
@@ -13432,29 +13852,35 @@ function LayoutsTab({
                       <div className='space-y-1.5'>
                         {defaultValueRows.map((row, idx) => (
                           // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
-                          <div key={idx} className='flex items-center gap-1.5'>
+                          <div key={idx} className='flex items-start gap-1.5'>
                             <select
                               value={row.field}
-                              onChange={(e) => updateDefaultValueRow(idx, { field: e.target.value })}
+                              onChange={(e) =>
+                                // A new field means the old value's shape may
+                                // not fit (ids vs text) — reset it.
+                                updateDefaultValueRow(idx, { field: e.target.value, value: null })
+                              }
                               className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
                             >
                               <option value=''>Field…</option>
-                              {dbColumns.map((c) => (
-                                <option key={c.name} value={c.name}>
-                                  {c.name}
+                              {defaultFieldOptions.map((name) => (
+                                <option key={name} value={name}>
+                                  {name}
                                 </option>
                               ))}
                             </select>
-                            <Input
+                            <LayoutDefaultValueInput
+                              tableName={tableName}
+                              field={row.field}
                               value={row.value}
-                              onChange={(e) => updateDefaultValueRow(idx, { value: e.target.value })}
-                              placeholder='value'
-                              className='h-7 min-w-0 flex-1 text-[11px]'
+                              onChange={(v) => updateDefaultValueRow(idx, { value: v })}
+                              fieldMeta={layoutFieldMeta}
+                              relations={layoutRelations}
                             />
                             <button
                               type='button'
                               onClick={() => removeDefaultValueRow(idx)}
-                              className='shrink-0 text-slate-400 hover:text-red-500'
+                              className='mt-1.5 shrink-0 text-slate-400 hover:text-red-500'
                             >
                               <Trash2 className='h-3.5 w-3.5' />
                             </button>
@@ -15059,7 +15485,13 @@ function FieldGroupsTab({
       Array<{ type: string; state_keys?: string[]; role_ids?: string[]; pipeline_id?: string }>
     > = {}
     for (const f of sorted) {
-      const fc = fieldConfig.find((fc) => fc.field === f.field)
+      // A field in the header strip AND a body group has TWO field-config
+      // rows. The header twin carries no col_span/overrides — seeding from it
+      // wiped the body row's values on the next save. Always prefer the
+      // non-header row.
+      const fcRows = fieldConfig.filter((c) => c.field === f.field)
+      const fc =
+        fcRows.find((c) => (c as Record<string, unknown>).group_key !== '__header__') ?? fcRows[0]
       const opts = fc?.options
       const parsed = (() => {
         try {
@@ -15508,7 +15940,8 @@ function FieldGroupsTab({
     'options',
     'inline_relation',
     'max_values',
-    'drilldown'
+    'drilldown',
+    'editable_computed'
   ]
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
@@ -15852,7 +16285,13 @@ function FieldGroupsTab({
 
   const getFieldSettings = useCallback(
     (f: string): FieldSettings => {
-      const fc = fieldConfig.find((c) => c.field === f)
+      // A field can sit in the header strip AND a body group — two rows, one
+      // per group. The settings sheet edits the BODY assignment; the header
+      // row (no overrides, no col_span) must never shadow it.
+      const fc =
+        fieldConfig.find(
+          (c) => c.field === f && (c as Record<string, unknown>).group_key !== '__header__'
+        ) ?? fieldConfig.find((c) => c.field === f)
       const rawOpts = (fc as Record<string, unknown> | undefined)?.options
       let opts: Record<string, unknown> = {}
       try {
@@ -15893,7 +16332,18 @@ function FieldGroupsTab({
               | null
               | undefined
           )?.drilldown as FieldSettings['drilldown']) ??
-          null
+          null,
+        computed_type:
+          ((fc as Record<string, unknown> | undefined)?.computed_type as string | null) ?? null,
+        editable_computed:
+          ov.editable_computed !== undefined
+            ? ov.editable_computed === true
+            : ((
+                (fc as Record<string, unknown> | undefined)?._overrides as
+                  | Record<string, unknown>
+                  | null
+                  | undefined
+              )?.editable_computed === true)
       }
     },
     [fieldConfig, localOverrides]
@@ -17403,6 +17853,7 @@ function FieldGroupsTab({
                   if (item === '__ungrouped__')
                     return (
                       <SortableUngroupedZone
+                        layoutId={layoutId}
                         key='__ungrouped__'
                         localFieldOrder={localFieldOrder}
                         allFields={allFields}
@@ -17480,6 +17931,7 @@ function FieldGroupsTab({
                   return (
                     <div key={g.id} className='space-y-1.5'>
                       <SortableGroupCard
+                        layoutId={layoutId}
                         group={g}
                         fieldNames={localFieldOrder[g.key] ?? []}
                         allFields={allFields}
@@ -17575,6 +18027,7 @@ function FieldGroupsTab({
                         <div className='ml-4 border-l-2 border-slate-200 pl-3 space-y-1.5'>
                           {childTabs.map((ch) => (
                             <SortableGroupCard
+                              layoutId={layoutId}
                               key={ch.id}
                               group={ch}
                               fieldNames={localFieldOrder[ch.key] ?? []}
@@ -17709,6 +18162,7 @@ function FieldGroupsTab({
                               displayName={settings.label || titleCase(f)}
                               colSpan={12}
                               fieldSettings={settings}
+                              layoutId={layoutId}
                               onSettings={(patch) => handleFieldSettings(f, patch)}
                               onUnassign={() => handleUnassign(f, '__apply_values__')}
                               inGrid
@@ -17756,6 +18210,7 @@ function FieldGroupsTab({
                               displayName={settings.label || titleCase(f)}
                               colSpan={12}
                               fieldSettings={settings}
+                              layoutId={layoutId}
                               onSettings={(patch) => handleFieldSettings(f, patch)}
                               onUnassign={() => handleUnassign(f, '__create_with_defaults__')}
                               inGrid
