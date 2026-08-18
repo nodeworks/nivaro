@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-08-17T23:24:10.569Z",
+  "generated_at": "2026-08-18T00:35:10.574Z",
   "releases": [
+    {
+      "version": "0.1.64",
+      "tag": "v0.1.64",
+      "date": "2026-08-17T20:35:08-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "reporting batch — drill-through, snapshots, explain, versions, chat delivery, highlight rules, dictionary tooltips, usage",
+              "hash": "a064b59f"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "right-click a cell to filter, exclude, or group by its value",
+              "hash": "d1a13fba"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "ask-the-table AI queries + click-to-copy table cells",
+              "hash": "89f2c545"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "cell context menu misaligned; relation filter showed raw FK ids",
+              "hash": "da34b43c"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.63",
       "tag": "v0.1.63",
-      "date": "2026-08-17T19:24:08-04:00",
+      "date": "2026-08-17T19:24:10-04:00",
       "sections": [
         {
           "label": "Added",
