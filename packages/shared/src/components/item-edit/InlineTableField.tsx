@@ -2927,14 +2927,27 @@ export function InlineTableField({
                     matchQuery: matched?.query ?? null,
                     matchSeed: matched?.seed ?? {}
                   }
-                : isPendingMode || !rowId
+                : !rowId
                   ? {
-                      deferred: true,
-                      stagedOps:
-                        (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
-                      onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                      // UNSAVED row: members stage under __o2m_<field> in the
+                      // row draft — the null-parentRowId path the editor
+                      // actually reads. deferred/stagedOps is the SAVED-row
+                      // pending mechanism; passing it here made Add silently
+                      // drop entries (save() fell into the stagedMembers
+                      // branch with no callback wired).
+                      stagedMembers:
+                        (draft[`__o2m_${relField}`] as Record<string, unknown>[] | undefined) ?? [],
+                      onStagedChange: (members: Record<string, unknown>[]) =>
+                        setDraftField(`__o2m_${relField}`, members)
                     }
-                  : {})}
+                  : isPendingMode
+                    ? {
+                        deferred: true,
+                        stagedOps:
+                          (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
+                        onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                      }
+                    : {})}
             />
           )
         })}
@@ -3654,6 +3667,7 @@ export function InlineTableField({
                   </td>
                 )
               })}
+              {rowEditorMode !== 'panel' && (
               <td className='px-1 py-1 align-middle'>
                 <div className='flex items-stretch gap-1'>
                   <button type='button' disabled={saving} onClick={saveEdit}
@@ -3666,6 +3680,7 @@ export function InlineTableField({
                   </button>
                 </div>
               </td>
+              )}
             </tr>
           )}
 
@@ -3872,12 +3887,13 @@ export function InlineTableField({
                     </td>
                   )
                 })}
+                {!(isEditing && rowEditorMode === 'panel') && (
                 <td className='px-1 py-1 align-middle'>
                   {isEditing ? (
                     <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
                       <button type='button' disabled={saving} onClick={saveEdit}
                         className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : 'Save'}
+                        {saving ? '…' : isPendingMode ? 'Queue' : 'Save'}
                       </button>
                       <button type='button' onClick={cancelEdit}
                         className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
@@ -3901,8 +3917,11 @@ export function InlineTableField({
                     </div>
                   )}
                 </td>
+                )}
               </tr>
-              {isEditing && drawerRelations && drawerRelations.length > 0 && (
+              {/* Panel mode renders the drawer INSIDE the panel — this strip is
+                  the inline-mode placement only, or the editors double up. */}
+              {isEditing && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
                 <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
                   <td colSpan={nestedColSpan} className='px-3 py-2'>
                     <div className='space-y-2'>
