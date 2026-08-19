@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-19T15:30:53.803Z",
+  "generated_at": "2026-08-19T16:12:35.902Z",
   "releases": [
+    {
+      "version": "0.1.71",
+      "tag": "v0.1.71",
+      "date": "2026-08-19T12:12:33-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "access-audit",
+              "text": "findings insert exceeded the MSSQL parameter cap on large runs",
+              "hash": "58dfdd5f"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "move spreadsheet-row comment out of the config interface",
+              "hash": "de7a04b1"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.70",
       "tag": "v0.1.70",
-      "date": "2026-08-19T11:30:51-04:00",
+      "date": "2026-08-19T11:30:53-04:00",
       "sections": [
         {
           "label": "Added",
