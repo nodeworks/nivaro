@@ -132,11 +132,29 @@ export async function recordViewRoutes(app: FastifyInstance) {
         return reply.send({ data: null })
       }
 
+      // Human labels, not machine names — nivaro_fields.label when set, else
+      // the same titlecased fallback every form header uses.
+      const fieldList = [...fields].slice(0, 8)
+      let fieldLabels = fieldList
+      if (fieldList.length > 0) {
+        const labelRows = (await db('nivaro_fields')
+          .where('collection', collection)
+          .whereIn('field', fieldList)
+          .select('field', 'label')
+          .catch(() => [])) as Array<{ field: string; label: string | null }>
+        const labelMap = new Map(labelRows.map((r) => [r.field, r.label]))
+        fieldLabels = fieldList.map(
+          (f) =>
+            labelMap.get(f) ||
+            f.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        )
+      }
+
       return reply.send({
         data: {
           since: since.toISOString(),
           field_changes: fieldChanges,
-          fields: [...fields].slice(0, 8),
+          fields: fieldLabels,
           comments: commentCount,
           transitions: transitionCount,
           editors: [...editors].slice(0, 5)
