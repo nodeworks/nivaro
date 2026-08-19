@@ -776,6 +776,7 @@ export function ImportConsole({
           open={newOpen}
           onOpenChange={setNewOpen}
           definitions={definitions.filter((d) => d.is_active)}
+          runCounts={runCounts}
           onQueued={(id) => {
             refreshAll()
             setOpenRunId(id)

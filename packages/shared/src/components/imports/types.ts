@@ -42,6 +42,28 @@ export interface ImportDefinition {
   file_types: string | null
   is_active: boolean
   sort: number
+  /** Declared staging schema (JSON) — see the definitions editor. */
+  staging_columns?: string | null
+  /** App-managed procedure body; null = managed outside the app. */
+  procedure_body?: string | null
+  procedure_hash?: string | null
+  procedure_deployed_at?: string | null
+  /** Pre-flight validation config (JSON). */
+  validation?: string | null
+}
+
+export interface ImportValidationIssue {
+  code: string
+  message: string
+  rows?: number[]
+  count?: number
+}
+
+export interface ImportValidationReport {
+  errors: ImportValidationIssue[]
+  warnings: ImportValidationIssue[]
+  stats: Record<string, number | boolean | null>
+  truncated: boolean
 }
 
 /** Live queue depth is never windowed; the rest respects `window_days`. */
@@ -78,6 +100,8 @@ export interface ImportPreview {
   staging_columns: string[] | null
   unknown_columns: string[]
   missing_columns: string[]
+  /** Pre-flight report — errors here block queueing server-side too. */
+  validation?: ImportValidationReport
 }
 
 /** Emitted by the worker on the `import:progress` socket event. */

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
@@ -9,6 +10,11 @@ import {
   listImportDefinitions,
   parseImportFile
 } from '../services/staged-imports.js'
+import {
+  parseStagingColumns,
+  parseValidationConfig,
+  validateStagedRows
+} from '../services/staged-import-validation.js'
 
 /**
  * Staged imports (`/api/staged-imports`) — queue + definition registry for
@@ -18,8 +24,273 @@ import {
  * deployment-configured SQL against shared staging tables, so queueing and
  * definition management are admin-only.
  */
+/** Snapshot the whole definition (proc body + schema + validation together)
+ *  so a bad edit is one click from undone. Content-deduped, pruned to 30. */
+async function snapshotDefinition(key: string, note: string, userId: string | null): Promise<void> {
+  try {
+    const row = await db('nivaro_import_definitions').where({ key }).first()
+    if (!row) return
+    const snapshot = JSON.stringify(row)
+    const latest = await db('nivaro_import_definition_versions')
+      .where('definition', row.id)
+      .orderBy('version', 'desc')
+      .first()
+    if (latest && latest.snapshot === snapshot) return
+    await db('nivaro_import_definition_versions').insert({
+      definition: row.id,
+      version: (Number(latest?.version) || 0) + 1,
+      snapshot,
+      note: note.slice(0, 255),
+      created_by: userId,
+      created_at: new Date()
+    })
+    const versions = await db('nivaro_import_definition_versions')
+      .where('definition', row.id)
+      .orderBy('version', 'desc')
+      .select('id')
+    if (versions.length > 30) {
+      await db('nivaro_import_definition_versions')
+        .whereIn('id', versions.slice(30).map((v) => v.id))
+        .del()
+    }
+  } catch {
+    // Version capture must never block the edit it protects.
+  }
+}
+
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
 export async function stagedImportRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+
+  // ─── Procedure management ─────────────────────────────────────────────────
+
+  /** The LIVE body from SQL Server — for taking over an externally-managed
+   *  procedure, or comparing against the stored one. */
+  app.get<{ Params: { id: string } }>(
+    '/definitions/:id/procedure',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      if (!row.procedure || !IDENT_RE.test(String(row.procedure))) {
+        return reply.code(400).send({ error: 'This definition has no procedure' })
+      }
+      const mod = (await db.raw(
+        `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
+        [String(row.procedure)]
+      )) as Array<{ definition: string | null }>
+      const live = Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
+      return {
+        data: {
+          procedure: row.procedure,
+          live_body: live,
+          stored_body: row.procedure_body ?? null,
+          deployed_hash: row.procedure_hash ?? null,
+          stored_hash: row.procedure_body
+            ? createHash('sha256').update(String(row.procedure_body)).digest('hex')
+            : null
+        }
+      }
+    }
+  )
+
+  /** Deploy the stored body via CREATE OR ALTER. Explicit — the worker never
+   *  deploys DDL mid-run. The body must target the definition's own procedure
+   *  so a deploy can't smuggle unrelated DDL under another name. */
+  app.post<{ Params: { id: string } }>(
+    '/definitions/:id/deploy',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const body = String(row.procedure_body ?? '').trim()
+      const proc = String(row.procedure ?? '')
+      if (!body) return reply.code(400).send({ error: 'This definition has no stored procedure body' })
+      if (!IDENT_RE.test(proc)) return reply.code(400).send({ error: 'Definition has no valid procedure name' })
+      const targetsOwn = new RegExp(
+        `create\\s+or\\s+alter\\s+proc(edure)?\\s+(\\[?dbo\\]?\\.)?\\[?${proc}\\]?\\b`,
+        'i'
+      )
+      if (!targetsOwn.test(body)) {
+        return reply.code(400).send({
+          error: `The body must start with CREATE OR ALTER PROCEDURE ${proc} — deploys are scoped to this definition's own procedure.`
+        })
+      }
+      try {
+        await db.raw(body)
+      } catch (err) {
+        return reply.code(400).send({ error: `Deploy failed: ${(err as Error).message}` })
+      }
+      const hash = createHash('sha256').update(body).digest('hex')
+      await db('nivaro_import_definitions')
+        .where('id', row.id)
+        .update({ procedure_hash: hash, procedure_deployed_at: new Date() })
+      await logActivity({
+        action: 'import-procedure-deploy',
+        user: req.user?.id,
+        collection: 'nivaro_import_definitions',
+        item: String(row.key),
+        comment: `CREATE OR ALTER ${proc}`,
+        req
+      })
+      return { data: { deployed: true, hash } }
+    }
+  )
+
+  // ─── Definition versions ──────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>(
+    '/definitions/:id/versions',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const versions = await db('nivaro_import_definition_versions')
+        .where('definition', row.id)
+        .orderBy('version', 'desc')
+        .select('id', 'version', 'note', 'created_by', 'created_at')
+      return { data: versions }
+    }
+  )
+
+  app.post<{ Params: { id: string; versionId: string } }>(
+    '/definitions/:id/versions/:versionId/restore',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const v = await db('nivaro_import_definition_versions')
+        .where({ definition: row.id, id: req.params.versionId })
+        .first()
+      if (!v) return reply.code(404).send({ error: 'Version not found' })
+      let snap: Record<string, unknown>
+      try {
+        snap = JSON.parse(String(v.snapshot))
+      } catch {
+        return reply.code(400).send({ error: 'Snapshot is unreadable' })
+      }
+      // Restores are reversible: capture current state first.
+      await snapshotDefinition(String(row.key), `before restore of v${v.version}`, req.user?.id ?? null)
+      const patch: Record<string, unknown> = {}
+      for (const f of [
+        'label', 'description', 'staging_table', 'procedure', 'loader', 'sort',
+        'is_active', 'staging_columns', 'validation', 'procedure_body'
+      ]) {
+        if (f in snap) patch[f] = snap[f]
+      }
+      await db('nivaro_import_definitions').where('id', row.id).update(patch)
+      await logActivity({
+        action: 'import-definition-restore',
+        user: req.user?.id,
+        collection: 'nivaro_import_definitions',
+        item: String(row.key),
+        comment: `restored v${v.version}`,
+        req
+      })
+      return { data: await getImportDefinition(String(row.key)) }
+    }
+  )
+
+  /** Regex-mine the LIVE procedure body for join/merge patterns and prefill a
+   *  validation config for human review. An assistant, never the authority —
+   *  the returned suggestion is not saved. */
+  app.post<{ Params: { id: string } }>(
+    '/definitions/:id/suggest-validation',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const proc = String(row.procedure ?? '')
+      if (!IDENT_RE.test(proc)) return reply.code(400).send({ error: 'Definition has no procedure to read' })
+      const mod = (await db.raw(
+        `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
+        [proc]
+      )) as Array<{ definition: string | null }>
+      const body = Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
+      if (!body) return reply.code(404).send({ error: `Procedure ${proc} not found in the database` })
+
+      const stagingTable = String(row.staging_table || `staging_${row.key}`).toLowerCase()
+
+      // Aliases assigned to the staging table (FROM/JOIN staging_x st).
+      const stagingAliases = new Set<string>([stagingTable])
+      for (const m of body.matchAll(/(?:from|join)\s+\[?(\w+)\]?\s+(?:as\s+)?(\w+)\b/gi)) {
+        if (m[1].toLowerCase() === stagingTable) stagingAliases.add(m[2].toLowerCase())
+      }
+
+      // JOIN other ON other.col = st.col → lookup {column: st col, collection, match_field}
+      const lookups: Array<{ column: string; collection: string; match_field: string }> = []
+      const seen = new Set<string>()
+      for (const m of body.matchAll(
+        /join\s+\[?(\w+)\]?\s+(?:as\s+)?(\w+)\s+on\s+\[?(\w+)\]?\.\[?(\w+)\]?\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?/gi
+      )) {
+        const [, table, alias, leftA, leftC, rightA, rightC] = m
+        if (table.toLowerCase() === stagingTable) continue
+        let stagingCol: string | null = null
+        let matchField: string | null = null
+        if (stagingAliases.has(leftA.toLowerCase()) && rightA.toLowerCase() === alias.toLowerCase()) {
+          stagingCol = leftC
+          matchField = rightC
+        } else if (stagingAliases.has(rightA.toLowerCase()) && leftA.toLowerCase() === alias.toLowerCase()) {
+          stagingCol = rightC
+          matchField = leftC
+        }
+        if (!stagingCol || !matchField) continue
+        const k = `${stagingCol}|${table}|${matchField}`.toLowerCase()
+        if (seen.has(k)) continue
+        seen.add(k)
+        if (!/^nivaro_/i.test(table)) {
+          lookups.push({ column: stagingCol, collection: table, match_field: matchField })
+        }
+      }
+
+      // Target table guess: the first INSERT INTO / MERGE (INTO) real table.
+      // Bare UPDATE is skipped — MERGE's "WHEN MATCHED THEN UPDATE SET" makes
+      // it match the keyword SET, and alias-form UPDATEs match aliases.
+      const RESERVED = new Set(['set', 'statistics', 'target', 'source'])
+      let target: string | null = null
+      for (const m of body.matchAll(/(?:insert\s+into|merge\s+(?:into\s+)?)\s*\[?(\w+)\]?/gi)) {
+        const t = m[1]
+        const lower = t.toLowerCase()
+        if (lower === stagingTable || stagingAliases.has(lower)) continue
+        if (/^(#|@)/.test(t) || /^nivaro_/i.test(t) || RESERVED.has(lower)) continue
+        target = t
+        break
+      }
+
+      // Merge keys: pairs inside a MERGE ... ON (...) clause only — mining every
+      // equality in the body reports plain join columns as identity, which is
+      // worse than an empty suggestion the admin fills in.
+      const keyCols = new Set<string>()
+      // Both ON shapes appear in the real proc set: parenthesized `ON (...)` and
+      // bare `ON a.x = b.x AND ...` running until the first WHEN clause.
+      const onClauses = [
+        ...body.matchAll(/merge[\s\S]{0,2500}?\bon\s*\(([\s\S]*?)\)/gi),
+        ...body.matchAll(/merge[\s\S]{0,2500}?\bon\s+([\s\S]*?)\bwhen\b/gi)
+      ]
+      for (const on of onClauses) {
+        for (const m of on[1].matchAll(/\[?(\w+)\]?\.\[?(\w+)\]?\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?/gi)) {
+          const [, la, lc, ra, rc] = m
+          if (stagingAliases.has(la.toLowerCase()) && !stagingAliases.has(ra.toLowerCase())) keyCols.add(lc)
+          else if (stagingAliases.has(ra.toLowerCase()) && !stagingAliases.has(la.toLowerCase())) keyCols.add(rc)
+          else if (la.toLowerCase() === 'source') keyCols.add(lc)
+          else if (ra.toLowerCase() === 'source') keyCols.add(rc)
+        }
+      }
+
+      return {
+        data: {
+          suggestion: {
+            key_columns: [...keyCols].slice(0, 4),
+            ...(target ? { target_table: target } : {}),
+            lookups
+          },
+          procedure: proc,
+          note: 'Regex-mined from the live procedure — review before saving; the config is the authority, not the procedure scan.'
+        }
+      }
+    }
+  )
 
   // ─── Definitions ──────────────────────────────────────────────────────────
 
@@ -53,6 +324,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       sort: Number(b.sort ?? 0),
       is_active: true
     })
+    await snapshotDefinition(key, 'created', req.user?.id ?? null)
     await logActivity({
       action: 'import-definition-create',
       user: req.user?.id,
@@ -74,8 +346,26 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       for (const f of ['label', 'description', 'staging_table', 'procedure', 'loader', 'sort']) {
         if (b[f] !== undefined) patch[f] = b[f]
       }
+      // Config fields arrive as objects or JSON strings; both normalize to a
+      // stored JSON string (or null to clear). Bad JSON is a 400, not a save.
+      for (const f of ['staging_columns', 'validation'] as const) {
+        if (b[f] === undefined) continue
+        if (b[f] === null || b[f] === '') {
+          patch[f] = null
+          continue
+        }
+        const parsed =
+          f === 'staging_columns' ? parseStagingColumns(b[f]) : parseValidationConfig(b[f])
+        if (!parsed) return reply.code(400).send({ error: `${f} is not valid` })
+        patch[f] = JSON.stringify(parsed)
+      }
+      if (b.procedure_body !== undefined) {
+        patch.procedure_body =
+          b.procedure_body === null || b.procedure_body === '' ? null : String(b.procedure_body)
+      }
       if (b.is_active !== undefined) patch.is_active = !!b.is_active
       if (Object.keys(patch).length > 0) {
+        await snapshotDefinition(String(row.key), 'before update', req.user?.id ?? null)
         await db('nivaro_import_definitions').where('id', row.id).update(patch)
       }
       await logActivity({
@@ -307,6 +597,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (existing.length > 0) stagingColumns = existing.filter((c) => c !== 'id')
     }
 
+    // Pre-flight validation: file-keyed checks (duplicates, required, numeric,
+    // declared-schema coverage) plus target/lookup checks against live tables.
+    // The procedure never runs; a definition with no config reports clean.
+    const validation = definition
+      ? await validateStagedRows(definition, rows)
+      : { errors: [], warnings: [], stats: {}, truncated: false }
+
     return {
       data: {
         row_count: rows.length,
@@ -316,7 +613,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         staging_table: table,
         staging_columns: stagingColumns,
         unknown_columns: stagingColumns ? columns.filter((c) => !stagingColumns.includes(c)) : [],
-        missing_columns: stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : []
+        missing_columns: stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : [],
+        validation
       }
     }
   })
@@ -336,9 +634,26 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     if (!definition) return reply.code(400).send({ error: `No import definition for "${key}"` })
     if (!definition.is_active) return reply.code(400).send({ error: `"${key}" is inactive` })
 
+    const buffer = await multipart.toBuffer()
+
+    // The preview's report is UX; THIS is the boundary. Hard errors are all
+    // file-derived (missing declared columns, duplicate keys, bad values), so
+    // blocking here can't strand an import on stale table state.
+    try {
+      const validation = await validateStagedRows(definition, parseImportFile(buffer))
+      if (validation.errors.length > 0) {
+        return reply.code(422).send({
+          error: `That file fails validation: ${validation.errors.map((e) => e.message).join(' · ')}`,
+          validation
+        })
+      }
+    } catch {
+      // The validator itself failing must never block the pipeline.
+    }
+
     const stored = await uploadFileBuffer(
       req.user!,
-      await multipart.toBuffer(),
+      buffer,
       multipart.filename,
       multipart.mimetype
     )

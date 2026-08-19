@@ -82,15 +82,45 @@ function TargetLine({ def }: { def: ImportDefinition }) {
   )
 }
 
+function DefinitionRow({
+  def,
+  active,
+  onPick
+}: {
+  def: ImportDefinition
+  active: boolean
+  onPick: (key: string) => void
+}) {
+  return (
+    <button
+      type='button'
+      onClick={() => onPick(def.key)}
+      className={cn(
+        'flex w-full flex-col gap-0.5 border-b border-slate-100 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-slate-50 dark:border-border/60 dark:hover:bg-muted/40',
+        active && 'bg-nvr-cyan/10 hover:bg-nvr-cyan/15 dark:bg-nvr-cyan/15'
+      )}
+    >
+      <span className='flex items-center gap-1.5 text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
+        {active && <Check className='h-3.5 w-3.5 shrink-0 text-nvr-cyan' />}
+        <span className='truncate'>{definitionTitle(def)}</span>
+      </span>
+      <TargetLine def={def} />
+    </button>
+  )
+}
+
 export function NewImportDialog({
   open,
   onOpenChange,
   definitions,
+  runCounts = {},
   onQueued
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   definitions: ImportDefinition[]
+  /** All-time run count per import key — drives the "Frequently used" section. */
+  runCounts?: Record<string, number>
   onQueued: (id: number) => void
 }) {
   const postMultipart = useMultipartPost()
@@ -114,6 +144,20 @@ export function NewImportDialog({
         .some((v) => String(v).toLowerCase().includes(q))
     )
   }, [definitions, search])
+
+  // Most-run imports float to the top so regulars don't search every time;
+  // everything else lists alphabetically. Searching collapses to one flat
+  // result list — grouping a two-item match would just add noise.
+  const grouped = useMemo(() => {
+    const alpha = [...filtered].sort((a, b) => definitionTitle(a).localeCompare(definitionTitle(b)))
+    if (search.trim()) return { frequent: [] as ImportDefinition[], rest: alpha }
+    const frequent = [...filtered]
+      .filter((d) => (runCounts[d.key] ?? 0) > 0)
+      .sort((a, b) => (runCounts[b.key] ?? 0) - (runCounts[a.key] ?? 0))
+      .slice(0, 5)
+    const freqKeys = new Set(frequent.map((d) => d.key))
+    return { frequent, rest: alpha.filter((d) => !freqKeys.has(d.key)) }
+  }, [filtered, runCounts, search])
 
   const preview = useMutation({
     mutationFn: async ({ f, key }: { f: File; key: string }) => {
@@ -216,26 +260,36 @@ export function NewImportDialog({
                     No import matches “{search}”.
                   </p>
                 ) : (
-                  filtered.map((d) => {
-                    const active = d.key === selectedKey
-                    return (
-                      <button
-                        key={d.key}
-                        type='button'
-                        onClick={() => pickDefinition(d.key)}
-                        className={cn(
-                          'flex w-full flex-col gap-0.5 border-b border-slate-100 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-slate-50 dark:border-border/60 dark:hover:bg-muted/40',
-                          active && 'bg-nvr-cyan/10 hover:bg-nvr-cyan/15 dark:bg-nvr-cyan/15'
+                  <>
+                    {grouped.frequent.length > 0 && (
+                      <>
+                        <p className='border-b border-slate-100 bg-slate-50/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60 dark:bg-muted/30 dark:text-muted-foreground'>
+                          Frequently used
+                        </p>
+                        {grouped.frequent.map((d) => (
+                          <DefinitionRow
+                            key={d.key}
+                            def={d}
+                            active={d.key === selectedKey}
+                            onPick={pickDefinition}
+                          />
+                        ))}
+                        {grouped.rest.length > 0 && (
+                          <p className='border-b border-slate-100 bg-slate-50/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60 dark:bg-muted/30 dark:text-muted-foreground'>
+                            All imports
+                          </p>
                         )}
-                      >
-                        <span className='flex items-center gap-1.5 text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
-                          {active && <Check className='h-3.5 w-3.5 shrink-0 text-nvr-cyan' />}
-                          <span className='truncate'>{definitionTitle(d)}</span>
-                        </span>
-                        <TargetLine def={d} />
-                      </button>
-                    )
-                  })
+                      </>
+                    )}
+                    {grouped.rest.map((d) => (
+                      <DefinitionRow
+                        key={d.key}
+                        def={d}
+                        active={d.key === selectedKey}
+                        onPick={pickDefinition}
+                      />
+                    ))}
+                  </>
                 )}
               </div>
             </section>
@@ -309,7 +363,8 @@ export function NewImportDialog({
               <div className='mt-3 min-h-[120px]'>
                 {preview.isPending && (
                   <p className='flex items-center gap-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' /> Reading the file…
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' /> Checking the file for errors and
+                    warnings — duplicates, missing values, and unmatched references…
                   </p>
                 )}
 
@@ -334,6 +389,60 @@ export function NewImportDialog({
                         <span className='text-slate-400'> · staging table will be created</span>
                       )}
                     </p>
+
+                    {previewData.validation && previewData.validation.errors.length > 0 && (
+                      <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11.5px] text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300'>
+                        <p className='mb-1 flex items-center gap-1.5 font-medium'>
+                          <AlertTriangle className='h-3.5 w-3.5' /> This file fails validation — it
+                          cannot be queued until fixed
+                        </p>
+                        {previewData.validation.errors.map((e) => (
+                          <p key={e.code + e.message}>
+                            {e.message}
+                            {e.rows && e.rows.length > 0 && (
+                              <span className='text-red-600 dark:text-red-400'>
+                                {' '}
+                                (rows {e.rows.join(', ')}
+                                {e.count && e.count > e.rows.length ? ', …' : ''})
+                              </span>
+                            )}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {previewData.validation && previewData.validation.warnings.length > 0 && (
+                      <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
+                        {previewData.validation.warnings.map((w) => (
+                          <p key={w.code + w.message}>
+                            {w.message}
+                            {w.rows && w.rows.length > 0 && (
+                              <span className='text-amber-600 dark:text-amber-400'>
+                                {' '}
+                                (rows {w.rows.join(', ')}
+                                {w.count && w.count > w.rows.length ? ', …' : ''})
+                              </span>
+                            )}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {previewData.validation &&
+                      (previewData.validation.stats.new_rows != null ||
+                        previewData.validation.stats.existing_rows != null) && (
+                        <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
+                          <span className='font-semibold tabular-nums text-emerald-600 dark:text-emerald-400'>
+                            {formatNumber(Number(previewData.validation.stats.new_rows ?? 0))}
+                          </span>{' '}
+                          new ·{' '}
+                          <span className='font-semibold tabular-nums text-slate-900 dark:text-foreground'>
+                            {formatNumber(Number(previewData.validation.stats.existing_rows ?? 0))}
+                          </span>{' '}
+                          already exist
+                          {previewData.validation.truncated && (
+                            <span className='text-slate-400'> · counts cover the first 20,000 rows</span>
+                          )}
+                        </p>
+                      )}
 
                     {hasWarnings && (
                       <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'>
@@ -459,7 +568,13 @@ export function NewImportDialog({
           </Button>
           <Button
             size='sm'
-            disabled={!selected || !file || queue.isPending || preview.isPending}
+            disabled={
+              !selected ||
+              !file ||
+              queue.isPending ||
+              preview.isPending ||
+              (preview.data?.validation?.errors.length ?? 0) > 0
+            }
             onClick={() => queue.mutate()}
           >
             {queue.isPending ? (

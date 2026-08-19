@@ -1,8 +1,8 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Loader2, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { patch, post } from '../../lib/commands'
+import { get, patch, post } from '../../lib/commands'
 import { cn, formatNumber } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -23,6 +23,18 @@ type Draft = {
   loader: '' | 'bulk' | 'insert'
   sort: string
   is_active: boolean
+  staging_columns: string
+  validation: string
+  procedure_body: string
+}
+
+const prettyJson = (raw: string | null | undefined): string => {
+  if (!raw) return ''
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
 }
 
 function toDraft(d: ImportDefinition | null): Draft {
@@ -34,7 +46,10 @@ function toDraft(d: ImportDefinition | null): Draft {
     procedure: d?.procedure ?? '',
     loader: d?.loader ?? '',
     sort: String(d?.sort ?? 0),
-    is_active: d?.is_active ?? true
+    is_active: d?.is_active ?? true,
+    staging_columns: prettyJson(d?.staging_columns),
+    validation: prettyJson(d?.validation),
+    procedure_body: d?.procedure_body ?? ''
   }
 }
 
@@ -99,7 +114,10 @@ export function DefinitionsPanel({
         procedure: draft.procedure.trim() || null,
         loader: draft.loader || null,
         sort: Number(draft.sort) || 0,
-        is_active: draft.is_active
+        is_active: draft.is_active,
+        staging_columns: draft.staging_columns.trim() || null,
+        validation: draft.validation.trim() || null,
+        procedure_body: draft.procedure_body.trim() || null
       }
       if (selectedId === NEW) {
         return client.request(
@@ -134,10 +152,23 @@ export function DefinitionsPanel({
     draft.procedure.trim() && !IDENT.test(draft.procedure.trim())
       ? 'Must be a plain procedure name.'
       : null
+  const jsonProblem = (raw: string): string | null => {
+    if (!raw.trim()) return null
+    try {
+      JSON.parse(raw)
+      return null
+    } catch {
+      return 'Not valid JSON.'
+    }
+  }
+  const stagingColsProblem = jsonProblem(draft.staging_columns)
+  const validationProblem = jsonProblem(draft.validation)
   const canSave =
     (selectedId === NEW ? IDENT.test(draft.key.trim()) : selectedId != null) &&
     !tableProblem &&
-    !procProblem
+    !procProblem &&
+    !stagingColsProblem &&
+    !validationProblem
 
   return (
     <div className='flex min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -335,6 +366,16 @@ export function DefinitionsPanel({
               </div>
             </div>
 
+            {selectedId !== NEW && selected && (
+              <AdvancedConfigSection
+                definition={selected}
+                draft={draft}
+                setDraft={setDraft}
+                stagingColsProblem={stagingColsProblem}
+                validationProblem={validationProblem}
+              />
+            )}
+
             <div className='flex items-center gap-3'>
               <Button size='sm' disabled={!canSave || save.isPending} onClick={() => save.mutate()}>
                 {save.isPending ? (
@@ -358,6 +399,223 @@ export function DefinitionsPanel({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Pre-flight validation, declared staging schema, and the app-managed
+ * procedure body — the config that makes an import self-describing: the
+ * schema the table converges on, the checks the preview runs, and the SQL
+ * that consumes it, versioned together.
+ */
+function AdvancedConfigSection({
+  definition,
+  draft,
+  setDraft,
+  stagingColsProblem,
+  validationProblem
+}: {
+  definition: ImportDefinition
+  draft: Draft
+  setDraft: React.Dispatch<React.SetStateAction<Draft>>
+  stagingColsProblem: string | null
+  validationProblem: string | null
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(!!(definition.procedure_body || definition.validation || definition.staging_columns))
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const suggest = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { suggestion: unknown; note: string } }>(
+        post(`/staged-imports/definitions/${definition.id}/suggest-validation`, {})
+      ),
+    onSuccess: (res) => {
+      const suggestion = (res as { data?: { suggestion?: unknown } })?.data?.suggestion
+      if (suggestion) {
+        setDraft((d) => ({ ...d, validation: JSON.stringify(suggestion, null, 2) }))
+        setMsg('Suggestion loaded from the live procedure — review, adjust, then Save.')
+      }
+    },
+    onError: (err: Error) => setMsg(err.message)
+  })
+
+  const loadLive = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { live_body: string | null } }>(
+        get(`/staged-imports/definitions/${definition.id}/procedure`)
+      ),
+    onSuccess: (res) => {
+      const live = (res as { data?: { live_body?: string | null } })?.data?.live_body
+      if (live) {
+        setDraft((d) => ({ ...d, procedure_body: live }))
+        setMsg('Live procedure body loaded — Save to take ownership, Deploy to push edits back.')
+      } else setMsg('The procedure does not exist in the database yet.')
+    },
+    onError: (err: Error) => setMsg(err.message)
+  })
+
+  const deploy = useMutation({
+    mutationFn: () =>
+      client.request(post(`/staged-imports/definitions/${definition.id}/deploy`, {})),
+    onSuccess: () => {
+      setMsg('Deployed.')
+      void qc.invalidateQueries({ queryKey: ['staged-import-definitions'] })
+    },
+    onError: (err: Error) => setMsg(err.message)
+  })
+
+  const { data: versions = [] } = useQuery<
+    Array<{ id: number; version: number; note: string | null; created_at: string }>
+  >({
+    queryKey: ['staged-import-def-versions', definition.id],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; version: number; note: string | null; created_at: string }> }>(
+          get(`/staged-imports/definitions/${definition.id}/versions`)
+        )
+        .then((r) => r.data ?? []),
+    enabled: open,
+    staleTime: 15_000
+  })
+  const restore = useMutation({
+    mutationFn: (versionId: number) =>
+      client.request(
+        post(`/staged-imports/definitions/${definition.id}/versions/${versionId}/restore`, {})
+      ),
+    onSuccess: () => {
+      setMsg('Restored — reload the definition to see it.')
+      void qc.invalidateQueries({ queryKey: ['staged-import-definitions'] })
+      void qc.invalidateQueries({ queryKey: ['staged-import-def-versions', definition.id] })
+    },
+    onError: (err: Error) => setMsg(err.message)
+  })
+
+  const bodyEdited =
+    !!draft.procedure_body.trim() &&
+    (!definition.procedure_hash || draft.procedure_body !== (definition.procedure_body ?? ''))
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-2.5 text-left'
+      >
+        <span className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
+          Validation, schema &amp; procedure
+        </span>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='space-y-4 border-t border-slate-100 p-4 dark:border-border'>
+          <Field
+            label='Declared staging columns (JSON)'
+            hint='[{"name":"po_number","from_header":"PO Number","required":true,"type":"text"}] — when set, the staging table converges on this schema and only these columns load.'
+          >
+            <Textarea
+              value={draft.staging_columns}
+              onChange={(e) => setDraft((d) => ({ ...d, staging_columns: e.target.value }))}
+              rows={5}
+              className='font-mono text-[11.5px]'
+              placeholder='Empty = derive the schema from each file (historic behavior)'
+            />
+            {stagingColsProblem && <Problem>{stagingColsProblem}</Problem>}
+          </Field>
+
+          <Field
+            label='Pre-flight validation (JSON)'
+            hint='key_columns (duplicate detection), target_table + target_match (new/update counts), lookups (join-miss detection), required, numeric. Runs in the preview and blocks queueing on hard errors.'
+          >
+            <div className='mb-1.5'>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-7 text-[11.5px]'
+                disabled={suggest.isPending || !definition.procedure}
+                onClick={() => suggest.mutate()}
+              >
+                {suggest.isPending ? 'Reading procedure…' : 'Suggest from procedure'}
+              </Button>
+            </div>
+            <Textarea
+              value={draft.validation}
+              onChange={(e) => setDraft((d) => ({ ...d, validation: e.target.value }))}
+              rows={7}
+              className='font-mono text-[11.5px]'
+              placeholder='Empty = no pre-flight checks'
+            />
+            {validationProblem && <Problem>{validationProblem}</Problem>}
+          </Field>
+
+          <Field
+            label='Procedure body (app-managed)'
+            hint='When set, this app owns the procedure: Deploy runs CREATE OR ALTER, the schema sync skips it, and every save versions it. Empty = the procedure is managed outside.'
+          >
+            <div className='mb-1.5 flex items-center gap-2'>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-7 text-[11.5px]'
+                disabled={loadLive.isPending || !definition.procedure}
+                onClick={() => loadLive.mutate()}
+              >
+                {loadLive.isPending ? 'Loading…' : 'Load live body'}
+              </Button>
+              <Button
+                size='sm'
+                className='h-7 text-[11.5px]'
+                disabled={deploy.isPending || !definition.procedure_body}
+                onClick={() => deploy.mutate()}
+              >
+                {deploy.isPending ? 'Deploying…' : 'Deploy procedure'}
+              </Button>
+              {bodyEdited && (
+                <span className='text-[11px] text-amber-600 dark:text-amber-400'>
+                  Save first — Deploy pushes the SAVED body.
+                </span>
+              )}
+            </div>
+            <Textarea
+              value={draft.procedure_body}
+              onChange={(e) => setDraft((d) => ({ ...d, procedure_body: e.target.value }))}
+              rows={12}
+              className='font-mono text-[11px] leading-snug'
+              placeholder='CREATE OR ALTER PROCEDURE import_… AS BEGIN … END'
+            />
+          </Field>
+
+          {versions.length > 0 && (
+            <Field label='Versions' hint='Every save snapshots the whole definition. Restore is itself versioned.'>
+              <div className='max-h-40 space-y-1 overflow-y-auto'>
+                {versions.map((v) => (
+                  <div
+                    key={v.id}
+                    className='flex items-center justify-between rounded border border-slate-100 px-2.5 py-1.5 text-[11.5px] dark:border-border'
+                  >
+                    <span className='min-w-0 truncate text-slate-600 dark:text-muted-foreground'>
+                      v{v.version} · {v.note ?? '—'} ·{' '}
+                      {new Date(v.created_at).toLocaleString()}
+                    </span>
+                    <button
+                      type='button'
+                      className='shrink-0 text-[11px] text-nvr-cyan hover:underline'
+                      disabled={restore.isPending}
+                      onClick={() => restore.mutate(v.id)}
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Field>
+          )}
+
+          {msg && <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>{msg}</p>}
+        </div>
+      )}
     </div>
   )
 }

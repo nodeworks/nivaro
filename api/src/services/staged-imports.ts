@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
+import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -29,6 +30,15 @@ export interface ImportDefinition {
   procedure: string | null
   loader: StagingLoader | null
   is_active: boolean
+  /** Declared staging schema (JSON) — when set, the staging table is built to
+   *  match it and file headers map onto it, instead of deriving from the file. */
+  staging_columns?: string | null
+  /** App-managed procedure body; null = the procedure is managed outside. */
+  procedure_body?: string | null
+  procedure_hash?: string | null
+  procedure_deployed_at?: string | Date | null
+  /** Pre-flight validation config (JSON) — see staged-import-validation.ts. */
+  validation?: string | null
 }
 
 export interface ImportProgress {
@@ -213,15 +223,38 @@ async function deleteFromShare(remoteName: string): Promise<void> {
 
 /** Staging tables are all-text by design — the procedure does the casting.
  *  Existing tables are emptied rather than dropped so a shape a procedure
- *  depends on survives a column change in the source file. */
-async function ensureStagingTable(table: string, columns: string[]): Promise<void> {
+ *  depends on survives a column change in the source file.
+ *
+ *  With a DECLARED schema the table converges on the declaration instead of
+ *  whatever the last file looked like: missing declared columns are ADDED
+ *  (never dropped — dropping is an explicit admin act), so a re-exported
+ *  sheet can't silently reshape the table under the procedure. */
+async function ensureStagingTable(
+  table: string,
+  columns: string[],
+  declared?: string[] | null
+): Promise<void> {
+  const wanted = declared && declared.length > 0 ? declared : columns
   if (await db.schema.hasTable(table)) {
+    if (declared && declared.length > 0) {
+      const existing = new Set(
+        ((await db('information_schema.columns')
+          .where('table_name', table)
+          .pluck('column_name')) as string[]).map((c) => c.toLowerCase())
+      )
+      const missing = wanted.filter((c) => c !== 'id' && !existing.has(c.toLowerCase()))
+      if (missing.length > 0) {
+        await db.schema.alterTable(table, (t) => {
+          for (const c of missing) t.text(c)
+        })
+      }
+    }
     await db.raw('DELETE FROM ??', [table])
     return
   }
   await db.schema.createTable(table, (t) => {
     t.increments()
-    for (const c of columns) if (c !== 'id') t.text(c)
+    for (const c of wanted) if (c !== 'id') t.text(c)
   })
 }
 
@@ -439,16 +472,36 @@ export async function runStagedImport({
     throw new Error(`Unsafe procedure name: ${definition.procedure}`)
   }
 
-  const rows = parseImportFile(buffer)
+  let rows = parseImportFile(buffer)
   if (rows.length === 0) throw new Error('File contained no rows')
   await onProgress?.('row_count', { row_count: rows.length })
 
   // Derived from ALL rows: keying the schema off row 1 (as the legacy importer
   // did) silently drops columns that only appear later in the file.
-  const columns = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
+  let columns = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
+
+  // Declared schema: file headers map onto the declared columns (same
+  // punctuation-tolerant matching the validator uses) and ONLY declared
+  // columns load — an extra sheet column can't invent a staging column, and
+  // the procedure reads the names it was written against.
+  const declared = parseStagingColumns(definition.staging_columns)
+  let declaredNames: string[] | null = null
+  if (declared) {
+    const { headerFor } = resolveHeaderMap(columns, declared)
+    rows = rows.map((r) => {
+      const o: Record<string, string> = {}
+      for (const col of declared) {
+        const h = headerFor.get(col.name)
+        o[col.name] = h ? (r[h] ?? '') : ''
+      }
+      return o
+    })
+    declaredNames = declared.map((c) => c.name).filter((c) => c !== 'id')
+    columns = declaredNames
+  }
 
   await onProgress?.('preparing')
-  await ensureStagingTable(table, columns)
+  await ensureStagingTable(table, columns, declaredNames)
 
   const loader: StagingLoader =
     definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'bulk')
