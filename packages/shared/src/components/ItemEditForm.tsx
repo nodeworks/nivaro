@@ -5,6 +5,7 @@ import { CloneDialog } from './item-edit/CloneDialog'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
@@ -5185,6 +5186,9 @@ export function ItemEditForm({
             )}
           >
             {extraTopContent}
+            {!isNew && itemId && (
+              <RecordRecapStrip collection={collection} itemId={String(itemId)} />
+            )}
             {importIssues.length > 0 && (
               <ImportIssuesPanel issues={importIssues} onDismiss={() => setImportIssues([])} />
             )}

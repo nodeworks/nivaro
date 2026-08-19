@@ -52680,6 +52680,238 @@
         }
       }
     },
+    "/items/warehouse_usage": {
+      "get": {
+        "tags": [
+          "Warehouse Usage"
+        ],
+        "operationId": "listWarehouseUsage",
+        "summary": "List warehouse_usage",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WarehouseUsage"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Warehouse Usage"
+        ],
+        "operationId": "createWarehouseUsage",
+        "summary": "Create warehouse_usage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseUsage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehouseUsage"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/warehouse_usage/{id}": {
+      "get": {
+        "tags": [
+          "Warehouse Usage"
+        ],
+        "operationId": "getWarehouseUsage",
+        "summary": "Get warehouse_usage by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehouseUsage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Warehouse Usage"
+        ],
+        "operationId": "updateWarehouseUsage",
+        "summary": "Update warehouse_usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseUsage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WarehouseUsage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Warehouse Usage"
+        ],
+        "operationId": "deleteWarehouseUsage",
+        "summary": "Delete warehouse_usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/items/inventory_request_materials_warehouses": {
       "get": {
         "tags": [
@@ -59774,6 +60006,64 @@
             "type": "string"
           },
           "collection": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "WarehouseUsage": {
+        "type": "object",
+        "description": "Monthly issuance out of each warehouse per CIFA item (month_1 = most recent month), including inventory ordered outside EFP. Loaded by the Warehouse Usage staged import.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "warehouse": {
+            "type": "integer"
+          },
+          "cifa": {
+            "type": "integer"
+          },
+          "month_1": {
+            "type": "number"
+          },
+          "month_2": {
+            "type": "number"
+          },
+          "month_3": {
+            "type": "number"
+          },
+          "month_4": {
+            "type": "number"
+          },
+          "month_5": {
+            "type": "number"
+          },
+          "month_6": {
+            "type": "number"
+          },
+          "month_7": {
+            "type": "number"
+          },
+          "month_8": {
+            "type": "number"
+          },
+          "month_9": {
+            "type": "number"
+          },
+          "month_10": {
+            "type": "number"
+          },
+          "month_11": {
+            "type": "number"
+          },
+          "month_12": {
+            "type": "number"
+          },
+          "date_created": {
+            "type": "string"
+          },
+          "date_updated": {
             "type": "string"
           }
         },

@@ -57,6 +57,7 @@ import { coverageGapsRoutes } from './coverage-gaps.js'
 import { myWorkRoutes } from './my-work.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { lastTouchRoutes } from './last-touch.js'
+import { recordViewRoutes } from './record-views.js'
 import { recordLinkRoutes } from './record-links.js'
 import { fieldHistoryRoutes } from './field-history.js'
 import { integrationHealthRoutes } from './integration-health.js'
@@ -153,6 +154,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(myWorkRoutes)
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)
+  await app.register(recordViewRoutes)
   await app.register(recordLinkRoutes)
   await app.register(fieldHistoryRoutes)
   await app.register(integrationHealthRoutes)
