@@ -601,6 +601,8 @@ export function createAddendum(body: {
   data?: Record<string, unknown>
   cost_impact?: number | null
   timeline_impact_days?: number | null
+  /** nivaro_files ids to attach (server caps at 50). */
+  attachments?: string[]
 }): Command<{ data: Addendum }> {
   return cmd('POST', '/addendums', undefined, body)
 }
@@ -718,4 +720,146 @@ export function updateLayoutUngroupedSort(
   return cmd('PATCH', `/collection-layouts/${id}/ungrouped-sort`, undefined, {
     ungrouped_sort: ungroupedSort
   })
+}
+
+// ─── Record views ("since you last looked") ───────────────────────────────────
+
+export interface RecordViewRecap {
+  /** Baseline of the recap — the caller's previous visit. */
+  since: ISODate
+  /** Number of distinct fields other users changed since then. */
+  field_changes: number
+  /** Human labels of the changed fields (first 8). */
+  fields: string[]
+  /** Comments by others since the baseline. */
+  comments: number
+  /** Workflow transitions by others since the baseline. */
+  transitions: number
+  /** Display names of the people who edited (first 5). */
+  editors: string[]
+}
+
+/**
+ * Roll the caller's view watermark for a record and get back the recap of what
+ * OTHERS changed since the previous visit, in one round trip. `data` is null on
+ * a first visit, a same-session refresh with no prior baseline, or when nothing
+ * changed. Call when opening a record.
+ */
+export function touchRecordView(
+  collection: string,
+  id: string | number
+): Command<{ data: RecordViewRecap | null }> {
+  return cmd('POST', `/record-views/${collection}/${id}/touch`, undefined, {})
+}
+
+// ─── Field change history (delta-mined) ───────────────────────────────────────
+
+export interface FieldChangeEntry {
+  /** The value the field BECAME at this point. */
+  value: unknown
+  /** Resolved display label — M2O FK → related record label, select value → choice text. */
+  display: string | null
+  timestamp: ISODate | null
+  user_name: string | null
+  action: string
+}
+
+/**
+ * One field's actual value changes (newest first, max 25) mined from revision
+ * deltas — consecutive identical values are deduped, M2O FKs resolve to display
+ * labels. Distinct from `readFieldHistory`, which reads the older
+ * /items/…/field-history route.
+ */
+export function readFieldChangeHistory(
+  collection: string,
+  id: string | number,
+  field: string
+): Command<{ data: FieldChangeEntry[] }> {
+  return cmd('GET', `/field-history/${collection}/${id}/${field}`)
+}
+
+// ─── Import preview ───────────────────────────────────────────────────────────
+
+export interface ImportPreviewDiff {
+  /** 1-based file row (header = row 1). */
+  row: number
+  id: string
+  kind: 'changed' | 'conflict'
+  /** Present on conflicts: why the operator must look. */
+  reason?: string
+  fields: Array<{ field: string; old: unknown; new: unknown }>
+}
+
+export interface ImportPreview {
+  /** Rows scanned (capped at 5,000 — `truncated` flags a bigger file). */
+  total: number
+  truncated: boolean
+  new: number
+  unchanged: number
+  changed: number
+  /** Existing-and-differs under strategy 'skip', or duplicate ids within the file. */
+  conflicts: number
+  field_change_counts: Record<string, number>
+  /** Field-level old→new diffs for the first 50 changed/conflicted rows. */
+  diffs: ImportPreviewDiff[]
+}
+
+/**
+ * Dry-run a CSV import (admin) — mirrors the real import's matching exactly
+ * (same id_field lookup, same strategy semantics) without writing anything.
+ */
+export function previewImportJob(body: {
+  collection: string
+  /** Raw CSV text including the header row. */
+  csv_data: string
+  /** { csvColumn: fieldName } */
+  column_map?: Record<string, string>
+  id_field?: string | null
+  /** Defaults to 'skip'. */
+  duplicate_strategy?: string
+}): Command<{ data: ImportPreview }> {
+  return cmd('POST', '/imports/preview', undefined, body)
+}
+
+// ─── Related comments (recorded notes) ────────────────────────────────────────
+
+export interface RelatedCommentEntry {
+  id: string
+  source: 'transition' | 'change_reason' | 'addendum' | 'note'
+  label: string
+  text: string
+  user: string | null
+  user_name: string | null
+  created_at: ISODate
+  /** Where the note came from ("Draft → Review", "Forecasts · 2026 · amount"). */
+  context: string | null
+}
+
+/**
+ * Read-only notes recorded about a record from other surfaces — workflow
+ * transition comments, change reasons (own + child rows), addendum reasons,
+ * and conventional note child tables. Time-ordered oldest first; merge with
+ * `listComments` for the full thread.
+ */
+export function listRelatedComments(
+  collection: string,
+  item: string | number
+): Command<{ data: RelatedCommentEntry[] }> {
+  return cmd('GET', '/comments/related', { collection, item: String(item) })
+}
+
+// ─── Distinct column values ───────────────────────────────────────────────────
+
+/**
+ * Distinct non-null values of one PHYSICAL column, ascending — for
+ * column-filter dropdowns. `limit` is clamped to 1–500 (default 200).
+ */
+export function readDistinctValues(
+  collection: string,
+  field: string,
+  options?: { limit?: number }
+): Command<{ data: unknown[] }> {
+  const params: Record<string, unknown> = { field }
+  if (options?.limit != null) params.limit = options.limit
+  return cmd('GET', `/items/${collection}/distinct`, params)
 }

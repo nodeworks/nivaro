@@ -1,7 +1,9 @@
 /**
  * Administration commands: roles & policies (RBAC/RLS), user management +
  * delegation, CSV import jobs, throughput reporting, notification-subscription
- * admin views, extension/flow registries, mail test.
+ * admin views, extension/flow registries, mail test, Report Studio, pipeline
+ * template versions, metric alerts, scope dimensions, staged imports, access
+ * audits, coverage gaps, integration health.
  */
 import { type Command, cmd } from '../command.js'
 import type { ISODate, UUID } from '../index.js'
@@ -1041,7 +1043,9 @@ export function setReportSubscription(
  * 'min:<col>' | 'tile:<label>' (kpi_group tile).
  */
 /** Clear cached custom-query results for this report's query widgets. */
-export function resetReportCache(id: UUID): Command<{ data: { queries: number; cleared: number } }> {
+export function resetReportCache(
+  id: UUID
+): Command<{ data: { queries: number; cleared: number } }> {
   return cmd('POST', `/report-studio/${id}/reset-cache`)
 }
 
@@ -1162,4 +1166,903 @@ export function deleteReportAlert(
   alertId: UUID
 ): Command<{ data: { deleted: boolean } }> {
   return cmd('DELETE', `/report-studio/${id}/alerts/${alertId}`)
+}
+
+/** Every alert's firing history for a report (newest first, capped 100). */
+export function readReportAlertsLog(id: UUID): Command<{ data: ReportAlertLogEntry[] }> {
+  return cmd('GET', `/report-studio/${id}/alerts-log`)
+}
+
+/** Currently-firing alerts for a report — drives the report's red strip. */
+export function readReportFiring(
+  id: UUID
+): Command<{ data: Array<{ alert_id: UUID; name: string; widget: UUID; since: ISODate }> }> {
+  return cmd('GET', `/report-studio/${id}/firing`)
+}
+
+// ─── Report Studio — templates, versions, snapshots, annotations ──────────────
+
+export interface ReportVersionEntry {
+  id: number
+  version: number
+  note: string | null
+  created_at: ISODate
+  created_by_name: string | null
+}
+
+/** Config version history for a report (newest first, capped 30). */
+export function listReportVersions(id: UUID): Command<{ data: ReportVersionEntry[] }> {
+  return cmd('GET', `/report-studio/${id}/versions`)
+}
+
+/** Restore a config version. Id-preserving; captures a 'before restore' version first. */
+export function restoreReportVersion(
+  id: UUID,
+  versionId: number
+): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', `/report-studio/${id}/versions/${versionId}/restore`)
+}
+
+export interface ReportSnapshotEntry {
+  id: number
+  name: string
+  taken_at: ISODate
+}
+
+/** Point-in-time snapshots (one derived metric per widget) for vs-then deltas. */
+export function listReportSnapshots(id: UUID): Command<{ data: ReportSnapshotEntry[] }> {
+  return cmd('GET', `/report-studio/${id}/snapshots`)
+}
+
+/** Take a snapshot now, resolved as the caller with the report's own date range. */
+export function createReportSnapshot(
+  id: UUID,
+  name?: string
+): Command<{ data: { id: number; name: string } }> {
+  return cmd('POST', `/report-studio/${id}/snapshots`, undefined, name ? { name } : {})
+}
+
+/** One snapshot with its per-widget values ({ widgetId: { value } }). */
+export function readReportSnapshot(
+  id: UUID,
+  snapId: number
+): Command<{
+  data: ReportSnapshotEntry & { data: Record<string, { value: number | null }> }
+}> {
+  return cmd('GET', `/report-studio/${id}/snapshots/${snapId}`)
+}
+
+export function deleteReportSnapshot(
+  id: UUID,
+  snapId: number
+): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/${id}/snapshots/${snapId}`)
+}
+
+export interface ReportAnnotation {
+  id: number
+  widget: UUID
+  note: string
+  /** 'YYYY-MM' or 'YYYY-MM-DD' bucket key — renders as a chart marker when it
+   *  matches a bucket. */
+  anchor_date: string | null
+  created_at: ISODate
+  created_by: UUID
+  created_by_name: string | null
+}
+
+export function listReportAnnotations(id: UUID): Command<{ data: ReportAnnotation[] }> {
+  return cmd('GET', `/report-studio/${id}/annotations`)
+}
+
+export function createReportAnnotation(
+  id: UUID,
+  body: { widget: UUID; note: string; anchor_date?: string | null }
+): Command<{ data: { id: number } }> {
+  return cmd('POST', `/report-studio/${id}/annotations`, undefined, body)
+}
+
+/** Delete an annotation (own note, or anyone with edit access to the report). */
+export function deleteReportAnnotation(
+  id: UUID,
+  annId: number
+): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/${id}/annotations/${annId}`)
+}
+
+export interface ReportTemplateEntry {
+  id: number
+  name: string
+  description: string | null
+  created_at: ISODate
+}
+
+/** Whole-report templates (global filters + widget set snapshots). */
+export function listReportTemplates(): Command<{ data: ReportTemplateEntry[] }> {
+  return cmd('GET', '/report-studio/templates')
+}
+
+/** Snapshot a report's current config as a reusable template. */
+export function saveReportTemplate(
+  id: UUID,
+  body: { name?: string; description?: string } = {}
+): Command<{ data: { id: number; name: string } }> {
+  return cmd('POST', `/report-studio/${id}/save-template`, undefined, body)
+}
+
+/** Instantiate a new (private) report from a template. */
+export function createReportFromTemplate(body: {
+  template_id: number
+  name?: string
+}): Command<{ data: { id: UUID } }> {
+  return cmd('POST', '/report-studio/from-template', undefined, body)
+}
+
+/** Delete a template (creator or admin). */
+export function deleteReportTemplate(templateId: number): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/report-studio/templates/${templateId}`)
+}
+
+/** Copy a widget into another report (needs edit access to the target). */
+export function copyReportWidget(
+  id: UUID,
+  widgetId: UUID,
+  targetReportId: UUID
+): Command<{ data: { id: UUID; report: UUID } }> {
+  return cmd('POST', `/report-studio/${id}/widgets/${widgetId}/copy`, undefined, {
+    target_report_id: targetReportId
+  })
+}
+
+/** Infer the record behind a query-widget row from its column values.
+ *  Resolved as the caller (RBAC/RLS apply); ambiguity is a miss. */
+export function drillReportRow(
+  values: Record<string, unknown>
+): Command<{ data: { collection: string; item_id: string } | { resolved: false } }> {
+  return cmd('POST', '/report-studio/drill-row', undefined, { values })
+}
+
+/** Per-report read stats from the throttled report-view activity log. Admin only. */
+export function readReportUsage(): Command<{
+  data: Record<string, { last_viewed: ISODate; views_30d: number; viewers_30d: number }>
+}> {
+  return cmd('GET', '/report-studio/usage')
+}
+
+// ─── Report Studio — prebuilt widget catalog ──────────────────────────────────
+
+export interface ReportWidgetPreset {
+  id: number
+  name: string
+  category: string
+  description: string | null
+  widget_type: ReportWidgetType
+  config: ReportWidgetConfig | null
+  w: number
+  h: number
+}
+
+/** Active prebuilt widget presets, ordered by category/sort/name. */
+export function listReportWidgetPresets(): Command<{ data: ReportWidgetPreset[] }> {
+  return cmd('GET', '/report-studio/widget-presets')
+}
+
+/** Add a preset to the catalog. Admin only. */
+export function createReportWidgetPreset(body: {
+  name: string
+  widget_type: ReportWidgetType
+  category?: string
+  description?: string | null
+  config?: ReportWidgetConfig | null
+  w?: number
+  h?: number
+  sort?: number
+  is_active?: boolean
+}): Command<{ data: { ok: boolean } }> {
+  return cmd('POST', '/report-studio/widget-presets', undefined, body)
+}
+
+/** Update a preset. Admin only. */
+export function updateReportWidgetPreset(
+  presetId: number,
+  body: Partial<Omit<ReportWidgetPreset, 'id'>> & { sort?: number; is_active?: boolean }
+): Command<{ data: { ok: boolean } }> {
+  return cmd('PATCH', `/report-studio/widget-presets/${presetId}`, undefined, body)
+}
+
+/** Delete a preset. Admin only. */
+export function deleteReportWidgetPreset(presetId: number): Command<{ data: { ok: boolean } }> {
+  return cmd('DELETE', `/report-studio/widget-presets/${presetId}`)
+}
+
+// ─── Pipeline template versions & impact preview ──────────────────────────────
+
+export interface PipelineVersionEntry {
+  id: number
+  version: number
+  note: string | null
+  created_at: ISODate
+  created_by_name: string | null
+}
+
+/** Config snapshots for a workflow/pipeline template (newest first). Admin only. */
+export function listPipelineVersions(
+  templateId: string
+): Command<{ data: PipelineVersionEntry[] }> {
+  return cmd('GET', `/pipelines/${templateId}/versions`)
+}
+
+/** One version with its parsed snapshot ({ template, states, transitions, bindings }). */
+export function readPipelineVersion(
+  templateId: string,
+  versionId: number
+): Command<{ data: PipelineVersionEntry & { snapshot: Record<string, unknown> } }> {
+  return cmd('GET', `/pipelines/${templateId}/versions/${versionId}`)
+}
+
+/** Restore a template config version. Id-preserving — states/bindings are never
+ *  deleted; a 'before restore' version is captured first. Admin only. */
+export function restorePipelineVersion(
+  templateId: string,
+  versionId: number
+): Command<{ data: Record<string, unknown> }> {
+  return cmd('POST', `/pipelines/${templateId}/versions/${versionId}/restore`)
+}
+
+export interface PipelineImpactResult {
+  state: { id: string; label: string | null }
+  evaluated: number
+  truncated: boolean
+  now_skipped: number
+  now_required: number
+  changes: Array<{
+    collection: string
+    item: string
+    current: boolean
+    proposed: boolean
+    proposed_reasons: string[]
+  }>
+}
+
+/** Preview a proposed skip-criteria change against real records in active
+ *  instances — returns only records whose skip decision flips. Admin only. */
+export function simulatePipelineImpact(
+  templateId: string,
+  body: {
+    state_id: string
+    skip_criteria?: Record<string, unknown> | null
+    skip_if_no_owners?: boolean
+    limit?: number
+  }
+): Command<{ data: PipelineImpactResult }> {
+  return cmd('POST', `/pipelines/${templateId}/simulate-impact`, undefined, body)
+}
+
+export interface ApprovalBrief {
+  entered_at: ISODate
+  days_in_state: number
+  revisions: number
+  field_changes: Array<{ field: string; old?: unknown; new: unknown }>
+  changed_total: number
+  comments: number
+  addendums: { count: number; cost_impact: number }
+  edited_by: string[]
+}
+
+/** What changed on a record since it entered its current state — the window an
+ *  approver is signing off on. Null when the record has no workflow instance. */
+export function readApprovalBrief(
+  collection: string,
+  item: string | number
+): Command<{ data: ApprovalBrief | null }> {
+  return cmd('GET', `/pipelines/instance/${collection}/${item}/approval-brief`)
+}
+
+/** Resolved owner display names per record id (one batched engine pass — feeds
+ *  browser Owners columns). Max 500 ids. */
+export function readStateOwnersBatch(
+  collection: string,
+  ids: Array<string | number>
+): Command<{ data: Record<string, Array<{ id: string; name: string }>> }> {
+  return cmd('POST', `/pipelines/instance/${collection}/owners/batch`, undefined, { ids })
+}
+
+// ─── Metric alert engine ──────────────────────────────────────────────────────
+
+export interface MetricDefinition {
+  id: number
+  name: string
+  description: string | null
+  metric_key: string
+  category: string
+  unit: string
+  default_operator: string
+  default_threshold: number | null
+  /** Admin callers only — omitted for everyone else. */
+  metric_source?: Record<string, unknown>
+  supported_filters: unknown
+  status: string
+  sort: number | null
+}
+
+export interface MetricAlertRule {
+  id: number
+  name: string
+  definition_id: number
+  operator: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'change_pct'
+  threshold_value: number
+  filters: unknown
+  check_frequency: 'hourly' | 'daily' | 'weekly'
+  is_shared: boolean
+  status: 'active' | 'paused' | 'archived'
+  created_by: UUID
+  /** Joined definition summary on list reads. */
+  definition?: {
+    id: number
+    name: string
+    description: string | null
+    category: string
+    unit: string
+  }
+}
+
+export interface MetricAlertSubscription {
+  id: number
+  rule_id: number
+  user: UUID
+  delivery_in_app: boolean
+  delivery_email: boolean
+  digest_frequency: 'immediate' | 'daily' | 'weekly'
+  status: string
+  rule_name?: string
+  definition_name?: string
+}
+
+/** The metric catalog (active only unless an admin passes all). */
+export function listMetricDefinitions(
+  options: { all?: boolean } = {}
+): Command<{ data: MetricDefinition[] }> {
+  return cmd('GET', '/metric-alerts/definitions', options.all ? { all: '1' } : undefined)
+}
+
+/** Rules visible to the caller (shared or own). */
+export function listMetricAlertRules(): Command<{ data: MetricAlertRule[] }> {
+  return cmd('GET', '/metric-alerts/rules')
+}
+
+/** Create a rule (the creator is auto-subscribed, EFP behavior). */
+export function createMetricAlertRule(body: {
+  name: string
+  definition_id: number
+  threshold_value: number
+  operator?: MetricAlertRule['operator']
+  filters?: unknown
+  check_frequency?: MetricAlertRule['check_frequency']
+  is_shared?: boolean
+  status?: MetricAlertRule['status']
+}): Command<{ data: MetricAlertRule }> {
+  return cmd('POST', '/metric-alerts/rules', undefined, body)
+}
+
+/** Update an own rule (admins may edit any). */
+export function updateMetricAlertRule(
+  id: number,
+  body: Partial<Omit<MetricAlertRule, 'id' | 'created_by' | 'definition'>>
+): Command<{ data: MetricAlertRule }> {
+  return cmd('PATCH', `/metric-alerts/rules/${id}`, undefined, body)
+}
+
+/** Delete an own rule. Note: responds { ok: true }, not a data envelope. */
+export function deleteMetricAlertRule(id: number): Command<{ ok: boolean }> {
+  return cmd('DELETE', `/metric-alerts/rules/${id}`)
+}
+
+/** The caller's own subscriptions (with joined rule/definition summaries). */
+export function listMetricAlertSubscriptions(): Command<{ data: MetricAlertSubscription[] }> {
+  return cmd('GET', '/metric-alerts/subscriptions')
+}
+
+/** Subscribe to a shared (or own) rule — idempotent, returns the existing row. */
+export function subscribeMetricAlert(body: {
+  rule_id: number
+  delivery_in_app?: boolean
+  delivery_email?: boolean
+  digest_frequency?: MetricAlertSubscription['digest_frequency']
+}): Command<{ data: MetricAlertSubscription }> {
+  return cmd('POST', '/metric-alerts/subscriptions', undefined, body)
+}
+
+export function updateMetricAlertSubscription(
+  id: number,
+  body: {
+    delivery_in_app?: boolean
+    delivery_email?: boolean
+    digest_frequency?: MetricAlertSubscription['digest_frequency']
+    status?: 'active' | 'paused'
+  }
+): Command<{ data: MetricAlertSubscription }> {
+  return cmd('PATCH', `/metric-alerts/subscriptions/${id}`, undefined, body)
+}
+
+/** Unsubscribe. Note: responds { ok: true }, not a data envelope. */
+export function unsubscribeMetricAlert(id: number): Command<{ ok: boolean }> {
+  return cmd('DELETE', `/metric-alerts/subscriptions/${id}`)
+}
+
+/** Firing log for rules the caller can see (newest first, cap 500). */
+export function readMetricAlertLog(
+  options: { limit?: number } = {}
+): Command<{ data: Array<Record<string, unknown>> }> {
+  return cmd('GET', '/metric-alerts/log', options.limit ? { limit: options.limit } : undefined)
+}
+
+export interface AnomalyDefinition {
+  id: number
+  key: string
+  name: string
+  description: string | null
+  category: string
+  /** Admin callers only. */
+  config?: Record<string, unknown>
+  /** Public scope picker spec: [{key, label, collection?, value_field?, label_field?, sort?}] */
+  scope_options: unknown
+  sensitivity_hints: unknown
+  status: string
+}
+
+export interface AnomalyRule {
+  id: number
+  name: string
+  definition_id: number
+  sensitivity: 'low' | 'medium' | 'high'
+  scopes: unknown
+  check_frequency: 'daily' | 'weekly'
+  delivery_in_app: boolean
+  delivery_email: boolean
+  status: 'active' | 'paused'
+  created_by: UUID
+  definition?: { id: number; key: string; name: string; description: string | null }
+}
+
+/** The anomaly detector catalog (active only unless an admin passes all). */
+export function listAnomalyDefinitions(
+  options: { all?: boolean } = {}
+): Command<{ data: AnomalyDefinition[] }> {
+  return cmd('GET', '/metric-alerts/anomaly-definitions', options.all ? { all: '1' } : undefined)
+}
+
+export function listAnomalyRules(): Command<{ data: AnomalyRule[] }> {
+  return cmd('GET', '/metric-alerts/anomaly-rules')
+}
+
+export function createAnomalyRule(body: {
+  name: string
+  definition_id: number
+  sensitivity?: AnomalyRule['sensitivity']
+  scopes?: unknown
+  check_frequency?: AnomalyRule['check_frequency']
+  delivery_in_app?: boolean
+  delivery_email?: boolean
+  status?: AnomalyRule['status']
+}): Command<{ data: AnomalyRule }> {
+  return cmd('POST', '/metric-alerts/anomaly-rules', undefined, body)
+}
+
+/** Update an own anomaly rule (admins may edit any). */
+export function updateAnomalyRule(
+  id: number,
+  body: Partial<Omit<AnomalyRule, 'id' | 'created_by' | 'definition'>>
+): Command<{ data: AnomalyRule }> {
+  return cmd('PATCH', `/metric-alerts/anomaly-rules/${id}`, undefined, body)
+}
+
+/** Delete an own anomaly rule. Note: responds { ok: true }, not a data envelope. */
+export function deleteAnomalyRule(id: number): Command<{ ok: boolean }> {
+  return cmd('DELETE', `/metric-alerts/anomaly-rules/${id}`)
+}
+
+/** Detection log (newest first, cap 500); stats_snapshot comes back parsed. */
+export function readAnomalyLog(
+  options: { limit?: number } = {}
+): Command<{ data: Array<Record<string, unknown>> }> {
+  return cmd(
+    'GET',
+    '/metric-alerts/anomaly-log',
+    options.limit ? { limit: options.limit } : undefined
+  )
+}
+
+/** Acknowledge or resolve a detection. */
+export function updateAnomalyLogEntry(
+  id: number,
+  status: 'acknowledged' | 'resolved'
+): Command<{ data: Record<string, unknown> }> {
+  return cmd('PATCH', `/metric-alerts/anomaly-log/${id}`, undefined, { status })
+}
+
+// ─── Scope dimension registry ─────────────────────────────────────────────────
+
+export interface ScopeDimension {
+  id: number
+  name: string
+  label: string
+  target_collection: string
+  display_field: string | null
+  options_sort: string | null
+  overrides: Record<string, string[]> | null
+  exclusions: string[] | null
+  strict: boolean
+  is_active: boolean
+}
+
+/** The full dimension registry (authenticated; includes inactive rows). */
+export function listScopeDimensions(): Command<{ data: ScopeDimension[] }> {
+  return cmd('GET', '/scope-dimensions')
+}
+
+// NOTE: there is no GET /scope-dimensions/:id single-read route — read one from
+// the list. Coverage below is the only per-dimension read.
+
+/** Live coverage preview: how the dimension resolves on every business
+ *  collection (self / auto / override / excluded / unreachable). Admin only. */
+export function readScopeDimensionCoverage(id: number): Command<{
+  data: Array<{
+    collection: string
+    status: 'self' | 'auto' | 'override' | 'excluded' | 'unreachable'
+    route: string | null
+    hops: unknown
+  }>
+}> {
+  return cmd('GET', `/scope-dimensions/${id}/coverage`)
+}
+
+// ─── Staged imports ───────────────────────────────────────────────────────────
+
+export interface StagedImportRun {
+  id: number
+  definition: number | null
+  import_key: string
+  status: 'queued' | 'running' | 'completed' | 'error' | 'canceled'
+  sort: number
+  file: UUID | null
+  row_count: number | null
+  duration: number | null
+  logs: string | null
+  started_at: ISODate | null
+  finished_at: ISODate | null
+  created_by: UUID | null
+  created_at: ISODate
+  updated_at: ISODate | null
+  legacy_id: number | null
+  definition_label: string | null
+  staging_table: string | null
+  procedure: string | null
+  loader: string | null
+  definition_active: boolean | null
+  file_name: string | null
+  file_size: number | null
+  created_by_first_name: string | null
+  created_by_last_name: string | null
+  created_by_email: string | null
+}
+
+export interface StagedImportStats {
+  window_days: number
+  by_status: Record<string, number>
+  total: number
+  all_time_total: number
+  by_key: Record<string, number>
+  rows_imported: number
+  median_duration: number | null
+  success_rate: number | null
+  runs_today: number
+  active: Array<{
+    id: number
+    import_key: string
+    status: string
+    started_at: ISODate | null
+    created_at: ISODate
+    row_count: number | null
+  }>
+}
+
+export interface ImportDefinition {
+  id: number
+  key: string
+  label: string | null
+  description: string | null
+  staging_table: string | null
+  procedure: string | null
+  loader: 'bulk' | 'insert' | null
+  sort: number
+  is_active: boolean
+  staging_columns?: unknown
+  validation?: unknown
+  procedure_body?: string | null
+}
+
+/** Paged staged-import runs. `days=0`/absent means all time; `status` accepts a
+ *  comma list; `search` matches key / definition label / file name / run id. */
+export function listStagedImports(
+  options: {
+    search?: string
+    page?: number
+    days?: number
+    status?: string
+    key?: string
+    limit?: number
+  } = {}
+): Command<{ data: StagedImportRun[]; total: number; page: number; limit: number }> {
+  return cmd('GET', '/staged-imports/', options)
+}
+
+/** Windowed aggregate stats (counts, success rate, live queue). `days=0` = all time. */
+export function readStagedImportStats(days?: number): Command<{ data: StagedImportStats }> {
+  return cmd('GET', '/staged-imports/stats', days != null ? { days } : undefined)
+}
+
+export function readStagedImport(id: number): Command<{ data: StagedImportRun }> {
+  return cmd('GET', `/staged-imports/${id}`)
+}
+
+// previewStagedImport (POST /staged-imports/preview) and queueStagedImport
+// (POST /staged-imports/) are MULTIPART file uploads — SDK request bodies are
+// JSON-only, so these go through the host's own fetch (Import Console
+// precedent: useApiFetchConfig + raw fetch).
+
+/** Re-queue a finished or failed run without re-uploading its file. Admin only. */
+export function requeueStagedImport(id: number): Command<{ data: { id: number; status: string } }> {
+  return cmd('POST', `/staged-imports/${id}/requeue`)
+}
+
+/** Stop a run that hasn't started, or clear one wedged in `running`. Admin only. */
+export function cancelStagedImport(id: number): Command<{ data: { id: number; status: string } }> {
+  return cmd('POST', `/staged-imports/${id}/cancel`)
+}
+
+/** Import definitions (active only unless `all`). */
+export function listImportDefinitions(
+  options: { all?: boolean } = {}
+): Command<{ data: ImportDefinition[] }> {
+  return cmd('GET', '/staged-imports/definitions', options.all ? { all: 'true' } : undefined)
+}
+
+/** Register a new import definition. Admin only. */
+export function createImportDefinition(data: {
+  key: string
+  label?: string
+  description?: string
+  staging_table?: string
+  procedure?: string
+  loader?: 'bulk' | 'insert'
+  sort?: number
+}): Command<{ data: ImportDefinition }> {
+  return cmd('POST', '/staged-imports/definitions', undefined, data)
+}
+
+/** Update a definition (config fields accept objects or JSON strings). Admin only. */
+export function updateImportDefinition(
+  id: number,
+  data: Partial<Omit<ImportDefinition, 'id' | 'key'>>
+): Command<{ data: ImportDefinition }> {
+  return cmd('PATCH', `/staged-imports/definitions/${id}`, undefined, data)
+}
+
+/** The LIVE procedure body from SQL Server vs the stored one (+ hashes). Admin only. */
+export function readImportProcedure(id: number): Command<{
+  data: {
+    procedure: string
+    live_body: string | null
+    stored_body: string | null
+    deployed_hash: string | null
+    stored_hash: string | null
+  }
+}> {
+  return cmd('GET', `/staged-imports/definitions/${id}/procedure`)
+}
+
+/** Deploy the stored procedure body via CREATE OR ALTER (scoped to the
+ *  definition's own procedure name). Admin only. */
+export function deployImportProcedure(
+  id: number
+): Command<{ data: { deployed: boolean; hash: string } }> {
+  return cmd('POST', `/staged-imports/definitions/${id}/deploy`)
+}
+
+/** Definition version history (proc body + schema + validation together). Admin only. */
+export function listImportDefinitionVersions(id: number): Command<{
+  data: Array<{
+    id: number
+    version: number
+    note: string | null
+    created_by: UUID | null
+    created_at: ISODate
+  }>
+}> {
+  return cmd('GET', `/staged-imports/definitions/${id}/versions`)
+}
+
+/** Restore a definition version (captures a 'before restore' version first). Admin only. */
+export function restoreImportDefinitionVersion(
+  id: number,
+  versionId: number
+): Command<{ data: ImportDefinition }> {
+  return cmd('POST', `/staged-imports/definitions/${id}/versions/${versionId}/restore`)
+}
+
+/** Regex-mine the live procedure for join/merge patterns and prefill a
+ *  validation config for review — nothing is saved. Admin only. */
+export function suggestImportValidation(id: number): Command<{
+  data: {
+    suggestion: {
+      key_columns: string[]
+      target_table?: string
+      lookups: Array<{ column: string; collection: string; match_field: string }>
+    }
+    procedure: string
+    note: string
+  }
+}> {
+  return cmd('POST', `/staged-imports/definitions/${id}/suggest-validation`)
+}
+
+// ─── Access audits ────────────────────────────────────────────────────────────
+
+export interface AccessAuditSubject {
+  type: 'field' | 'pipeline_owners'
+  field?: string
+  label: string
+}
+
+export interface AccessAuditRun {
+  id: number
+  audit: number
+  status: 'running' | 'completed' | 'error'
+  checked_records?: number
+  checked_pairs?: number
+  violation_count?: number
+  truncated?: boolean
+  error?: string | null
+  triggered_by: UUID | null
+  started_at: ISODate
+  finished_at?: ISODate | null
+}
+
+export interface AccessAudit {
+  id: number
+  name: string
+  collection: string
+  subjects: AccessAuditSubject[]
+  is_active: boolean
+  sort: number
+  latest_run?: AccessAuditRun | null
+}
+
+export interface AccessAuditFinding {
+  id: number
+  collection: string
+  item_id: string
+  item_label: string | null
+  user: UUID
+  subject: string
+  reasons: string[]
+  user_email: string | null
+  first_name: string | null
+  last_name: string | null
+  last_access: ISODate | null
+}
+
+/** Audit definitions with each one's latest run. Admin only (all routes here). */
+export function listAccessAudits(): Command<{ data: AccessAudit[] }> {
+  return cmd('GET', '/access-audits/')
+}
+
+export function createAccessAudit(data: {
+  collection: string
+  subjects: AccessAuditSubject[]
+  name?: string
+}): Command<{ data: AccessAudit }> {
+  return cmd('POST', '/access-audits/', undefined, data)
+}
+
+export function updateAccessAudit(
+  id: number,
+  data: Partial<{
+    name: string
+    collection: string
+    subjects: AccessAuditSubject[]
+    is_active: boolean
+  }>
+): Command<{ data: AccessAudit }> {
+  return cmd('PATCH', `/access-audits/${id}`, undefined, data)
+}
+
+export function deleteAccessAudit(id: number): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/access-audits/${id}`)
+}
+
+/** Start a run (fire-and-forget — poll listAccessAuditRuns; 409 while one runs). */
+export function runAccessAudit(id: number): Command<{ data: AccessAuditRun }> {
+  return cmd('POST', `/access-audits/${id}/run`)
+}
+
+/** Run history for an audit (newest first, capped 30). */
+export function listAccessAuditRuns(id: number): Command<{ data: AccessAuditRun[] }> {
+  return cmd('GET', `/access-audits/${id}/runs`)
+}
+
+/** Paged findings for a run; filter by user id or search item label/id/email. */
+export function readAccessAuditFindings(
+  runId: number,
+  options: { page?: number; limit?: number; user?: string; search?: string } = {}
+): Command<{ data: AccessAuditFinding[]; total: number }> {
+  return cmd('GET', `/access-audits/runs/${runId}/findings`, options)
+}
+
+// ─── Coverage gaps ────────────────────────────────────────────────────────────
+
+export interface CoverageGapOwner {
+  id: string
+  name: string
+  reason: 'suspended' | 'inactive' | 'redacted' | 'ooo_no_delegate'
+}
+
+export interface CoverageGapItem {
+  collection: string
+  item: string
+  label: string
+  state: string | null
+  template: string
+  kind: 'all_unavailable' | 'no_owners'
+  owners: CoverageGapOwner[]
+}
+
+export interface CoverageGapReport {
+  open_instances: number
+  evaluated: number
+  truncated: boolean
+  blocked: CoverageGapItem[]
+  no_owner_count: number
+  by_user: Array<{
+    id: string
+    name: string
+    reason: CoverageGapOwner['reason']
+    blocked_count: number
+  }>
+}
+
+/** Records whose entire resolved owner set cannot act (computed live). Admin only. */
+export function readCoverageGaps(): Command<{ data: CoverageGapReport }> {
+  return cmd('GET', '/coverage-gaps')
+}
+
+// ─── Integration health ───────────────────────────────────────────────────────
+
+export interface IntegrationApiHealth {
+  id: number
+  name: string
+  base_url: string | null
+  auth_type: string | null
+  totals: Record<string, number>
+  last_success_at: ISODate | null
+  last_activity_at: ISODate | null
+  window_24h: Record<string, number>
+  last_failure: {
+    error: string | null
+    at: ISODate
+    collection: string
+    item: string
+  } | null
+}
+
+/** Per-external-API push outcomes + flow-run counts + the cron roster. Admin only. */
+export function readIntegrationHealth(): Command<{
+  data: {
+    apis: IntegrationApiHealth[]
+    crons: Array<Record<string, unknown>>
+    dead_letters_24h: number
+    flow_runs_24h: Record<string, number>
+  }
+}> {
+  return cmd('GET', '/integration-health')
 }

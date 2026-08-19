@@ -3,8 +3,8 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
-import { notifyUser } from '../services/notification-channels.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
+import { notifyUser } from '../services/notification-channels.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -216,6 +216,16 @@ export async function notificationsRoutes(app: FastifyInstance) {
       .whereIn('id', ids)
       .where({ recipient: req.user!.id, status: 'inbox' })
       .update({ status: 'read' })
+    // Consistency with the sibling read endpoints, which all log.
+    if (updated > 0) {
+      void logActivity({
+        action: 'notification-read',
+        user: req.user!.id,
+        collection: 'nivaro_notifications',
+        comment: `batch mark-read (${updated})`,
+        req
+      })
+    }
     return reply.send({ data: { updated } })
   })
 

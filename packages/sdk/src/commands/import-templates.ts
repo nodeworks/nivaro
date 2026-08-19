@@ -1,4 +1,4 @@
-import { cmd, type Command } from '../command.js'
+import { type Command, cmd } from '../command.js'
 
 export interface ImportTemplateSummary {
   id: string
@@ -27,15 +27,22 @@ export interface ImportParseResponse {
     nested?: { field: string; rows: Record<string, unknown>[] }
     stubs?: Record<string, { is_new: true; name: string }>
   }[]
-  issues: { severity: 'warn' | 'error'; rule: string; row?: number; column?: string; message: string }[]
+  issues: {
+    severity: 'warn' | 'error'
+    rule: string
+    row?: number
+    column?: string
+    message: string
+  }[]
   file_id: string | null
   line_target_field: string | null
   nested_relation: { collection: string; fk_field: string } | null
   m2m: Record<string, Array<string | number>>
 }
 
-export const listImportTemplates = (collection: string): Command<{ data: ImportTemplateSummary[] }> =>
-  cmd('GET', '/import-templates', { collection })
+export const listImportTemplates = (
+  collection: string
+): Command<{ data: ImportTemplateSummary[] }> => cmd('GET', '/import-templates', { collection })
 
 export const executeImportTemplate = (
   id: string,

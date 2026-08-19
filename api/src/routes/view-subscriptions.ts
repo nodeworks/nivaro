@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 /**
  * Own-CRUD for saved-view subscriptions (see services/view-subscriptions.ts
@@ -43,7 +44,8 @@ export async function viewSubscriptionsRoutes(app: FastifyInstance) {
     // everyone, or shared to your role.
     const mine = String(view.user).toUpperCase() === String(req.user?.id ?? '').toUpperCase()
     const shared = view.is_shared === true || view.is_shared === 1
-    const roleOk = !view.role || String(view.role).toUpperCase() === String(req.userRole?.id ?? '').toUpperCase()
+    const roleOk =
+      !view.role || String(view.role).toUpperCase() === String(req.userRole?.id ?? '').toUpperCase()
     if (!mine && !(shared && roleOk)) return reply.code(403).send({ error: 'Forbidden' })
 
     const existing = await db('nivaro_view_subscriptions')
@@ -53,6 +55,13 @@ export async function viewSubscriptionsRoutes(app: FastifyInstance) {
       await db('nivaro_view_subscriptions')
         .where({ id: existing.id })
         .update({ digest, is_active: true })
+      void logActivity({
+        action: 'view-subscription-subscribe',
+        user: req.user?.id,
+        collection: 'nivaro_saved_views',
+        item: String(viewId),
+        comment: digest
+      })
       return reply.send({ data: { id: existing.id, view_id: viewId, digest } })
     }
 
@@ -67,6 +76,13 @@ export async function viewSubscriptionsRoutes(app: FastifyInstance) {
       .returning('id')) as unknown[]
     const idRow = rows[0] as { id: number } | number
     const id = typeof idRow === 'object' && idRow !== null ? (idRow as { id: number }).id : idRow
+    void logActivity({
+      action: 'view-subscription-subscribe',
+      user: req.user?.id,
+      collection: 'nivaro_saved_views',
+      item: String(viewId),
+      comment: digest
+    })
     return reply.code(201).send({ data: { id, view_id: viewId, digest } })
   })
 
@@ -76,6 +92,11 @@ export async function viewSubscriptionsRoutes(app: FastifyInstance) {
       .where({ id: Number(id), user: req.user?.id })
       .delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
+    void logActivity({
+      action: 'view-subscription-unsubscribe',
+      user: req.user?.id,
+      item: String(id)
+    })
     return reply.code(204).send()
   })
 }

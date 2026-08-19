@@ -647,3 +647,313 @@ export function executeBulkAction(
 ): Command<{ data: unknown }> {
   return cmd('POST', `/bulk-actions/${actionId}/execute`, undefined, data)
 }
+
+// ─── Deploy preflight (admin) ─────────────────────────────────────────────────
+
+export type PreflightSeverity = 'ok' | 'warn' | 'fail'
+
+export interface PreflightCheck {
+  id: string
+  status: PreflightSeverity
+  /** One plain sentence for the operator. */
+  summary: string
+  detail?: Record<string, unknown>
+}
+
+export interface PreflightReport {
+  status: PreflightSeverity
+  version: string
+  environment: string
+  checks: PreflightCheck[]
+  ts: ISODate
+}
+
+/**
+ * Deploy coherence check: migrations (both directions), db/redis reachability,
+ * required extensions, version pinning. Responds 503 when status is 'fail' so
+ * CI can branch on the status code alone.
+ */
+export function readPreflight(): Command<{ data: PreflightReport }> {
+  return cmd('GET', '/preflight')
+}
+
+// ─── Cron administration (admin) ──────────────────────────────────────────────
+
+export interface CronJob {
+  id: string
+  expression: string
+  /** Set when the job was registered by an extension. */
+  extensionId?: string
+  nextRun: ISODate | null
+}
+
+/** All scheduled jobs (core + extension-registered). */
+export function listCronJobs(): Command<{ data: CronJob[] }> {
+  return cmd('GET', '/cron')
+}
+
+/** Run a scheduled job now, out of band. Resolves after the job completes. */
+export function runCronJob(
+  id: string
+): Command<{ data: { id: string; ran: boolean; duration_ms: number } }> {
+  return cmd('POST', `/cron/${id}/run`)
+}
+
+// ─── Request traces (admin) ───────────────────────────────────────────────────
+
+export interface TraceSpan {
+  seq: number
+  phase: string
+  ms: number
+  /** Offset from request start (waterfall layout). */
+  at: number
+  detail?: string
+}
+
+export interface RequestTrace {
+  id: string
+  method: string
+  route: string
+  url: string
+  status: number
+  user: string | null
+  total_ms: number
+  spans: TraceSpan[]
+  ts: string
+  unaccounted_ms: number
+}
+
+/**
+ * Slow-request traces from THIS replica's in-process ring buffer (requests
+ * faster than TRACE_SLOW_MS are never recorded). `limit` caps at 200;
+ * `route` is a substring filter.
+ */
+export function listTraces(query?: { limit?: number; route?: string }): Command<{
+  data: {
+    config: Record<string, unknown>
+    traces: Array<RequestTrace & { slowest_phase: string | null }>
+  }
+}> {
+  const params: Record<string, unknown> = {}
+  if (query?.limit != null) params.limit = query.limit
+  if (query?.route) params.route = query.route
+  return cmd('GET', '/traces', params)
+}
+
+export function readTrace(id: string): Command<{ data: RequestTrace }> {
+  return cmd('GET', `/traces/${id}`)
+}
+
+export function clearTraces(): Command<{ data: { cleared: boolean } }> {
+  return cmd('DELETE', '/traces')
+}
+
+// ─── Environment config diff (admin) ──────────────────────────────────────────
+
+export interface ConfigTableClassification {
+  config: string[]
+  derived: string[]
+  runtime: string[]
+  /** Present in the database but in none of the lists — a new migration. */
+  unclassified: string[]
+  /** Classified but absent from this database — an older instance. */
+  absent: string[]
+}
+
+export interface ConfigSnapshot {
+  format: 1
+  generated_at: string
+  instance: { version: string; environment: string; database: string; label?: string }
+  classification: ConfigTableClassification
+  /** table → row id → hashed/serialized row. */
+  tables: Record<string, Record<string, unknown>>
+  /** Tables that were requested but could not be read, with the reason. */
+  errors: Record<string, string>
+}
+
+/** What this instance considers configuration (with row counts), without shipping any of it. */
+export function readConfigInventory(): Command<{
+  data: {
+    instance: { version: string; environment: string; database: string }
+    classification: ConfigTableClassification
+    counts: Record<string, number>
+  }
+}> {
+  return cmd('GET', '/config-diff/inventory')
+}
+
+/**
+ * Export this instance's config snapshot for comparison on another instance.
+ * Secrets are DROPPED, not masked. Activity-logged.
+ */
+export function exportConfigSnapshot(options?: {
+  label?: string
+  /** Restrict to specific tables. */
+  tables?: string[]
+}): Command<{ data: ConfigSnapshot }> {
+  const params: Record<string, unknown> = {}
+  if (options?.label) params.label = options.label
+  if (options?.tables?.length) params.tables = options.tables.join(',')
+  return cmd('GET', '/config-diff/snapshot', params)
+}
+
+/**
+ * Compare an uploaded snapshot (`theirs`) against this instance's live config
+ * (`mine`). Body is the snapshot itself or `{snapshot}`. NOTE: real snapshots
+ * are routinely far past 1MB — this route accepts bodies up to 128MB.
+ */
+export function compareConfigSnapshot(snapshot: unknown): Command<{ data: unknown }> {
+  return cmd('POST', '/config-diff/compare', undefined, { snapshot })
+}
+
+// ─── Layout versions (admin) ──────────────────────────────────────────────────
+
+export interface LayoutVersion {
+  id: number
+  version: number
+  note: string | null
+  created_at: ISODate
+  created_by_name: string
+}
+
+/** Snapshot history for a layout (newest first, pruned to 30 server-side). */
+export function listLayoutVersions(layoutId: number): Command<{ data: LayoutVersion[] }> {
+  return cmd('GET', `/collection-layouts/${layoutId}/versions`)
+}
+
+/**
+ * Restore a layout version — id-preserving; a "before restore" snapshot is
+ * captured first so the restore itself is reversible.
+ */
+export function restoreLayoutVersion(
+  layoutId: number,
+  versionId: number
+): Command<{ data: { restored_assignments: number; restored_groups: number } }> {
+  return cmd('POST', `/collection-layouts/${layoutId}/versions/${versionId}/restore`)
+}
+
+// ─── Omnisearch ───────────────────────────────────────────────────────────────
+
+export interface OmniSearchHit {
+  collection: string
+  collection_label: string
+  id: string
+  label: string
+  score: number
+  matched_field: string | null
+}
+
+/**
+ * Cross-collection record search, resolved AS the requesting user (RBAC + RLS
+ * + scopes). `q` must be at least 2 characters. Distinct from `globalSearch`
+ * (the command palette route) and `semanticSearch` (vector similarity).
+ */
+export function omniSearch(
+  q: string,
+  options?: { collections?: string[]; limit?: number; per_collection?: number }
+): Command<{
+  data: OmniSearchHit[]
+  meta: { searched: number; skipped: string[]; truncated: boolean }
+}> {
+  const params: Record<string, unknown> = { q }
+  if (options?.collections?.length) params.collections = options.collections.join(',')
+  if (options?.limit != null) params.limit = options.limit
+  if (options?.per_collection != null) params.per_collection = options.per_collection
+  return cmd('GET', '/search', params)
+}
+
+// ─── Flow test & replay ───────────────────────────────────────────────────────
+
+export interface FlowTestStep {
+  key: string
+  name: string
+  type: string
+  status: 'resolve' | 'reject' | 'async'
+  /** Rendered side-effect content when dry_run rendered instead of sending. */
+  preview?: unknown
+}
+
+/**
+ * Test-run a flow with a caller-supplied payload, regardless of active status.
+ * dry_run defaults TRUE: side-effect ops (mail/webhook/…) render but do not
+ * send. The run records in flow history with trigger 'test'.
+ */
+export function testFlow(
+  flowId: string,
+  body?: { payload?: Record<string, unknown>; dry_run?: boolean }
+): Command<{
+  data: {
+    steps: FlowTestStep[]
+    output: Record<string, unknown>
+    error: string | null
+    dry_run: boolean
+  }
+}> {
+  return cmd('POST', `/flows/${flowId}/test`, undefined, body ?? {})
+}
+
+export interface FlowReplayResult {
+  dry_run: boolean
+  matched: number
+  truncated: boolean
+  skipped_deletes: number
+  /** Dry run only: first 20 matched activity rows. */
+  sample?: Array<{
+    id: number
+    collection: string
+    action: string
+    item: string
+    timestamp: string
+  }>
+  /** Real run only. */
+  executed?: number
+  failed?: number
+  missing?: number
+}
+
+/**
+ * Replay an event-trigger flow over a historical window (admin) — re-executes
+ * once per matching create/update in nivaro_activity. dry_run defaults TRUE
+ * (count + sample first — replays fan out real side effects); the payload is
+ * the record's CURRENT row with `$replay: true`, deletes are skipped, and
+ * before-timing flows are refused (400).
+ */
+export function replayFlow(
+  flowId: string,
+  body: {
+    /** ISO datetime, required. */
+    from: string
+    /** ISO datetime, required — must be after `from`. */
+    to: string
+    /** Defaults to true. Pass false to actually execute. */
+    dry_run?: boolean
+    /** Max writes to replay, 1–1000 (default 500). */
+    limit?: number
+  }
+): Command<{ data: FlowReplayResult }> {
+  return cmd('POST', `/flows/${flowId}/replay`, undefined, body)
+}
+
+// ─── Masquerade (admin) ───────────────────────────────────────────────────────
+
+/**
+ * Mint a masquerade token (admin): a short-lived `nvm_…` Bearer token that
+ * resolves to the target user for up to 4h, with RBAC/RLS genuinely running
+ * as them. Activity-logged.
+ */
+export function startMasquerade(userId: string): Command<{
+  data: {
+    token: string
+    user: { id: UUID; first_name: string | null; last_name: string | null; email: string }
+  }
+}> {
+  return cmd('POST', '/auth/masquerade', undefined, { user_id: userId })
+}
+
+/**
+ * Revoke the current masquerade session. MUST be called with the `nvm_` token
+ * as the Bearer — 400 otherwise. Bare `{ok}` response, no data envelope.
+ */
+export function stopMasquerade(): Command<{ ok: boolean }> {
+  return cmd('DELETE', '/auth/masquerade')
+}

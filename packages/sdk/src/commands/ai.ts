@@ -144,7 +144,6 @@ export function updateAiSettings(
   return cmd('PATCH', `/ai-settings/${collection}`, undefined, body)
 }
 
-
 // ─── Ask-your-data chat ───────────────────────────────────────────────────────
 
 export interface AiChatTraceEntry {
@@ -163,13 +162,48 @@ export function aiChat(
   return cmd('POST', '/ai/chat', undefined, { messages })
 }
 
-
 /** Approve an AI action proposal (proposer only; executes through the items service). */
-export function approveAiProposal(id: string): Command<{ data: { status: string; result: Record<string, unknown> } }> {
+export function approveAiProposal(
+  id: string
+): Command<{ data: { status: string; result: Record<string, unknown> } }> {
   return cmd('POST', `/ai/proposals/${id}/approve`)
 }
 
 /** Reject an AI action proposal. */
 export function rejectAiProposal(id: string): Command<void> {
   return cmd('POST', `/ai/proposals/${id}/reject`)
+}
+
+// ─── Record review / briefing ─────────────────────────────────────────────────
+
+export interface AiReviewFinding {
+  severity: 'error' | 'warning' | 'suggestion'
+  /** Field name or area the finding is about. */
+  field: string
+  message: string
+}
+
+/**
+ * Pre-submission record review: a findings list over the record plus up to 3
+ * O2M child sets, guided by the collection's configured AI rules. Read-gated.
+ */
+export function aiReview(body: {
+  collection: string
+  item: string | number
+}): Command<{ data: { findings: AiReviewFinding[] } }> {
+  return cmd('POST', '/ai/review', undefined, body)
+}
+
+/**
+ * Render a short plain-text briefing from caller-supplied context — the caller
+ * gathers the data, this endpoint only writes the words. NOTE the response key
+ * is `brief`, not `text`.
+ */
+export function aiBrief(body: {
+  /** The data to brief over (capped server-side at 16k chars). */
+  context: string
+  /** Optional system-style instructions (capped at 1k chars). */
+  instructions?: string
+}): Command<{ data: { brief: string } }> {
+  return cmd('POST', '/ai/brief', undefined, body)
 }

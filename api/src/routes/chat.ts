@@ -11,7 +11,13 @@ import {
   listRooms,
   parseRoom
 } from '../services/chat.js'
-import { botUserId, chatBotName, clearChatBotCache, handleBotMention, mentionsBot } from '../services/chat-bot.js'
+import {
+  botUserId,
+  chatBotName,
+  clearChatBotCache,
+  handleBotMention,
+  mentionsBot
+} from '../services/chat-bot.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { sendWebPush } from '../services/web-push.js'
 
@@ -53,8 +59,15 @@ export async function chatRoutes(app: FastifyInstance) {
       .orderBy('id', 'desc')
       .limit(limit)
       .select(
-        'id', 'sender', 'sender_name', 'room', 'message', 'date_created',
-        'edited_at', 'deleted_at', 'attachments'
+        'id',
+        'sender',
+        'sender_name',
+        'room',
+        'message',
+        'date_created',
+        'edited_at',
+        'deleted_at',
+        'attachments'
       )) as Array<Record<string, unknown>>
 
     // Reactions for the returned window, one query.
@@ -260,9 +273,7 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
     const parsed = parseRoom(room)
     if (parsed.kind !== 'dm') return { data: { last_read_at: null } }
-    const peer = (parsed.participants ?? []).find(
-      (p) => p !== String(req.user!.id).toUpperCase()
-    )
+    const peer = (parsed.participants ?? []).find((p) => p !== String(req.user!.id).toUpperCase())
     if (!peer) return { data: { last_read_at: null } }
     const row = await db('nivaro_chat_memberships').where({ user: peer, room }).first()
     return { data: { last_read_at: row?.last_read_at ?? null } }
@@ -309,9 +320,16 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const text = String((req.body as { message?: string })?.message ?? '').trim()
     if (!text) return reply.code(400).send({ error: 'message is required' })
-    await db('chat_messages')
-      .where('id', msg.id)
-      .update({ message: text, edited_at: new Date() })
+    await db('chat_messages').where('id', msg.id).update({ message: text, edited_at: new Date() })
+    // The send is an accountability record (accountability='activity' on
+    // chat_messages) — a rewrite of that record must be too.
+    void logActivity({
+      action: 'chat-message-edit',
+      user: req.user?.id,
+      collection: 'chat_messages',
+      item: String(msg.id),
+      comment: `room ${String(msg.room)}`
+    })
     emitRoomTouch(String(msg.room))
     return { data: { id: msg.id, message: text } }
   })
@@ -329,6 +347,14 @@ export async function chatRoutes(app: FastifyInstance) {
       .where('id', msg.id)
       .update({ message: '', attachments: null, deleted_at: new Date() })
     await db('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+    // Admins may delete OTHER people's messages — the log records who did.
+    void logActivity({
+      action: 'chat-message-delete',
+      user: req.user?.id,
+      collection: 'chat_messages',
+      item: String(msg.id),
+      comment: `room ${String(msg.room)}${own ? '' : ` — sender ${String(msg.sender)}`}`
+    })
     emitRoomTouch(String(msg.room))
     return { data: { deleted: true } }
   })
@@ -409,9 +435,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const firstNames = [
       String(req.user?.first_name ?? '').trim() || 'Me',
-      ...users.map(
-        (u) => String(u.first_name ?? '').trim() || String(u.email ?? '').split('@')[0]
-      )
+      ...users.map((u) => String(u.first_name ?? '').trim() || String(u.email ?? '').split('@')[0])
     ]
     const name = String(b.name ?? '').trim() || firstNames.slice(0, 4).join(', ')
     const key = `grp-${Math.random().toString(16).slice(2, 10)}`
@@ -462,11 +486,12 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const name = String(b.name ?? '').trim()
     if (!name) return reply.code(400).send({ error: 'name is required' })
-    const key = String(b.key ?? '')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '') || slugify(name)
+    const key =
+      String(b.key ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|-+$/g, '') || slugify(name)
     if (!key) return reply.code(400).send({ error: 'A channel key could not be derived' })
     if ((await channels()).has(key)) {
       return reply.code(409).send({ error: `A channel named "${key}" already exists` })
@@ -569,7 +594,9 @@ export async function chatRoutes(app: FastifyInstance) {
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const self = String(req.params.userId) === String(req.user?.id)
       if (!self && !req.isAdmin && String(row.created_by ?? '') !== String(req.user?.id)) {
-        return reply.code(403).send({ error: 'Only the channel owner or an admin can remove members' })
+        return reply
+          .code(403)
+          .send({ error: 'Only the channel owner or an admin can remove members' })
       }
       await db('nivaro_chat_memberships')
         .where({ user: req.params.userId, room: `ch:${row.key}` })
@@ -628,29 +655,36 @@ export async function chatRoutes(app: FastifyInstance) {
       collection: 'nivaro_chat_room_types',
       comment: `${prefix} → ${b.collection}.${b.match_field || 'id'}`
     })
-    return reply.code(201).send({ data: await db('nivaro_chat_room_types').where({ prefix }).first() })
+    return reply
+      .code(201)
+      .send({ data: await db('nivaro_chat_room_types').where({ prefix }).first() })
   })
 
-  app.patch<{ Params: { id: string } }>('/room-types/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_chat_room_types').where('id', req.params.id).first()
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    const b = req.body as Record<string, unknown>
-    const patch: Record<string, unknown> = {}
-    for (const f of ['collection', 'match_field', 'label']) if (b[f] !== undefined) patch[f] = b[f]
-    if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    if (Object.keys(patch).length > 0) {
-      await db('nivaro_chat_room_types').where('id', row.id).update(patch)
-      clearChatCaches()
-      void logActivity({
-        action: 'chat-room-type-update',
-        user: req.user?.id ?? null,
-        collection: 'nivaro_chat_room_types',
-        item: String(row.id),
-        comment: `${row.prefix}: ${Object.keys(patch).join(', ')}`
-      })
+  app.patch<{ Params: { id: string } }>(
+    '/room-types/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_chat_room_types').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const b = req.body as Record<string, unknown>
+      const patch: Record<string, unknown> = {}
+      for (const f of ['collection', 'match_field', 'label'])
+        if (b[f] !== undefined) patch[f] = b[f]
+      if (b.is_active !== undefined) patch.is_active = !!b.is_active
+      if (Object.keys(patch).length > 0) {
+        await db('nivaro_chat_room_types').where('id', row.id).update(patch)
+        clearChatCaches()
+        void logActivity({
+          action: 'chat-room-type-update',
+          user: req.user?.id ?? null,
+          collection: 'nivaro_chat_room_types',
+          item: String(row.id),
+          comment: `${row.prefix}: ${Object.keys(patch).join(', ')}`
+        })
+      }
+      return { data: await db('nivaro_chat_room_types').where('id', row.id).first() }
     }
-    return { data: await db('nivaro_chat_room_types').where('id', row.id).first() }
-  })
+  )
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -3,10 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
-import { inferDrillTarget } from '../services/report-drill.js'
-import { restoreReportVersion, snapshotReportVersion } from '../services/report-versions.js'
-import { deriveAlertMetric } from '../services/report-studio-jobs.js'
 import { can } from '../services/permissions.js'
+import { inferDrillTarget } from '../services/report-drill.js'
 import {
   type DateRange,
   type EntityFilter,
@@ -18,6 +16,8 @@ import {
   type WidgetQueryConfig,
   type WidgetRow
 } from '../services/report-studio.js'
+import { deriveAlertMetric } from '../services/report-studio-jobs.js'
+import { restoreReportVersion, snapshotReportVersion } from '../services/report-versions.js'
 
 /**
  * Report Studio â€” user-composed widget reports over any collection.
@@ -87,9 +87,7 @@ async function loadReport(id: string): Promise<ReportRow | undefined> {
   return (await db('nivaro_report_defs').where({ id }).first()) as ReportRow | undefined
 }
 
-function sanitizeAlertFilters(
-  raw: unknown
-): string | null {
+function sanitizeAlertFilters(raw: unknown): string | null {
   if (!Array.isArray(raw)) return null
   const out = raw
     .filter(
@@ -103,7 +101,9 @@ function sanitizeAlertFilters(
       const e = f as { field: string; values: Array<string | number>; labels?: string[] }
       return {
         field: e.field.slice(0, 80),
-        values: e.values.slice(0, 50).map((v) => (typeof v === 'number' ? v : String(v).slice(0, 200))),
+        values: e.values
+          .slice(0, 50)
+          .map((v) => (typeof v === 'number' ? v : String(v).slice(0, 200))),
         labels: Array.isArray(e.labels)
           ? e.labels.slice(0, 50).map((l) => String(l).slice(0, 200))
           : undefined
@@ -145,7 +145,8 @@ export async function reportStudioRoutes(app: FastifyInstance) {
   app.post('/widget-presets', { preHandler: requireAuth }, async (req, reply) => {
     if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
     const b = (req.body ?? {}) as Record<string, unknown>
-    if (!b.name || !b.widget_type) return reply.code(400).send({ error: 'name and widget_type required' })
+    if (!b.name || !b.widget_type)
+      return reply.code(400).send({ error: 'name and widget_type required' })
     const now = new Date()
     await db('nivaro_report_widget_presets').insert({
       name: String(b.name).slice(0, 255),
@@ -183,7 +184,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     void logActivity({
       action: 'report-widget-preset-update',
       user: req.user?.id ?? null,
-      comment: `preset ${id}: ${Object.keys(patch).filter((k) => k !== 'updated_at').join(', ')}`
+      comment: `preset ${id}: ${Object.keys(patch)
+        .filter((k) => k !== 'updated_at')
+        .join(', ')}`
     })
     return reply.send({ data: { ok: true } })
   })
@@ -262,7 +265,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       item: report.id,
       user: req.user!.id
     })
-    return reply.send({ data: { ...formatReport(report, widgets), editable: canEditReport(report, req) } })
+    return reply.send({
+      data: { ...formatReport(report, widgets), editable: canEditReport(report, req) }
+    })
   })
 
   app.patch<{
@@ -355,7 +360,21 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const incoming = Array.isArray(req.body?.widgets) ? req.body.widgets : []
     if (incoming.length > 40) return reply.code(400).send({ error: 'Max 40 widgets per report' })
 
-    const VALID_TYPES = new Set(['kpi', 'kpi_group', 'bar', 'line', 'donut', 'table', 'divider', 'query', 'calc', 'movers', 'heatmap', 'waterfall', 'narrative'])
+    const VALID_TYPES = new Set([
+      'kpi',
+      'kpi_group',
+      'bar',
+      'line',
+      'donut',
+      'table',
+      'divider',
+      'query',
+      'calc',
+      'movers',
+      'heatmap',
+      'waterfall',
+      'narrative'
+    ])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
       report: report.id,
@@ -403,9 +422,15 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       const data = await resolveWidgetDataFull(
         req.user!,
         report.id,
-        { id: widget.id, type: widget.type, collection: widget.collection, config: parseJson(widget.config) },
+        {
+          id: widget.id,
+          type: widget.type,
+          collection: widget.collection,
+          config: parseJson(widget.config)
+        },
         req.body?.date_range ??
-          (parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ?? null),
+          parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ??
+          null,
         Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : []
       )
       return reply.send({ data })
@@ -526,9 +551,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     if (!report) return reply.code(404).send({ error: 'Report not found' })
     if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
     if (req.body == null) {
-      await db('nivaro_report_subscriptions')
-        .where({ report: report.id, user: req.user!.id })
-        .del()
+      await db('nivaro_report_subscriptions').where({ report: report.id, user: req.user!.id }).del()
       await logActivity({
         action: 'report-unsubscribe',
         collection: 'nivaro_report_defs',
@@ -819,7 +842,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
     if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
-    const name = String(req.body?.name ?? '').trim().slice(0, 120)
+    const name = String(req.body?.name ?? '')
+      .trim()
+      .slice(0, 120)
     if (!name) return reply.code(400).send({ error: 'name is required' })
     const row = {
       date_range: req.body?.date_range ? JSON.stringify(req.body.date_range) : null,
@@ -992,10 +1017,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           if (!(await can(req.user!, 'read', col))) continue
           const valid = await physicalColumns(col)
           if (!valid.has(field)) continue
-          const rows = (await db(col)
-            .distinct(field)
-            .whereNotNull(field)
-            .limit(100)) as Array<Record<string, unknown>>
+          const rows = (await db(col).distinct(field).whereNotNull(field).limit(100)) as Array<
+            Record<string, unknown>
+          >
           // FK? resolve labels
           const rel = (await db('nivaro_relations')
             .where({ many_collection: col, many_field: field })
@@ -1051,7 +1075,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
 
       // Catalog: registered collections + their numeric/date fields
       const collections = (await db('nivaro_collections')
-        .whereNot('collection', 'like', 'nivaro\_%')
+        .whereNot('collection', 'like', 'nivaro_%')
         .select('collection', 'display_name')
         .limit(80)) as Array<{ collection: string; display_name: string | null }>
       const fields = (await db('nivaro_fields')
@@ -1059,7 +1083,16 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           'collection',
           collections.map((c) => c.collection)
         )
-        .whereIn('type', ['integer', 'bigInteger', 'decimal', 'float', 'number', 'date', 'datetime', 'string'])
+        .whereIn('type', [
+          'integer',
+          'bigInteger',
+          'decimal',
+          'float',
+          'number',
+          'date',
+          'datetime',
+          'string'
+        ])
         .select('collection', 'field', 'type')) as Array<{
         collection: string
         field: string
@@ -1136,7 +1169,10 @@ Respond ONLY with JSON: {"widgets":[{"type":"...","title":"...","collection":"..
         .map((f: unknown) =>
           typeof f === 'string'
             ? { field: f, label: f }
-            : { field: String((f as { field?: unknown })?.field ?? ''), label: String((f as { label?: unknown })?.label ?? '') }
+            : {
+                field: String((f as { field?: unknown })?.field ?? ''),
+                label: String((f as { label?: unknown })?.label ?? '')
+              }
         )
         .filter((f: { field: string }) => /^[a-zA-Z0-9_]+$/.test(f.field))
       const fieldList = fieldDefs.map(
@@ -1161,6 +1197,15 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
           .join('')
         const jsonMatch = text.match(/\{[\s\S]*\}/)
         if (!jsonMatch) return reply.code(422).send({ error: 'Could not parse the request' })
+        // AI calls are logged (ai-generate/ai-summarize precedent, and the
+        // sibling report-ai-build).
+        void logActivity({
+          action: 'report-ai-filters',
+          user: req.user?.id ?? null,
+          collection: 'nivaro_report_defs',
+          item: String(report.id),
+          comment: prompt.slice(0, 200)
+        })
         return reply.send({ data: JSON.parse(jsonMatch[0]) })
       } catch (err) {
         return reply
@@ -1204,7 +1249,11 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       const report = await loadReport(req.params.id)
       if (!report) return reply.code(404).send({ error: 'Report not found' })
       if (!canEditReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
-      const result = await restoreReportVersion(report.id, Number(req.params.versionId), req.user!.id)
+      const result = await restoreReportVersion(
+        report.id,
+        Number(req.params.versionId),
+        req.user!.id
+      )
       if ('error' in result) return reply.code(400).send({ error: result.error })
       await logActivity({
         action: 'report-version-restore',
@@ -1250,8 +1299,9 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
         }
       }
       const name =
-        String(req.body?.name ?? '').trim().slice(0, 120) ||
-        new Date().toISOString().slice(0, 10)
+        String(req.body?.name ?? '')
+          .trim()
+          .slice(0, 120) || new Date().toISOString().slice(0, 10)
       const [inserted] = await db('nivaro_report_snapshots')
         .insert({
           report: report.id,
@@ -1325,6 +1375,13 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       await db('nivaro_report_snapshots')
         .where({ report: report.id, id: Number(req.params.snapId) })
         .del()
+      void logActivity({
+        action: 'report-snapshot-delete',
+        user: req.user?.id ?? null,
+        collection: 'nivaro_report_defs',
+        item: String(report.id),
+        comment: `snapshot ${req.params.snapId}`
+      })
       return reply.send({ data: { deleted: true } })
     }
   )
@@ -1378,7 +1435,16 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
         .where({ 'a.report': report.id })
         .orderBy('a.id', 'desc')
         .limit(200)
-        .select('a.id', 'a.widget', 'a.note', 'a.anchor_date', 'a.created_at', 'a.created_by', 'u.first_name', 'u.last_name')
+        .select(
+          'a.id',
+          'a.widget',
+          'a.note',
+          'a.anchor_date',
+          'a.created_at',
+          'a.created_by',
+          'u.first_name',
+          'u.last_name'
+        )
       return reply.send({
         data: rows.map((r) => ({
           id: r.id,
@@ -1401,7 +1467,9 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
     if (!report) return reply.code(404).send({ error: 'Report not found' })
     if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
     const widget = String(req.body?.widget ?? '')
-    const note = String(req.body?.note ?? '').trim().slice(0, 500)
+    const note = String(req.body?.note ?? '')
+      .trim()
+      .slice(0, 500)
     if (!/^[0-9a-f-]{36}$/i.test(widget) || !note) {
       return reply.code(400).send({ error: 'widget and note are required' })
     }
@@ -1420,6 +1488,13 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       typeof inserted === 'object' && inserted !== null
         ? (inserted as { id: number }).id
         : (inserted as number)
+    void logActivity({
+      action: 'report-annotation-create',
+      user: req.user?.id ?? null,
+      collection: 'nivaro_report_defs',
+      item: String(report.id),
+      comment: note.slice(0, 120)
+    })
     return reply.code(201).send({ data: { id } })
   })
 
@@ -1438,6 +1513,13 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
         return reply.code(403).send({ error: 'Forbidden' })
       }
       await db('nivaro_report_annotations').where({ id: row.id }).del()
+      void logActivity({
+        action: 'report-annotation-delete',
+        user: req.user?.id ?? null,
+        collection: 'nivaro_report_defs',
+        item: String(report.id),
+        comment: String(row.note ?? '').slice(0, 120)
+      })
       return reply.send({ data: { deleted: true } })
     }
   )
@@ -1476,11 +1558,17 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       const widgets = (await db('nivaro_report_widgets')
         .where({ report: report.id })
         .orderBy('sort')) as WidgetRow[]
-      const name = String(req.body?.name ?? '').trim().slice(0, 120) || `${report.name} template`
+      const name =
+        String(req.body?.name ?? '')
+          .trim()
+          .slice(0, 120) || `${report.name} template`
       const [inserted] = await db('nivaro_report_templates')
         .insert({
           name,
-          description: String(req.body?.description ?? '').trim().slice(0, 500) || null,
+          description:
+            String(req.body?.description ?? '')
+              .trim()
+              .slice(0, 500) || null,
           snapshot: JSON.stringify({
             global_filters: report.global_filters,
             widgets: widgets.map((w) => ({
@@ -1530,7 +1618,10 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       const newId = randomUUID()
       await db('nivaro_report_defs').insert({
         id: newId,
-        name: String(req.body?.name ?? '').trim().slice(0, 255) || String(tpl.name),
+        name:
+          String(req.body?.name ?? '')
+            .trim()
+            .slice(0, 255) || String(tpl.name),
         owner: req.user!.id,
         is_shared: false,
         global_filters: snap?.global_filters ?? null,
@@ -1579,6 +1670,11 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
         return reply.code(403).send({ error: 'Forbidden' })
       }
       await db('nivaro_report_templates').where({ id: tpl.id }).del()
+      void logActivity({
+        action: 'report-template-delete',
+        user: req.user?.id ?? null,
+        comment: `template "${String(tpl.name ?? tpl.id).slice(0, 80)}"`
+      })
       return reply.send({ data: { deleted: true } })
     }
   )
@@ -1620,6 +1716,13 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
         w: widget.w,
         h: widget.h,
         sort: Number(maxRow?.sort ?? 0) + 1
+      })
+      void logActivity({
+        action: 'report-widget-copy',
+        user: req.user?.id ?? null,
+        collection: 'nivaro_report_defs',
+        item: String(target.id),
+        comment: `widget ${req.params.widgetId} copied from report ${report.id}`
       })
       return reply.code(201).send({ data: { id: newId, report: target.id } })
     }

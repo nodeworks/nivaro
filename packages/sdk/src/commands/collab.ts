@@ -522,3 +522,561 @@ export function subscribeFieldWatch(id: number): Command<{ data: { watch: number
 export function unsubscribeFieldWatch(id: number): Command<void> {
   return cmd('DELETE', `/field-watches/${id}/subscribe`)
 }
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+
+export type ChatRoomKind = 'global' | 'dm' | 'channel' | 'entity' | 'unknown'
+
+export interface ChatRoomSummary {
+  room: string
+  kind: ChatRoomKind
+  label: string | null
+  unread: number
+  muted: boolean
+  notify_mode: 'all' | 'mentions'
+  joined: boolean
+  /** Channel rooms only. */
+  channel: {
+    id: number
+    visibility: 'open' | 'role' | 'private'
+    role: string | null
+    topic: string | null
+    created_by: string | null
+    is_direct: boolean
+  } | null
+  last_message: {
+    id: number
+    message: string
+    sender: string | null
+    sender_name: string | null
+    date_created: string
+  } | null
+}
+
+export interface ChatChannel {
+  id: number
+  key: string
+  name: string
+  topic: string | null
+  visibility: 'open' | 'role' | 'private'
+  role: string | null
+  created_by: string | null
+  is_archived: boolean
+  is_direct: boolean
+}
+
+export interface ChatDirectoryChannel extends ChatChannel {
+  joined: boolean
+  members: number
+}
+
+export interface ChatReaction {
+  emoji: string
+  user: string
+  user_name: string | null
+}
+
+export interface ChatMessage {
+  id: number
+  room: string
+  message: string
+  sender: UUID | null
+  sender_name: string | null
+  date_created: ISODate
+  edited_at?: ISODate | null
+  deleted_at?: ISODate | null
+  attachments: string[]
+  reactions: ChatReaction[]
+}
+
+export interface ChatPin {
+  pin_id: number
+  id: number
+  sender_name: string | null
+  message: string
+  date_created: ISODate
+}
+
+export interface ChatSearchHit {
+  id: number
+  room: string
+  sender: UUID | null
+  sender_name: string | null
+  message: string
+  date_created: ISODate
+}
+
+export interface ChatChannelMember {
+  user: UUID
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  joined_at: ISODate | null
+}
+
+export interface ChatRoomType {
+  id: number
+  prefix: string
+  collection: string
+  match_field: string
+  label: string | null
+  is_active: boolean
+}
+
+/** The current user's sidebar rooms (joined channels, DMs, global) with unread counts. */
+export function listChatRooms(): Command<{ data: ChatRoomSummary[] }> {
+  return cmd('GET', '/chat/rooms')
+}
+
+/** Joinable channels (private ones appear only to members). Group DMs are excluded. */
+export function readChatDirectory(search?: string): Command<{ data: ChatDirectoryChannel[] }> {
+  return cmd('GET', '/chat/directory', search ? { search } : undefined)
+}
+
+/** Newest messages in a room, ascending for rendering. `before` = message id cursor. */
+export function listChatMessages(
+  room: string,
+  options?: { before?: number; limit?: number }
+): Command<{ data: ChatMessage[] }> {
+  const params: Record<string, unknown> = { room }
+  if (options?.before != null) params.before = options.before
+  if (options?.limit != null) params.limit = options.limit
+  return cmd('GET', '/chat/messages', params)
+}
+
+/** Send a message. `attachments` = uploaded nivaro_files ids; mentions notify explicitly. */
+export function sendChatMessage(body: {
+  room: string
+  message?: string
+  mentions?: string[]
+  attachments?: string[]
+}): Command<{ data: ChatMessage }> {
+  return cmd('POST', '/chat/messages', undefined, body)
+}
+
+/** Edit your own message within the 15-minute window. Mentions are not re-fired. */
+export function editChatMessage(
+  id: number,
+  message: string
+): Command<{ data: { id: number; message: string } }> {
+  return cmd('PATCH', `/chat/messages/${id}`, undefined, { message })
+}
+
+/** Soft-delete a message (own, or admin) — the row survives as a tombstone. */
+export function deleteChatMessage(id: number): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/chat/messages/${id}`)
+}
+
+/** Toggle a reaction from the fixed palette (👍 ✅ 👀 🎉 ❤️ 😂). */
+export function toggleChatReaction(
+  id: number,
+  emoji: string
+): Command<{ data: { toggled: string; on: boolean } }> {
+  return cmd('POST', `/chat/messages/${id}/reactions`, undefined, { emoji })
+}
+
+/** Pin or unpin a message. Any room member may toggle. */
+export function toggleChatPin(id: number): Command<{ data: { pinned: boolean } }> {
+  return cmd('POST', `/chat/messages/${id}/pin`)
+}
+
+/** Pinned messages in a room (newest 20). */
+export function listChatPins(room: string): Command<{ data: ChatPin[] }> {
+  return cmd('GET', `/chat/rooms/${encodeURIComponent(room)}/pins`)
+}
+
+/** Search messages across the current user's sidebar rooms (min 2 chars). */
+export function searchChatMessages(q: string): Command<{ data: ChatSearchHit[] }> {
+  return cmd('GET', '/chat/search', { q })
+}
+
+/** Create a group DM (a private channel rendered as a conversation). */
+export function createGroupDm(body: {
+  user_ids: string[]
+  name?: string
+}): Command<{ data: { room: string; name: string } }> {
+  return cmd('POST', '/chat/group-dm', undefined, body)
+}
+
+/** Instance chat config — bot name/user id when the AI bot is enabled. */
+export function readChatConfig(): Command<{
+  data: { bot_name: string | null; bot_user_id: string | null }
+}> {
+  return cmd('GET', '/chat/config')
+}
+
+/** Mark a room read up to now. */
+export function markChatRoomRead(room: string): Command<{ data: { room: string; read: boolean } }> {
+  return cmd('POST', `/chat/rooms/${encodeURIComponent(room)}/read`)
+}
+
+/** Join a room (adds it to the sidebar). Refused for rooms you cannot see. */
+export function joinChatRoom(room: string): Command<{ data: { room: string; joined: boolean } }> {
+  return cmd('POST', `/chat/rooms/${encodeURIComponent(room)}/join`)
+}
+
+/** Leave a room (removes the membership row). */
+export function leaveChatRoom(room: string): Command<{ data: { room: string; joined: boolean } }> {
+  return cmd('DELETE', `/chat/rooms/${encodeURIComponent(room)}/join`)
+}
+
+/** Update per-room notification settings. `notify_mode: 'mentions'` = mentions only, null = all. */
+export function updateChatRoom(
+  room: string,
+  body: { muted?: boolean; notify_mode?: 'mentions' | null }
+): Command<{ data: { room: string; is_muted?: boolean; notify_mode?: string | null } }> {
+  return cmd('PATCH', `/chat/rooms/${encodeURIComponent(room)}`, undefined, body)
+}
+
+/** DM read receipt — when the other participant last read the room. */
+export function readChatPeerRead(
+  room: string
+): Command<{ data: { last_read_at: ISODate | null } }> {
+  return cmd('GET', `/chat/rooms/${encodeURIComponent(room)}/peer-read`)
+}
+
+/** Create a channel. Role-scoped channels require `role`. (Channel listing = readChatDirectory.) */
+export function createChatChannel(body: {
+  name: string
+  key?: string
+  topic?: string
+  visibility?: 'open' | 'role' | 'private'
+  role?: string | null
+}): Command<{ data: ChatChannel }> {
+  return cmd('POST', '/chat/channels', undefined, body)
+}
+
+/** Update a channel (owner or admin). */
+export function updateChatChannel(
+  id: number,
+  body: Partial<{
+    name: string
+    topic: string | null
+    visibility: 'open' | 'role' | 'private'
+    role: string | null
+    is_archived: boolean
+  }>
+): Command<{ data: ChatChannel }> {
+  return cmd('PATCH', `/chat/channels/${id}`, undefined, body)
+}
+
+/** Members of a channel (visible to anyone who can see the room). */
+export function listChatChannelMembers(id: number): Command<{ data: ChatChannelMember[] }> {
+  return cmd('GET', `/chat/channels/${id}/members`)
+}
+
+/** Add someone to a channel (owner or admin). */
+export function addChatChannelMember(
+  id: number,
+  userId: string
+): Command<{ data: { room: string; user: string } }> {
+  return cmd('POST', `/chat/channels/${id}/members`, undefined, { user_id: userId })
+}
+
+/** Remove a member (self, owner, or admin). */
+export function removeChatChannelMember(
+  id: number,
+  userId: string
+): Command<{ data: { removed: boolean } }> {
+  return cmd('DELETE', `/chat/channels/${id}/members/${encodeURIComponent(userId)}`)
+}
+
+/** Roles (id + name only) for the role-scoped channel picker — readable by any user. */
+export function listChatRoles(): Command<{ data: Array<{ id: UUID; name: string }> }> {
+  return cmd('GET', '/chat/roles')
+}
+
+/** Entity-room registry — which room prefixes map to which collections. */
+export function listChatRoomTypes(): Command<{ data: ChatRoomType[] }> {
+  return cmd('GET', '/chat/room-types')
+}
+
+/** Register an entity-room prefix (admin). `match_field` defaults to 'id'. */
+export function createChatRoomType(body: {
+  prefix: string
+  collection: string
+  match_field?: string
+  label?: string
+}): Command<{ data: ChatRoomType }> {
+  return cmd('POST', '/chat/room-types', undefined, body)
+}
+
+/** Update an entity-room registration (admin). */
+export function updateChatRoomType(
+  id: number,
+  body: Partial<{
+    collection: string
+    match_field: string
+    label: string | null
+    is_active: boolean
+  }>
+): Command<{ data: ChatRoomType }> {
+  return cmd('PATCH', `/chat/room-types/${id}`, undefined, body)
+}
+
+// ─── My Work ──────────────────────────────────────────────────────────────────
+
+export interface MyWorkSla {
+  state_key: string
+  elapsed_hours: number
+  duration_hours: number | null
+  warning_threshold_pct: number | null
+  business_hours_only: boolean
+  status: 'ok' | 'warning' | 'breached' | null
+  remaining_hours: number | null
+  entered_at: ISODate
+}
+
+export interface MyWorkOwnedEntry {
+  collection: string
+  item: string
+  label: string
+  state: string | null
+  state_color: string | null
+  url: string
+  sla: MyWorkSla | null
+}
+
+export interface MyWorkSummary {
+  owned: MyWorkOwnedEntry[]
+  owned_total: number
+  tasks: Array<{
+    id: number
+    collection: string
+    item: string
+    title: string
+    due_date: ISODate | null
+    status: string
+  }>
+  approvals: Array<{
+    id: number
+    collection: string
+    item: string
+    chain_name: string
+    current_step: number
+  }>
+  notifications: Array<{
+    id: number
+    subject: string
+    message: string | null
+    sender: UUID | null
+    collection: string | null
+    item: string | null
+    timestamp: ISODate
+  }>
+  counts: {
+    owned: number
+    owned_breached: number
+    owned_warning: number
+    tasks: number
+    approvals: number
+    notifications: number
+  }
+}
+
+/** The current user's actionable inbox: owned records (SLA-first), tasks,
+ *  approval steps, unread notifications. */
+export function readMyWork(): Command<{ data: MyWorkSummary }> {
+  return cmd('GET', '/my-work')
+}
+
+// ─── Notifications: batch + send ─────────────────────────────────────────────
+
+/** Mark several notifications read in one call (own rows only, max 200 ids). */
+export function markNotificationsRead(
+  ids: Array<string | number>
+): Command<{ data: { updated: number } }> {
+  return cmd('POST', '/notifications/mark-read', undefined, { ids })
+}
+
+/** Send a user-to-user notification. Sender is always the caller. */
+export function createNotification(body: {
+  recipient: string
+  subject: string
+  message?: string
+  collection?: string
+  item?: string
+}): Command<{ ok: boolean }> {
+  return cmd('POST', '/notifications', undefined, body)
+}
+
+/** Admin broadcast: audience = users whose restrict-mode scope for `dimension`
+ *  intersects `values`, plus explicit `user_ids`. */
+export function sendBulkNotification(body: {
+  subject: string
+  message?: string
+  html?: string
+  dimension?: string
+  values?: Array<string | number>
+  user_ids?: string[]
+  channels?: { inapp?: boolean; email?: boolean }
+}): Command<{ data: { recipients: number; emails_sent: number } }> {
+  return cmd('POST', '/notifications/bulk', undefined, body)
+}
+
+// ─── Record links ─────────────────────────────────────────────────────────────
+
+export type RecordLinkType = 'relates to' | 'supersedes' | 'duplicates' | 'blocks' | 'caused by'
+
+export interface RecordLink {
+  id: number
+  direction: 'out' | 'in'
+  /** Incoming links carry the inverse phrasing ('superseded by' etc.). */
+  type: string
+  collection: string
+  item: string
+  label: string | null
+  note: string | null
+}
+
+/** Links attached to a record, both directions, labels for readable ends. */
+export function listRecordLinks(
+  collection: string,
+  id: string | number
+): Command<{ data: RecordLink[] }> {
+  return cmd('GET', `/record-links/${collection}/${id}`)
+}
+
+/** Link two records. `link_type` defaults to 'relates to'; duplicates 409. */
+export function createRecordLink(body: {
+  from_collection: string
+  from_item: string
+  to_collection: string
+  to_item: string
+  link_type?: RecordLinkType
+  note?: string
+}): Command<{ data: { linked: boolean } }> {
+  return cmd('POST', '/record-links', undefined, body)
+}
+
+/** Remove a link (requires read on the FROM side). */
+export function deleteRecordLink(id: number): Command<{ data: { deleted: boolean } }> {
+  return cmd('DELETE', `/record-links/${id}`)
+}
+
+// ─── Pinned items ─────────────────────────────────────────────────────────────
+
+/** The current user's pinned item ids for a collection. */
+export function listPinnedItems(collection: string): Command<{ data: string[] }> {
+  return cmd('GET', `/pinned/${collection}`)
+}
+
+/** Pin or unpin a record for the current user. */
+export function togglePinnedItem(
+  collection: string,
+  itemId: string | number
+): Command<{ data: { pinned: boolean } }> {
+  return cmd('POST', `/pinned/${collection}/${itemId}/toggle`)
+}
+
+// ─── Last touch ───────────────────────────────────────────────────────────────
+
+export interface LastTouch {
+  action: string
+  timestamp: ISODate
+  user_id: UUID | null
+  user_name: string | null
+}
+
+/** Newest create/update on a record ("Edited 3d ago by Beth"). `data: null` when untouched. */
+export function readLastTouch(
+  collection: string,
+  id: string | number
+): Command<{ data: LastTouch | null }> {
+  return cmd('GET', `/last-touch/${collection}/${id}`)
+}
+
+// ─── View subscriptions ───────────────────────────────────────────────────────
+
+export interface ViewSubscription {
+  id: number
+  view_id: number
+  digest: 'daily' | 'weekly'
+  is_active: boolean
+  last_run_at: ISODate | null
+  view_name: string
+  collection: string
+}
+
+/** The current user's saved-view digest subscriptions. */
+export function listViewSubscriptions(): Command<{ data: ViewSubscription[] }> {
+  return cmd('GET', '/view-subscriptions')
+}
+
+/** Subscribe to a saved view's new-records digest (upserts by view). */
+export function createViewSubscription(body: {
+  view_id: number
+  digest?: 'daily' | 'weekly'
+}): Command<{ data: { id: number; view_id: number; digest: string } }> {
+  return cmd('POST', '/view-subscriptions', undefined, body)
+}
+
+/** Unsubscribe (own rows only). Responds 204 with no body. */
+export function deleteViewSubscription(id: number): Command<void> {
+  return cmd('DELETE', `/view-subscriptions/${id}`)
+}
+
+// ─── Access explain / requests ────────────────────────────────────────────────
+
+export interface AccessReason {
+  type: 'permission' | 'not_found' | 'row_filter' | 'scope' | 'scope_strict'
+  message: string
+  dimension?: string
+  dimension_label?: string
+  allowed_values?: string[]
+}
+
+/** Why a record is (in)visible to the current user — each access gate re-run
+ *  separately, reasons only, never record data. */
+export function explainRecordAccess(
+  collection: string,
+  id: string | number
+): Command<{ data: { access: boolean; reasons: AccessReason[] } }> {
+  return cmd('GET', `/access-explain/${collection}/${id}`)
+}
+
+/** Ask admins for access to a hidden record. Deduped per user+record per day
+ *  (`already: true` on a repeat). */
+export function requestRecordAccess(body: {
+  collection: string
+  item: string
+  note?: string
+}): Command<{ data: { requested: boolean; already?: boolean; notified?: number } }> {
+  return cmd('POST', '/access-requests', undefined, body)
+}
+
+// ─── Presence (online list) ───────────────────────────────────────────────────
+
+export interface OnlinePresenceUser {
+  user_id: UUID | null
+  display_name: string | null
+  role_name: string | null
+  current_path: string | null
+  last_seen: ISODate
+  is_idle: boolean
+  last_active: ISODate | null
+  /** Server-rendered "Collection › Record label" for the current path. */
+  page: string | null
+  app: string | null
+  typing_room: string | null
+  scopes: string[]
+  scopes_by_dimension: Record<string, string[]>
+  /** Live session recording id — admins only, null otherwise. */
+  recording_id: string | null
+}
+
+export interface OnlinePresenceConfig {
+  fields: string[]
+  scope_dimensions: string[]
+  admin_url: string
+  dimensions: Array<{ name: string; label: string }>
+}
+
+/** Who is online, scoped by the viewer's own restrictions, with instance
+ *  display config. Response carries `config` beside `data`. */
+export function readOnlinePresence(): Command<{
+  data: OnlinePresenceUser[]
+  config: OnlinePresenceConfig
+}> {
+  return cmd('GET', '/presence/online')
+}

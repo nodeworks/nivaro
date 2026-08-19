@@ -63,7 +63,9 @@ export interface FileUsageEntry {
 }
 
 /** Where is this file referenced? FK-driven scan of every column pointing at nivaro_files. */
-export function readFileUsage(id: string): Command<{ data: { usages: FileUsageEntry[]; total: number } }> {
+export function readFileUsage(
+  id: string
+): Command<{ data: { usages: FileUsageEntry[]; total: number } }> {
   return cmd('GET', `/files/${id}/usage`)
 }
 

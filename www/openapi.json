@@ -60013,7 +60013,7 @@
       },
       "WarehouseUsage": {
         "type": "object",
-        "description": "Monthly issuance out of each warehouse per CIFA item (month_1 = most recent month), including inventory ordered outside EFP. Loaded by the Warehouse Usage staged import.",
+        "description": "Monthly issuance out of each warehouse per CIFA item — one row per calendar month, including inventory ordered outside EFP. Loaded by the Warehouse Usage staged import (wide file unpivoted; month_1 = the month of the load).",
         "properties": {
           "id": {
             "type": "integer"
@@ -60024,40 +60024,11 @@
           "cifa": {
             "type": "integer"
           },
-          "month_1": {
-            "type": "number"
+          "month": {
+            "type": "string",
+            "format": "date"
           },
-          "month_2": {
-            "type": "number"
-          },
-          "month_3": {
-            "type": "number"
-          },
-          "month_4": {
-            "type": "number"
-          },
-          "month_5": {
-            "type": "number"
-          },
-          "month_6": {
-            "type": "number"
-          },
-          "month_7": {
-            "type": "number"
-          },
-          "month_8": {
-            "type": "number"
-          },
-          "month_9": {
-            "type": "number"
-          },
-          "month_10": {
-            "type": "number"
-          },
-          "month_11": {
-            "type": "number"
-          },
-          "month_12": {
+          "quantity": {
             "type": "number"
           },
           "date_created": {
