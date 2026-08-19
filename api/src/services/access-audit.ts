@@ -426,7 +426,9 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
     const labelMap = await buildLabelMap(collection, [
       ...new Set(findings.map((f) => f.item_id))
     ])
-    for (const chunk of chunks(findings, 400)) {
+    // 7 bound params per row against MSSQL's ~2100-parameter statement cap:
+    // 250 rows = 1750 params. 400 was over the cap and failed on big runs.
+    for (const chunk of chunks(findings, 250)) {
       await db('nivaro_access_audit_findings').insert(
         chunk.map((f) => ({
           run: runId,
