@@ -261,10 +261,13 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
           /* noop */
         }
       }
-      // Bare yyyy-mm-dd parses as UTC midnight — render it timezone-proof.
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-        const [y, m, d] = s.split('-').map(Number)
-        return new Date(y, m - 1, d).toLocaleDateString()
+      // Bare yyyy-mm-dd — and ISO strings at exactly UTC midnight, which is
+      // how MSSQL `date` columns serialize — parse as UTC midnight; local
+      // conversion would shift them a day (and first-of-month values a whole
+      // MONTH) back. Render the stored calendar day from the string parts.
+      const dm = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/)
+      if (dm) {
+        return new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])).toLocaleDateString()
       }
       return dateOnly ? new Date(s).toLocaleDateString() : new Date(s).toLocaleString()
     } catch {

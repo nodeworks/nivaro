@@ -755,6 +755,17 @@ function CellValue({
     )
   }
   if (fieldType === 'timestamp' || fieldType === 'datetime' || fieldType === 'date') {
+    // A date-only value (bare yyyy-mm-dd, or the UTC-midnight ISO form MSSQL
+    // `date` columns serialize to) must render its stored calendar day —
+    // local conversion of UTC midnight shifts it a day back.
+    const dm = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/)
+    if (dm) {
+      const label = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])).toLocaleDateString(
+        'en-US',
+        { month: 'short', day: 'numeric', year: 'numeric' }
+      )
+      return <span className='text-[12px] tabular-nums text-slate-400'>{label}</span>
+    }
     // Rendered as human text ("2 days ago", "08/05/2026"), so it reads as prose;
     // tabular figures keep the column's digits aligned.
     return (

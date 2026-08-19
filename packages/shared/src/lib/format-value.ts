@@ -18,7 +18,11 @@ function pad(n: number): string {
 }
 
 function formatDateTemplate(raw: string, template: string): string {
-  const d = new Date(raw)
+  // Date-only values (bare yyyy-mm-dd, or ISO at exactly UTC midnight — the
+  // MSSQL `date` serialization) are anchored to their stored calendar day so
+  // the local getters below can't shift them into the previous day/month.
+  const dm = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/)
+  const d = dm ? new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])) : new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
   if (template === 'relative') return formatRelative(d)
   // Longest tokens first so YYYY wins over YY, MMM over MM, hh over h.
