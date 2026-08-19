@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-18T17:38:43.766Z",
+  "generated_at": "2026-08-19T15:30:53.803Z",
   "releases": [
+    {
+      "version": "0.1.70",
+      "tag": "v0.1.70",
+      "date": "2026-08-19T11:30:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "pre-flight validation, config-managed procedures, and definition versioning",
+              "hash": "aa77b0dd"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "pinned queue column headers no longer hide behind scrolling headers",
+              "hash": "85267cda"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.69",
       "tag": "v0.1.69",
-      "date": "2026-08-18T13:38:41-04:00",
+      "date": "2026-08-18T13:38:43-04:00",
       "sections": [
         {
           "label": "Added",
