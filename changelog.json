@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-19T16:12:35.902Z",
+  "generated_at": "2026-08-19T18:08:41.775Z",
   "releases": [
+    {
+      "version": "0.1.72",
+      "tag": "v0.1.72",
+      "date": "2026-08-19T14:08:39-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "\"since you last looked\" record recap + Stock Planning coverage view",
+              "hash": "01d8c444"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.71",
       "tag": "v0.1.71",
-      "date": "2026-08-19T12:12:33-04:00",
+      "date": "2026-08-19T12:12:35-04:00",
       "sections": [
         {
           "label": "Fixed",
