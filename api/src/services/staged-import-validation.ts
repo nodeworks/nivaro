@@ -36,14 +36,15 @@ export interface ImportValidationConfig {
   target_table?: string
   /** file column -> target column (single or composite key). */
   target_match?: Record<string, string>
-  /* Row numbers in issues are SPREADSHEET rows (header = row 1, first data
-   row = 2) so they match what the user sees opening the file. */
-/** Join-miss detection: rows whose value matches nothing the procedure can
+  /** Join-miss detection: rows whose value matches nothing the procedure can
    *  join to (the rows it would silently drop or NULL-out). */
   lookups?: Array<{ column: string; collection: string; match_field: string; label?: string }>
   required?: string[]
   numeric?: string[]
 }
+
+/* Row numbers in issues are SPREADSHEET rows (header = row 1, first data
+   row = 2) so they match what the user sees opening the file. */
 
 export interface ValidationIssue {
   code: string
