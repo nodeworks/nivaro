@@ -277,6 +277,97 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
   return out
 }
 
+export interface CollectionCheckSummary {
+  collection: string
+  required: number
+  validation: number
+  cascade: number
+  skipped: number
+}
+
+/**
+ * Per-collection check counts for the picker, computed from THREE bulk
+ * queries instead of compiling every collection serially (230 collections x
+ * several ~37ms round trips each made the dropdown take seconds). Counts are
+ * a preview — exact compilation (alias resolution etc.) happens at run time.
+ */
+export async function summarizeAllCollections(): Promise<Map<string, CollectionCheckSummary>> {
+  const [fields, layouts, assignments] = await Promise.all([
+    db('nivaro_fields')
+      .where((qb) =>
+        qb
+          .where('required', true)
+          .orWhereNotNull('validation_rules')
+          .orWhereNotNull('dependency_config')
+      )
+      .select('collection', 'field', 'required', 'validation_rules', 'dependency_config') as Promise<
+      Array<{
+        collection: string
+        field: string
+        required: unknown
+        validation_rules: unknown
+        dependency_config: unknown
+      }>
+    >,
+    db('nivaro_collection_layouts')
+      .where('layout_type', 'grouped')
+      .select('id', 'collection') as Promise<Array<{ id: number; collection: string }>>,
+    db('nivaro_layout_field_assignments')
+      .where('is_visible', true)
+      .select('layout_id', 'field') as Promise<Array<{ layout_id: number; field: string }>>
+  ])
+
+  const layoutsByCollection = new Map<string, number[]>()
+  for (const l of layouts) {
+    if (!layoutsByCollection.has(l.collection)) layoutsByCollection.set(l.collection, [])
+    layoutsByCollection.get(l.collection)?.push(l.id)
+  }
+  const visibleByLayout = new Map<number, Set<string>>()
+  for (const a of assignments) {
+    if (!visibleByLayout.has(a.layout_id)) visibleByLayout.set(a.layout_id, new Set())
+    visibleByLayout.get(a.layout_id)?.add(a.field)
+  }
+  const onEvery = (collection: string, field: string): boolean => {
+    const ids = layoutsByCollection.get(collection)
+    if (!ids || ids.length === 0) return true
+    return ids.every((id) => visibleByLayout.get(id)?.has(field))
+  }
+
+  const out = new Map<string, CollectionCheckSummary>()
+  const entry = (collection: string): CollectionCheckSummary => {
+    let e = out.get(collection)
+    if (!e) {
+      e = { collection, required: 0, validation: 0, cascade: 0, skipped: 0 }
+      out.set(collection, e)
+    }
+    return e
+  }
+  for (const f of fields) {
+    if (!IDENT.test(f.collection) || /^nivaro_|^directus_/i.test(f.collection)) continue
+    if (!IDENT.test(f.field)) continue
+    const e = entry(f.collection)
+    const bound = onEvery(f.collection, f.field)
+    if (f.required === true || f.required === 1) {
+      if (bound) e.required++
+      else e.skipped++
+    }
+    const rules = parseJson<ValidationRule[]>(f.validation_rules)
+    if (Array.isArray(rules) && rules.length > 0) {
+      if (bound) e.validation++
+      else e.skipped++
+    }
+    const dep = parseJson<{
+      cascade_filters?: Array<{ parent_field?: string; filter_column?: string; filter_via_many?: boolean }>
+    }>(f.dependency_config)
+    for (const c of dep?.cascade_filters ?? []) {
+      if (!c.parent_field || !c.filter_column) continue
+      if (c.filter_column.includes('.') || c.filter_via_many) e.skipped++
+      else e.cascade++
+    }
+  }
+  return out
+}
+
 export interface ConformanceSummary {
   checked: number
   violations: number

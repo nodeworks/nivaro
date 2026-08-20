@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { compileChecks, runConformance } from '../services/config-conformance.js'
+import { runConformance, summarizeAllCollections } from '../services/config-conformance.js'
 
 /** Config conformance runs — admin-only, access-audit execution model:
  *  fire-and-forget run, pollable status, findings paged per run. */
@@ -15,40 +15,24 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
   /** Which collections have anything to check, with per-kind counts — the
    *  picker only offers collections where a run can find something. */
   app.get('/collections', async () => {
-    const rows = (await db('nivaro_collections')
-      .whereRaw("collection NOT LIKE 'nivaro\\_%' ESCAPE '\\'")
-      .whereRaw("collection NOT LIKE 'directus\\_%' ESCAPE '\\'")
-      .select('collection', 'display_name')) as Array<{
-      collection: string
-      display_name: string | null
-    }>
-    const out: Array<{
-      collection: string
-      display_name: string | null
-      required: number
-      validation: number
-      cascade: number
-      skipped: number
-    }> = []
-    for (const r of rows) {
-      if (!IDENT.test(r.collection)) continue
-      try {
-        const checks = await compileChecks(r.collection)
-        const total =
-          checks.requiredFields.length + checks.validation.length + checks.cascades.length
-        if (total === 0) continue
-        out.push({
-          collection: r.collection,
-          display_name: r.display_name,
-          required: checks.requiredFields.length,
-          validation: checks.validation.length,
-          cascade: checks.cascades.length,
-          skipped: checks.skipped.length
-        })
-      } catch {
-        /* a broken collection's config must not hide the rest */
-      }
-    }
+    const [rows, summaries] = await Promise.all([
+      db('nivaro_collections')
+        .whereRaw("collection NOT LIKE 'nivaro\\_%' ESCAPE '\\'")
+        .whereRaw("collection NOT LIKE 'directus\\_%' ESCAPE '\\'")
+        .select('collection', 'display_name') as Promise<
+        Array<{ collection: string; display_name: string | null }>
+      >,
+      summarizeAllCollections()
+    ])
+    const out = rows
+      .filter((r) => IDENT.test(r.collection))
+      .map((r) => {
+        const s = summaries.get(r.collection)
+        if (!s || s.required + s.validation + s.cascade === 0) return null
+        return { display_name: r.display_name, ...s }
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(a?.collection).localeCompare(String(b?.collection)))
     return { data: out }
   })
 
