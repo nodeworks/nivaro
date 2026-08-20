@@ -400,10 +400,17 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     // closes, where the timestamp window can only expire slowly. The window
     // stays as a fallback for a host with no socket, and covers the seconds
     // between an HTTP heartbeat and a socket connecting.
-    const windowMs = 60_000
+    // last_seen freshness is the ONLY authority for being online: the socket
+    // flips is_online on disconnect, but its bookkeeping is per-process
+    // memory, so every API restart stranded is_online=true bits and those
+    // rows read as online FOREVER (the reported ghost-online bug). Beats
+    // re-assert is_online=true every ~25s, so a false bit self-heals in one
+    // beat while a closed tab (socket flip + no more beats) drops instantly.
+    const windowMs = 70_000
     const since = new Date(Date.now() - windowMs)
     const rows = (await db('user_presence')
-      .where((qb) => void qb.where('is_online', true).orWhere('last_seen', '>=', since))
+      .where('last_seen', '>=', since)
+      .where((qb) => void qb.where('is_online', true).orWhereNull('is_online'))
       .orderBy('last_seen', 'desc')
       .limit(200)) as Array<Record<string, unknown>>
 
@@ -572,10 +579,21 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           // nothing ever said otherwise. Recent activity wins.
           is_idle: (() => {
             const flag = r.is_idle === true || r.is_idle === 1
-            if (!flag) return false
             const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
+            // Idle when the client says so OR its last real input is stale —
+            // recent activity wins in both directions.
+            if (active && Date.now() - active > IDLE_AFTER_MS) return true
+            if (!flag) return false
             if (!active) return true
             return Date.now() - active > IDLE_AFTER_MS
+          })(),
+          // How long they've been away from the keyboard, for the "Idle · 12m"
+          // label — null while active or unknown.
+          idle_minutes: (() => {
+            const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
+            if (!active) return null
+            const mins = Math.floor((Date.now() - active) / 60_000)
+            return mins >= Math.floor(IDLE_AFTER_MS / 60_000) ? mins : null
           })(),
           last_active: r.last_active ?? null,
           // Rendered here because only the server can: the panel has neither

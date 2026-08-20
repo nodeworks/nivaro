@@ -130,12 +130,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     set.add(socketId)
     liveSockets.set(userId, set)
     const now = new Date()
-    // Connecting IS activity: it takes a real interaction to open the app.
+    // A connection asserts ONLINE-ness only. It must not stamp activity: the
+    // socket reconnects on its own (network blips, laptop wake), and treating
+    // each reconnect as input reset the idle clock — people flipped from
+    // "Idle · 12m" back to bare "Idle" every reconnect. The client's own
+    // beats carry is_idle/last_active, the actual input claims.
     await writePresence(userId, {
       is_online: true,
-      is_idle: false,
-      last_seen: now,
-      last_active: now
+      last_seen: now
     })
   }
 

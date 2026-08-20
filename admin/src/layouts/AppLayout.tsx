@@ -200,7 +200,7 @@ export const navCategories: NavCategory[] = [
       { icon: GitCompare, label: 'Environment Config', to: '/config-diff' },
       { icon: ServerCog, label: 'Environments', to: '/environments' },
       { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness' },
-      { icon: Megaphone, label: 'Announcements', to: '/announcements' },
+      { icon: Megaphone, label: 'Broadcasts', to: '/announcements' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },

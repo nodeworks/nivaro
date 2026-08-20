@@ -76,6 +76,7 @@ export {
   CloneDialog,
   CollectionBrowserView,
   AnnouncementBanner,
+  BroadcastView,
   ConformanceView,
   CollectionImportPanel,
   CommentPanel,

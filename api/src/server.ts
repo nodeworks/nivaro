@@ -482,6 +482,19 @@ export async function buildServer() {
     })
 
     // Daily readiness score snapshot — the trend line toward cutover.
+    // Presence janitor — the socket's disconnect bookkeeping is per-process,
+    // so restarts strand is_online=true bits; anything raw /items readers see
+    // must self-heal even if no client ever beats again.
+    app.cron.schedule('presence-janitor', '*/5 * * * *', async () => {
+      const has = await db.schema.hasTable('user_presence')
+      if (!has) return
+      await db('user_presence')
+        .where('is_online', true)
+        .where('last_seen', '<', new Date(Date.now() - 10 * 60_000))
+        .update({ is_online: false, is_idle: true })
+        .catch(() => {})
+    })
+
     app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
       const { runReadinessChecks } = await import('./services/readiness.js')
       const report = await runReadinessChecks()

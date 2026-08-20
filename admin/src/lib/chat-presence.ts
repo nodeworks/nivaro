@@ -14,8 +14,10 @@ import { getSocket, onCollectionUpdate } from '@/lib/socket'
  * this one is what the chat Online tab and typing indicators read.
  */
 
-const HEARTBEAT_MS = 30_000
-const ONLINE_WINDOW_MS = 5 * 60_000
+const HEARTBEAT_MS = 25_000
+// Must exceed one heartbeat + jitter and nothing more — a 5-minute window
+// kept people 'online' for five minutes after closing the tab.
+const ONLINE_WINDOW_MS = 70_000
 
 export interface OnlineUser {
   id: number
@@ -72,6 +74,10 @@ async function beat(userId: string, name: string, path: string, roleName: string
     // 'API' — what people call this console. efp-new sends nothing, so the
     // ordinary case stays unlabelled.
     app: 'API',
+    // Re-asserted every beat: the socket's disconnect bookkeeping is
+    // per-process, so a server restart strands is_online=false/true bits —
+    // a live tab must keep saying so itself.
+    is_online: true,
     ...idleState()
   }
   try {
@@ -139,7 +145,24 @@ export function usePresenceHeartbeat() {
     roles?.find((r) => r.id?.toLowerCase() === user?.role?.toLowerCase())?.name ?? null
 
   useEffect(() => {
+    // Clean exits flip offline INSTANTLY: keepalive survives page teardown,
+    // and the server treats is_online=false as gone even inside the window.
+    const goOffline = () => {
+      if (presenceRowId == null) return
+      try {
+        void fetch(`/api/items/user_presence/${presenceRowId}`, {
+          method: 'PATCH',
+          keepalive: true,
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ is_online: false, is_idle: true })
+        })
+      } catch {
+        // The 70s window still catches it.
+      }
+    }
     if (!user) return
+    window.addEventListener('pagehide', goOffline)
     const name =
       [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Unknown'
     void beat(user.id, name, pathname, roleName)
@@ -147,7 +170,10 @@ export function usePresenceHeartbeat() {
       () => void beat(user.id, name, window.location.pathname, roleName),
       HEARTBEAT_MS
     )
-    return () => clearInterval(t)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener('pagehide', goOffline)
+    }
   }, [user, pathname, roleName])
 }
 
@@ -158,7 +184,14 @@ export function useOnlineUsers(): { users: OnlineUser[]; loading: boolean } {
     queryKey: ['admin-online-users'],
     queryFn: async () => {
       const since = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString()
-      const filter = encodeURIComponent(JSON.stringify({ last_seen: { _gte: since } }))
+      const filter = encodeURIComponent(
+        JSON.stringify({
+          _and: [
+            { last_seen: { _gte: since } },
+            { _or: [{ is_online: { _eq: true } }, { is_online: { _null: true } }] }
+          ]
+        })
+      )
       const res = await api.get<{ data: OnlineUser[] }>(
         `/items/user_presence?limit=200&sort=-last_seen&filter=${filter}`
       )

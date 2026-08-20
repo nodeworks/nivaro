@@ -1429,6 +1429,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * `role_name` (legacy writers stored the id), and it rendered as the user's
  * subtitle in the Online list — meaningless to anyone reading it.
  */
+/** "Idle · 12m" from the last real input the client reported. */
+function idleLabel(u: { last_active?: string | null; idle_minutes?: number | null }): string {
+  const mins =
+    typeof u.idle_minutes === 'number'
+      ? u.idle_minutes
+      : u.last_active
+        ? Math.floor((Date.now() - new Date(u.last_active).getTime()) / 60_000)
+        : null
+  if (mins == null || mins < 1) return 'Idle'
+  if (mins < 60) return `Idle · ${mins}m`
+  return `Idle · ${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
 function humanLabel(value: string | null | undefined): string | null {
   const v = value?.trim()
   if (!v || UUID_RE.test(v)) return null
@@ -2496,12 +2509,17 @@ export function ChatPanel({
                         // way at a glance rather than competing with it.
                         u.is_idle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
                       )}
-                      title={u.is_idle ? 'Idle' : 'Online'}
+                      title={u.is_idle ? idleLabel(u) : 'Online'}
                     />
                   </span>
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                       {u.display_name ?? 'Unknown user'}
+                      {u.is_idle && (
+                        <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
+                          {idleLabel(u)}
+                        </span>
+                      )}
                     </span>
                     <span className='block truncate text-[11px] text-slate-400'>
                       {(() => {

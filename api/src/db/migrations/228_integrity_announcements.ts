@@ -34,11 +34,18 @@ export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_announcements'))) {
     await knex.schema.createTable('nivaro_announcements', (t) => {
       t.increments('id')
+      t.string('subject', 500).nullable()
       t.text('message').notNullable()
       /** 'info' | 'warn' | 'critical' */
       t.string('severity', 20).notNullable().defaultTo('info')
       /** JSON array of role ids; null = everyone. */
       t.text('roles').nullable()
+      /** JSON array of delivery channels: banner | message | email | sms. */
+      t.text('channels').nullable()
+      /** JSON audience: {dimension?, values?, user_ids?} on top of roles. */
+      t.text('audience').nullable()
+      /** How many users the send channels actually reached. */
+      t.integer('delivered_count').nullable()
       t.dateTime('starts_at').nullable()
       t.dateTime('ends_at').nullable()
       t.boolean('is_active').notNullable().defaultTo(true)
