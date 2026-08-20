@@ -47,9 +47,7 @@ export async function recordViewRoutes(app: FastifyInstance) {
       const now = new Date()
       const existing = (await db('nivaro_record_views')
         .where({ user: userId, collection, item_id: String(id) })
-        .first()) as
-        | { id: number; last_viewed_at: Date; prev_viewed_at: Date | null }
-        | undefined
+        .first()) as { id: number; last_viewed_at: Date; prev_viewed_at: Date | null } | undefined
 
       let since: Date | null = null
       if (!existing) {
@@ -144,9 +142,7 @@ export async function recordViewRoutes(app: FastifyInstance) {
           .catch(() => [])) as Array<{ field: string; label: string | null }>
         const labelMap = new Map(labelRows.map((r) => [r.field, r.label]))
         fieldLabels = fieldList.map(
-          (f) =>
-            labelMap.get(f) ||
-            f.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+          (f) => labelMap.get(f) || f.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
         )
       }
 
@@ -159,6 +155,34 @@ export async function recordViewRoutes(app: FastifyInstance) {
           transitions: transitionCount,
           editors: [...editors].slice(0, 5)
         }
+      })
+    }
+  )
+
+  /** Who has opened this record, newest first — the audit companion to the
+   *  recap ("did the approver actually look?"). Admin-only: viewing habits
+   *  are behavioral data, not record data. */
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/record-views/:collection/:id/viewers',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+      const rows = await db('nivaro_record_views as v')
+        .leftJoin('nivaro_users as u', 'u.id', 'v.user')
+        .where({ 'v.collection': collection, 'v.item_id': String(id) })
+        .orderBy('v.last_viewed_at', 'desc')
+        .limit(50)
+        .select('v.user', 'v.last_viewed_at', 'u.first_name', 'u.last_name', 'u.email')
+      return reply.send({
+        data: rows.map((r) => ({
+          user_id: r.user,
+          name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || 'Unknown',
+          last_viewed_at: new Date(r.last_viewed_at).toISOString()
+        }))
       })
     }
   )

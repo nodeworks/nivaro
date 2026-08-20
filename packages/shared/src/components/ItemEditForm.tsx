@@ -1,15 +1,20 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileDown, Loader2, Save, Trash2, Wrench } from 'lucide-react'
-import { CloneDialog } from './item-edit/CloneDialog'
-import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './item-edit/ChangeReasonDialog'
-import { RawEditSheet } from './item-edit/RawEditSheet'
-import { RecordChatActions } from './item-edit/RecordChatActions'
-import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
-import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
-import { ImportFromFileButton } from './import/ImportFromFileButton'
-import { ImportIssuesPanel } from './import/ImportIssuesPanel'
-import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  FileDown,
+  Loader2,
+  Save,
+  Trash2,
+  Wrench
+} from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -20,28 +25,72 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { applyValidationRule } from '../lib/validation-rules'
-import { StaleFieldReportContext, GridFlushContext, type GridFlushContextValue, ItemEditAuthContext, ParentDraftContext, ReimportHandlerContext, useApiFetchConfig, useNivaroClient, RelationPathDataContext } from '../context'
+import {
+  GridFlushContext,
+  type GridFlushContextValue,
+  ItemEditAuthContext,
+  ParentDraftContext,
+  ReimportHandlerContext,
+  RelationPathDataContext,
+  StaleFieldReportContext,
+  useApiFetchConfig,
+  useNivaroClient
+} from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
-import { FieldRow } from './item-edit/FieldRow'
-import { GroupSection, InlineDisplay, OwnersInline, OwnersInlineCompact, StripFieldValue } from './item-edit/GroupSection'
-import { applyDisplayTemplate, isSentinelKey, parseJson, resolveColSpan, SENTINEL_FIELDS, SYSTEM_FIELDS, useContainerWidth } from './item-edit/helpers'
+import { applyValidationRule } from '../lib/validation-rules'
+import { ImportFromFileButton } from './import/ImportFromFileButton'
+import { ImportIssuesPanel } from './import/ImportIssuesPanel'
+import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
+import {
+  AddendumFieldContext,
+  type AddendumFieldMap,
+  AddendumO2MContext,
+  type AddendumO2MMap,
+  AddendumViewContext
+} from './item-edit/AddendumFieldContext'
 import { useAutoIdPreview } from './item-edit/AutoIdPreviewField'
+import {
+  type ChangeReasonChallenge,
+  ChangeReasonDialog,
+  changeReasonChallenge
+} from './item-edit/ChangeReasonDialog'
+import { CloneDialog } from './item-edit/CloneDialog'
+import { FieldRow } from './item-edit/FieldRow'
+import {
+  GroupSection,
+  InlineDisplay,
+  OwnersInline,
+  OwnersInlineCompact,
+  StripFieldValue
+} from './item-edit/GroupSection'
+import {
+  applyDisplayTemplate,
+  isSentinelKey,
+  parseJson,
+  resolveColSpan,
+  SENTINEL_FIELDS,
+  SYSTEM_FIELDS,
+  useContainerWidth
+} from './item-edit/helpers'
+import { evalClientFormula } from './item-edit/InlineTableField'
+import { computeLiveRollup, parseRollupSources } from './item-edit/live-rollups'
 import { m2aWriteMeta } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
-import { AddendumFieldContext, AddendumO2MContext, AddendumViewContext, type AddendumFieldMap, type AddendumO2MMap } from './item-edit/AddendumFieldContext'
 import {
   LiveRowsContext,
-  StagedRelationsContext,
-  type StagedRelationsCtx,
-  type StagedRelOps,
   type LiveRowsCtx,
   O2MStagingContext,
-  type O2MStagingCtx
+  type O2MStagingCtx,
+  StagedRelationsContext,
+  type StagedRelationsCtx,
+  type StagedRelOps
 } from './item-edit/O2MStagingContext'
-import { computeLiveRollup, parseRollupSources } from './item-edit/live-rollups'
-import { evalClientFormula } from './item-edit/InlineTableField'
+import { RawEditSheet } from './item-edit/RawEditSheet'
+import { RecordChatActions } from './item-edit/RecordChatActions'
+import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
+import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
 import type {
@@ -56,13 +105,35 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { AccessDeniedPanel, AddendumPanel, CommentPanel, ExternalRequestsChip, ItemActionButtons, ItemLockBanner, OwnersSlot, PipelinePanel, PipelineTransitionButtons, RelatedRecordsPanel, RevisionsPanel, TaskPanel, useItemLock, WorkflowPanel } from './panels'
-import { WidgetSlot, type InputBinding } from './WidgetSlot'
+import {
+  AccessDeniedPanel,
+  AddendumPanel,
+  CommentPanel,
+  ExternalRequestsChip,
+  ItemActionButtons,
+  ItemLockBanner,
+  OwnersSlot,
+  PipelinePanel,
+  PipelineTransitionButtons,
+  RelatedRecordsPanel,
+  RevisionsPanel,
+  TaskPanel,
+  useItemLock,
+  WorkflowPanel
+} from './panels'
 import type { PendingTask } from './panels/TaskPanel'
-import { Button } from './ui/button'
-import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
-import { Skeleton } from './ui/skeleton'
 import { TipLayer } from './TipLayer'
+import { Button } from './ui/button'
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from './ui/dialog'
+import { Skeleton } from './ui/skeleton'
+import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
 function parseSummaryFields(raw: string[] | string | null | undefined): SummaryEntry[] | undefined {
   if (!raw) return undefined
@@ -101,7 +172,10 @@ function buildReimportFileRows(result: ImportParseResponse): Record<string, unkn
   return result.lines.map((line) => ({
     ...line.values,
     ...(line.nested
-      ? { [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]: line.nested.rows }
+      ? {
+          [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]:
+            line.nested.rows
+        }
       : {})
   }))
 }
@@ -138,29 +212,46 @@ interface SaveStepItem {
 }
 
 function SaveStepIcon({ status }: { status: SaveStepStatus }) {
-  if (status === 'running') return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
+  if (status === 'running')
+    return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
   if (status === 'done') return <Check className='h-4 w-4 text-green-500 shrink-0' />
   if (status === 'error') return <AlertCircle className='h-4 w-4 text-red-500 shrink-0' />
   return <div className='h-4 w-4 rounded-full border-2 border-slate-200 shrink-0' />
 }
 
-function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: SaveStepItem[]; onClose: () => void }) {
-  const allSettled = steps.length > 0 && steps.every(s => s.status === 'done' || s.status === 'error')
-  const hasError = steps.some(s => s.status === 'error')
+function SaveProgressDialog({
+  open,
+  steps,
+  onClose
+}: {
+  open: boolean
+  steps: SaveStepItem[]
+  onClose: () => void
+}) {
+  const allSettled =
+    steps.length > 0 && steps.every((s) => s.status === 'done' || s.status === 'error')
+  const hasError = steps.some((s) => s.status === 'error')
   // A failed step aborts the rest, so the steps after it stay 'pending' and
   // never settle — which used to mean the dialog offered no way out at exactly
   // the moment it was reporting a failure. An error IS an end state.
   const canClose = allSettled || hasError
-  const doneCount = steps.filter(s => s.status === 'done').length
+  const doneCount = steps.filter((s) => s.status === 'done').length
   const totalCount = steps.length
   const overallPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next && canClose) onClose() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && canClose) onClose()
+      }}
+    >
       <DialogContent
         // Clicking away mid-save would hide work still in flight; once it can
         // be closed, every normal escape (outside click, Escape, the X) works.
-        onInteractOutside={(e) => { if (!canClose) e.preventDefault() }}
+        onInteractOutside={(e) => {
+          if (!canClose) e.preventDefault()
+        }}
         className='max-w-md'
       >
         <DialogHeader>
@@ -184,10 +275,11 @@ function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: Sa
         </DialogHeader>
         <DialogBody>
           <div className='space-y-2'>
-            {steps.map(step => {
-              const rowPct = step.progress && step.progress.total > 0
-                ? Math.round((step.progress.done / step.progress.total) * 100)
-                : null
+            {steps.map((step) => {
+              const rowPct =
+                step.progress && step.progress.total > 0
+                  ? Math.round((step.progress.done / step.progress.total) * 100)
+                  : null
               return (
                 <div
                   key={step.id}
@@ -200,16 +292,20 @@ function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: Sa
                   )}
                 >
                   <div className='flex items-start gap-2.5'>
-                    <div className='mt-0.5 shrink-0'><SaveStepIcon status={step.status} /></div>
+                    <div className='mt-0.5 shrink-0'>
+                      <SaveStepIcon status={step.status} />
+                    </div>
                     <div className='flex-1 min-w-0'>
                       <div className='flex items-center justify-between gap-2'>
-                        <span className={cn(
-                          'text-[13px] font-medium leading-snug',
-                          step.status === 'done' && 'text-slate-400',
-                          step.status === 'error' && 'text-red-700',
-                          step.status === 'running' && 'text-slate-900',
-                          step.status === 'pending' && 'text-slate-500'
-                        )}>
+                        <span
+                          className={cn(
+                            'text-[13px] font-medium leading-snug',
+                            step.status === 'done' && 'text-slate-400',
+                            step.status === 'error' && 'text-red-700',
+                            step.status === 'running' && 'text-slate-900',
+                            step.status === 'pending' && 'text-slate-500'
+                          )}
+                        >
                           {step.label}
                         </span>
                         {hasError && step.status === 'pending' && (
@@ -222,10 +318,14 @@ function SaveProgressDialog({ open, steps, onClose }: { open: boolean; steps: Sa
                         )}
                       </div>
                       {step.detail && !step.error && (
-                        <p className='text-[11px] text-slate-400 mt-0.5 leading-snug'>{step.detail}</p>
+                        <p className='text-[11px] text-slate-400 mt-0.5 leading-snug'>
+                          {step.detail}
+                        </p>
                       )}
                       {step.error && (
-                        <p className='text-[11px] text-red-500 mt-0.5 break-words leading-snug'>{step.error}</p>
+                        <p className='text-[11px] text-red-500 mt-0.5 break-words leading-snug'>
+                          {step.error}
+                        </p>
                       )}
                       {step.status === 'running' && rowPct !== null && (
                         <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
@@ -333,12 +433,40 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   const num = Number(value)
-  if (format === 'currency') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num)
-  if (format === 'integer') return isNaN(num) ? String(value) : new Intl.NumberFormat().format(Math.round(num))
-  if (format === 'decimal') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)
-  if (format === 'percent') return isNaN(num) ? String(value) : new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(num / 100)
-  if (format === 'date') { try { return new Date(String(value)).toLocaleDateString() } catch { return String(value) } }
-  if (format === 'datetime') { try { return new Date(String(value)).toLocaleString() } catch { return String(value) } }
+  if (format === 'currency')
+    return isNaN(num)
+      ? String(value)
+      : new Intl.NumberFormat(undefined, {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 2
+        }).format(num)
+  if (format === 'integer')
+    return isNaN(num) ? String(value) : new Intl.NumberFormat().format(Math.round(num))
+  if (format === 'decimal')
+    return isNaN(num)
+      ? String(value)
+      : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)
+  if (format === 'percent')
+    return isNaN(num)
+      ? String(value)
+      : new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(
+          num / 100
+        )
+  if (format === 'date') {
+    try {
+      return new Date(String(value)).toLocaleDateString()
+    } catch {
+      return String(value)
+    }
+  }
+  if (format === 'datetime') {
+    try {
+      return new Date(String(value)).toLocaleString()
+    } catch {
+      return String(value)
+    }
+  }
   return String(value)
 }
 
@@ -608,11 +736,17 @@ export function ItemEditForm({
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
-  const { data: fieldConfig, isLoading: fieldsLoading, isFetched: fieldConfigFetched } = useQuery<CMSField[]>({
+  const {
+    data: fieldConfig,
+    isLoading: fieldsLoading,
+    isFetched: fieldConfigFetched
+  } = useQuery<CMSField[]>({
     queryKey: ['field-config', collection, layoutId],
     queryFn: () =>
       client
-        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined))
+        .request<{ data: CMSField[] }>(
+          get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined)
+        )
         .then((r) => r.data ?? []),
     staleTime: 60_000,
     // Wait for the layout either way, not just when a slug pins one. Without
@@ -647,30 +781,54 @@ export function ItemEditForm({
     staleTime: 60_000
   })
 
-  const { data: colMeta } = useQuery<{ display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean; addendums_enabled?: boolean; addendum_allowed_roles?: string | null; addendum_allowed_states?: string | null }>({
+  const { data: colMeta } = useQuery<{
+    display_name?: string
+    singular?: string | null
+    display_template?: string | null
+    item_locking_enabled?: boolean
+    addendums_enabled?: boolean
+    addendum_allowed_roles?: string | null
+    addendum_allowed_states?: string | null
+  }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
       client
-        .request<{ data: { display_name?: string; singular?: string | null; display_template?: string | null; item_locking_enabled?: boolean; addendums_enabled?: boolean; addendum_allowed_roles?: string | null; addendum_allowed_states?: string | null } }>(
-          get(`/collections/${collection}`)
-        )
+        .request<{
+          data: {
+            display_name?: string
+            singular?: string | null
+            display_template?: string | null
+            item_locking_enabled?: boolean
+            addendums_enabled?: boolean
+            addendum_allowed_roles?: string | null
+            addendum_allowed_states?: string | null
+          }
+        }>(get(`/collections/${collection}`))
         .then((r) => r.data),
     staleTime: 60_000
   })
 
-  const { data: fileLayouts = [] } = useQuery<Array<{ id: number; name: string; pdf_button_label?: string | null }>>({
+  const { data: fileLayouts = [] } = useQuery<
+    Array<{ id: number; name: string; pdf_button_label?: string | null }>
+  >({
     queryKey: ['file-layouts', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; name: string; layout_type?: string; is_active?: boolean | number; pdf_button_label?: string | null }> }>(
-          get('/collection-layouts', { collection, type: 'file' })
-        )
+        .request<{
+          data: Array<{
+            id: number
+            name: string
+            layout_type?: string
+            is_active?: boolean | number
+            pdf_button_label?: string | null
+          }>
+        }>(get('/collection-layouts', { collection, type: 'file' }))
         // The list route ignores the type param — filter here or every layout
         // on the collection would grow a PDF button. Inactive file layouts get
         // no header button (that's how a PDF export is retired).
         .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'file' && !!l.is_active)),
     enabled: !!collection && !isNew,
-    staleTime: 60_000,
+    staleTime: 60_000
   })
 
   const [headerWidgetTypes, setHeaderWidgetTypes] = useState<Record<string, string>>({})
@@ -682,36 +840,43 @@ export function ItemEditForm({
   const [addendumViewId, setAddendumViewId] = useState<string>('original')
   const [addendumViewDropdownOpen, setAddendumViewDropdownOpen] = useState(false)
 
-  const downloadPdf = useCallback(async (layoutId: number) => {
-    if (!itemId || !collection) return
-    setPdfLoading(layoutId)
-    setShowPdfDropdown(false)
-    try {
-      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${layoutId}/generate-pdf`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...fetchCfg.authHeaders,
-          ...(workspace ? { 'x-workspace': workspace } : {}),
-        },
-        credentials: fetchCfg.credentials,
-        body: JSON.stringify({ collection, item_id: itemId }),
-      })
-      if (!resp.ok) throw new Error(await resp.text())
-      const blob = await resp.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${collection}-${itemId}.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
-      toast.error('Failed to generate PDF')
-    } finally {
-      setPdfLoading(null)
-    }
-  }, [collection, itemId])
+  const downloadPdf = useCallback(
+    async (layoutId: number) => {
+      if (!itemId || !collection) return
+      setPdfLoading(layoutId)
+      setShowPdfDropdown(false)
+      try {
+        const workspace =
+          typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+        const resp = await fetch(
+          `${fetchCfg.apiBase}/collection-layouts/${layoutId}/generate-pdf`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...fetchCfg.authHeaders,
+              ...(workspace ? { 'x-workspace': workspace } : {})
+            },
+            credentials: fetchCfg.credentials,
+            body: JSON.stringify({ collection, item_id: itemId })
+          }
+        )
+        if (!resp.ok) throw new Error(await resp.text())
+        const blob = await resp.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${collection}-${itemId}.pdf`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {
+        toast.error('Failed to generate PDF')
+      } finally {
+        setPdfLoading(null)
+      }
+    },
+    [collection, itemId]
+  )
 
   useEffect(() => {
     if (!showPdfDropdown) return
@@ -788,18 +953,25 @@ export function ItemEditForm({
   // ── Save progress dialog ───────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveSteps, setSaveSteps] = useState<SaveStepItem[]>([])
-  function updateStep(id: string, upd: Partial<SaveStepItem> | ((prev: SaveStepItem) => Partial<SaveStepItem>)) {
-    setSaveSteps(prev => prev.map(s => {
-      if (s.id !== id) return s
-      const changes = typeof upd === 'function' ? upd(s) : upd
-      return { ...s, ...changes }
-    }))
+  function updateStep(
+    id: string,
+    upd: Partial<SaveStepItem> | ((prev: SaveStepItem) => Partial<SaveStepItem>)
+  ) {
+    setSaveSteps((prev) =>
+      prev.map((s) => {
+        if (s.id !== id) return s
+        const changes = typeof upd === 'function' ? upd(s) : upd
+        return { ...s, ...changes }
+      })
+    )
   }
   function getO2MLabel(key: string): string {
     const [rc] = key.split('.')
-    const rel = relations.find(r => r.many_collection === rc && r.one_collection === collection && !r.junction_field)
+    const rel = relations.find(
+      (r) => r.many_collection === rc && r.one_collection === collection && !r.junction_field
+    )
     if (rel?.one_field) {
-      const f = allFields.find(af => af.field === rel.one_field)
+      const f = allFields.find((af) => af.field === rel.one_field)
       return f?.label ?? titleCase(rel.one_field)
     }
     return titleCase(rc)
@@ -822,90 +994,104 @@ export function ItemEditForm({
   }, [])
 
   // ── Pending O2M rows (new records) ─────────────────────────────────────────
-  const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(new Map())
+  const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(
+    new Map()
+  )
   // Pending edits/deletes for existing rows (saveMode='pending')
-  const [pendingO2MEdits, setPendingO2MEdits] = useState<Map<string, Map<string, Record<string, unknown>>>>(new Map())
+  const [pendingO2MEdits, setPendingO2MEdits] = useState<
+    Map<string, Map<string, Record<string, unknown>>>
+  >(new Map())
   const [pendingO2MDeletes, setPendingO2MDeletes] = useState<Map<string, Set<string>>>(new Map())
 
-  const o2mStagingCtx = useMemo<O2MStagingCtx>(() => ({
-    getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
-    queueRow: (rc, mf, data) => setPendingO2MRows(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      next.set(key, [...(next.get(key) ?? []), data])
-      return next
+  const o2mStagingCtx = useMemo<O2MStagingCtx>(
+    () => ({
+      getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
+      queueRow: (rc, mf, data) =>
+        setPendingO2MRows((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          next.set(key, [...(next.get(key) ?? []), data])
+          return next
+        }),
+      removeRow: (rc, mf, idx) =>
+        setPendingO2MRows((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const arr = [...(next.get(key) ?? [])]
+          arr.splice(idx, 1)
+          next.set(key, arr)
+          return next
+        }),
+      updateRow: (rc, mf, idx, data) =>
+        setPendingO2MRows((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const arr = [...(next.get(key) ?? [])]
+          arr[idx] = { ...arr[idx], ...data }
+          next.set(key, arr)
+          return next
+        }),
+      reorderRows: (rc, mf, fromIdx, toIdx) =>
+        setPendingO2MRows((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const arr = [...(next.get(key) ?? [])]
+          const [moved] = arr.splice(fromIdx, 1)
+          arr.splice(toIdx, 0, moved)
+          next.set(key, arr)
+          return next
+        }),
+      getPendingEdits: (rc, mf) => pendingO2MEdits.get(`${rc}.${mf}`) ?? new Map(),
+      getPendingDeletes: (rc, mf) => pendingO2MDeletes.get(`${rc}.${mf}`) ?? new Set(),
+      queueEdit: (rc, mf, rowId, changes) =>
+        setPendingO2MEdits((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const edits = new Map(next.get(key) ?? [])
+          edits.set(rowId, { ...(edits.get(rowId) ?? {}), ...changes })
+          next.set(key, edits)
+          return next
+        }),
+      queueDelete: (rc, mf, rowId) => {
+        setPendingO2MDeletes((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const dels = new Set(next.get(key) ?? [])
+          dels.add(rowId)
+          next.set(key, dels)
+          return next
+        })
+        // Remove any pending edit for this row
+        setPendingO2MEdits((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const edits = new Map(next.get(key) ?? [])
+          edits.delete(rowId)
+          next.set(key, edits)
+          return next
+        })
+      },
+      cancelPendingEdit: (rc, mf, rowId) =>
+        setPendingO2MEdits((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const edits = new Map(next.get(key) ?? [])
+          edits.delete(rowId)
+          next.set(key, edits)
+          return next
+        }),
+      cancelPendingDelete: (rc, mf, rowId) =>
+        setPendingO2MDeletes((prev) => {
+          const next = new Map(prev)
+          const key = `${rc}.${mf}`
+          const dels = new Set(next.get(key) ?? [])
+          dels.delete(rowId)
+          next.set(key, dels)
+          return next
+        })
     }),
-    removeRow: (rc, mf, idx) => setPendingO2MRows(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const arr = [...(next.get(key) ?? [])]
-      arr.splice(idx, 1)
-      next.set(key, arr)
-      return next
-    }),
-    updateRow: (rc, mf, idx, data) => setPendingO2MRows(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const arr = [...(next.get(key) ?? [])]
-      arr[idx] = { ...arr[idx], ...data }
-      next.set(key, arr)
-      return next
-    }),
-    reorderRows: (rc, mf, fromIdx, toIdx) => setPendingO2MRows(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const arr = [...(next.get(key) ?? [])]
-      const [moved] = arr.splice(fromIdx, 1)
-      arr.splice(toIdx, 0, moved)
-      next.set(key, arr)
-      return next
-    }),
-    getPendingEdits: (rc, mf) => pendingO2MEdits.get(`${rc}.${mf}`) ?? new Map(),
-    getPendingDeletes: (rc, mf) => pendingO2MDeletes.get(`${rc}.${mf}`) ?? new Set(),
-    queueEdit: (rc, mf, rowId, changes) => setPendingO2MEdits(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const edits = new Map(next.get(key) ?? [])
-      edits.set(rowId, { ...(edits.get(rowId) ?? {}), ...changes })
-      next.set(key, edits)
-      return next
-    }),
-    queueDelete: (rc, mf, rowId) => {
-      setPendingO2MDeletes(prev => {
-        const next = new Map(prev)
-        const key = `${rc}.${mf}`
-        const dels = new Set(next.get(key) ?? [])
-        dels.add(rowId)
-        next.set(key, dels)
-        return next
-      })
-      // Remove any pending edit for this row
-      setPendingO2MEdits(prev => {
-        const next = new Map(prev)
-        const key = `${rc}.${mf}`
-        const edits = new Map(next.get(key) ?? [])
-        edits.delete(rowId)
-        next.set(key, edits)
-        return next
-      })
-    },
-    cancelPendingEdit: (rc, mf, rowId) => setPendingO2MEdits(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const edits = new Map(next.get(key) ?? [])
-      edits.delete(rowId)
-      next.set(key, edits)
-      return next
-    }),
-    cancelPendingDelete: (rc, mf, rowId) => setPendingO2MDeletes(prev => {
-      const next = new Map(prev)
-      const key = `${rc}.${mf}`
-      const dels = new Set(next.get(key) ?? [])
-      dels.delete(rowId)
-      next.set(key, dels)
-      return next
-    }),
-  }), [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
+    [pendingO2MRows, pendingO2MEdits, pendingO2MDeletes]
+  )
 
   // ── Import from file (new records) ─────────────────────────────────────────
   const [importIssues, setImportIssues] = useState<ImportParseResponse['issues']>([])
@@ -958,129 +1144,139 @@ export function ItemEditForm({
     [m2mLinks, m2mUnlinks]
   )
 
-  const applyImportResult = useCallback(async (result: ImportParseResponse) => {
-    draftRef.current = { ...draftRef.current, ...result.values }
-    setDraft((prev) => ({ ...prev, ...result.values }))
+  const applyImportResult = useCallback(
+    async (result: ImportParseResponse) => {
+      draftRef.current = { ...draftRef.current, ...result.values }
+      setDraft((prev) => ({ ...prev, ...result.values }))
 
-    const issues = [...result.issues]
-    if (result.lines.length > 0) {
-      const rel = result.line_target_field
-        ? relations.find(
-            (r) => r.one_collection === collection && r.one_field === result.line_target_field
-          )
-        : null
-      if (rel?.many_collection && rel.many_field) {
-        const lineFieldRow = (fieldConfig ?? []).find((f) => f.field === result.line_target_field)
-        const rawOpts = lineFieldRow?.options
-        const opts = (
-          typeof rawOpts === 'string'
-            ? (() => {
-                try {
-                  return JSON.parse(rawOpts)
-                } catch {
-                  return {}
-                }
-              })()
-            : (rawOpts ?? {})
-        ) as { row_rules?: unknown[]; parent_context_fields?: string[] }
-        const rowRules = Array.isArray(opts.row_rules) ? opts.row_rules : []
-        if (rowRules.length > 0) {
-          const mergedDraft = { ...draftRef.current }
-          const parentCtx: Record<string, unknown> = {}
-          for (const f of opts.parent_context_fields ?? []) parentCtx[f] = mergedDraft[f] ?? null
-          for (const rule of rowRules) {
-            const tf = (rule as { trigger_field?: unknown }).trigger_field
-            if (typeof tf === 'string' && tf.startsWith('$parent.')) {
-              const key = tf.slice(8)
-              if (!(key in parentCtx)) parentCtx[key] = mergedDraft[key] ?? null
-            }
-          }
-          // Bounded concurrency (10 at a time) rather than firing every line's
-          // evaluate at once — a large import could otherwise open hundreds of
-          // simultaneous requests. Failed rows degrade to {} and are surfaced as one
-          // aggregate warning so the user knows some autofill didn't run.
-          const evaluated: Record<string, unknown>[] = []
-          let anyEvalFailed = false
-          const EVAL_CHUNK = 10
-          for (let i = 0; i < result.lines.length; i += EVAL_CHUNK) {
-            const chunk = result.lines.slice(i, i + EVAL_CHUNK)
-            const chunkResults = await Promise.all(
-              chunk.map((line) =>
-                client
-                  .request<{ updates: Record<string, unknown> }>(
-                    post('/field-rules/evaluate', {
-                      collection: rel.many_collection,
-                      data: line.values,
-                      parent_context: parentCtx,
-                      row_rules: rowRules
-                    })
-                  )
-                  .then((res) => res.updates ?? {})
-                  .catch(() => {
-                    anyEvalFailed = true
-                    return {}
-                  })
-              )
+      const issues = [...result.issues]
+      if (result.lines.length > 0) {
+        const rel = result.line_target_field
+          ? relations.find(
+              (r) => r.one_collection === collection && r.one_field === result.line_target_field
             )
-            evaluated.push(...chunkResults)
-          }
-          if (anyEvalFailed) {
-            issues.push({
-              severity: 'warn',
-              rule: 'import-apply',
-              message:
-                'Some line autofill rules could not be evaluated — check the affected rows before saving.'
+          : null
+        if (rel?.many_collection && rel.many_field) {
+          const lineFieldRow = (fieldConfig ?? []).find((f) => f.field === result.line_target_field)
+          const rawOpts = lineFieldRow?.options
+          const opts = (
+            typeof rawOpts === 'string'
+              ? (() => {
+                  try {
+                    return JSON.parse(rawOpts)
+                  } catch {
+                    return {}
+                  }
+                })()
+              : (rawOpts ?? {})
+          ) as { row_rules?: unknown[]; parent_context_fields?: string[] }
+          const rowRules = Array.isArray(opts.row_rules) ? opts.row_rules : []
+          if (rowRules.length > 0) {
+            const mergedDraft = { ...draftRef.current }
+            const parentCtx: Record<string, unknown> = {}
+            for (const f of opts.parent_context_fields ?? []) parentCtx[f] = mergedDraft[f] ?? null
+            for (const rule of rowRules) {
+              const tf = (rule as { trigger_field?: unknown }).trigger_field
+              if (typeof tf === 'string' && tf.startsWith('$parent.')) {
+                const key = tf.slice(8)
+                if (!(key in parentCtx)) parentCtx[key] = mergedDraft[key] ?? null
+              }
+            }
+            // Bounded concurrency (10 at a time) rather than firing every line's
+            // evaluate at once — a large import could otherwise open hundreds of
+            // simultaneous requests. Failed rows degrade to {} and are surfaced as one
+            // aggregate warning so the user knows some autofill didn't run.
+            const evaluated: Record<string, unknown>[] = []
+            let anyEvalFailed = false
+            const EVAL_CHUNK = 10
+            for (let i = 0; i < result.lines.length; i += EVAL_CHUNK) {
+              const chunk = result.lines.slice(i, i + EVAL_CHUNK)
+              const chunkResults = await Promise.all(
+                chunk.map((line) =>
+                  client
+                    .request<{ updates: Record<string, unknown> }>(
+                      post('/field-rules/evaluate', {
+                        collection: rel.many_collection,
+                        data: line.values,
+                        parent_context: parentCtx,
+                        row_rules: rowRules
+                      })
+                    )
+                    .then((res) => res.updates ?? {})
+                    .catch(() => {
+                      anyEvalFailed = true
+                      return {}
+                    })
+                )
+              )
+              evaluated.push(...chunkResults)
+            }
+            if (anyEvalFailed) {
+              issues.push({
+                severity: 'warn',
+                rule: 'import-apply',
+                message:
+                  'Some line autofill rules could not be evaluated — check the affected rows before saving.'
+              })
+            }
+            result.lines.forEach((line, i) => {
+              line.values = { ...line.values, ...evaluated[i] }
             })
           }
-          result.lines.forEach((line, i) => {
-            line.values = { ...line.values, ...evaluated[i] }
+          for (const line of result.lines) {
+            o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
+              ...line.values,
+              ...(line.nested
+                ? {
+                    [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]:
+                      line.nested.rows
+                  }
+                : {})
+            })
+          }
+        } else {
+          issues.push({
+            severity: 'error',
+            rule: 'import-apply',
+            message: 'No matching relation found for the imported line items — they were not added.'
           })
         }
-        for (const line of result.lines) {
-          o2mStagingCtx.queueRow(rel.many_collection, rel.many_field, {
-            ...line.values,
-            ...(line.nested
-              ? { [result.nested_relation ? `__o2m_${line.nested.field}` : line.nested.field]: line.nested.rows }
-              : {})
+      }
+
+      const m2mEntries = Object.entries(result.m2m ?? {})
+      for (const [field, ids] of m2mEntries) {
+        // Exact one_field match first, then the legacy junction-table-name alias
+        // (a field named after the junction collection itself, e.g. 'workflows_files').
+        const m2mRel =
+          relations.find(
+            (r) =>
+              r.one_collection === collection && r.one_field === field && r.junction_field != null
+          ) ??
+          relations.find(
+            (r) =>
+              r.one_collection === collection &&
+              r.many_collection === field &&
+              r.junction_field != null
+          )
+        if (m2mRel) {
+          // Stage under the same key the M2M editors use, so the links render in the
+          // form and the save flush (findM2MRel) resolves them.
+          const stagingKey =
+            m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+          for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+        } else {
+          issues.push({
+            severity: 'error',
+            rule: 'import-apply',
+            message: `No M2M relation found for "${field}" — the imported selection was not applied.`
           })
         }
-      } else {
-        issues.push({
-          severity: 'error',
-          rule: 'import-apply',
-          message: 'No matching relation found for the imported line items — they were not added.'
-        })
       }
-    }
 
-    const m2mEntries = Object.entries(result.m2m ?? {})
-    for (const [field, ids] of m2mEntries) {
-      // Exact one_field match first, then the legacy junction-table-name alias
-      // (a field named after the junction collection itself, e.g. 'workflows_files').
-      const m2mRel =
-        relations.find(
-          (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
-        ) ??
-        relations.find(
-          (r) =>
-            r.one_collection === collection && r.many_collection === field && r.junction_field != null
-        )
-      if (m2mRel) {
-        // Stage under the same key the M2M editors use, so the links render in the
-        // form and the save flush (findM2MRel) resolves them.
-        const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
-        for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
-      } else {
-        issues.push({
-          severity: 'error',
-          rule: 'import-apply',
-          message: `No M2M relation found for "${field}" — the imported selection was not applied.`
-        })
-      }
-    }
-
-    setImportIssues(issues)
-  }, [collection, relations, o2mStagingCtx, m2mStagingCtx, fieldConfig, client])
+      setImportIssues(issues)
+    },
+    [collection, relations, o2mStagingCtx, m2mStagingCtx, fieldConfig, client]
+  )
 
   // ── Re-import (existing records) ────────────────────────────────────────────
   const [reimportDialog, setReimportDialog] = useState<{
@@ -1150,14 +1346,18 @@ export function ItemEditForm({
       try {
         diff =
           result.lines.length > 0 && rel?.many_collection && rel.many_field
-            ? diffReimportLines(fileRows, existingRows, { lines: cfg.lines, match_by: cfg.match_by })
+            ? diffReimportLines(fileRows, existingRows, {
+                lines: cfg.lines,
+                match_by: cfg.match_by
+              })
             : { creates: [], updates: [], deletes: [], matchedUnchanged: 0 }
       } catch (err) {
         setImportIssues([
           {
             severity: 'error',
             rule: 'reimport-apply',
-            message: err instanceof Error ? err.message : 'Duplicate match key in the imported lines.'
+            message:
+              err instanceof Error ? err.message : 'Duplicate match key in the imported lines.'
           }
         ])
         return
@@ -1166,7 +1366,16 @@ export function ItemEditForm({
       setImportIssues([])
       setReimportDialog({ diff, result, template, existingRows })
     },
-    [isDirty, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes, relations, collection, client, itemId]
+    [
+      isDirty,
+      pendingO2MRows,
+      pendingO2MEdits,
+      pendingO2MDeletes,
+      relations,
+      collection,
+      client,
+      itemId
+    ]
   )
 
   const applyReimportStaging = useCallback(
@@ -1305,7 +1514,10 @@ export function ItemEditForm({
           for (const row of existingRows) {
             existingByKey.set(reimportMatchKey(row, cfg.match_by), String(row.id))
           }
-          const matchedByField = new Map<string, { id: string; members: Record<string, unknown>[] }[]>()
+          const matchedByField = new Map<
+            string,
+            { id: string; members: Record<string, unknown>[] }[]
+          >()
           for (const row of fileRows) {
             const existingId = existingByKey.get(reimportMatchKey(row, cfg.match_by))
             if (!existingId) continue
@@ -1313,7 +1525,10 @@ export function ItemEditForm({
               if (!colKey.startsWith('__o2m_')) continue
               const field = colKey.slice('__o2m_'.length)
               const arr = matchedByField.get(field) ?? []
-              arr.push({ id: existingId, members: Array.isArray(val) ? (val as Record<string, unknown>[]) : [] })
+              arr.push({
+                id: existingId,
+                members: Array.isArray(val) ? (val as Record<string, unknown>[]) : []
+              })
               matchedByField.set(field, arr)
             }
           }
@@ -1381,16 +1596,21 @@ export function ItemEditForm({
       // same idiom as the new-record import path).
       const findM2mAliasRel = (field: string) =>
         relations.find(
-          (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
+          (r) =>
+            r.one_collection === collection && r.one_field === field && r.junction_field != null
         ) ??
         relations.find(
-          (r) => r.one_collection === collection && r.many_collection === field && r.junction_field != null
+          (r) =>
+            r.one_collection === collection &&
+            r.many_collection === field &&
+            r.junction_field != null
         )
 
       if (attachField && result.file_id) {
         const attachRel = findM2mAliasRel(attachField)
         if (attachRel) {
-          const stagingKey = attachRel.one_field ?? `${attachRel.many_collection}.${attachRel.junction_field}`
+          const stagingKey =
+            attachRel.one_field ?? `${attachRel.many_collection}.${attachRel.junction_field}`
           if (cfg.attachments === 'replace' && attachRel.many_collection && attachRel.many_field) {
             try {
               const junctionRows = await client
@@ -1423,7 +1643,8 @@ export function ItemEditForm({
         if (attachField && field === attachField) continue
         const m2mRel = findM2mAliasRel(field)
         if (m2mRel) {
-          const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+          const stagingKey =
+            m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
           // Existing record: only stage values not already linked, or the save
           // flush would insert duplicate junction rows (e.g. a second 2026
           // funding-year link on every re-import).
@@ -1550,14 +1771,18 @@ export function ItemEditForm({
       if (Array.isArray(value)) {
         const m2mRel =
           relations.find(
-            (r) => r.one_collection === collection && r.one_field === key && r.junction_field != null
+            (r) =>
+              r.one_collection === collection && r.one_field === key && r.junction_field != null
           ) ??
           relations.find(
             (r) =>
-              r.one_collection === collection && r.many_collection === key && r.junction_field != null
+              r.one_collection === collection &&
+              r.many_collection === key &&
+              r.junction_field != null
           )
         if (m2mRel) {
-          const stagingKey = m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
+          const stagingKey =
+            m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
           for (const id of value) m2mStagingCtx.stageLink(stagingKey, id)
           continue
         }
@@ -1749,7 +1974,13 @@ export function ItemEditForm({
         if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
         const map = cfg.field_map
         const sourceFields = [
-          ...new Set(Object.values(map).flatMap((v) => String(v).split('||').map((c) => c.trim())))
+          ...new Set(
+            Object.values(map).flatMap((v) =>
+              String(v)
+                .split('||')
+                .map((c) => c.trim())
+            )
+          )
         ].filter(Boolean)
         if (sourceFields.length === 0) continue
         void client
@@ -1766,7 +1997,9 @@ export function ItemEditForm({
               // 'a||b' = first non-null of the listed source fields; 'id'
               // refers to the source record itself (EFP: a location's
               // designated shipping_location, else the location itself).
-              const candidates = String(sourceField).split('||').map((c) => c.trim())
+              const candidates = String(sourceField)
+                .split('||')
+                .map((c) => c.trim())
               let v: unknown = null
               for (const c of candidates) {
                 v = src[c]
@@ -1794,7 +2027,10 @@ export function ItemEditForm({
 
   const applyFieldRuleResults = useCallback(
     (results: Record<string, unknown> | null | undefined) => {
-      const { scalar, alias } = partitionRuleResults(results, new Set(m2mAliasFieldsForRules.keys()))
+      const { scalar, alias } = partitionRuleResults(
+        results,
+        new Set(m2mAliasFieldsForRules.keys())
+      )
       // Unsettled-guard: checked against the state captured when this
       // response's evaluate cycle started — a target that wasn't known yet
       // simply gets another chance on the next trigger fire.
@@ -1875,7 +2111,9 @@ export function ItemEditForm({
   // unstageUnlink calls (all user-driven), and untouched keys keep their
   // prior array/Set reference — so a reference change for a tracked key is
   // exactly a real staging edit, never mount noise or an unrelated field.
-  const m2mStagingTrackerRef = useRef<Record<string, { links?: unknown[]; unlinks?: Set<unknown> }>>({})
+  const m2mStagingTrackerRef = useRef<
+    Record<string, { links?: unknown[]; unlinks?: Set<unknown> }>
+  >({})
   const m2mStagingMountedRef = useRef(false)
   const m2mTriggerAliasFields = useMemo(
     () =>
@@ -1966,7 +2204,15 @@ export function ItemEditForm({
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
 
   const o2mRelations = useMemo(
-    () => relations.filter((r) => !r.junction_field && r.one_collection === collection && r.one_field && r.many_field && r.many_collection),
+    () =>
+      relations.filter(
+        (r) =>
+          !r.junction_field &&
+          r.one_collection === collection &&
+          r.one_field &&
+          r.many_field &&
+          r.many_collection
+      ),
     [relations, collection]
   )
   const o2mQueryResults = useQueries({
@@ -2034,16 +2280,28 @@ export function ItemEditForm({
   const { data: currentUserData } = useQuery<{ role?: string | null } | null>({
     queryKey: ['current-user-me'],
     queryFn: () =>
-      client.request<{ data: { role?: string | null } }>(get('/users/me')).then((r) => r.data ?? null),
+      client
+        .request<{ data: { role?: string | null } }>(get('/users/me'))
+        .then((r) => r.data ?? null),
     staleTime: 5 * 60_000,
     enabled: hasLockConditions || addendumEnabled
   })
 
-  const { data: pipelineInstanceData } = useQuery<{ instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> } | null>({
+  const { data: pipelineInstanceData } = useQuery<{
+    instance?: { current_state?: string | null } | null
+    states?: Array<{ id: string; key: string }>
+  } | null>({
     queryKey: ['pipeline-instance-lock', collection, itemId],
     queryFn: () =>
-      client.request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
-        .then((r) => r.data as { instance?: { current_state?: string | null } | null; states?: Array<{ id: string; key: string }> })
+      client
+        .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
+        .then(
+          (r) =>
+            r.data as {
+              instance?: { current_state?: string | null } | null
+              states?: Array<{ id: string; key: string }>
+            }
+        )
         .catch(() => null),
     staleTime: 30_000,
     enabled: (hasLockConditions || addendumEnabled) && !isNew
@@ -2059,40 +2317,64 @@ export function ItemEditForm({
           const userRole = currentUserData?.role ?? null
           if (!userRole || !allowedRoles.includes(userRole)) return false
         }
-      } catch { /* malformed JSON — allow */ }
+      } catch {
+        /* malformed JSON — allow */
+      }
     }
     // State check
     if (colMeta?.addendum_allowed_states) {
       try {
-        const stateRules = JSON.parse(colMeta.addendum_allowed_states) as Array<{ pipeline_id: string; state_keys: string[] }>
+        const stateRules = JSON.parse(colMeta.addendum_allowed_states) as Array<{
+          pipeline_id: string
+          state_keys: string[]
+        }>
         if (Array.isArray(stateRules) && stateRules.length > 0) {
           const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
-          const currentStateKey = pipelineInstanceData?.states?.find((s) => s.id === currentStateId)?.key ?? null
-          const allowed = stateRules.some((rule) => rule.state_keys.length === 0 || (currentStateKey !== null && rule.state_keys.includes(currentStateKey)))
+          const currentStateKey =
+            pipelineInstanceData?.states?.find((s) => s.id === currentStateId)?.key ?? null
+          const allowed = stateRules.some(
+            (rule) =>
+              rule.state_keys.length === 0 ||
+              (currentStateKey !== null && rule.state_keys.includes(currentStateKey))
+          )
           if (!allowed) return false
         }
-      } catch { /* malformed JSON — allow */ }
+      } catch {
+        /* malformed JSON — allow */
+      }
     }
     return true
-  }, [addendumEnabled, colMeta?.addendum_allowed_roles, colMeta?.addendum_allowed_states, currentUserData?.role, pipelineInstanceData])
+  }, [
+    addendumEnabled,
+    colMeta?.addendum_allowed_roles,
+    colMeta?.addendum_allowed_states,
+    currentUserData?.role,
+    pipelineInstanceData
+  ])
 
-  type AddendumRecord = { id: string; title: string; status: string; fields_schema: string[] | null; data: Record<string, unknown> | null }
+  type AddendumRecord = {
+    id: string
+    title: string
+    status: string
+    fields_schema: string[] | null
+    data: Record<string, unknown> | null
+  }
 
   const { data: addendumData = [] } = useQuery<AddendumRecord[]>({
     queryKey: ['addendums', collection, itemId],
     queryFn: () =>
-      client.request<{ data: AddendumRecord[] }>(
-        get(`/addendums/${collection}/${itemId}`)
-      ).then((r) => r.data ?? []),
+      client
+        .request<{ data: AddendumRecord[] }>(get(`/addendums/${collection}/${itemId}`))
+        .then((r) => r.data ?? []),
     enabled: addendumEnabled,
-    staleTime: 30_000,
+    staleTime: 30_000
   })
 
   const addendumFieldMap = useMemo<AddendumFieldMap>(() => {
     const map: AddendumFieldMap = {}
     for (const a of addendumData) {
       if (['approved', 'rejected'].includes(a.status)) continue
-      for (const key of (a.fields_schema ?? [])) {
+      for (const key of a.fields_schema ?? []) {
         if (!map[key]) map[key] = []
         map[key].push({ id: a.id, title: a.title, status: a.status })
       }
@@ -2101,7 +2383,7 @@ export function ItemEditForm({
   }, [addendumData])
 
   const activeAddendums = useMemo(
-    () => addendumData.filter(a => !['approved', 'rejected'].includes(a.status)),
+    () => addendumData.filter((a) => !['approved', 'rejected'].includes(a.status)),
     [addendumData]
   )
 
@@ -2117,7 +2399,7 @@ export function ItemEditForm({
 
   const addendumViewData = useMemo<Record<string, unknown> | null>(() => {
     if (addendumViewId === 'original') return null
-    const a = addendumData.find(x => x.id === addendumViewId)
+    const a = addendumData.find((x) => x.id === addendumViewId)
     if (!a?.data) return null
     return Object.fromEntries(Object.entries(a.data).filter(([, v]) => !Array.isArray(v)))
   }, [addendumViewId, addendumData])
@@ -2126,9 +2408,9 @@ export function ItemEditForm({
   // whose value is a rollup over those rows recomputes as they change — so a
   // total agrees with the lines under it before the save round-trip that makes
   // the server recalculate it. Display only; nothing is written from here.
-  const [liveRowsByRelation, setLiveRowsByRelation] = useState<Map<string, Record<string, unknown>[]>>(
-    new Map()
-  )
+  const [liveRowsByRelation, setLiveRowsByRelation] = useState<
+    Map<string, Record<string, unknown>[]>
+  >(new Map())
   // Which child fields any rollup actually reads, per relation — the signature
   // below is built from these alone, so an unrelated edit (a note, a date)
   // cannot churn the live total.
@@ -2190,9 +2472,9 @@ export function ItemEditForm({
   // published by grids so record-scoped widgets (Deployments rollup) can
   // reflect unsaved changes. Signature-guarded like reportLiveRows — grids
   // rebuild their ops object every render.
-  const [stagedRelsByGrid, setStagedRelsByGrid] = useState<Map<string, Record<string, StagedRelOps>>>(
-    new Map()
-  )
+  const [stagedRelsByGrid, setStagedRelsByGrid] = useState<
+    Map<string, Record<string, StagedRelOps>>
+  >(new Map())
   const stagedRelsSigRef = useRef(new Map<string, string>())
   const reportStagedRels = useCallback<StagedRelationsCtx['report']>((gridKey, byCollection) => {
     if (byCollection === null) {
@@ -2222,7 +2504,8 @@ export function ItemEditForm({
   // here. (A SAVED record needs no fallback — its stored value is the server's
   // own rollup and is already correct.)
   const stagedRollupRelations = useMemo(() => {
-    if (!isNew) return [] as Array<{ key: string; collection: string; rows: Record<string, unknown>[] }>
+    if (!isNew)
+      return [] as Array<{ key: string; collection: string; rows: Record<string, unknown>[] }>
     const out: Array<{ key: string; collection: string; rows: Record<string, unknown>[] }> = []
     for (const key of rollupFieldsByRelation.keys()) {
       if (liveRowsByRelation.has(key)) continue
@@ -2240,7 +2523,9 @@ export function ItemEditForm({
     queries: stagedRollupRelations.map((r) => ({
       queryKey: ['field-config', r.collection, null],
       queryFn: () =>
-        client.request<{ data: CMSField[] }>(get(`/field-config/${r.collection}`)).then((res) => res.data ?? []),
+        client
+          .request<{ data: CMSField[] }>(get(`/field-config/${r.collection}`))
+          .then((res) => res.data ?? []),
       staleTime: 60_000
     }))
   })
@@ -2297,7 +2582,7 @@ export function ItemEditForm({
   }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation])
 
   const effectiveDraft = useMemo(
-    () => addendumViewData ? { ...draft, ...addendumViewData } : draft,
+    () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
     [draft, addendumViewData]
   )
 
@@ -2314,7 +2599,12 @@ export function ItemEditForm({
       for (const [key, val] of Object.entries(a.data ?? {})) {
         if (!Array.isArray(val) || val.length === 0) continue
         if (!map[key]) map[key] = []
-        map[key].push({ addendumId: a.id, addendumTitle: a.title, addendumStatus: a.status, rows: val as Array<Record<string, unknown>> })
+        map[key].push({
+          addendumId: a.id,
+          addendumTitle: a.title,
+          addendumStatus: a.status,
+          rows: val as Array<Record<string, unknown>>
+        })
       }
     }
     return map
@@ -2341,7 +2631,9 @@ export function ItemEditForm({
       return true
     })
     if (!assignedFieldSet) return deduped
-    return deduped.filter((f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field))
+    return deduped.filter(
+      (f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)
+    )
   }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData])
 
   const groups = useMemo<FieldGroup[]>(() => {
@@ -2371,7 +2663,9 @@ export function ItemEditForm({
       queryKey: ['field-config', r.many_collection],
       queryFn: () =>
         client
-          .request<{ data: Array<{ field: string; options: unknown }> }>(get(`/field-config/${r.many_collection}`))
+          .request<{ data: Array<{ field: string; options: unknown }> }>(
+            get(`/field-config/${r.many_collection}`)
+          )
           .then((res) => res.data ?? []),
       enabled: !!r.many_collection,
       staleTime: 120_000
@@ -2385,11 +2679,16 @@ export function ItemEditForm({
       if (!r.one_field) return
       const cfg = summaryAggConfigs[r.one_field]
       if (!cfg || !cfg.agg_field) return
-      const fields: Array<{ field: string; options: unknown }> = (aggFieldConfigResults[i]?.data as Array<{ field: string; options: unknown }> | undefined) ?? []
+      const fields: Array<{ field: string; options: unknown }> =
+        (aggFieldConfigResults[i]?.data as
+          | Array<{ field: string; options: unknown }>
+          | undefined) ?? []
       const fieldMeta = fields.find((f) => f.field === cfg.agg_field)
       if (!fieldMeta) return
       const opts = fieldMeta.options
-        ? typeof fieldMeta.options === 'string' ? fieldMeta.options : JSON.stringify(fieldMeta.options)
+        ? typeof fieldMeta.options === 'string'
+          ? fieldMeta.options
+          : JSON.stringify(fieldMeta.options)
         : null
       if (opts) enriched[r.one_field] = { ...cfg, field_options: opts }
     })
@@ -2419,7 +2718,8 @@ export function ItemEditForm({
     const map: Record<string, number> = {}
     aggRelations.forEach((r, i) => {
       if (!r.one_field || !r.many_collection || !r.many_field) return
-      const baseRows: Record<string, unknown>[] = (aggQueryResults[i]?.data as Record<string, unknown>[] | undefined) ?? []
+      const baseRows: Record<string, unknown>[] =
+        (aggQueryResults[i]?.data as Record<string, unknown>[] | undefined) ?? []
       const cfg = enrichedSummaryAggConfigs[r.one_field]
       if (!cfg) return
       const stagingKey = `${r.many_collection}.${r.many_field}`
@@ -2430,22 +2730,36 @@ export function ItemEditForm({
       const effectiveRows: Record<string, unknown>[] = [
         ...baseRows
           .filter((row) => !deletes.has(String(row.id)))
-          .map((row) => edits.has(String(row.id)) ? { ...row, ...edits.get(String(row.id)) } : row),
+          .map((row) =>
+            edits.has(String(row.id)) ? { ...row, ...edits.get(String(row.id)) } : row
+          ),
         ...newRows
       ]
       if (cfg.agg === 'count') {
         map[r.one_field] = effectiveRows.length
         return
       }
-      const nums = effectiveRows.map((row) => Number(row[cfg.agg_field])).filter((n) => !Number.isNaN(n))
-      if (!nums.length) { map[r.one_field] = 0; return }
+      const nums = effectiveRows
+        .map((row) => Number(row[cfg.agg_field]))
+        .filter((n) => !Number.isNaN(n))
+      if (!nums.length) {
+        map[r.one_field] = 0
+        return
+      }
       if (cfg.agg === 'sum') map[r.one_field] = nums.reduce((a, b) => a + b, 0)
       else if (cfg.agg === 'avg') map[r.one_field] = nums.reduce((a, b) => a + b, 0) / nums.length
       else if (cfg.agg === 'min') map[r.one_field] = Math.min(...nums)
       else if (cfg.agg === 'max') map[r.one_field] = Math.max(...nums)
     })
     return map
-  }, [aggRelations, aggQueryResults, summaryAggConfigs, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes])
+  }, [
+    aggRelations,
+    aggQueryResults,
+    summaryAggConfigs,
+    pendingO2MRows,
+    pendingO2MEdits,
+    pendingO2MDeletes
+  ])
 
   const o2mLoading = useMemo<Set<string>>(() => {
     const s = new Set<string>()
@@ -2460,13 +2774,23 @@ export function ItemEditForm({
 
   const o2mUniqueByMap = useMemo<Map<string, string[]>>(() => {
     const map = new Map<string, string[]>()
-    for (const f of (fieldConfig ?? [])) {
+    for (const f of fieldConfig ?? []) {
       if (f.interface !== 'inline-table') continue
       let opts: Record<string, unknown> = {}
-      try { opts = f.options ? (typeof f.options === 'string' ? JSON.parse(f.options) : f.options as Record<string, unknown>) : {} } catch { continue }
+      try {
+        opts = f.options
+          ? typeof f.options === 'string'
+            ? JSON.parse(f.options)
+            : (f.options as Record<string, unknown>)
+          : {}
+      } catch {
+        continue
+      }
       const ub = Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : null
       if (!ub?.length) continue
-      const rel = relations.find((r) => r.one_field === f.field && r.one_collection === collection && !r.junction_field)
+      const rel = relations.find(
+        (r) => r.one_field === f.field && r.one_collection === collection && !r.junction_field
+      )
       if (!rel?.many_collection || !rel?.many_field) continue
       map.set(`${rel.many_collection}.${rel.many_field}`, ub)
     }
@@ -2490,7 +2814,10 @@ export function ItemEditForm({
     () =>
       allFields.filter(
         (f) =>
-          !f.group_key && !f.hidden && !SYSTEM_FIELDS.has(f.field) && !isSentinelKey(f.field) &&
+          !f.group_key &&
+          !f.hidden &&
+          !SYSTEM_FIELDS.has(f.field) &&
+          !isSentinelKey(f.field) &&
           (layoutId === null || f.layout_assigned !== false)
       ),
     [allFields, layoutId]
@@ -2503,10 +2830,19 @@ export function ItemEditForm({
 
   const containerGroups = useMemo(() => groups.filter((g) => g.type === 'container'), [groups])
   // Legacy orphan tabs (no container) — used for layout-level tabs/steps mode
-  const tabGroups = useMemo(() => groups.filter((g) => g.type === 'tab' && !g.container_id), [groups])
+  const tabGroups = useMemo(
+    () => groups.filter((g) => g.type === 'tab' && !g.container_id),
+    [groups]
+  )
   // All tabs regardless of container — used for SummaryPanel coverage
-  const allTabGroups = useMemo(() => groups.filter((g) => g.type === 'tab').sort((a, b) => a.sort - b.sort), [groups])
-  const sectionGroups = useMemo(() => groups.filter((g) => g.type === 'section' || g.type === 'metadata'), [groups])
+  const allTabGroups = useMemo(
+    () => groups.filter((g) => g.type === 'tab').sort((a, b) => a.sort - b.sort),
+    [groups]
+  )
+  const sectionGroups = useMemo(
+    () => groups.filter((g) => g.type === 'section' || g.type === 'metadata'),
+    [groups]
+  )
   const hasContainers = containerGroups.length > 0
   // Legacy mode: tab groups with no container use the layout-level tab_mode
   const hasTabs = tabGroups.length > 0
@@ -2517,8 +2853,12 @@ export function ItemEditForm({
   const summaryEnabled = !!layoutMeta?.summary_enabled
   const hideEmptySummary = !!layoutMeta?.summary_hide_empty
   // Layout-level disable flags override props when a layout is active
-  const effectiveShowRevisions = layoutMeta ? !layoutMeta.disable_revisions && showRevisions : showRevisions
-  const effectiveShowComments = layoutMeta ? !layoutMeta.disable_comments && showComments : showComments
+  const effectiveShowRevisions = layoutMeta
+    ? !layoutMeta.disable_revisions && showRevisions
+    : showRevisions
+  const effectiveShowComments = layoutMeta
+    ? !layoutMeta.disable_comments && showComments
+    : showComments
   const effectiveShowTasks = layoutMeta ? !layoutMeta.disable_tasks && showTasks : showTasks
   const effectiveShowClone = layoutMeta ? !layoutMeta.disable_clone && showClone : showClone
   const effectiveShowDelete = layoutMeta ? !layoutMeta.disable_delete : true
@@ -2529,7 +2869,10 @@ export function ItemEditForm({
   const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
   const prevAccordionModeRef = useRef(false)
   useEffect(() => {
-    if (!accordionMode) { prevAccordionModeRef.current = false; return }
+    if (!accordionMode) {
+      prevAccordionModeRef.current = false
+      return
+    }
     // Re-init whenever accordion turns on (mode changes or groups change)
     if (accordionMode && !prevAccordionModeRef.current) {
       prevAccordionModeRef.current = true
@@ -2541,7 +2884,9 @@ export function ItemEditForm({
   const bodyRef = useRef<HTMLDivElement>(null)
   // Per-container active tab: Map<containerId, tabKey>
   const [containerTabs, setContainerTabs] = useState<Map<number, string>>(() => new Map())
-  const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(() => new Map())
+  const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(
+    () => new Map()
+  )
   const getContainerTab = (c: FieldGroup, children: FieldGroup[]) =>
     containerTabs.get(c.id) ?? children[0]?.key ?? ''
   const isContainerTabVisited = (c: FieldGroup, key: string) =>
@@ -2620,7 +2965,12 @@ export function ItemEditForm({
     const parseSkip = (v: unknown): string[] => {
       if (Array.isArray(v)) return v.map(String)
       if (typeof v === 'string' && v.trim()) {
-        try { const p = JSON.parse(v); return Array.isArray(p) ? p.map(String) : [] } catch { return [] }
+        try {
+          const p = JSON.parse(v)
+          return Array.isArray(p) ? p.map(String) : []
+        } catch {
+          return []
+        }
       }
       return []
     }
@@ -2651,7 +3001,8 @@ export function ItemEditForm({
       const currentGroup = children.find((g) => g.key === current)
       if (!skipSatisfied(currentGroup)) continue
       const next = children.find((g) => !skipSatisfied(g))
-      if (next && next.key !== current) setContainerTabs((prev) => new Map(prev).set(c.id, next.key))
+      if (next && next.key !== current)
+        setContainerTabs((prev) => new Map(prev).set(c.id, next.key))
     }
     // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot after data load
   }, [isNew, isStepsMode, itemData, allSteps, tabGroups, activeTab, groups, containerTabs])
@@ -2662,9 +3013,9 @@ export function ItemEditForm({
       if (isNew && !visitedSteps.has(s.key)) continue
       const stepFields =
         s.key === '__general__'
-          ? (isStepsMode
-              ? ungroupedFields
-              : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
+          ? isStepsMode
+            ? ungroupedFields
+            : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
           : (groupedMap[s.key] ?? [])
       const allFilled = stepFields
         .filter((f) => f.required && !f.hidden)
@@ -2675,15 +3026,24 @@ export function ItemEditForm({
       if (allFilled) out.add(s.key)
     }
     return out
-  }, [allSteps, ungroupedFields, sectionGroups, groupedMap, draft, isNew, visitedSteps, isStepsMode])
+  }, [
+    allSteps,
+    ungroupedFields,
+    sectionGroups,
+    groupedMap,
+    draft,
+    isNew,
+    visitedSteps,
+    isStepsMode
+  ])
 
   function handleNext() {
     if (validateBeforeNext) {
       const stepFields =
         activeTab === '__general__'
-          ? (isStepsMode
-              ? ungroupedFields
-              : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
+          ? isStepsMode
+            ? ungroupedFields
+            : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
           : (groupedMap[activeTab] ?? [])
       const errs: Record<string, string> = {}
       for (const f of stepFields) {
@@ -2706,14 +3066,24 @@ export function ItemEditForm({
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
   const addendumSlot = assignments.find((a) => a.field === '__addendums__')
-  const widgetSlots = assignments.filter((a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null)
+  const widgetSlots = assignments.filter(
+    (a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null
+  )
   const ownersSlot = assignments.find((a) => a.field === '__owners__')
   const pdfSlot = assignments.find((a) => a.field === '__pdf__')
   const pdfSlotOverrides = pdfSlot
-    ? (() => { try { return typeof pdfSlot.overrides === 'string' ? JSON.parse(pdfSlot.overrides) : (pdfSlot.overrides ?? {}) } catch { return {} } })()
+    ? (() => {
+        try {
+          return typeof pdfSlot.overrides === 'string'
+            ? JSON.parse(pdfSlot.overrides)
+            : (pdfSlot.overrides ?? {})
+        } catch {
+          return {}
+        }
+      })()
     : null
-  const pdfAttachField = pdfSlotOverrides?.attach_to_field as string | null ?? null
-  const pdfFilenameTemplate = pdfSlotOverrides?.filename_template as string | null ?? null
+  const pdfAttachField = (pdfSlotOverrides?.attach_to_field as string | null) ?? null
+  const pdfFilenameTemplate = (pdfSlotOverrides?.filename_template as string | null) ?? null
   const pdfGroupKey = pdfSlot?.group_key ?? null
   const pdfInGroup = !!(pdfGroupKey && groups.some((g) => g.key === pdfGroupKey))
   const pdfSourceLayoutId = (pdfSlotOverrides?.source_layout_id as number | null) ?? null
@@ -2729,23 +3099,27 @@ export function ItemEditForm({
     if (pdfAttaching || !pdfAttachField || !renderLayoutId || !targetItem) return
     setPdfAttaching(true)
     try {
-      const workspace = typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
-      const resp = await fetch(`${fetchCfg.apiBase}/collection-layouts/${renderLayoutId}/generate-and-attach`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...fetchCfg.authHeaders,
-          ...(workspace ? { 'x-workspace': workspace } : {}),
-        },
-        credentials: fetchCfg.credentials,
-        body: JSON.stringify({
-          collection,
-          item_id: targetItem,
-          attach_field: pdfAttachField,
-          filename_template: pdfFilenameTemplate,
-          replace_generated: pdfOverwrite
-        }),
-      })
+      const workspace =
+        typeof window !== 'undefined' ? (localStorage.getItem('nivaro_workspace') ?? '') : ''
+      const resp = await fetch(
+        `${fetchCfg.apiBase}/collection-layouts/${renderLayoutId}/generate-and-attach`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...fetchCfg.authHeaders,
+            ...(workspace ? { 'x-workspace': workspace } : {})
+          },
+          credentials: fetchCfg.credentials,
+          body: JSON.stringify({
+            collection,
+            item_id: targetItem,
+            attach_field: pdfAttachField,
+            filename_template: pdfFilenameTemplate,
+            replace_generated: pdfOverwrite
+          })
+        }
+      )
       if (!resp.ok) throw new Error(await resp.text())
       // An automatic regeneration is a side effect of saving, not its own
       // event — announcing it every time would be noise.
@@ -2775,25 +3149,43 @@ export function ItemEditForm({
     />
   )
 
-  const headerWidgets = useMemo(() => (activeLayoutData?.assignments ?? [])
-    .filter((a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null && (a.group_key ?? null) === '__header__')
-    .map((ws) => ({
-      field: ws.field,
-      widgetId: ws.widget_id!,
-      label: ws.label_override ?? null,
-      sort: ws.sort ?? 0,
-      inputBindings: typeof ws.input_bindings === 'string'
-        ? (JSON.parse(ws.input_bindings) as InputBinding[])
-        : [] as InputBinding[],
-    })), [activeLayoutData])
+  const headerWidgets = useMemo(
+    () =>
+      (activeLayoutData?.assignments ?? [])
+        .filter(
+          (a) =>
+            a.field.startsWith('__widget_') &&
+            a.field.endsWith('__') &&
+            a.widget_id != null &&
+            (a.group_key ?? null) === '__header__'
+        )
+        .map((ws) => ({
+          field: ws.field,
+          widgetId: ws.widget_id!,
+          label: ws.label_override ?? null,
+          sort: ws.sort ?? 0,
+          inputBindings:
+            typeof ws.input_bindings === 'string'
+              ? (JSON.parse(ws.input_bindings) as InputBinding[])
+              : ([] as InputBinding[])
+        })),
+    [activeLayoutData]
+  )
 
   const fieldInlineDisplay = useMemo(() => {
-    const out: Record<string, { entries: Array<{ field: string; label: string | null; format: string | null }>; separator: string | null }> = {}
-    for (const a of (activeLayoutData?.assignments ?? [])) {
+    const out: Record<
+      string,
+      {
+        entries: Array<{ field: string; label: string | null; format: string | null }>
+        separator: string | null
+      }
+    > = {}
+    for (const a of activeLayoutData?.assignments ?? []) {
       if (!a.field || a.field.startsWith('__')) continue
       try {
         const raw = (a as unknown as Record<string, unknown>).input_bindings
-        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+        const parsed: Array<{ key: string; binding_value: string }> =
+          typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
         const entry = parsed.find((b) => b.key === '__inline_display__')
         if (entry?.binding_value) {
           const data = JSON.parse(entry.binding_value)
@@ -2802,7 +3194,9 @@ export function ItemEditForm({
           const separator: string | null = isArray ? null : (data.separator ?? null)
           if (Array.isArray(entries) && entries.length) out[a.field] = { entries, separator }
         }
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
     }
     return out
   }, [activeLayoutData])
@@ -2812,13 +3206,25 @@ export function ItemEditForm({
     if (!row) return null
     try {
       const raw = (row as unknown as Record<string, unknown>).input_bindings
-      const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
+      const parsed: Array<{ key: string; binding_value: string }> =
+        typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
       const entry = parsed.find((b) => b.key === '__subtitle_config__')
       if (!entry?.binding_value) return null
       const data = JSON.parse(entry.binding_value)
       if (!data.fields || !Array.isArray(data.fields) || !data.fields.length) return null
-      return { fields: data.fields as Array<{ field: string; label: string | null; color?: string; weight?: string; display_as?: string }>, separator: (data.separator as string) ?? ' | ' }
-    } catch { return null }
+      return {
+        fields: data.fields as Array<{
+          field: string
+          label: string | null
+          color?: string
+          weight?: string
+          display_as?: string
+        }>,
+        separator: (data.separator as string) ?? ' | '
+      }
+    } catch {
+      return null
+    }
   }, [activeLayoutData])
 
   const subtitleFieldSet = useMemo<Set<string>>(
@@ -2832,7 +3238,10 @@ export function ItemEditForm({
     if (!subtitleConfig) return null
     for (const sf of subtitleConfig.fields) {
       const meta = (fieldConfig ?? []).find((f) => f.field === sf.field)
-      if (meta && parseJson<{ auto_id?: { pattern?: string } }>(meta.options ?? null)?.auto_id?.pattern) {
+      if (
+        meta &&
+        parseJson<{ auto_id?: { pattern?: string } }>(meta.options ?? null)?.auto_id?.pattern
+      ) {
         return meta
       }
     }
@@ -2862,7 +3271,12 @@ export function ItemEditForm({
         if (val === null || val === undefined || val === '') return null
         return { value: String(val), color: sf.color, weight: sf.weight, display_as: sf.display_as }
       })
-      .filter(Boolean) as Array<{ value: string; color?: string; weight?: string; display_as?: string }>
+      .filter(Boolean) as Array<{
+      value: string
+      color?: string
+      weight?: string
+      display_as?: string
+    }>
   }, [subtitleConfig, isNew, itemData, draft, autoIdSubtitleMeta, autoIdSubtitlePreview])
 
   // Full subtitle text for the hover tip + the copy button — the rendered row
@@ -2942,37 +3356,49 @@ export function ItemEditForm({
     [subtitleParts, subtitleConfig]
   )
 
-  const headerFields = useMemo(() => (activeLayoutData?.assignments ?? [])
-    .filter((a) => (a.field === '__owners__' || !a.field.startsWith('__')) && (a.group_key ?? null) === '__header__')
-    .map((a) => {
-      const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
-      let displayFormat = 'text'
-      let color: string | undefined
-      let weight: string | undefined
-      let displayAs: string | undefined
-      let linkTemplate: string | undefined
-      try {
-        const raw = (a as unknown as Record<string, unknown>).input_bindings
-        const parsed: Array<{ key: string; binding_value: string }> = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])
-        const fmt = parsed.find((b) => b.key === '__display_format__')
-        if (fmt?.binding_value) displayFormat = fmt.binding_value
-        color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
-        weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
-        displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
-        linkTemplate = parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
-      } catch { /* noop */ }
-      return {
-        field: a.field,
-        label: a.label_override ?? titleCase(meta?.label ?? a.field),
-        sort: a.sort ?? 0,
-        displayFormat,
-        color,
-        weight,
-        displayAs,
-        linkTemplate,
-        cmsField: meta ?? null,
-      }
-    }), [activeLayoutData, fieldConfig])
+  const headerFields = useMemo(
+    () =>
+      (activeLayoutData?.assignments ?? [])
+        .filter(
+          (a) =>
+            (a.field === '__owners__' || !a.field.startsWith('__')) &&
+            (a.group_key ?? null) === '__header__'
+        )
+        .map((a) => {
+          const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
+          let displayFormat = 'text'
+          let color: string | undefined
+          let weight: string | undefined
+          let displayAs: string | undefined
+          let linkTemplate: string | undefined
+          try {
+            const raw = (a as unknown as Record<string, unknown>).input_bindings
+            const parsed: Array<{ key: string; binding_value: string }> =
+              typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
+            const fmt = parsed.find((b) => b.key === '__display_format__')
+            if (fmt?.binding_value) displayFormat = fmt.binding_value
+            color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
+            weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
+            displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
+            linkTemplate =
+              parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
+          } catch {
+            /* noop */
+          }
+          return {
+            field: a.field,
+            label: a.label_override ?? titleCase(meta?.label ?? a.field),
+            sort: a.sort ?? 0,
+            displayFormat,
+            color,
+            weight,
+            displayAs,
+            linkTemplate,
+            cmsField: meta ?? null
+          }
+        }),
+    [activeLayoutData, fieldConfig]
+  )
 
   useEffect(() => {
     if (!onHeaderWidgets) return
@@ -2982,7 +3408,16 @@ export function ItemEditForm({
   const sectionOrder = useMemo(() => {
     const isVisible = (a: SlotAssignment | undefined) =>
       !(a && (a.is_visible === 0 || a.is_visible === false))
-    type Item = FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__' | '__owners__' | '__pdf__' | string
+    type Item =
+      | FieldGroup
+      | '__ungrouped__'
+      | '__pipeline__'
+      | '__comments__'
+      | '__tasks__'
+      | '__addendums__'
+      | '__owners__'
+      | '__pdf__'
+      | string
     const entries: Array<{ item: Item; sort: number; tie: number }> = [
       ...sectionGroups.map((g) => ({ item: g as Item, sort: g.sort, tie: 0 })),
       // Container groups sit alongside section groups in the order
@@ -2993,13 +3428,16 @@ export function ItemEditForm({
           const saved = activeLayoutData?.ungrouped_sort ?? sectionGroups.length
           // Subtitle fields in the ungrouped zone must appear before panels (not buried below
           // Notes/Tasks). Cap the ungrouped sort to just before the earliest active slot.
-          if (subtitleFieldSet.size > 0 && ungroupedFields.some((f) => subtitleFieldSet.has(f.field))) {
+          if (
+            subtitleFieldSet.size > 0 &&
+            ungroupedFields.some((f) => subtitleFieldSet.has(f.field))
+          ) {
             const slotSorts = [
               showPipeline && pipelineSlot ? pipelineSlot.sort : null,
               effectiveShowTasks && tasksSlot ? tasksSlot.sort : null,
               effectiveShowComments && commentsSlot ? commentsSlot.sort : null,
               showPipeline && ownersSlot && !ownersInGroup ? ownersSlot.sort : null,
-              pdfSlot && !isNew && !pdfInGroup ? pdfSlot.sort : null,
+              pdfSlot && !isNew && !pdfInGroup ? pdfSlot.sort : null
             ].filter((s): s is number => s !== null)
             const minSlot = slotSorts.length > 0 ? Math.min(...slotSorts) : Infinity
             if (isFinite(minSlot) && saved >= minSlot) return minSlot - 0.5
@@ -3017,7 +3455,13 @@ export function ItemEditForm({
       entries.push({ item: '__comments__', sort: commentsSlot.sort, tie: 4 })
     if (colMeta?.addendums_enabled && !isNew && addendumSlot && isVisible(addendumSlot))
       entries.push({ item: '__addendums__', sort: addendumSlot.sort, tie: 7 })
-    if (showPipeline && ownersSlot && isVisible(ownersSlot) && !ownersInGroup && ownersGroupKey !== '__header__')
+    if (
+      showPipeline &&
+      ownersSlot &&
+      isVisible(ownersSlot) &&
+      !ownersInGroup &&
+      ownersGroupKey !== '__header__'
+    )
       entries.push({ item: '__owners__', sort: ownersSlot.sort, tie: 5 })
     if (pdfSlot && isVisible(pdfSlot) && !isNew && !pdfInGroup)
       entries.push({ item: '__pdf__', sort: pdfSlot.sort, tie: 6 })
@@ -3062,9 +3506,7 @@ export function ItemEditForm({
           const st = m2mAliasFieldStates[f.field]
           if (st.known && st.ids.length === 0) errs[f.field] = 'This field is required'
         } else if (
-          relations.some(
-            (r) => r.one_collection === collection && r.one_field === f.field
-          )
+          relations.some((r) => r.one_collection === collection && r.one_field === f.field)
         ) {
           // Other alias shapes (O2M, unresolvable M2A) — no draft value exists
           // and no count was reported; skip rather than false-block.
@@ -3117,33 +3559,56 @@ export function ItemEditForm({
     const targets: Array<{ collection: string; changedFields: string[] }> = []
     if (!isNew) {
       const parentChanged = allFields
-        .filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft &&
-          !valuesEqual(draft[f.field], initialDataRef.current[f.field]))
-        .map(f => f.field)
+        .filter(
+          (f) =>
+            !SYSTEM_FIELDS.has(f.field) &&
+            !f.readonly &&
+            f.field in draft &&
+            !valuesEqual(draft[f.field], initialDataRef.current[f.field])
+        )
+        .map((f) => f.field)
       if (parentChanged.length) targets.push({ collection, changedFields: parentChanged })
     }
     for (const [key, edits] of pendingO2MEdits.entries()) {
       if (edits.size === 0) continue
       const rc = key.split('.')[0]
       const changed = new Set<string>()
-      for (const ch of edits.values()) for (const k of Object.keys(ch)) if (!k.startsWith('__')) changed.add(k)
+      for (const ch of edits.values())
+        for (const k of Object.keys(ch)) if (!k.startsWith('__')) changed.add(k)
       if (changed.size) targets.push({ collection: rc, changedFields: [...changed] })
     }
     for (const t of targets) {
       try {
         const meta = await qc.fetchQuery({
           queryKey: ['collection-meta-cr', t.collection],
-          queryFn: () => client.request<{ data: { change_reason_config?: { fields?: string[]; reasons?: string[]; allow_free_text?: boolean } | null } }>(get(`/collections/${t.collection}`)).then(r => r.data),
+          queryFn: () =>
+            client
+              .request<{
+                data: {
+                  change_reason_config?: {
+                    fields?: string[]
+                    reasons?: string[]
+                    allow_free_text?: boolean
+                  } | null
+                }
+              }>(get(`/collections/${t.collection}`))
+              .then((r) => r.data),
           staleTime: 60_000
         })
         const cfg = meta?.change_reason_config
         if (cfg?.fields?.length) {
-          const hit = t.changedFields.filter(f => cfg.fields!.includes(f))
+          const hit = t.changedFields.filter((f) => cfg.fields!.includes(f))
           if (hit.length) {
-            return { fields_changed: hit, reasons: cfg.reasons ?? [], allow_free_text: cfg.allow_free_text !== false }
+            return {
+              fields_changed: hit,
+              reasons: cfg.reasons ?? [],
+              allow_free_text: cfg.allow_free_text !== false
+            }
           }
         }
-      } catch { /* meta unavailable — fall through to the server backstop */ }
+      } catch {
+        /* meta unavailable — fall through to the server backstop */
+      }
     }
     return null
   }
@@ -3172,16 +3637,24 @@ export function ItemEditForm({
       let flushChallenge: ChangeReasonChallenge | null = null
 
       // Build step list from pending state
-      const hasM2M = [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
-                     [...m2mUnlinks.entries()].some(([, ids]) => ids.size > 0)
-      const newO2MKeys = [...pendingO2MRows.entries()].filter(([, r]) => r.length > 0).map(([k]) => k)
-      const editO2MKeys = [...pendingO2MEdits.entries()].filter(([, e]) => e.size > 0).map(([k]) => k)
-      const delO2MKeys = [...pendingO2MDeletes.entries()].filter(([, d]) => d.size > 0).map(([k]) => k)
+      const hasM2M =
+        [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
+        [...m2mUnlinks.entries()].some(([, ids]) => ids.size > 0)
+      const newO2MKeys = [...pendingO2MRows.entries()]
+        .filter(([, r]) => r.length > 0)
+        .map(([k]) => k)
+      const editO2MKeys = [...pendingO2MEdits.entries()]
+        .filter(([, e]) => e.size > 0)
+        .map(([k]) => k)
+      const delO2MKeys = [...pendingO2MDeletes.entries()]
+        .filter(([, d]) => d.size > 0)
+        .map(([k]) => k)
 
       // Detail strings — count only fields that actually changed
       const changedCount = isNew
-        ? allFields.filter(f => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft).length
-        : allFields.filter(f => {
+        ? allFields.filter((f) => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft)
+            .length
+        : allFields.filter((f) => {
             if (SYSTEM_FIELDS.has(f.field) || f.readonly || !(f.field in draft)) return false
             return !valuesEqual(draft[f.field], initialDataRef.current[f.field])
           }).length
@@ -3191,31 +3664,77 @@ export function ItemEditForm({
           ? 'No field changes'
           : `${changedCount} field${changedCount !== 1 ? 's' : ''} changed`
 
-      let m2mAdds = 0, m2mRemoves = 0
+      let m2mAdds = 0,
+        m2mRemoves = 0
       for (const [, ids] of m2mLinks.entries()) m2mAdds += ids.length
       for (const [, ids] of m2mUnlinks.entries()) m2mRemoves += ids.size
       const m2mDetail = [
         m2mAdds > 0 ? `+${m2mAdds} linked` : '',
         m2mRemoves > 0 ? `-${m2mRemoves} unlinked` : ''
-      ].filter(Boolean).join(' · ')
+      ]
+        .filter(Boolean)
+        .join(' · ')
 
       const flushers = [...gridFlushersRef.current.entries()]
       const steps: SaveStepItem[] = [
-        ...(flushers.length > 0 ? [{ id: 'flush', label: 'Save attachments', status: 'pending' as SaveStepStatus, detail: `${flushers.length} field${flushers.length !== 1 ? 's' : ''} with pending changes` }] : []),
-        { id: 'main', label: isNew ? `Create ${colMeta?.singular || titleCase(collection)}` : `Save ${colMeta?.singular || titleCase(collection)}`, status: 'pending', detail: mainDetail },
-        ...(hasM2M ? [{ id: 'm2m', label: 'Update relationships', status: 'pending' as SaveStepStatus, detail: m2mDetail }] : []),
-        ...newO2MKeys.map(k => {
+        ...(flushers.length > 0
+          ? [
+              {
+                id: 'flush',
+                label: 'Save attachments',
+                status: 'pending' as SaveStepStatus,
+                detail: `${flushers.length} field${flushers.length !== 1 ? 's' : ''} with pending changes`
+              }
+            ]
+          : []),
+        {
+          id: 'main',
+          label: isNew
+            ? `Create ${colMeta?.singular || titleCase(collection)}`
+            : `Save ${colMeta?.singular || titleCase(collection)}`,
+          status: 'pending',
+          detail: mainDetail
+        },
+        ...(hasM2M
+          ? [
+              {
+                id: 'm2m',
+                label: 'Update relationships',
+                status: 'pending' as SaveStepStatus,
+                detail: m2mDetail
+              }
+            ]
+          : []),
+        ...newO2MKeys.map((k) => {
           const n = pendingO2MRows.get(k)?.length ?? 0
-          return { id: `o2m:new:${k}`, label: `Add ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} new row${n !== 1 ? 's' : ''}`, progress: { done: 0, total: n } }
+          return {
+            id: `o2m:new:${k}`,
+            label: `Add ${titleCase(k.split('.')[0])}`,
+            status: 'pending' as SaveStepStatus,
+            detail: `${n} new row${n !== 1 ? 's' : ''}`,
+            progress: { done: 0, total: n }
+          }
         }),
-        ...editO2MKeys.map(k => {
+        ...editO2MKeys.map((k) => {
           const n = pendingO2MEdits.get(k)?.size ?? 0
-          return { id: `o2m:edit:${k}`, label: `Update ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} edited`, progress: { done: 0, total: n } }
+          return {
+            id: `o2m:edit:${k}`,
+            label: `Update ${titleCase(k.split('.')[0])}`,
+            status: 'pending' as SaveStepStatus,
+            detail: `${n} row${n !== 1 ? 's' : ''} edited`,
+            progress: { done: 0, total: n }
+          }
         }),
-        ...delO2MKeys.map(k => {
+        ...delO2MKeys.map((k) => {
           const n = pendingO2MDeletes.get(k)?.size ?? 0
-          return { id: `o2m:del:${k}`, label: `Remove from ${titleCase(k.split('.')[0])}`, status: 'pending' as SaveStepStatus, detail: `${n} row${n !== 1 ? 's' : ''} deleted`, progress: { done: 0, total: n } }
-        }),
+          return {
+            id: `o2m:del:${k}`,
+            label: `Remove from ${titleCase(k.split('.')[0])}`,
+            status: 'pending' as SaveStepStatus,
+            detail: `${n} row${n !== 1 ? 's' : ''} deleted`,
+            progress: { done: 0, total: n }
+          }
+        })
       ]
       setSaveSteps(steps)
       setSaveDialogOpen(true)
@@ -3253,7 +3772,9 @@ export function ItemEditForm({
       let savedId: string
       try {
         if (isNew) {
-          const r = await client.request<{ data: { id: string | number } }>(post(`/items/${collection}`, payload))
+          const r = await client.request<{ data: { id: string | number } }>(
+            post(`/items/${collection}`, payload)
+          )
           savedId = String(r.data.id)
         } else if (Object.keys(payload).length > 0) {
           await client.request(patch(`/items/${collection}/${itemId}`, payload))
@@ -3273,21 +3794,31 @@ export function ItemEditForm({
         const msg = errMsg(err)
         updateStep('main', { status: 'error', error: msg })
         const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
-        if (resp?.data?.field) setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
+        if (resp?.data?.field)
+          setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
         throw err
       }
 
       // ── M2M ───────────────────────────────────────────────────────────────
-      const findM2MRel = (stagingKey: string): (CMSRelation & { junction_field: string }) | null => {
-        const byField = relations.find(r => r.one_field === stagingKey && r.one_collection === collection)
+      const findM2MRel = (
+        stagingKey: string
+      ): (CMSRelation & { junction_field: string }) | null => {
+        const byField = relations.find(
+          (r) => r.one_field === stagingKey && r.one_collection === collection
+        )
         if (byField) {
-          const jf = byField.junction_field ?? relations.find(c => c.many_collection === byField.many_collection && c.id !== byField.id)?.many_field ?? null
+          const jf =
+            byField.junction_field ??
+            relations.find(
+              (c) => c.many_collection === byField.many_collection && c.id !== byField.id
+            )?.many_field ??
+            null
           return jf ? { ...byField, junction_field: jf } : null
         }
         const parts = stagingKey.split('.')
         if (parts.length === 2) {
           const [mc, jf] = parts
-          const r = relations.find(rel => rel.many_collection === mc)
+          const r = relations.find((rel) => rel.many_collection === mc)
           return r ? { ...r, junction_field: jf } : null
         }
         return null
@@ -3301,7 +3832,10 @@ export function ItemEditForm({
             if (!ids.size) continue
             const rel = findM2MRel(key)
             if (!rel) continue
-            for (const jId of ids) m2mOps.push(client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {}))
+            for (const jId of ids)
+              m2mOps.push(
+                client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {})
+              )
           }
           for (const [key, ids] of m2mLinks.entries()) {
             if (!ids.length) continue
@@ -3310,11 +3844,25 @@ export function ItemEditForm({
             // M2A junctions carry a collection-discriminator column — omit it
             // and the row is unreadable by anything that filters on it.
             const companion = relations.find(
-              c => c.many_collection === rel.many_collection && c.many_field === rel.junction_field && c.id !== rel.id
+              (c) =>
+                c.many_collection === rel.many_collection &&
+                c.many_field === rel.junction_field &&
+                c.id !== rel.id
             )
             const m2a = m2aWriteMeta(companion)
             const extra = m2a ? { [m2a.field]: m2a.value } : {}
-            for (const relId of ids) m2mOps.push(client.request(post(`/items/${rel.many_collection}`, { [rel.many_field!]: savedId, [rel.junction_field]: relId, ...extra })).catch(() => {}))
+            for (const relId of ids)
+              m2mOps.push(
+                client
+                  .request(
+                    post(`/items/${rel.many_collection}`, {
+                      [rel.many_field!]: savedId,
+                      [rel.junction_field]: relId,
+                      ...extra
+                    })
+                  )
+                  .catch(() => {})
+              )
           }
           await Promise.all(m2mOps)
           updateStep('m2m', { status: 'done' })
@@ -3325,7 +3873,11 @@ export function ItemEditForm({
 
       // ── Comments (new only) ────────────────────────────────────────────────
       if (isNew && pendingComments.length > 0) {
-        await Promise.all(pendingComments.map(text => client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})))
+        await Promise.all(
+          pendingComments.map((text) =>
+            client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})
+          )
+        )
       }
 
       // ── O2M new rows ───────────────────────────────────────────────────────
@@ -3335,46 +3887,78 @@ export function ItemEditForm({
         const rowList = pendingO2MRows.get(key) ?? []
         const uniqueBy = o2mUniqueByMap.get(key)
         if (uniqueBy?.length) {
-          const getUK = (r: Record<string, unknown>) => uniqueBy.map(f => String(r[f] ?? '')).join('\x00')
+          const getUK = (r: Record<string, unknown>) =>
+            uniqueBy.map((f) => String(r[f] ?? '')).join('\x00')
           const seen = new Set<string>()
-          const hasDup = rowList.some((r) => { const k = getUK(r); if (seen.has(k)) return true; seen.add(k); return false })
+          const hasDup = rowList.some((r) => {
+            const k = getUK(r)
+            if (seen.has(k)) return true
+            seen.add(k)
+            return false
+          })
           if (hasDup) {
-            updateStep(stepId, { status: 'error', error: `Duplicate ${uniqueBy.join(' + ')} values in new rows` })
+            updateStep(stepId, {
+              status: 'error',
+              error: `Duplicate ${uniqueBy.join(' + ')} values in new rows`
+            })
             continue
           }
         }
         updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
         try {
           let nestedFailures = 0
-          await Promise.all(rowList.map(async (data) => {
-            const o2mEntries = Object.entries(data).filter(([k]) => k.startsWith('__o2m_'))
-            const cleanData = Object.fromEntries(Object.entries(data).filter(([k]) => !k.startsWith('__o2m_')))
-            const res = await client.request<{ data: { id: unknown } }>(post(`/items/${rc}`, { ...cleanData, [mf]: savedId }))
-            const childId = res?.data?.id
-            updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length } }))
-            for (const [o2mKey, members] of o2mEntries) {
-              const field = o2mKey.slice('__o2m_'.length)
-              const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
-              const memberList = Array.isArray(members) ? members as Record<string, unknown>[] : []
-              // A missing child id would silently orphan members (undefined FK drops
-              // from the JSON body) — count them as failures instead, like the
-              // InlineTableField path's newRowId guard.
-              if (childId == null || !grandRel?.many_collection || !grandRel.many_field) {
-                nestedFailures += memberList.length
-                continue
-              }
-              for (const member of memberList) {
-                try {
-                  await client.request(post(`/items/${grandRel.many_collection}`, { ...member, [grandRel.many_field]: childId }))
-                } catch {
-                  nestedFailures++
+          await Promise.all(
+            rowList.map(async (data) => {
+              const o2mEntries = Object.entries(data).filter(([k]) => k.startsWith('__o2m_'))
+              const cleanData = Object.fromEntries(
+                Object.entries(data).filter(([k]) => !k.startsWith('__o2m_'))
+              )
+              const res = await client.request<{ data: { id: unknown } }>(
+                post(`/items/${rc}`, { ...cleanData, [mf]: savedId })
+              )
+              const childId = res?.data?.id
+              updateStep(stepId, (s) => ({
+                progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length }
+              }))
+              for (const [o2mKey, members] of o2mEntries) {
+                const field = o2mKey.slice('__o2m_'.length)
+                const grandRel = relations.find(
+                  (r) => r.one_collection === rc && r.one_field === field
+                )
+                const memberList = Array.isArray(members)
+                  ? (members as Record<string, unknown>[])
+                  : []
+                // A missing child id would silently orphan members (undefined FK drops
+                // from the JSON body) — count them as failures instead, like the
+                // InlineTableField path's newRowId guard.
+                if (childId == null || !grandRel?.many_collection || !grandRel.many_field) {
+                  nestedFailures += memberList.length
+                  continue
+                }
+                for (const member of memberList) {
+                  try {
+                    await client.request(
+                      post(`/items/${grandRel.many_collection}`, {
+                        ...member,
+                        [grandRel.many_field]: childId
+                      })
+                    )
+                  } catch {
+                    nestedFailures++
+                  }
                 }
               }
-            }
-          }))
-          updateStep(stepId, nestedFailures > 0
-            ? { status: 'error', error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed` }
-            : { status: 'done' })
+            })
+          )
+          updateStep(
+            stepId,
+            nestedFailures > 0
+              ? {
+                  status: 'error',
+                  error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`
+                }
+              : { status: 'done' }
+          )
         } catch (err) {
           updateStep(stepId, { status: 'error', error: errMsg(err) })
         }
@@ -3393,74 +3977,111 @@ export function ItemEditForm({
         // nested ops failed) — rebuilt per-row so a retry only re-attempts what actually
         // failed, instead of re-running every op (which would duplicate creates/deletes).
         const remainingRows = new Map<string, Record<string, unknown>>()
-        await Promise.all([...edits.entries()].map(async ([rowId, changes]) => {
-          // __nested_ops_* keys stage a NestedRelationEditor's grandchild ops (F3) — strip
-          // them from the PATCH payload and apply them against the resolved relation instead.
-          const nestedOpsEntries = Object.entries(changes).filter(([k]) => k.startsWith('__nested_ops_'))
-          const cleanChanges = Object.fromEntries(Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_')))
-          let rowPatchFailed = false
-          if (Object.keys(cleanChanges).length > 0) {
-            if (changeReasonRef.current) cleanChanges._change_reason = changeReasonRef.current
-            await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch(err => {
-              hasErr = true
-              rowPatchFailed = true
-              const challenge = changeReasonChallenge(err)
-              if (challenge) {
-                flushChallenge = challenge
-                updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
-              } else {
-                updateStep(stepId, { status: 'error', error: errMsg(err) })
+        await Promise.all(
+          [...edits.entries()].map(async ([rowId, changes]) => {
+            // __nested_ops_* keys stage a NestedRelationEditor's grandchild ops (F3) — strip
+            // them from the PATCH payload and apply them against the resolved relation instead.
+            const nestedOpsEntries = Object.entries(changes).filter(([k]) =>
+              k.startsWith('__nested_ops_')
+            )
+            const cleanChanges = Object.fromEntries(
+              Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_'))
+            )
+            let rowPatchFailed = false
+            if (Object.keys(cleanChanges).length > 0) {
+              if (changeReasonRef.current) cleanChanges._change_reason = changeReasonRef.current
+              await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch((err) => {
+                hasErr = true
+                rowPatchFailed = true
+                const challenge = changeReasonChallenge(err)
+                if (challenge) {
+                  flushChallenge = challenge
+                  updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
+                } else {
+                  updateStep(stepId, { status: 'error', error: errMsg(err) })
+                }
+              })
+            }
+            if (rowPatchFailed) {
+              // Gate: the row's own edit didn't land — retain the queued edit UNCHANGED (nested
+              // ops included) rather than attempting grandchild writes for a rejected parent edit.
+              remainingRows.set(rowId, changes)
+              updateStep(stepId, (s) => ({
+                progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size }
+              }))
+              return
+            }
+            const remainingChanges: Record<string, unknown> = {}
+            for (const [opsKey, opsVal] of nestedOpsEntries) {
+              const field = opsKey.slice('__nested_ops_'.length)
+              const grandRel = relations.find(
+                (r) => r.one_collection === rc && r.one_field === field
+              )
+              const ops = opsVal as NestedOps
+              if (!grandRel?.many_collection || !grandRel.many_field) {
+                nestedFailures += ops.created.length + ops.updated.length + ops.deleted.length
+                remainingChanges[opsKey] = ops
+                continue
               }
-            })
-          }
-          if (rowPatchFailed) {
-            // Gate: the row's own edit didn't land — retain the queued edit UNCHANGED (nested
-            // ops included) rather than attempting grandchild writes for a rejected parent edit.
-            remainingRows.set(rowId, changes)
-            updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
-            return
-          }
-          const remainingChanges: Record<string, unknown> = {}
-          for (const [opsKey, opsVal] of nestedOpsEntries) {
-            const field = opsKey.slice('__nested_ops_'.length)
-            const grandRel = relations.find(r => r.one_collection === rc && r.one_field === field)
-            const ops = opsVal as NestedOps
-            if (!grandRel?.many_collection || !grandRel.many_field) {
-              nestedFailures += ops.created.length + ops.updated.length + ops.deleted.length
-              remainingChanges[opsKey] = ops
-              continue
+              const { many_collection, many_field } = grandRel
+              const failedCreated: Record<string, unknown>[] = []
+              const failedUpdated: { id: string; changes: Record<string, unknown> }[] = []
+              const failedDeleted: string[] = []
+              await Promise.all(
+                ops.created.map((draftRow) =>
+                  client
+                    .request(
+                      post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId })
+                    )
+                    .catch(() => {
+                      nestedFailures++
+                      failedCreated.push(draftRow)
+                    })
+                )
+              )
+              await Promise.all(
+                ops.updated.map((u) =>
+                  client
+                    .request(patch(`/items/${many_collection}/${u.id}`, u.changes))
+                    .catch(() => {
+                      nestedFailures++
+                      failedUpdated.push(u)
+                    })
+                )
+              )
+              // Deletes last, after creates/updates for this same flush have had a chance to land.
+              await Promise.all(
+                ops.deleted.map((id) =>
+                  client.request(del(`/items/${many_collection}/${id}`)).catch(() => {
+                    nestedFailures++
+                    failedDeleted.push(id)
+                  })
+                )
+              )
+              // Prune: only the ops that actually failed ride along on a retry.
+              if (failedCreated.length || failedUpdated.length || failedDeleted.length) {
+                remainingChanges[opsKey] = {
+                  created: failedCreated,
+                  updated: failedUpdated,
+                  deleted: failedDeleted
+                }
+              }
             }
-            const { many_collection, many_field } = grandRel
-            const failedCreated: Record<string, unknown>[] = []
-            const failedUpdated: { id: string; changes: Record<string, unknown> }[] = []
-            const failedDeleted: string[] = []
-            await Promise.all(ops.created.map(draftRow =>
-              client.request(post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId }))
-                .catch(() => { nestedFailures++; failedCreated.push(draftRow) })
-            ))
-            await Promise.all(ops.updated.map(u =>
-              client.request(patch(`/items/${many_collection}/${u.id}`, u.changes))
-                .catch(() => { nestedFailures++; failedUpdated.push(u) })
-            ))
-            // Deletes last, after creates/updates for this same flush have had a chance to land.
-            await Promise.all(ops.deleted.map(id =>
-              client.request(del(`/items/${many_collection}/${id}`))
-                .catch(() => { nestedFailures++; failedDeleted.push(id) })
-            ))
-            // Prune: only the ops that actually failed ride along on a retry.
-            if (failedCreated.length || failedUpdated.length || failedDeleted.length) {
-              remainingChanges[opsKey] = { created: failedCreated, updated: failedUpdated, deleted: failedDeleted }
-            }
-          }
-          if (Object.keys(remainingChanges).length > 0) remainingRows.set(rowId, remainingChanges)
-          updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size } }))
-        }))
+            if (Object.keys(remainingChanges).length > 0) remainingRows.set(rowId, remainingChanges)
+            updateStep(stepId, (s) => ({
+              progress: { done: (s.progress?.done ?? 0) + 1, total: edits.size }
+            }))
+          })
+        )
         if (remainingRows.size > 0) nextEdits.set(key, remainingRows)
         else nextEdits.delete(key)
         if (!hasErr && nestedFailures === 0) {
           updateStep(stepId, { status: 'done' })
         } else if (!hasErr) {
-          updateStep(stepId, { status: 'error', error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed` })
+          updateStep(stepId, {
+            status: 'error',
+            error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`
+          })
         }
       }
       setPendingO2MEdits(nextEdits)
@@ -3474,19 +4095,41 @@ export function ItemEditForm({
         const dels = pendingO2MDeletes.get(key) ?? new Set()
         updateStep(stepId, { status: 'running', progress: { done: 0, total: dels.size } })
         let hasErr = false
-        await Promise.all([...dels].map(async (rowId) => {
-          await client.request(del(`/items/${rc}/${rowId}`)).catch(err => { hasErr = true; updateStep(stepId, { status: 'error', error: errMsg(err) }) })
-          updateStep(stepId, (s) => ({ progress: { done: (s.progress?.done ?? 0) + 1, total: dels.size } }))
-        }))
-        if (!hasErr) { updateStep(stepId, { status: 'done' }); nextDels.delete(key) }
+        await Promise.all(
+          [...dels].map(async (rowId) => {
+            await client.request(del(`/items/${rc}/${rowId}`)).catch((err) => {
+              hasErr = true
+              updateStep(stepId, { status: 'error', error: errMsg(err) })
+            })
+            updateStep(stepId, (s) => ({
+              progress: { done: (s.progress?.done ?? 0) + 1, total: dels.size }
+            }))
+          })
+        )
+        if (!hasErr) {
+          updateStep(stepId, { status: 'done' })
+          nextDels.delete(key)
+        }
       }
       setPendingO2MDeletes(nextDels)
 
       // ── Tasks (new only) ──────────────────────────────────────────────────
       if (isNew && pendingTasks.length > 0) {
-        await Promise.all(pendingTasks.map(t =>
-          client.request(post('/tasks', { collection, item: savedId, title: t.title, assignee: t.assignee, due_date: t.due_date || undefined })).catch(() => {})
-        ))
+        await Promise.all(
+          pendingTasks.map((t) =>
+            client
+              .request(
+                post('/tasks', {
+                  collection,
+                  item: savedId,
+                  title: t.title,
+                  assignee: t.assignee,
+                  due_date: t.due_date || undefined
+                })
+              )
+              .catch(() => {})
+          )
+        )
       }
 
       return savedId
@@ -3502,7 +4145,7 @@ export function ItemEditForm({
       const o2mKeysToInvalidate = new Set([
         ...pendingO2MRows.keys(),
         ...pendingO2MEdits.keys(),
-        ...pendingO2MDeletes.keys(),
+        ...pendingO2MDeletes.keys()
       ])
       for (const key of o2mKeysToInvalidate) {
         const dotIdx = key.indexOf('.')
@@ -3565,14 +4208,19 @@ export function ItemEditForm({
     const currentRole = currentUserData?.role ?? null
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
     const currentStateKey = currentStateId
-      ? (pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId)?.key ?? null
+      ? ((pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId)?.key ?? null)
       : null
     for (const a of assignments) {
       if (!a.lock_conditions) continue
       let conds: Array<{ type: string; state_keys?: string[]; role_ids?: string[] }> = []
-      try { conds = JSON.parse(a.lock_conditions) } catch { continue }
+      try {
+        conds = JSON.parse(a.lock_conditions)
+      } catch {
+        continue
+      }
       const locked = conds.some((c) => {
-        if (c.type === 'pipeline_state' && c.state_keys?.length) return c.state_keys.includes(currentStateKey ?? '')
+        if (c.type === 'pipeline_state' && c.state_keys?.length)
+          return c.state_keys.includes(currentStateKey ?? '')
         if (c.type === 'role' && c.role_ids?.length) return c.role_ids.includes(currentRole ?? '')
         return false
       })
@@ -3589,9 +4237,13 @@ export function ItemEditForm({
           item={pipelineItem}
           title={pipelineSlot?.label_override ?? undefined}
           defaultExpanded={pipelineSlot?.default_expanded ?? false}
-          showApprovalChain={!!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain}
+          showApprovalChain={
+            !!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain
+          }
           onBeforeTransition={validateAll}
-          addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled}
+          addendumPending={
+            !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
+          }
           addendumView={viewingAddendum}
         />
       )
@@ -3642,7 +4294,11 @@ export function ItemEditForm({
       const slot = widgetSlots.find((a) => a.field === key)
       if (!slot || !slot.widget_id) return null
       let bindings: InputBinding[] = []
-      try { bindings = typeof slot.input_bindings === 'string' ? JSON.parse(slot.input_bindings) : [] } catch { /* noop */ }
+      try {
+        bindings = typeof slot.input_bindings === 'string' ? JSON.parse(slot.input_bindings) : []
+      } catch {
+        /* noop */
+      }
       return (
         <WidgetSlot
           key={key}
@@ -3670,7 +4326,16 @@ export function ItemEditForm({
             title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
             className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
           >
-            <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' className='h-3.5 w-3.5'>
+            <svg
+              xmlns='http://www.w3.org/2000/svg'
+              viewBox='0 0 24 24'
+              fill='none'
+              stroke='currentColor'
+              strokeWidth='2'
+              strokeLinecap='round'
+              strokeLinejoin='round'
+              className='h-3.5 w-3.5'
+            >
               <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
               <polyline points='14 2 14 8 20 8' />
               <line x1='9' y1='13' x2='15' y2='13' />
@@ -3690,42 +4355,50 @@ export function ItemEditForm({
     return (
       <div key='__ungrouped__' className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
         <GridContainer>
-          {(cw) => visible.map((f) => {
-            const inlineConfig = fieldInlineDisplay?.[f.field]
-            const inlineEntries = inlineConfig?.entries
-            const inlineSeparator = inlineConfig?.separator ?? null
-            const rawVal = draft[f.field]
-            const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
-            const inlineRelCollection = (inlineEntries?.length && hasVal)
-              ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
-              : null
-            return (
-              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                <FieldRow
-                  field={f}
-                  draft={effectiveDraft}
-                  onChange={handleFieldChange}
-                  relations={relations}
-                  collection={collection}
-                  itemId={itemId}
-                  error={validationErrors[f.field]}
-                  visible={true}
-                  locked={isReadOnly || addendumViewId !== 'original'}
-                  layoutAiEnabled={layoutAiEnabled}
-                  renderField={renderField}
-                  onCountChange={handleM2MCountChange}
-                />
-                {inlineEntries?.length && hasVal && inlineRelCollection && (
-                  <InlineDisplay
-                    relCollection={inlineRelCollection}
-                    relId={rawVal as string | number}
-                    entries={inlineEntries}
-                    separator={inlineSeparator}
+          {(cw) =>
+            visible.map((f) => {
+              const inlineConfig = fieldInlineDisplay?.[f.field]
+              const inlineEntries = inlineConfig?.entries
+              const inlineSeparator = inlineConfig?.separator ?? null
+              const rawVal = draft[f.field]
+              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+              const inlineRelCollection =
+                inlineEntries?.length && hasVal
+                  ? (relations.find(
+                      (r) =>
+                        r.many_collection === collection &&
+                        r.many_field === f.field &&
+                        !r.junction_field
+                    )?.one_collection ?? null)
+                  : null
+              return (
+                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                  <FieldRow
+                    field={f}
+                    draft={effectiveDraft}
+                    onChange={handleFieldChange}
+                    relations={relations}
+                    collection={collection}
+                    itemId={itemId}
+                    error={validationErrors[f.field]}
+                    visible={true}
+                    locked={isReadOnly || addendumViewId !== 'original'}
+                    layoutAiEnabled={layoutAiEnabled}
+                    renderField={renderField}
+                    onCountChange={handleM2MCountChange}
                   />
-                )}
-              </div>
-            )
-          })}
+                  {inlineEntries?.length && hasVal && inlineRelCollection && (
+                    <InlineDisplay
+                      relCollection={inlineRelCollection}
+                      relId={rawVal as string | number}
+                      entries={inlineEntries}
+                      separator={inlineSeparator}
+                    />
+                  )}
+                </div>
+              )
+            })
+          }
         </GridContainer>
       </div>
     )
@@ -3740,15 +4413,33 @@ export function ItemEditForm({
     const activeKey = getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
     const activeSwapCfg = (() => {
-      try { return activeChild?.swap_config ? JSON.parse(activeChild.swap_config) as { enabled: boolean; primary_field: string; alternate_fields: ({ field: string; width: 1 | 2 } | string)[]; toggle_label?: string; back_label?: string } : null } catch { return null }
+      try {
+        return activeChild?.swap_config
+          ? (JSON.parse(activeChild.swap_config) as {
+              enabled: boolean
+              primary_field: string
+              alternate_fields: ({ field: string; width: 1 | 2 } | string)[]
+              toggle_label?: string
+              back_label?: string
+            })
+          : null
+      } catch {
+        return null
+      }
     })()
-    const normActiveAlts = (activeSwapCfg?.alternate_fields ?? []).map(x => typeof x === 'string' ? { field: x, width: 2 as const } : x)
-    const activeIsSwapped = activeSwapCfg?.enabled ? swappedGroups.has(activeChild?.id ?? -1) : false
+    const normActiveAlts = (activeSwapCfg?.alternate_fields ?? []).map((x) =>
+      typeof x === 'string' ? { field: x, width: 2 as const } : x
+    )
+    const activeIsSwapped = activeSwapCfg?.enabled
+      ? swappedGroups.has(activeChild?.id ?? -1)
+      : false
     const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
     // PDF slot: check if assigned to the active child tab or to the container itself
-    const pdfInContainer = !isNew && !!layoutId && !!pdfSlot && (
-      pdfGroupKey === activeChild?.key || pdfGroupKey === c.key
-    )
+    const pdfInContainer =
+      !isNew &&
+      !!layoutId &&
+      !!pdfSlot &&
+      (pdfGroupKey === activeChild?.key || pdfGroupKey === c.key)
 
     const containerCompleted = new Set<string>()
     const containerErrors = new Set<string>()
@@ -3758,7 +4449,12 @@ export function ItemEditForm({
       const hasError = chFields.some((f) => validationErrors[f.field])
       if (hasError) containerErrors.add(ch.key)
       const requiredFields = chFields.filter((f) => f.required && !f.hidden)
-      const allFilled = requiredFields.length === 0 || requiredFields.every((f) => { const v = draft[f.field]; return v !== null && v !== undefined && v !== '' })
+      const allFilled =
+        requiredFields.length === 0 ||
+        requiredFields.every((f) => {
+          const v = draft[f.field]
+          return v !== null && v !== undefined && v !== ''
+        })
       if (allFilled) containerCompleted.add(ch.key)
     }
 
@@ -3794,90 +4490,147 @@ export function ItemEditForm({
         )}
         <div className='px-5 py-5'>
           <GridContainer>
-            {(cw) => activeFields.map((f) => {
-              const inlineConfig = fieldInlineDisplay?.[f.field]
-              const inlineEntries = inlineConfig?.entries
-              const inlineSeparator = inlineConfig?.separator ?? null
-              const rawVal = draft[f.field]
-              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
-              const inlineRelCollection = (inlineEntries?.length && hasVal)
-                ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
-                : null
-              const isPrimarySwapField = activeSwapCfg?.enabled && f.field === activeSwapCfg.primary_field
-              const primaryHasVal = (() => { const v = draft[activeSwapCfg?.primary_field ?? '']; return v !== null && v !== undefined && v !== '' })()
-              const altHasVal = normActiveAlts.some((a) => { const v = draft[a.field]; return v !== null && v !== undefined && v !== '' })
-              const swapToggleBtn = isPrimarySwapField ? (
-                <span className='inline-flex items-center gap-1.5'>
-                  <button
-                    type='button'
-                    onClick={() => setSwappedGroups((prev) => { const next = new Set(prev); if (next.has(activeChild!.id)) next.delete(activeChild!.id); else next.add(activeChild!.id); return next })}
-                    className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
-                  >
-                    {activeIsSwapped ? (activeSwapCfg!.back_label ?? 'Back') : (activeSwapCfg!.toggle_label ?? 'Enter manually')}
-                  </button>
-                  <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', primaryHasVal ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')}>
-                    <span className={['h-1.5 w-1.5 rounded-full', primaryHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
-                    Original
+            {(cw) =>
+              activeFields.map((f) => {
+                const inlineConfig = fieldInlineDisplay?.[f.field]
+                const inlineEntries = inlineConfig?.entries
+                const inlineSeparator = inlineConfig?.separator ?? null
+                const rawVal = draft[f.field]
+                const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+                const inlineRelCollection =
+                  inlineEntries?.length && hasVal
+                    ? (relations.find(
+                        (r) =>
+                          r.many_collection === collection &&
+                          r.many_field === f.field &&
+                          !r.junction_field
+                      )?.one_collection ?? null)
+                    : null
+                const isPrimarySwapField =
+                  activeSwapCfg?.enabled && f.field === activeSwapCfg.primary_field
+                const primaryHasVal = (() => {
+                  const v = draft[activeSwapCfg?.primary_field ?? '']
+                  return v !== null && v !== undefined && v !== ''
+                })()
+                const altHasVal = normActiveAlts.some((a) => {
+                  const v = draft[a.field]
+                  return v !== null && v !== undefined && v !== ''
+                })
+                const swapToggleBtn = isPrimarySwapField ? (
+                  <span className='inline-flex items-center gap-1.5'>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        setSwappedGroups((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(activeChild!.id)) next.delete(activeChild!.id)
+                          else next.add(activeChild!.id)
+                          return next
+                        })
+                      }
+                      className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
+                    >
+                      {activeIsSwapped
+                        ? (activeSwapCfg!.back_label ?? 'Back')
+                        : (activeSwapCfg!.toggle_label ?? 'Enter manually')}
+                    </button>
+                    <span
+                      className={[
+                        'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
+                        primaryHasVal
+                          ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                          : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'h-1.5 w-1.5 rounded-full',
+                          primaryHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                        ].join(' ')}
+                      />
+                      Original
+                    </span>
+                    <span
+                      className={[
+                        'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
+                        altHasVal
+                          ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                          : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'h-1.5 w-1.5 rounded-full',
+                          altHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                        ].join(' ')}
+                      />
+                      Manual
+                    </span>
                   </span>
-                  <span className={['inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium', altHasVal ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'].join(' ')}>
-                    <span className={['h-1.5 w-1.5 rounded-full', altHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'].join(' ')} />
-                    Manual
-                  </span>
-                </span>
-              ) : undefined
-              const swapContentNode = isPrimarySwapField && activeIsSwapped ? (
-                <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
-                <div className='grid grid-cols-2 gap-3'>
-                  {normActiveAlts.map((a) => {
-                    const af = (fieldConfig ?? []).find(fc => fc.field === a.field)
-                    if (!af) return null
-                    return (
-                      <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
-                        <FieldRow
-                          field={af}
-                          draft={effectiveDraft}
-                          onChange={handleFieldChange}
-                          relations={relations}
-                          collection={collection}
-                          itemId={itemId}
-                          error={validationErrors[af.field]}
-                          visible={true}
-                          forceVisible={true}
-                          locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
-                          layoutAiEnabled={layoutAiEnabled}
-                          renderField={renderField}
-                          onCountChange={handleM2MCountChange}
-                        />
+                ) : undefined
+                const swapContentNode =
+                  isPrimarySwapField && activeIsSwapped ? (
+                    <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
+                      <div className='grid grid-cols-2 gap-3'>
+                        {normActiveAlts.map((a) => {
+                          const af = (fieldConfig ?? []).find((fc) => fc.field === a.field)
+                          if (!af) return null
+                          return (
+                            <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
+                              <FieldRow
+                                field={af}
+                                draft={effectiveDraft}
+                                onChange={handleFieldChange}
+                                relations={relations}
+                                collection={collection}
+                                itemId={itemId}
+                                error={validationErrors[af.field]}
+                                visible={true}
+                                forceVisible={true}
+                                locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
+                                layoutAiEnabled={layoutAiEnabled}
+                                renderField={renderField}
+                                onCountChange={handleM2MCountChange}
+                              />
+                            </div>
+                          )
+                        })}
                       </div>
-                    )
-                  })}
-                </div>
-                </div>
-              ) : undefined
-              return (
-                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={effectiveDraft}
-                    onChange={handleFieldChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={validationErrors[f.field]}
-                    visible={visibleFields.has(f.field) || !visibleFields.size}
-                    locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={handleM2MCountChange}
-                    swapButton={swapToggleBtn}
-                    swapContent={swapContentNode}
-                  />
-                  {inlineEntries?.length && hasVal && inlineRelCollection && (
-                    <InlineDisplay relCollection={inlineRelCollection} relId={rawVal as string | number} entries={inlineEntries} separator={inlineSeparator} />
-                  )}
-                </div>
-              )
-            })}
+                    </div>
+                  ) : undefined
+                return (
+                  <div
+                    key={f.field}
+                    style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}
+                  >
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      visible={visibleFields.has(f.field) || !visibleFields.size}
+                      locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                      swapButton={swapToggleBtn}
+                      swapContent={swapContentNode}
+                    />
+                    {inlineEntries?.length && hasVal && inlineRelCollection && (
+                      <InlineDisplay
+                        relCollection={inlineRelCollection}
+                        relId={rawVal as string | number}
+                        entries={inlineEntries}
+                        separator={inlineSeparator}
+                      />
+                    )}
+                  </div>
+                )
+              })
+            }
           </GridContainer>
           {widgetSlots
             .filter((ws) => (ws.group_key ?? null) === activeChild.key)
@@ -3885,7 +4638,14 @@ export function ItemEditForm({
               // Container tab bodies bypass GroupSection, so widget slots in tab
               // groups render here. input_bindings arrives as a JSON string.
               let bindings: InputBinding[] = []
-              try { bindings = typeof ws.input_bindings === 'string' ? JSON.parse(ws.input_bindings) : ((ws.input_bindings ?? []) as unknown as InputBinding[]) } catch { /* noop */ }
+              try {
+                bindings =
+                  typeof ws.input_bindings === 'string'
+                    ? JSON.parse(ws.input_bindings)
+                    : ((ws.input_bindings ?? []) as unknown as InputBinding[])
+              } catch {
+                /* noop */
+              }
               return (
                 <div key={ws.field} className='mt-4'>
                   <WidgetSlot
@@ -3909,54 +4669,75 @@ export function ItemEditForm({
                 title={!pdfAttachField ? 'Configure PDF field in Data Model → Layouts' : undefined}
                 className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
               >
-                <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' className='h-3.5 w-3.5'>
+                <svg
+                  xmlns='http://www.w3.org/2000/svg'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='2'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  className='h-3.5 w-3.5'
+                >
                   <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
                   <polyline points='14 2 14 8 20 8' />
                   <line x1='9' y1='13' x2='15' y2='13' />
                   <line x1='9' y1='17' x2='13' y2='17' />
                 </svg>
-                {pdfAttaching ? 'Generating…' : (pdfSlot?.label_override?.trim() || 'Generate PDF')}
+                {pdfAttaching ? 'Generating…' : pdfSlot?.label_override?.trim() || 'Generate PDF'}
               </button>
             </div>
           )}
-          {c.tab_mode === 'steps' && children.length > 1 && (() => {
-            const idx = children.findIndex((ch) => ch.key === activeKey)
-            const isFirst = idx === 0
-            const isLast = idx === children.length - 1
-            return (
-              <div className='mt-6 border-t border-slate-200 pt-4'>
-                <div className='flex items-center justify-between gap-2'>
-                  <button
-                    type='button'
-                    disabled={isFirst}
-                    onClick={() => setContainerTab(c, children[idx - 1].key)}
-                    className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40'
-                  >
-                    <ChevronDown className='h-3.5 w-3.5 rotate-90' />
-                    Previous
-                  </button>
-                  <span className='text-[11px] text-slate-400'>Step {idx + 1} of {children.length}</span>
-                  {isLast ? null : (
+          {c.tab_mode === 'steps' &&
+            children.length > 1 &&
+            (() => {
+              const idx = children.findIndex((ch) => ch.key === activeKey)
+              const isFirst = idx === 0
+              const isLast = idx === children.length - 1
+              return (
+                <div className='mt-6 border-t border-slate-200 pt-4'>
+                  <div className='flex items-center justify-between gap-2'>
                     <button
                       type='button'
-                      onClick={() => setContainerTab(c, children[idx + 1].key)}
-                      className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0]'
+                      disabled={isFirst}
+                      onClick={() => setContainerTab(c, children[idx - 1].key)}
+                      className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40'
                     >
-                      Next
-                      <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
+                      <ChevronDown className='h-3.5 w-3.5 rotate-90' />
+                      Previous
                     </button>
-                  )}
+                    <span className='text-[11px] text-slate-400'>
+                      Step {idx + 1} of {children.length}
+                    </span>
+                    {isLast ? null : (
+                      <button
+                        type='button'
+                        onClick={() => setContainerTab(c, children[idx + 1].key)}
+                        className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0]'
+                      >
+                        Next
+                        <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )
-          })()}
+              )
+            })()}
         </div>
       </div>
     )
   }
 
   function renderSectionItem(
-    item: FieldGroup | '__ungrouped__' | '__pipeline__' | '__comments__' | '__tasks__' | '__owners__' | '__pdf__' | string
+    item:
+      | FieldGroup
+      | '__ungrouped__'
+      | '__pipeline__'
+      | '__comments__'
+      | '__tasks__'
+      | '__owners__'
+      | '__pdf__'
+      | string
   ) {
     if (item === '__ungrouped__') return renderUngrouped()
     if (typeof item === 'string' && item !== '__ungrouped__') return renderSentinel(item)
@@ -3964,9 +4745,23 @@ export function ItemEditForm({
     if (g.type === 'container') return renderContainer(g)
     if (g.type === 'metadata' && isNew) return null
     const swapCfg = (() => {
-      try { return g.swap_config ? JSON.parse(g.swap_config) as { enabled: boolean; primary_field: string; alternate_fields: ({ field: string; width: 1 | 2 } | string)[]; toggle_label?: string; back_label?: string } : null } catch { return null }
+      try {
+        return g.swap_config
+          ? (JSON.parse(g.swap_config) as {
+              enabled: boolean
+              primary_field: string
+              alternate_fields: ({ field: string; width: 1 | 2 } | string)[]
+              toggle_label?: string
+              back_label?: string
+            })
+          : null
+      } catch {
+        return null
+      }
     })()
-    const normAlts = (swapCfg?.alternate_fields ?? []).map(x => typeof x === 'string' ? { field: x, width: 2 as const } : x)
+    const normAlts = (swapCfg?.alternate_fields ?? []).map((x) =>
+      typeof x === 'string' ? { field: x, width: 2 as const } : x
+    )
     const isSwapped = swapCfg?.enabled ? swappedGroups.has(g.id) : false
     const baseFields = groupedMap[g.key] ?? []
     // A rollup whose live total has moved away from the stored one shows both
@@ -3987,7 +4782,10 @@ export function ItemEditForm({
       }
       return {
         ...f,
-        options: { ...((f.options as Record<string, unknown> | null) ?? {}), __live_delta: { original, live } }
+        options: {
+          ...((f.options as Record<string, unknown> | null) ?? {}),
+          __live_delta: { original, live }
+        }
       }
     })
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
@@ -4036,13 +4834,25 @@ export function ItemEditForm({
         fieldInlineDisplay={fieldInlineDisplay}
         swapConfig={swapCfg}
         swapped={isSwapped}
-        onSwapToggle={swapCfg?.enabled ? () => setSwappedGroups((prev) => {
-          const next = new Set(prev)
-          if (next.has(g.id)) next.delete(g.id); else next.add(g.id)
-          return next
-        }) : undefined}
-        alternateFields={swapCfg?.enabled ? (fieldConfig ?? []).filter((af) => normAlts.some(a => a.field === af.field)) : undefined}
-        alternateWidths={swapCfg?.enabled ? Object.fromEntries(normAlts.map(a => [a.field, a.width])) : undefined}
+        onSwapToggle={
+          swapCfg?.enabled
+            ? () =>
+                setSwappedGroups((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(g.id)) next.delete(g.id)
+                  else next.add(g.id)
+                  return next
+                })
+            : undefined
+        }
+        alternateFields={
+          swapCfg?.enabled
+            ? (fieldConfig ?? []).filter((af) => normAlts.some((a) => a.field === af.field))
+            : undefined
+        }
+        alternateWidths={
+          swapCfg?.enabled ? Object.fromEntries(normAlts.map((a) => [a.field, a.width])) : undefined
+        }
       />
     )
   }
@@ -4056,32 +4866,57 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
-        )}
-        {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
-        {!isNew && itemId && <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />}
-        {!commentsSlot && effectiveShowComments && (
-          <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
-        )}
-        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
-          <AddendumPanel
-            collection={collection}
-            item={itemId}
-            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
-            canCreate={addendumCanCreate}
-            onActiveCountChange={setActiveAddendumCount}
-            onApplied={() => {
-              // An approved addendum rewrites the record, so the attached
-              // document is now stale — regenerate it the same way a save does.
-              if (pdfAutoGenerate && pdfAttachField) {
-                void handleGenerateAndAttach({ silent: true }).then(() => {
-                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                })
-              }
-            }}
+          <PipelinePanel
+            collection={pipelineCollection}
+            item={pipelineItem}
+            onBeforeTransition={validateAll}
+            addendumPending={
+              !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
+            }
+            addendumView={viewingAddendum}
           />
         )}
+        {!tasksSlot && effectiveShowTasks && (
+          <TaskPanel
+            collection={collection}
+            item={itemId}
+            queuedTasks={isNew ? pendingTasks : undefined}
+            onQueueTask={isNew ? handleQueueTask : undefined}
+          />
+        )}
+        {!isNew && itemId && (
+          <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+        )}
+        {!commentsSlot && effectiveShowComments && (
+          <CommentPanel
+            collection={collection}
+            item={itemId}
+            queuedComments={isNew ? pendingComments : undefined}
+            onQueueComment={isNew ? handleQueueComment : undefined}
+          />
+        )}
+        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {!addendumSlot &&
+          activeLayoutData !== undefined &&
+          colMeta?.addendums_enabled &&
+          !isNew && (
+            <AddendumPanel
+              collection={collection}
+              item={itemId}
+              addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+              canCreate={addendumCanCreate}
+              onActiveCountChange={setActiveAddendumCount}
+              onApplied={() => {
+                // An approved addendum rewrites the record, so the attached
+                // document is now stale — regenerate it the same way a save does.
+                if (pdfAutoGenerate && pdfAttachField) {
+                  void handleGenerateAndAttach({ silent: true }).then(() => {
+                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                  })
+                }
+              }}
+            />
+          )}
       </div>
     )
   }
@@ -4090,9 +4925,9 @@ export function ItemEditForm({
   function renderTabContent(tabKey: string, inStepsMode = false) {
     const fields = (
       tabKey === '__general__'
-        ? (inStepsMode
-            ? ungroupedFields
-            : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])])
+        ? inStepsMode
+          ? ungroupedFields
+          : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
         : (groupedMap[tabKey] ?? [])
     ).filter((f) => !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
@@ -4104,9 +4939,19 @@ export function ItemEditForm({
       | { _t: 'pdf'; slot: SlotAssignment }
       | { _t: 'widget'; slot: SlotAssignment }
     )
-    const tabItems: TabItem[] = fields.map((f) => ({ _k: f.field, sort: f.sort ?? 0, _t: 'field' as const, f }))
+    const tabItems: TabItem[] = fields.map((f) => ({
+      _k: f.field,
+      sort: f.sort ?? 0,
+      _t: 'field' as const,
+      f
+    }))
     if (ownersHere && ownersSlot) {
-      tabItems.push({ _k: '__owners__', sort: ownersSlot.sort, _t: 'owners' as const, slot: ownersSlot })
+      tabItems.push({
+        _k: '__owners__',
+        sort: ownersSlot.sort,
+        _t: 'owners' as const,
+        slot: ownersSlot
+      })
     }
     if (pdfHere && pdfSlot) {
       tabItems.push({ _k: '__pdf__', sort: pdfSlot.sort, _t: 'pdf' as const, slot: pdfSlot })
@@ -4118,89 +4963,112 @@ export function ItemEditForm({
     return (
       <div className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
         <GridContainer>
-          {(cw) => tabItems.map((item) => {
-            if (item._t === 'owners') {
-              const span = item.slot.col_span ?? 12
+          {(cw) =>
+            tabItems.map((item) => {
+              if (item._t === 'owners') {
+                const span = item.slot.col_span ?? 12
+                return (
+                  <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
+                    <OwnersInline
+                      collection={collection}
+                      itemId={itemId}
+                      label={item.slot.label_override || 'Owners'}
+                    />
+                  </div>
+                )
+              }
+              if (item._t === 'pdf') {
+                if (!layoutId) return null
+                const span = item.slot.col_span ?? 12
+                const label = item.slot.label_override?.trim() || 'Generate PDF'
+                const notConfigured = !pdfAttachField
+                return (
+                  <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
+                    <button
+                      type='button'
+                      onClick={() => void handleGenerateAndAttach()}
+                      disabled={pdfAttaching || notConfigured}
+                      title={
+                        notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined
+                      }
+                      className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+                    >
+                      <svg
+                        xmlns='http://www.w3.org/2000/svg'
+                        className='h-3.5 w-3.5'
+                        viewBox='0 0 24 24'
+                        fill='none'
+                        stroke='currentColor'
+                        strokeWidth='2'
+                        strokeLinecap='round'
+                        strokeLinejoin='round'
+                      >
+                        <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                        <polyline points='14 2 14 8 20 8' />
+                      </svg>
+                      {pdfAttaching ? 'Generating…' : label}
+                    </button>
+                  </div>
+                )
+              }
+              if (item._t === 'widget') {
+                if (!item.slot.widget_id) return null
+                const span = item.slot.col_span ?? 12
+                return (
+                  <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
+                    <WidgetSlot
+                      widgetId={item.slot.widget_id}
+                      inputBindings={(item.slot.input_bindings ?? []) as InputBinding[]}
+                      itemDraft={draft}
+                      label={item.slot.label_override ?? undefined}
+                      defaultExpanded={item.slot.default_expanded ?? true}
+                    />
+                  </div>
+                )
+              }
+              const f = item.f
+              const inlineConfig = fieldInlineDisplay?.[f.field]
+              const inlineEntries = inlineConfig?.entries
+              const inlineSeparator = inlineConfig?.separator ?? null
+              const rawVal = draft[f.field]
+              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+              const inlineRelCollection =
+                inlineEntries?.length && hasVal
+                  ? (relations.find(
+                      (r) =>
+                        r.many_collection === collection &&
+                        r.many_field === f.field &&
+                        !r.junction_field
+                    )?.one_collection ?? null)
+                  : null
               return (
-                <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
-                  <OwnersInline collection={collection} itemId={itemId} label={item.slot.label_override || 'Owners'} />
-                </div>
-              )
-            }
-            if (item._t === 'pdf') {
-              if (!layoutId) return null
-              const span = item.slot.col_span ?? 12
-              const label = item.slot.label_override?.trim() || 'Generate PDF'
-              const notConfigured = !pdfAttachField
-              return (
-                <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
-                  <button
-                    type='button'
-                    onClick={() => void handleGenerateAndAttach()}
-                    disabled={pdfAttaching || notConfigured}
-                    title={notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined}
-                    className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
-                  >
-                    <svg xmlns='http://www.w3.org/2000/svg' className='h-3.5 w-3.5' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                      <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
-                      <polyline points='14 2 14 8 20 8' />
-                    </svg>
-                    {pdfAttaching ? 'Generating…' : label}
-                  </button>
-                </div>
-              )
-            }
-            if (item._t === 'widget') {
-              if (!item.slot.widget_id) return null
-              const span = item.slot.col_span ?? 12
-              return (
-                <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
-                  <WidgetSlot
-                    widgetId={item.slot.widget_id}
-                    inputBindings={(item.slot.input_bindings ?? []) as InputBinding[]}
-                    itemDraft={draft}
-                    label={item.slot.label_override ?? undefined}
-                    defaultExpanded={item.slot.default_expanded ?? true}
+                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                  <FieldRow
+                    field={f}
+                    draft={effectiveDraft}
+                    onChange={handleFieldChange}
+                    relations={relations}
+                    collection={collection}
+                    itemId={itemId}
+                    error={validationErrors[f.field]}
+                    visible={true}
+                    locked={isReadOnly || addendumViewId !== 'original'}
+                    layoutAiEnabled={layoutAiEnabled}
+                    renderField={renderField}
+                    onCountChange={handleM2MCountChange}
                   />
+                  {inlineEntries?.length && hasVal && inlineRelCollection && (
+                    <InlineDisplay
+                      relCollection={inlineRelCollection}
+                      relId={rawVal as string | number}
+                      entries={inlineEntries}
+                      separator={inlineSeparator}
+                    />
+                  )}
                 </div>
               )
-            }
-            const f = item.f
-            const inlineConfig = fieldInlineDisplay?.[f.field]
-            const inlineEntries = inlineConfig?.entries
-            const inlineSeparator = inlineConfig?.separator ?? null
-            const rawVal = draft[f.field]
-            const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
-            const inlineRelCollection = (inlineEntries?.length && hasVal)
-              ? (relations.find((r) => r.many_collection === collection && r.many_field === f.field && !r.junction_field)?.one_collection ?? null)
-              : null
-            return (
-              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                <FieldRow
-                  field={f}
-                  draft={effectiveDraft}
-                  onChange={handleFieldChange}
-                  relations={relations}
-                  collection={collection}
-                  itemId={itemId}
-                  error={validationErrors[f.field]}
-                  visible={true}
-                  locked={isReadOnly || addendumViewId !== 'original'}
-                  layoutAiEnabled={layoutAiEnabled}
-                  renderField={renderField}
-                  onCountChange={handleM2MCountChange}
-                />
-                {inlineEntries?.length && hasVal && inlineRelCollection && (
-                  <InlineDisplay
-                    relCollection={inlineRelCollection}
-                    relId={rawVal as string | number}
-                    entries={inlineEntries}
-                    separator={inlineSeparator}
-                  />
-                )}
-              </div>
-            )
-          })}
+            })
+          }
         </GridContainer>
       </div>
     )
@@ -4243,32 +5111,57 @@ export function ItemEditForm({
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
           .map((item) => renderSentinel(item as string))}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={pipelineCollection} item={pipelineItem} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
-        )}
-        {!tasksSlot && effectiveShowTasks && <TaskPanel collection={collection} item={itemId} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />}
-        {!isNew && itemId && <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />}
-        {!commentsSlot && effectiveShowComments && (
-          <CommentPanel collection={collection} item={itemId} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
-        )}
-        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
-          <AddendumPanel
-            collection={collection}
-            item={itemId}
-            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
-            canCreate={addendumCanCreate}
-            onActiveCountChange={setActiveAddendumCount}
-            onApplied={() => {
-              // An approved addendum rewrites the record, so the attached
-              // document is now stale — regenerate it the same way a save does.
-              if (pdfAutoGenerate && pdfAttachField) {
-                void handleGenerateAndAttach({ silent: true }).then(() => {
-                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                })
-              }
-            }}
+          <PipelinePanel
+            collection={pipelineCollection}
+            item={pipelineItem}
+            onBeforeTransition={validateAll}
+            addendumPending={
+              !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
+            }
+            addendumView={viewingAddendum}
           />
         )}
+        {!tasksSlot && effectiveShowTasks && (
+          <TaskPanel
+            collection={collection}
+            item={itemId}
+            queuedTasks={isNew ? pendingTasks : undefined}
+            onQueueTask={isNew ? handleQueueTask : undefined}
+          />
+        )}
+        {!isNew && itemId && (
+          <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+        )}
+        {!commentsSlot && effectiveShowComments && (
+          <CommentPanel
+            collection={collection}
+            item={itemId}
+            queuedComments={isNew ? pendingComments : undefined}
+            onQueueComment={isNew ? handleQueueComment : undefined}
+          />
+        )}
+        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {!addendumSlot &&
+          activeLayoutData !== undefined &&
+          colMeta?.addendums_enabled &&
+          !isNew && (
+            <AddendumPanel
+              collection={collection}
+              item={itemId}
+              addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+              canCreate={addendumCanCreate}
+              onActiveCountChange={setActiveAddendumCount}
+              onApplied={() => {
+                // An approved addendum rewrites the record, so the attached
+                // document is now stale — regenerate it the same way a save does.
+                if (pdfAutoGenerate && pdfAttachField) {
+                  void handleGenerateAndAttach({ silent: true }).then(() => {
+                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                  })
+                }
+              }}
+            />
+          )}
       </div>
     )
   }
@@ -4377,11 +5270,13 @@ export function ItemEditForm({
           steps={allSteps}
           active={activeTab}
           completed={completedSteps}
-          errorSteps={new Set(
-            allSteps
-              .filter((s) => (groupedMap[s.key] ?? []).some((f) => validationErrors[f.field]))
-              .map((s) => s.key)
-          )}
+          errorSteps={
+            new Set(
+              allSteps
+                .filter((s) => (groupedMap[s.key] ?? []).some((f) => validationErrors[f.field]))
+                .map((s) => s.key)
+            )
+          }
           onStepClick={setActiveTab}
         />
         {renderTabContent(activeTab, true)}
@@ -4390,33 +5285,57 @@ export function ItemEditForm({
           return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
         })}
         {!pipelineSlot && showPipeline && (
-          <PipelinePanel collection={pipelineCollection} item={pipelineItem} defaultExpanded={false} onBeforeTransition={validateAll} addendumPending={!viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled} addendumView={viewingAddendum} />
-        )}
-        {!tasksSlot && effectiveShowTasks && (
-          <TaskPanel collection={collection} item={itemId} defaultExpanded={false} queuedTasks={isNew ? pendingTasks : undefined} onQueueTask={isNew ? handleQueueTask : undefined} />
-        )}
-        {!commentsSlot && effectiveShowComments && (
-          <CommentPanel collection={collection} item={itemId} defaultExpanded={false} queuedComments={isNew ? pendingComments : undefined} onQueueComment={isNew ? handleQueueComment : undefined} />
-        )}
-        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
-        {!addendumSlot && activeLayoutData !== undefined && colMeta?.addendums_enabled && !isNew && (
-          <AddendumPanel
-            collection={collection}
-            item={itemId}
-            addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
-            canCreate={addendumCanCreate}
-            onActiveCountChange={setActiveAddendumCount}
-            onApplied={() => {
-              // An approved addendum rewrites the record, so the attached
-              // document is now stale — regenerate it the same way a save does.
-              if (pdfAutoGenerate && pdfAttachField) {
-                void handleGenerateAndAttach({ silent: true }).then(() => {
-                  qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                })
-              }
-            }}
+          <PipelinePanel
+            collection={pipelineCollection}
+            item={pipelineItem}
+            defaultExpanded={false}
+            onBeforeTransition={validateAll}
+            addendumPending={
+              !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
+            }
+            addendumView={viewingAddendum}
           />
         )}
+        {!tasksSlot && effectiveShowTasks && (
+          <TaskPanel
+            collection={collection}
+            item={itemId}
+            defaultExpanded={false}
+            queuedTasks={isNew ? pendingTasks : undefined}
+            onQueueTask={isNew ? handleQueueTask : undefined}
+          />
+        )}
+        {!commentsSlot && effectiveShowComments && (
+          <CommentPanel
+            collection={collection}
+            item={itemId}
+            defaultExpanded={false}
+            queuedComments={isNew ? pendingComments : undefined}
+            onQueueComment={isNew ? handleQueueComment : undefined}
+          />
+        )}
+        {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
+        {!addendumSlot &&
+          activeLayoutData !== undefined &&
+          colMeta?.addendums_enabled &&
+          !isNew && (
+            <AddendumPanel
+              collection={collection}
+              item={itemId}
+              addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
+              canCreate={addendumCanCreate}
+              onActiveCountChange={setActiveAddendumCount}
+              onApplied={() => {
+                // An approved addendum rewrites the record, so the attached
+                // document is now stale — regenerate it the same way a save does.
+                if (pdfAutoGenerate && pdfAttachField) {
+                  void handleGenerateAndAttach({ silent: true }).then(() => {
+                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
+                  })
+                }
+              }}
+            />
+          )}
         {stepNav}
       </div>
     )
@@ -4492,851 +5411,1223 @@ export function ItemEditForm({
 
   const title = colMeta?.display_name ?? titleCase(collection ?? '')
   const singularTitle = colMeta?.singular || title
-  const itemTitle = !isNew && itemData && colMeta?.display_template
-    ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
-    : title
+  const itemTitle =
+    !isNew && itemData && colMeta?.display_template
+      ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
+      : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
   return (
-    <ReimportHandlerContext.Provider value={isNew ? null : (handleReimportParsed as import('../context').ReimportHandler)}>
-    <RelationPathDataContext.Provider value={relationPathData}>
-    <AddendumO2MContext.Provider value={addendumO2MMap}>
-    <AddendumViewContext.Provider value={addendumViewId}>
-    <AddendumFieldContext.Provider value={addendumFieldMap}>
-    <ParentDraftContext.Provider value={{ draft: parentDraftWithAliases, collection, dirtyFields: userTouchedRef.current }}>
-    <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
-    <StaleFieldReportContext.Provider value={reportStaleField}>
-    <O2MStagingContext.Provider value={o2mStagingCtx}>
-    <LiveRowsContext.Provider value={liveRowsCtx}>
-    <StagedRelationsContext.Provider value={stagedRelsCtx}>
-    <M2MStagingContext.Provider value={m2mStagingCtx}>
-      {/* Instant tooltips for truncated header values. Self-deduplicating —
+    <ReimportHandlerContext.Provider
+      value={isNew ? null : (handleReimportParsed as import('../context').ReimportHandler)}
+    >
+      <RelationPathDataContext.Provider value={relationPathData}>
+        <AddendumO2MContext.Provider value={addendumO2MMap}>
+          <AddendumViewContext.Provider value={addendumViewId}>
+            <AddendumFieldContext.Provider value={addendumFieldMap}>
+              <ParentDraftContext.Provider
+                value={{
+                  draft: parentDraftWithAliases,
+                  collection,
+                  dirtyFields: userTouchedRef.current
+                }}
+              >
+                <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
+                  <StaleFieldReportContext.Provider value={reportStaleField}>
+                    <O2MStagingContext.Provider value={o2mStagingCtx}>
+                      <LiveRowsContext.Provider value={liveRowsCtx}>
+                        <StagedRelationsContext.Provider value={stagedRelsCtx}>
+                          <M2MStagingContext.Provider value={m2mStagingCtx}>
+                            {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
-      <TipLayer />
-      <SaveProgressDialog
-        open={saveDialogOpen}
-        steps={saveSteps}
-        onClose={() => setSaveDialogOpen(false)}
-      />
-      <Dialog
-        open={!!reimportDialog}
-        onOpenChange={(open) => {
-          if (!open && !reimportApplying) setReimportDialog(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Update this record from file</DialogTitle>
-          </DialogHeader>
-          <DialogBody className='space-y-3'>
-            {reimportDialog && (
-              <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-                {reimportDialog.diff.updates.length} will update · {reimportDialog.diff.creates.length} new ·{' '}
-                {reimportDialog.diff.deletes.length} will delete · {reimportDialog.diff.matchedUnchanged} unchanged
-              </p>
-            )}
-            {reimportDialog && <ImportIssuesPanel issues={reimportDialog.result.issues} />}
-          </DialogBody>
-          <DialogFooter>
-            <Button
-              variant='outline'
-              onClick={() => setReimportDialog(null)}
-              disabled={reimportApplying}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={async () => {
-                if (!reimportDialog) return
-                setReimportApplying(true)
-                await applyReimportStaging(
-                  reimportDialog.diff,
-                  reimportDialog.result,
-                  reimportDialog.template,
-                  reimportDialog.existingRows
-                )
-                setReimportApplying(false)
-                setReimportDialog(null)
-              }}
-              disabled={reimportApplying}
-            >
-              {reimportApplying ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Apply to form'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
-        {showHeader && (
-          <header
-            className={cn(
-              'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 py-3.5 flex items-center gap-3',
-              headerClassName
-            )}
-          >
-            {onBack && (
-              <button
-                type='button'
-                onClick={onBack}
-                aria-label='Back'
-                className='shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-              >
-                <ArrowLeft aria-hidden className='h-4 w-4' />
-              </button>
-            )}
-            <div className='flex min-w-0 flex-col'>
-              <div className='group/title flex items-center gap-1.5'>
-                <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
-                  {isNew ? `New ${singularTitle}` : itemTitle}
-                </h1>
-                {!isNew && itemTitle && (
-                  copiedHeaderField === '__title__'
-                    ? <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                    : (
-                      <button
-                        type='button'
-                        className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
-                        onClick={() => {
-                          navigator.clipboard.writeText(itemTitle ?? '').catch(() => {})
-                          setCopiedHeaderField('__title__')
-                          setTimeout(() => setCopiedHeaderField((prev) => prev === '__title__' ? null : prev), 1500)
-                        }}
-                      >
-                        <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                      </button>
-                    )
-                )}
-              </div>
-              {lastTouchText && (
-                <p
-                  className='mt-0.5 text-[10.5px] text-slate-400 dark:text-slate-500'
-                  data-tip={lastTouch ? new Date(lastTouch.timestamp).toLocaleString() : undefined}
-                  data-last-touch
-                >
-                  {lastTouchText}
-                </p>
-              )}
-              {subtitleParts.length > 0 && (
-                <div className='group/subtitle mt-0.5 flex items-center gap-1'>
-                  {/* Capped to 350px on one line — a long subtitle used to wrap
+                            <TipLayer />
+                            <SaveProgressDialog
+                              open={saveDialogOpen}
+                              steps={saveSteps}
+                              onClose={() => setSaveDialogOpen(false)}
+                            />
+                            <Dialog
+                              open={!!reimportDialog}
+                              onOpenChange={(open) => {
+                                if (!open && !reimportApplying) setReimportDialog(null)
+                              }}
+                            >
+                              <DialogContent>
+                                <DialogHeader>
+                                  <DialogTitle>Update this record from file</DialogTitle>
+                                </DialogHeader>
+                                <DialogBody className='space-y-3'>
+                                  {reimportDialog && (
+                                    <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                                      {reimportDialog.diff.updates.length} will update ·{' '}
+                                      {reimportDialog.diff.creates.length} new ·{' '}
+                                      {reimportDialog.diff.deletes.length} will delete ·{' '}
+                                      {reimportDialog.diff.matchedUnchanged} unchanged
+                                    </p>
+                                  )}
+                                  {reimportDialog && (
+                                    <ImportIssuesPanel issues={reimportDialog.result.issues} />
+                                  )}
+                                </DialogBody>
+                                <DialogFooter>
+                                  <Button
+                                    variant='outline'
+                                    onClick={() => setReimportDialog(null)}
+                                    disabled={reimportApplying}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    onClick={async () => {
+                                      if (!reimportDialog) return
+                                      setReimportApplying(true)
+                                      await applyReimportStaging(
+                                        reimportDialog.diff,
+                                        reimportDialog.result,
+                                        reimportDialog.template,
+                                        reimportDialog.existingRows
+                                      )
+                                      setReimportApplying(false)
+                                      setReimportDialog(null)
+                                    }}
+                                    disabled={reimportApplying}
+                                  >
+                                    {reimportApplying ? (
+                                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                    ) : (
+                                      'Apply to form'
+                                    )}
+                                  </Button>
+                                </DialogFooter>
+                              </DialogContent>
+                            </Dialog>
+                            <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
+                              {showHeader && (
+                                <header
+                                  className={cn(
+                                    'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 py-3.5 flex items-center gap-3',
+                                    headerClassName
+                                  )}
+                                >
+                                  {onBack && (
+                                    <button
+                                      type='button'
+                                      onClick={onBack}
+                                      aria-label='Back'
+                                      className='shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                                    >
+                                      <ArrowLeft aria-hidden className='h-4 w-4' />
+                                    </button>
+                                  )}
+                                  <div className='flex min-w-0 flex-col'>
+                                    <div className='group/title flex items-center gap-1.5'>
+                                      <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
+                                        {isNew ? `New ${singularTitle}` : itemTitle}
+                                      </h1>
+                                      {!isNew &&
+                                        itemTitle &&
+                                        (copiedHeaderField === '__title__' ? (
+                                          <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                        ) : (
+                                          <button
+                                            type='button'
+                                            className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
+                                            onClick={() => {
+                                              navigator.clipboard
+                                                .writeText(itemTitle ?? '')
+                                                .catch(() => {})
+                                              setCopiedHeaderField('__title__')
+                                              setTimeout(
+                                                () =>
+                                                  setCopiedHeaderField((prev) =>
+                                                    prev === '__title__' ? null : prev
+                                                  ),
+                                                1500
+                                              )
+                                            }}
+                                          >
+                                            <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
+                                          </button>
+                                        ))}
+                                    </div>
+                                    {lastTouchText && (
+                                      <p
+                                        className='mt-0.5 flex items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
+                                        data-tip={
+                                          lastTouch
+                                            ? new Date(lastTouch.timestamp).toLocaleString()
+                                            : undefined
+                                        }
+                                        data-last-touch
+                                      >
+                                        {lastTouchText}
+                                        {/* Admin-only: the route 403s everyone else anyway. */}
+                                        {isAdmin && !isNew && itemId && (
+                                          <RecordViewersChip
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                          />
+                                        )}
+                                      </p>
+                                    )}
+                                    {subtitleParts.length > 0 && (
+                                      <div className='group/subtitle mt-0.5 flex items-center gap-1'>
+                                        {/* Capped to 350px on one line — a long subtitle used to wrap
                       and push the whole header taller. The full text rides in
                       data-tip, so hovering shows it instantly (TipLayer). */}
-                  <div
-                    data-tip={subtitleFullText}
-                    className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
-                  >
-                  {subtitleParts.map((p, i) => {
-                    const weightClass = p.weight === 'bold' ? 'font-bold' : p.weight === 'semibold' ? 'font-semibold' : p.weight === 'medium' ? 'font-medium' : 'font-normal'
-                    const colorClass = p.color === 'cyan' ? 'text-nvr-cyan' : p.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : p.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : p.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : p.color === 'red' ? 'text-red-600 dark:text-red-400' : p.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'
-                    const isPill = p.display_as === 'pill'
-                    const isTag = p.display_as === 'tag'
-                    const sep = subtitleConfig?.separator ?? ' | '
-                    return (
-                      <span key={i} className='inline-flex items-center gap-1 align-middle'>
-                        {i > 0 && !isPill && !isTag && <span className='text-[11px] text-slate-300 dark:text-slate-600'>{sep}</span>}
-                        <span className={[
-                          'text-[12px]',
-                          weightClass,
-                          colorClass,
-                          isPill ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]' : '',
-                          isTag ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]' : '',
-                        ].filter(Boolean).join(' ')}>
-                          {p.value}
-                        </span>
-                      </span>
-                    )
-                  })}
-                  </div>
-                  {copiedHeaderField === '__subtitle__'
-                    ? <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                    : (
-                      <button
-                        type='button'
-                        className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
-                        onClick={() => {
-                          navigator.clipboard.writeText(subtitleFullText).catch(() => {})
-                          setCopiedHeaderField('__subtitle__')
-                          setTimeout(() => setCopiedHeaderField((prev) => prev === '__subtitle__' ? null : prev), 1500)
-                        }}
-                      >
-                        <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                      </button>
-                    )
-                  }
-                </div>
-              )}
-            </div>
-            <div className='ml-auto flex items-center gap-1.5'>
-              {isNew && (
-                <ImportFromFileButton collection={collection} onParsed={applyImportResult} />
-              )}
-              {!isNew && (
-                <ImportFromFileButton
-                  collection={collection}
-                  templateFilter={(t) => t.reimport?.enabled === true}
-                  getLabel={(t) => t.reimport?.button_label ?? t.button_label}
-                  onParsed={handleReimportParsed}
-                />
-              )}
-              {!isNew && itemId && (
-                <RecordSubscribeButton collection={collection} itemId={String(itemId)} />
-              )}
-              {!isNew && itemId && (
-                <RecordChatActions collection={collection} itemDraft={draft} />
-              )}
-              {!isNew && itemId && onDuplicate && (
-                <button
-                  type='button'
-                  title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
-                  onClick={async () => {
-                    // Copy what a person would re-create: plain scalars + M2O
-                    // FKs, the M2M link sets (Zone, funding years…), and the
-                    // O2M grids' child rows. Excluded: id, audit stamps,
-                    // auto-id fields (they regenerate), computed fields
-                    // (server re-derives), attachments.
-                    const AUDIT = new Set([
-                      'id', 'user_created', 'date_created', 'user_updated', 'date_updated',
-                      'created_at', 'updated_at', 'created', 'changed', 'creator', 'last_state_change'
-                    ])
-                    // Only fields the form actually SHOWS copy — hidden columns
-                    // are integration/system state (external ids, status
-                    // mirrors) that must not follow the record.
-                    const copyable = new Set<string>()
-                    const skip = new Set<string>(AUDIT)
-                    for (const fc of fieldConfig ?? []) {
-                      const opts = fc.options as Record<string, unknown> | null
-                      if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) skip.add(fc.field)
-                      if ((fc as { computed_type?: string | null }).computed_type) skip.add(fc.field)
-                      const readonlyFc = Boolean((fc as { readonly?: boolean }).readonly)
-                      const noDupe = Boolean(
-                        opts && typeof opts === 'object' && (opts as { no_duplicate?: unknown }).no_duplicate
-                      )
-                      if (
-                        !fc.hidden &&
-                        !readonlyFc &&
-                        !noDupe &&
-                        (fc as { layout_assigned?: boolean }).layout_assigned !== false
-                      ) {
-                        copyable.add(fc.field)
-                      }
-                    }
-                    const values: Record<string, unknown> = {}
-                    for (const [k, v] of Object.entries(draft)) {
-                      if (!copyable.has(k) || skip.has(k) || k.includes('.') || k.startsWith('__')) continue
-                      if (v === undefined || v === null || v === '') continue
-                      if (typeof v === 'object') continue
-                      values[k] = v
-                    }
-                    // M2M links — every alias's committed id set, staged on the
-                    // new form exactly like hand-picked selections.
-                    const links: Record<string, unknown[]> = {}
-                    for (const [aliasField, info] of m2mAliasFieldsForRules.entries()) {
-                      // Attachments never copy — file links belong to the original.
-                      if (aliasField === 'files' || /_files$/i.test(info.manyCollection)) continue
-                      const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
-                      if (ids.length) links[info.stagingKey] = ids
-                    }
-                    // O2M child rows for the grids this layout shows (files
-                    // and audit children are not grids, so they never copy).
-                    const rows: Record<string, Array<Record<string, unknown>>> = {}
-                    const CHILD_SKIP = [
-                      'id', 'user_created', 'date_created', 'user_updated', 'date_updated',
-                      'created_at', 'updated_at', 'created', 'changed', 'creator'
-                    ]
-                    for (const fc of fieldConfig ?? []) {
-                      if (fc.hidden) continue
-                      const rel = (relations ?? []).find(
-                        (r) =>
-                          r.one_collection === collection &&
-                          !r.junction_field &&
-                          (r.one_field === fc.field || r.many_collection === fc.field)
-                      )
-                      if (!rel?.many_collection || !rel.many_field) continue
-                      const key = `${rel.many_collection}.${rel.many_field}`
-                      if (rows[key]) continue
-                      try {
-                        const res = (await client.request(
-                          get<{ data: Array<Record<string, unknown>> }>(`/items/${rel.many_collection}`, {
-                            limit: 200,
-                            filter: JSON.stringify({ [rel.many_field]: { _eq: itemId } })
-                          })
-                        )) as { data: Array<Record<string, unknown>> }
-                        const childRows = (res.data ?? []).map((r0) => {
-                          const c = { ...r0 }
-                          for (const k of CHILD_SKIP) delete c[k]
-                          delete c[rel.many_field as string]
-                          for (const k of Object.keys(c)) {
-                            if (c[k] === null || typeof c[k] === 'object') delete c[k]
-                          }
-                          return c
-                        })
-                        if (childRows.length) rows[key] = childRows
-                      } catch {
-                        /* a grid that fails to read just doesn't copy */
-                      }
-                    }
-                    onDuplicate({ values, links, rows })
-                  }}
-                  className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                  data-duplicate-record
-                >
-                  <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
-                    <rect x='9' y='9' width='13' height='13' rx='2'/>
-                    <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/>
-                  </svg>
-                  Duplicate
-                </button>
-              )}
-              {showItemActions && !isNew && (
-                <ItemActionButtons collection={collection} itemId={String(itemId)} />
-              )}
-              {!isNew && itemId && fileLayouts.map((fl) => (
-                <Button
-                  key={fl.id}
-                  type='button'
-                  variant='outline'
-                  size='sm'
-                  disabled={pdfLoading === fl.id}
-                  onClick={() => void downloadPdf(fl.id)}
-                  className='gap-1.5'
-                >
-                  {pdfLoading === fl.id ? (
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                  ) : (
-                    <FileDown className='h-3.5 w-3.5' />
-                  )}
-                  {fl.pdf_button_label || 'Export PDF'}
-                </Button>
-              ))}
-              {(effectiveShowRevisions && !isNew) || (effectiveShowClone && !isNew && isAdmin) || canDelete ? (
-                <>
-                  {effectiveShowRevisions && !isNew && (
-                    <RevisionsPanel
-                      collection={collection}
-                      item={itemId}
-                      onRollback={() =>
-                        qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
-                      }
-                    />
-                  )}
-                  <ChangeReasonDialog
-                    challenge={crChallenge}
-                    fieldLabel={(f) => {
-                      const fc = allFields.find((af) => af.field === f)
-                      return fc?.label || titleCase(f)
-                    }}
-                    onCancel={() => setCrChallenge(null)}
-                    onSubmit={(reason) => {
-                      changeReasonRef.current = reason
-                      setCrChallenge(null)
-                      saveMut.mutate()
-                    }}
-                  />
-                  {isAdmin && !isNew && itemId && (
-                    <>
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        onClick={() => setRawEditOpen(true)}
-                        title='Edit every field with conditional logic bypassed (admin)'
-                        className='gap-1.5'
-                      >
-                        <Wrench className='h-3.5 w-3.5' />
-                        Raw edit
-                      </Button>
-                      <RawEditSheet
-                        collection={collection}
-                        itemId={String(itemId)}
-                        open={rawEditOpen}
-                        onClose={() => setRawEditOpen(false)}
-                        onSaved={() => {
-                          qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
-                        }}
-                      />
-                    </>
-                  )}
-                  {effectiveShowClone && !isNew && isAdmin && (
-                    <CloneDialog
-                      collection={collection}
-                      itemId={itemId}
-                      fields={fieldConfig ?? []}
-                      relations={relations}
-                      currentValues={itemData ?? {}}
-                      onSuccess={(newId) => onSaved?.(String(newId))}
-                    />
-                  )}
-                  {canDelete &&
-                    (confirmDelete ? (
-                      <>
-                        <span className='text-sm text-muted-foreground'>Delete?</span>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='destructive'
-                          className='gap-1.5'
-                          onClick={() => deleteMut.mutate()}
-                          disabled={deleteMut.isPending}
-                        >
-                          {deleteMut.isPending ? (
-                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                          ) : (
-                            'Yes, delete'
-                          )}
-                        </Button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='outline'
-                          onClick={() => setConfirmDelete(false)}
-                        >
-                          Cancel
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        className='gap-1.5 text-destructive hover:text-destructive'
-                        onClick={() => setConfirmDelete(true)}
-                      >
-                        <Trash2 className='h-3.5 w-3.5' />
-                      </Button>
-                    ))}
-                  <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
-                </>
-              ) : null}
-              {!isStepsMode && (
-                <div className='relative'>
-                  {isDirty && !saveMut.isPending && (
-                    <span className='absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
-                  )}
-                  <Button
-                    type='button'
-                    size='sm'
-                    onClick={() => handleSave()}
-                    disabled={saveMut.isPending || isReadOnly}
-                    className='gap-1.5'
-                  >
-                    {saveMut.isPending ? (
-                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                    ) : (
-                      <Save className='h-3.5 w-3.5' />
-                    )}
-                    {isNew ? 'Create' : 'Save'}
-                  </Button>
-                </div>
-              )}
-              {!isNew && addendumEnabled && addendumData.length > 0 && (
-                <div className='relative'>
-                  <button
-                    type='button'
-                    onClick={() => setAddendumViewDropdownOpen(o => !o)}
-                    className={cn(
-                      'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
-                      viewingAddendum
-                        ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
-                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
-                    )}
-                    title='Choose which version the form and actions apply to'
-                  >
-                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', viewingAddendum ? 'bg-amber-400' : 'bg-slate-400')} />
-                    <span className='max-w-[160px] truncate'>
-                      {viewingAddendum
-                        ? (addendumData.find(a => a.id === addendumViewId)?.title ?? 'Addendum')
-                        : 'Viewing: Original'}
-                    </span>
-                    <ChevronDown className='h-3 w-3 opacity-60' />
-                  </button>
-                  {addendumViewDropdownOpen && (
-                    <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
-                      <button
-                        type='button'
-                        onClick={() => { setAddendumViewId('original'); setAddendumViewDropdownOpen(false) }}
-                        className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]', addendumViewId === 'original' && 'font-semibold text-slate-900 dark:text-slate-100')}
-                      >
-                        <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
-                        Original
-                      </button>
-                      {addendumData.map(a => (
-                        <button
-                          key={a.id}
-                          type='button'
-                          onClick={() => { setAddendumViewId(a.id); setAddendumViewDropdownOpen(false) }}
-                          className={cn('flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10', addendumViewId === a.id && 'font-semibold text-amber-900 dark:text-amber-300')}
-                        >
-                          <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', a.status === 'approved' ? 'bg-emerald-400' : a.status === 'rejected' ? 'bg-red-400' : 'bg-amber-400')} />
-                          <span className='flex-1 truncate'>{a.title}</span>
-                          <span className='text-[10px] capitalize text-slate-400'>{a.status}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              {!isNew && showPipeline && (!isStepsMode || viewingAddendum) && (
-                <PipelineTransitionButtons
-                  key={`${pipelineCollection}:${pipelineItem}`}
-                  collection={pipelineCollection}
-                  item={pipelineItem}
-                  // Same as the header buttons: save first, then transition.
-                  onBeforeTransition={async () => {
-                    if (!validateAll()) return false
-                    if (!isDirty) return true
-                    try {
-                      await saveMut.mutateAsync()
-                      return true
-                    } catch {
-                      return false
-                    }
-                  }}
-                />
-              )}
-            </div>
-          </header>
-        )}
+                                        <div
+                                          data-tip={subtitleFullText}
+                                          className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
+                                        >
+                                          {subtitleParts.map((p, i) => {
+                                            const weightClass =
+                                              p.weight === 'bold'
+                                                ? 'font-bold'
+                                                : p.weight === 'semibold'
+                                                  ? 'font-semibold'
+                                                  : p.weight === 'medium'
+                                                    ? 'font-medium'
+                                                    : 'font-normal'
+                                            const colorClass =
+                                              p.color === 'cyan'
+                                                ? 'text-nvr-cyan'
+                                                : p.color === 'blue'
+                                                  ? 'text-blue-600 dark:text-blue-400'
+                                                  : p.color === 'green'
+                                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                                    : p.color === 'amber'
+                                                      ? 'text-amber-600 dark:text-amber-400'
+                                                      : p.color === 'red'
+                                                        ? 'text-red-600 dark:text-red-400'
+                                                        : p.color === 'purple'
+                                                          ? 'text-purple-600 dark:text-purple-400'
+                                                          : 'text-slate-500 dark:text-slate-400'
+                                            const isPill = p.display_as === 'pill'
+                                            const isTag = p.display_as === 'tag'
+                                            const sep = subtitleConfig?.separator ?? ' | '
+                                            return (
+                                              <span
+                                                key={i}
+                                                className='inline-flex items-center gap-1 align-middle'
+                                              >
+                                                {i > 0 && !isPill && !isTag && (
+                                                  <span className='text-[11px] text-slate-300 dark:text-slate-600'>
+                                                    {sep}
+                                                  </span>
+                                                )}
+                                                <span
+                                                  className={[
+                                                    'text-[12px]',
+                                                    weightClass,
+                                                    colorClass,
+                                                    isPill
+                                                      ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]'
+                                                      : '',
+                                                    isTag
+                                                      ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]'
+                                                      : ''
+                                                  ]
+                                                    .filter(Boolean)
+                                                    .join(' ')}
+                                                >
+                                                  {p.value}
+                                                </span>
+                                              </span>
+                                            )
+                                          })}
+                                        </div>
+                                        {copiedHeaderField === '__subtitle__' ? (
+                                          <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                        ) : (
+                                          <button
+                                            type='button'
+                                            className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
+                                            onClick={() => {
+                                              navigator.clipboard
+                                                .writeText(subtitleFullText)
+                                                .catch(() => {})
+                                              setCopiedHeaderField('__subtitle__')
+                                              setTimeout(
+                                                () =>
+                                                  setCopiedHeaderField((prev) =>
+                                                    prev === '__subtitle__' ? null : prev
+                                                  ),
+                                                1500
+                                              )
+                                            }}
+                                          >
+                                            <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className='ml-auto flex items-center gap-1.5'>
+                                    {isNew && (
+                                      <ImportFromFileButton
+                                        collection={collection}
+                                        onParsed={applyImportResult}
+                                      />
+                                    )}
+                                    {!isNew && (
+                                      <ImportFromFileButton
+                                        collection={collection}
+                                        templateFilter={(t) => t.reimport?.enabled === true}
+                                        getLabel={(t) => t.reimport?.button_label ?? t.button_label}
+                                        onParsed={handleReimportParsed}
+                                      />
+                                    )}
+                                    {!isNew && itemId && (
+                                      <RecordSubscribeButton
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {!isNew && itemId && (
+                                      <RecordChatActions
+                                        collection={collection}
+                                        itemDraft={draft}
+                                      />
+                                    )}
+                                    {!isNew && itemId && onDuplicate && (
+                                      <button
+                                        type='button'
+                                        title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                        onClick={async () => {
+                                          // Copy what a person would re-create: plain scalars + M2O
+                                          // FKs, the M2M link sets (Zone, funding years…), and the
+                                          // O2M grids' child rows. Excluded: id, audit stamps,
+                                          // auto-id fields (they regenerate), computed fields
+                                          // (server re-derives), attachments.
+                                          const AUDIT = new Set([
+                                            'id',
+                                            'user_created',
+                                            'date_created',
+                                            'user_updated',
+                                            'date_updated',
+                                            'created_at',
+                                            'updated_at',
+                                            'created',
+                                            'changed',
+                                            'creator',
+                                            'last_state_change'
+                                          ])
+                                          // Only fields the form actually SHOWS copy — hidden columns
+                                          // are integration/system state (external ids, status
+                                          // mirrors) that must not follow the record.
+                                          const copyable = new Set<string>()
+                                          const skip = new Set<string>(AUDIT)
+                                          for (const fc of fieldConfig ?? []) {
+                                            const opts = fc.options as Record<
+                                              string,
+                                              unknown
+                                            > | null
+                                            if (
+                                              opts &&
+                                              typeof opts === 'object' &&
+                                              (opts as { auto_id?: unknown }).auto_id
+                                            )
+                                              skip.add(fc.field)
+                                            if (
+                                              (fc as { computed_type?: string | null })
+                                                .computed_type
+                                            )
+                                              skip.add(fc.field)
+                                            const readonlyFc = Boolean(
+                                              (fc as { readonly?: boolean }).readonly
+                                            )
+                                            const noDupe = Boolean(
+                                              opts &&
+                                                typeof opts === 'object' &&
+                                                (opts as { no_duplicate?: unknown }).no_duplicate
+                                            )
+                                            if (
+                                              !fc.hidden &&
+                                              !readonlyFc &&
+                                              !noDupe &&
+                                              (fc as { layout_assigned?: boolean })
+                                                .layout_assigned !== false
+                                            ) {
+                                              copyable.add(fc.field)
+                                            }
+                                          }
+                                          const values: Record<string, unknown> = {}
+                                          for (const [k, v] of Object.entries(draft)) {
+                                            if (
+                                              !copyable.has(k) ||
+                                              skip.has(k) ||
+                                              k.includes('.') ||
+                                              k.startsWith('__')
+                                            )
+                                              continue
+                                            if (v === undefined || v === null || v === '') continue
+                                            if (typeof v === 'object') continue
+                                            values[k] = v
+                                          }
+                                          // M2M links — every alias's committed id set, staged on the
+                                          // new form exactly like hand-picked selections.
+                                          const links: Record<string, unknown[]> = {}
+                                          for (const [
+                                            aliasField,
+                                            info
+                                          ] of m2mAliasFieldsForRules.entries()) {
+                                            // Attachments never copy — file links belong to the original.
+                                            if (
+                                              aliasField === 'files' ||
+                                              /_files$/i.test(info.manyCollection)
+                                            )
+                                              continue
+                                            const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
+                                            if (ids.length) links[info.stagingKey] = ids
+                                          }
+                                          // O2M child rows for the grids this layout shows (files
+                                          // and audit children are not grids, so they never copy).
+                                          const rows: Record<
+                                            string,
+                                            Array<Record<string, unknown>>
+                                          > = {}
+                                          const CHILD_SKIP = [
+                                            'id',
+                                            'user_created',
+                                            'date_created',
+                                            'user_updated',
+                                            'date_updated',
+                                            'created_at',
+                                            'updated_at',
+                                            'created',
+                                            'changed',
+                                            'creator'
+                                          ]
+                                          for (const fc of fieldConfig ?? []) {
+                                            if (fc.hidden) continue
+                                            const rel = (relations ?? []).find(
+                                              (r) =>
+                                                r.one_collection === collection &&
+                                                !r.junction_field &&
+                                                (r.one_field === fc.field ||
+                                                  r.many_collection === fc.field)
+                                            )
+                                            if (!rel?.many_collection || !rel.many_field) continue
+                                            const key = `${rel.many_collection}.${rel.many_field}`
+                                            if (rows[key]) continue
+                                            try {
+                                              const res = (await client.request(
+                                                get<{ data: Array<Record<string, unknown>> }>(
+                                                  `/items/${rel.many_collection}`,
+                                                  {
+                                                    limit: 200,
+                                                    filter: JSON.stringify({
+                                                      [rel.many_field]: { _eq: itemId }
+                                                    })
+                                                  }
+                                                )
+                                              )) as { data: Array<Record<string, unknown>> }
+                                              const childRows = (res.data ?? []).map((r0) => {
+                                                const c = { ...r0 }
+                                                for (const k of CHILD_SKIP) delete c[k]
+                                                delete c[rel.many_field as string]
+                                                for (const k of Object.keys(c)) {
+                                                  if (c[k] === null || typeof c[k] === 'object')
+                                                    delete c[k]
+                                                }
+                                                return c
+                                              })
+                                              if (childRows.length) rows[key] = childRows
+                                            } catch {
+                                              /* a grid that fails to read just doesn't copy */
+                                            }
+                                          }
+                                          onDuplicate({ values, links, rows })
+                                        }}
+                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                        data-duplicate-record
+                                      >
+                                        <svg
+                                          width='13'
+                                          height='13'
+                                          viewBox='0 0 24 24'
+                                          fill='none'
+                                          stroke='currentColor'
+                                          strokeWidth='2'
+                                          strokeLinecap='round'
+                                          strokeLinejoin='round'
+                                          aria-hidden='true'
+                                        >
+                                          <rect x='9' y='9' width='13' height='13' rx='2' />
+                                          <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                        </svg>
+                                        Duplicate
+                                      </button>
+                                    )}
+                                    {showItemActions && !isNew && (
+                                      <ItemActionButtons
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {!isNew &&
+                                      itemId &&
+                                      fileLayouts.map((fl) => (
+                                        <Button
+                                          key={fl.id}
+                                          type='button'
+                                          variant='outline'
+                                          size='sm'
+                                          disabled={pdfLoading === fl.id}
+                                          onClick={() => void downloadPdf(fl.id)}
+                                          className='gap-1.5'
+                                        >
+                                          {pdfLoading === fl.id ? (
+                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                          ) : (
+                                            <FileDown className='h-3.5 w-3.5' />
+                                          )}
+                                          {fl.pdf_button_label || 'Export PDF'}
+                                        </Button>
+                                      ))}
+                                    {(effectiveShowRevisions && !isNew) ||
+                                    (effectiveShowClone && !isNew && isAdmin) ||
+                                    canDelete ? (
+                                      <>
+                                        {effectiveShowRevisions && !isNew && (
+                                          <RevisionsPanel
+                                            collection={collection}
+                                            item={itemId}
+                                            onRollback={() =>
+                                              qc.invalidateQueries({
+                                                queryKey: ['item', collection, itemId]
+                                              })
+                                            }
+                                          />
+                                        )}
+                                        <ChangeReasonDialog
+                                          challenge={crChallenge}
+                                          fieldLabel={(f) => {
+                                            const fc = allFields.find((af) => af.field === f)
+                                            return fc?.label || titleCase(f)
+                                          }}
+                                          onCancel={() => setCrChallenge(null)}
+                                          onSubmit={(reason) => {
+                                            changeReasonRef.current = reason
+                                            setCrChallenge(null)
+                                            saveMut.mutate()
+                                          }}
+                                        />
+                                        {isAdmin && !isNew && itemId && (
+                                          <>
+                                            <Button
+                                              type='button'
+                                              variant='outline'
+                                              size='sm'
+                                              onClick={() => setRawEditOpen(true)}
+                                              title='Edit every field with conditional logic bypassed (admin)'
+                                              className='gap-1.5'
+                                            >
+                                              <Wrench className='h-3.5 w-3.5' />
+                                              Raw edit
+                                            </Button>
+                                            <RawEditSheet
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              open={rawEditOpen}
+                                              onClose={() => setRawEditOpen(false)}
+                                              onSaved={() => {
+                                                qc.invalidateQueries({
+                                                  queryKey: ['item', collection, String(itemId)]
+                                                })
+                                              }}
+                                            />
+                                          </>
+                                        )}
+                                        {effectiveShowClone && !isNew && isAdmin && (
+                                          <CloneDialog
+                                            collection={collection}
+                                            itemId={itemId}
+                                            fields={fieldConfig ?? []}
+                                            relations={relations}
+                                            currentValues={itemData ?? {}}
+                                            onSuccess={(newId) => onSaved?.(String(newId))}
+                                          />
+                                        )}
+                                        {canDelete &&
+                                          (confirmDelete ? (
+                                            <>
+                                              <span className='text-sm text-muted-foreground'>
+                                                Delete?
+                                              </span>
+                                              <Button
+                                                type='button'
+                                                size='sm'
+                                                variant='destructive'
+                                                className='gap-1.5'
+                                                onClick={() => deleteMut.mutate()}
+                                                disabled={deleteMut.isPending}
+                                              >
+                                                {deleteMut.isPending ? (
+                                                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                ) : (
+                                                  'Yes, delete'
+                                                )}
+                                              </Button>
+                                              <Button
+                                                type='button'
+                                                size='sm'
+                                                variant='outline'
+                                                onClick={() => setConfirmDelete(false)}
+                                              >
+                                                Cancel
+                                              </Button>
+                                            </>
+                                          ) : (
+                                            <Button
+                                              type='button'
+                                              size='sm'
+                                              variant='outline'
+                                              className='gap-1.5 text-destructive hover:text-destructive'
+                                              onClick={() => setConfirmDelete(true)}
+                                            >
+                                              <Trash2 className='h-3.5 w-3.5' />
+                                            </Button>
+                                          ))}
+                                        <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
+                                      </>
+                                    ) : null}
+                                    {!isStepsMode && (
+                                      <div className='relative'>
+                                        {isDirty && !saveMut.isPending && (
+                                          <span className='absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                                        )}
+                                        <Button
+                                          type='button'
+                                          size='sm'
+                                          onClick={() => handleSave()}
+                                          disabled={saveMut.isPending || isReadOnly}
+                                          className='gap-1.5'
+                                        >
+                                          {saveMut.isPending ? (
+                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                          ) : (
+                                            <Save className='h-3.5 w-3.5' />
+                                          )}
+                                          {isNew ? 'Create' : 'Save'}
+                                        </Button>
+                                      </div>
+                                    )}
+                                    {!isNew && addendumEnabled && addendumData.length > 0 && (
+                                      <div className='relative'>
+                                        <button
+                                          type='button'
+                                          onClick={() => setAddendumViewDropdownOpen((o) => !o)}
+                                          className={cn(
+                                            'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
+                                            viewingAddendum
+                                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
+                                              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
+                                          )}
+                                          title='Choose which version the form and actions apply to'
+                                        >
+                                          <span
+                                            className={cn(
+                                              'h-1.5 w-1.5 shrink-0 rounded-full',
+                                              viewingAddendum ? 'bg-amber-400' : 'bg-slate-400'
+                                            )}
+                                          />
+                                          <span className='max-w-[160px] truncate'>
+                                            {viewingAddendum
+                                              ? (addendumData.find((a) => a.id === addendumViewId)
+                                                  ?.title ?? 'Addendum')
+                                              : 'Viewing: Original'}
+                                          </span>
+                                          <ChevronDown className='h-3 w-3 opacity-60' />
+                                        </button>
+                                        {addendumViewDropdownOpen && (
+                                          <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
+                                            <button
+                                              type='button'
+                                              onClick={() => {
+                                                setAddendumViewId('original')
+                                                setAddendumViewDropdownOpen(false)
+                                              }}
+                                              className={cn(
+                                                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]',
+                                                addendumViewId === 'original' &&
+                                                  'font-semibold text-slate-900 dark:text-slate-100'
+                                              )}
+                                            >
+                                              <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
+                                              Original
+                                            </button>
+                                            {addendumData.map((a) => (
+                                              <button
+                                                key={a.id}
+                                                type='button'
+                                                onClick={() => {
+                                                  setAddendumViewId(a.id)
+                                                  setAddendumViewDropdownOpen(false)
+                                                }}
+                                                className={cn(
+                                                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10',
+                                                  addendumViewId === a.id &&
+                                                    'font-semibold text-amber-900 dark:text-amber-300'
+                                                )}
+                                              >
+                                                <span
+                                                  className={cn(
+                                                    'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                    a.status === 'approved'
+                                                      ? 'bg-emerald-400'
+                                                      : a.status === 'rejected'
+                                                        ? 'bg-red-400'
+                                                        : 'bg-amber-400'
+                                                  )}
+                                                />
+                                                <span className='flex-1 truncate'>{a.title}</span>
+                                                <span className='text-[10px] capitalize text-slate-400'>
+                                                  {a.status}
+                                                </span>
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!isNew &&
+                                      showPipeline &&
+                                      (!isStepsMode || viewingAddendum) && (
+                                        <PipelineTransitionButtons
+                                          key={`${pipelineCollection}:${pipelineItem}`}
+                                          collection={pipelineCollection}
+                                          item={pipelineItem}
+                                          // Same as the header buttons: save first, then transition.
+                                          onBeforeTransition={async () => {
+                                            if (!validateAll()) return false
+                                            if (!isDirty) return true
+                                            try {
+                                              await saveMut.mutateAsync()
+                                              return true
+                                            } catch {
+                                              return false
+                                            }
+                                          }}
+                                        />
+                                      )}
+                                  </div>
+                                </header>
+                              )}
 
-        {showHeader && (headerWidgets.length > 0 || headerFields.length > 0) && (
-          <div className='flex shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
-            {[
-              ...headerWidgets.map((w) => ({ type: 'widget' as const, sort: w.sort, key: w.field, data: w })),
-              ...headerFields.map((f) => ({ type: 'field' as const, sort: f.sort, key: f.field, data: f })),
-            ]
-              .sort((a, b) => a.sort - b.sort)
-              .map((item) => {
-                const copyCell = (el: HTMLElement | null, field: string) => {
-                  if (!el) return
-                  const clone = el.cloneNode(true) as HTMLElement
-                  clone.querySelectorAll('[data-copy-skip], button').forEach((n) => n.remove())
-                  const text = clone.textContent?.trim() ?? ''
-                  if (text) {
-                    navigator.clipboard.writeText(text).catch(() => {})
-                    setCopiedHeaderField(field)
-                    setTimeout(() => setCopiedHeaderField((prev) => prev === field ? null : prev), 1500)
-                  }
-                }
+                              {showHeader &&
+                                (headerWidgets.length > 0 || headerFields.length > 0) && (
+                                  <div className='flex shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
+                                    {[
+                                      ...headerWidgets.map((w) => ({
+                                        type: 'widget' as const,
+                                        sort: w.sort,
+                                        key: w.field,
+                                        data: w
+                                      })),
+                                      ...headerFields.map((f) => ({
+                                        type: 'field' as const,
+                                        sort: f.sort,
+                                        key: f.field,
+                                        data: f
+                                      }))
+                                    ]
+                                      .sort((a, b) => a.sort - b.sort)
+                                      .map((item) => {
+                                        const copyCell = (
+                                          el: HTMLElement | null,
+                                          field: string
+                                        ) => {
+                                          if (!el) return
+                                          const clone = el.cloneNode(true) as HTMLElement
+                                          clone
+                                            .querySelectorAll('[data-copy-skip], button')
+                                            .forEach((n) => n.remove())
+                                          const text = clone.textContent?.trim() ?? ''
+                                          if (text) {
+                                            navigator.clipboard.writeText(text).catch(() => {})
+                                            setCopiedHeaderField(field)
+                                            setTimeout(
+                                              () =>
+                                                setCopiedHeaderField((prev) =>
+                                                  prev === field ? null : prev
+                                                ),
+                                              1500
+                                            )
+                                          }
+                                        }
 
-                if (item.type === 'widget') {
-                  const w = item.data
-                  const isBtnGroup = headerWidgetTypes[w.field] === 'button-group'
-                  return (
-                    <div key={w.field} className='group relative self-stretch border-r border-slate-200 dark:border-border'>
-                      <WidgetSlot
-                        widgetId={w.widgetId}
-                        inputBindings={w.inputBindings}
-                        itemDraft={effectiveDraft}
-                        itemCollection={collection}
-                        label={w.label ?? undefined}
-                        compact={true}
-                        strip={true}
-                        onWidgetType={(t) => setHeaderWidgetTypes(prev => ({ ...prev, [w.field]: t }))}
-                      />
-                      {!isBtnGroup && (copiedHeaderField === w.field
-                        ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                        : (
-                          <button
-                            type='button'
-                            className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                            onClick={(e) => copyCell(e.currentTarget.closest<HTMLElement>('.group'), w.field)}
-                          >
-                            <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                          </button>
-                        )
-                      )}
-                    </div>
-                  )
-                }
-                const f = item.data
-                if (f.field === '__owners__') {
-                  return (
-                    <div key='__owners__' className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'>
-                      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
-                      <div className='mt-1'>
-                        <OwnersInlineCompact collection={collection} itemId={itemId} />
-                      </div>
-                      {copiedHeaderField === '__owners__'
-                        ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                        : (
-                          <button
-                            type='button'
-                            className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                            onClick={(e) => copyCell(e.currentTarget.closest<HTMLElement>('.group'), '__owners__')}
-                          >
-                            <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                          </button>
-                        )
-                      }
-                    </div>
-                  )
-                }
-                // M2M alias fields have no draft column — their value is the
-                // committed junction id set the form already tracks (same
-                // source SummaryPanel uses). Without this every M2M header
-                // field renders '—' regardless of how many links exist.
-                const aliasState = m2mAliasFieldStates[f.field]
-                // A rollup header reads the live total while its grid is on
-                // screen; otherwise the stored value, which is what the server
-                // will recalculate to anyway.
-                const liveRollup = liveRollupValues.get(f.field)
-                const raw = aliasState
-                  ? aliasState.ids
-                  : (liveRollup ?? effectiveDraft[f.field])
-                // Addendum view: a header value the addendum CHANGES reads amber,
-                // matching the proposed-change styling everywhere else.
-                const changedByAddendum =
-                  viewingAddendum &&
-                  !aliasState &&
-                  addendumViewData != null &&
-                  f.field in addendumViewData &&
-                  String(draft[f.field] ?? '') !== String(addendumViewData[f.field] ?? '')
-                const hColorClass = changedByAddendum ? 'text-amber-600 dark:text-amber-400' : f.color === 'cyan' ? 'text-nvr-cyan' : f.color === 'blue' ? 'text-blue-600 dark:text-blue-400' : f.color === 'green' ? 'text-emerald-600 dark:text-emerald-400' : f.color === 'amber' ? 'text-amber-600 dark:text-amber-400' : f.color === 'red' ? 'text-red-600 dark:text-red-400' : f.color === 'purple' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-900 dark:text-slate-100'
-                const hWeightClass = f.weight === 'bold' ? 'font-bold' : f.weight === 'semibold' ? 'font-semibold' : f.weight === 'medium' ? 'font-medium' : 'font-semibold'
-                const textCls = `${hColorClass} ${hWeightClass}`
-                const isPill = f.displayAs === 'pill'
-                const isTag = f.displayAs === 'tag'
-                return (
-                  <div
-                    key={f.field}
-                    data-header-field={f.field}
-                    // self-stretch so the label sits the same distance from the
-                    // top as a widget cell's. The row is items-center, and a
-                    // widget stat cell already stretches to full height — a
-                    // centred field chip is shorter, so its label landed a few
-                    // pixels lower and the two read as misaligned.
-                    className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
-                  >
-                    <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>{f.label}</span>
-                    <span className={['mt-1 leading-tight truncate max-w-[220px] pb-px', isPill ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10` : isTag ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}` : ''].filter(Boolean).join(' ')}>
-                      {(() => {
-                        const inner = f.cmsField
-                          ? <StripFieldValue field={f.cmsField} val={raw} relations={relations} collection={collection} displayFormat={f.displayFormat} textClassName={textCls} />
-                          : <span className={`text-[13px] ${textCls}`}>{formatHeaderFieldValue(raw, f.displayFormat)}</span>
-                        // Configured link template ({{value}} + any {{field}} from
-                        // the draft) turns the header value into an external link
-                        // — how e.g. an MWF ID deep-links to the MWF system with
-                        // zero hardcoding (Table Editor header chip ⚙ → Link URL).
-                        const linkTemplate = (f as { linkTemplate?: string }).linkTemplate
-                        if (!linkTemplate || raw === null || raw === undefined || raw === '' || Array.isArray(raw)) return inner
-                        const href = linkTemplate
-                          .replace(/\{\{\s*value\s*\}\}/g, encodeURIComponent(String(raw)))
-                          .replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => encodeURIComponent(String(draft[k] ?? '')))
-                        if (!/^https?:\/\//i.test(href)) return inner
-                        return (
-                          <a
-                            href={href}
-                            target='_blank'
-                            rel='noopener noreferrer'
-                            className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {inner}
-                          </a>
-                        )
-                      })()}
-                    </span>
-                    {copiedHeaderField === f.field
-                      ? <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                      : (
-                        <button
-                          type='button'
-                          className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                          onClick={(e) => {
-                            const cell = e.currentTarget.closest<HTMLElement>('.group')
-                            const valueSpan = cell?.querySelectorAll<HTMLElement>(':scope > span')[1]
-                            let text = ''
-                            if (valueSpan) {
-                              const clone = valueSpan.cloneNode(true) as HTMLElement
-                              clone.querySelectorAll('[data-copy-skip]').forEach(el => el.remove())
-                              text = clone.textContent?.trim() ?? ''
-                            }
-                            if (text) {
-                              navigator.clipboard.writeText(text).catch(() => {})
-                              setCopiedHeaderField(f.field)
-                              setTimeout(() => setCopiedHeaderField(prev => prev === f.field ? null : prev), 1500)
-                            }
-                          }}
-                        >
-                          <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                        </button>
-                      )
-                    }
-                  </div>
-                )
-              })}
-            {!isNew && itemId && (
-              <div className='ml-auto self-center py-2 pl-3'>
-                <ExternalRequestsChip collection={collection} itemId={String(itemId)} />
-              </div>
-            )}
-          </div>
-        )}
+                                        if (item.type === 'widget') {
+                                          const w = item.data
+                                          const isBtnGroup =
+                                            headerWidgetTypes[w.field] === 'button-group'
+                                          return (
+                                            <div
+                                              key={w.field}
+                                              className='group relative self-stretch border-r border-slate-200 dark:border-border'
+                                            >
+                                              <WidgetSlot
+                                                widgetId={w.widgetId}
+                                                inputBindings={w.inputBindings}
+                                                itemDraft={effectiveDraft}
+                                                itemCollection={collection}
+                                                label={w.label ?? undefined}
+                                                compact={true}
+                                                strip={true}
+                                                onWidgetType={(t) =>
+                                                  setHeaderWidgetTypes((prev) => ({
+                                                    ...prev,
+                                                    [w.field]: t
+                                                  }))
+                                                }
+                                              />
+                                              {!isBtnGroup &&
+                                                (copiedHeaderField === w.field ? (
+                                                  <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                ) : (
+                                                  <button
+                                                    type='button'
+                                                    className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                    onClick={(e) =>
+                                                      copyCell(
+                                                        e.currentTarget.closest<HTMLElement>(
+                                                          '.group'
+                                                        ),
+                                                        w.field
+                                                      )
+                                                    }
+                                                  >
+                                                    <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                  </button>
+                                                ))}
+                                            </div>
+                                          )
+                                        }
+                                        const f = item.data
+                                        if (f.field === '__owners__') {
+                                          return (
+                                            <div
+                                              key='__owners__'
+                                              className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                            >
+                                              <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+                                                {f.label}
+                                              </span>
+                                              <div className='mt-1'>
+                                                <OwnersInlineCompact
+                                                  collection={collection}
+                                                  itemId={itemId}
+                                                />
+                                              </div>
+                                              {copiedHeaderField === '__owners__' ? (
+                                                <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                              ) : (
+                                                <button
+                                                  type='button'
+                                                  className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                  onClick={(e) =>
+                                                    copyCell(
+                                                      e.currentTarget.closest<HTMLElement>(
+                                                        '.group'
+                                                      ),
+                                                      '__owners__'
+                                                    )
+                                                  }
+                                                >
+                                                  <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                </button>
+                                              )}
+                                            </div>
+                                          )
+                                        }
+                                        // M2M alias fields have no draft column — their value is the
+                                        // committed junction id set the form already tracks (same
+                                        // source SummaryPanel uses). Without this every M2M header
+                                        // field renders '—' regardless of how many links exist.
+                                        const aliasState = m2mAliasFieldStates[f.field]
+                                        // A rollup header reads the live total while its grid is on
+                                        // screen; otherwise the stored value, which is what the server
+                                        // will recalculate to anyway.
+                                        const liveRollup = liveRollupValues.get(f.field)
+                                        const raw = aliasState
+                                          ? aliasState.ids
+                                          : (liveRollup ?? effectiveDraft[f.field])
+                                        // Addendum view: a header value the addendum CHANGES reads amber,
+                                        // matching the proposed-change styling everywhere else.
+                                        const changedByAddendum =
+                                          viewingAddendum &&
+                                          !aliasState &&
+                                          addendumViewData != null &&
+                                          f.field in addendumViewData &&
+                                          String(draft[f.field] ?? '') !==
+                                            String(addendumViewData[f.field] ?? '')
+                                        const hColorClass = changedByAddendum
+                                          ? 'text-amber-600 dark:text-amber-400'
+                                          : f.color === 'cyan'
+                                            ? 'text-nvr-cyan'
+                                            : f.color === 'blue'
+                                              ? 'text-blue-600 dark:text-blue-400'
+                                              : f.color === 'green'
+                                                ? 'text-emerald-600 dark:text-emerald-400'
+                                                : f.color === 'amber'
+                                                  ? 'text-amber-600 dark:text-amber-400'
+                                                  : f.color === 'red'
+                                                    ? 'text-red-600 dark:text-red-400'
+                                                    : f.color === 'purple'
+                                                      ? 'text-purple-600 dark:text-purple-400'
+                                                      : 'text-slate-900 dark:text-slate-100'
+                                        const hWeightClass =
+                                          f.weight === 'bold'
+                                            ? 'font-bold'
+                                            : f.weight === 'semibold'
+                                              ? 'font-semibold'
+                                              : f.weight === 'medium'
+                                                ? 'font-medium'
+                                                : 'font-semibold'
+                                        const textCls = `${hColorClass} ${hWeightClass}`
+                                        const isPill = f.displayAs === 'pill'
+                                        const isTag = f.displayAs === 'tag'
+                                        return (
+                                          <div
+                                            key={f.field}
+                                            data-header-field={f.field}
+                                            // self-stretch so the label sits the same distance from the
+                                            // top as a widget cell's. The row is items-center, and a
+                                            // widget stat cell already stretches to full height — a
+                                            // centred field chip is shorter, so its label landed a few
+                                            // pixels lower and the two read as misaligned.
+                                            className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                          >
+                                            <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+                                              {f.label}
+                                            </span>
+                                            <span
+                                              className={[
+                                                'mt-1 leading-tight truncate max-w-[220px] pb-px',
+                                                isPill
+                                                  ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
+                                                  : isTag
+                                                    ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
+                                                    : ''
+                                              ]
+                                                .filter(Boolean)
+                                                .join(' ')}
+                                            >
+                                              {(() => {
+                                                const inner = f.cmsField ? (
+                                                  <StripFieldValue
+                                                    field={f.cmsField}
+                                                    val={raw}
+                                                    relations={relations}
+                                                    collection={collection}
+                                                    displayFormat={f.displayFormat}
+                                                    textClassName={textCls}
+                                                  />
+                                                ) : (
+                                                  <span className={`text-[13px] ${textCls}`}>
+                                                    {formatHeaderFieldValue(raw, f.displayFormat)}
+                                                  </span>
+                                                )
+                                                // Configured link template ({{value}} + any {{field}} from
+                                                // the draft) turns the header value into an external link
+                                                // — how e.g. an MWF ID deep-links to the MWF system with
+                                                // zero hardcoding (Table Editor header chip ⚙ → Link URL).
+                                                const linkTemplate = (
+                                                  f as { linkTemplate?: string }
+                                                ).linkTemplate
+                                                if (
+                                                  !linkTemplate ||
+                                                  raw === null ||
+                                                  raw === undefined ||
+                                                  raw === '' ||
+                                                  Array.isArray(raw)
+                                                )
+                                                  return inner
+                                                const href = linkTemplate
+                                                  .replace(
+                                                    /\{\{\s*value\s*\}\}/g,
+                                                    encodeURIComponent(String(raw))
+                                                  )
+                                                  .replace(
+                                                    /\{\{\s*([\w.]+)\s*\}\}/g,
+                                                    (_m, k: string) =>
+                                                      encodeURIComponent(String(draft[k] ?? ''))
+                                                  )
+                                                if (!/^https?:\/\//i.test(href)) return inner
+                                                return (
+                                                  <a
+                                                    href={href}
+                                                    target='_blank'
+                                                    rel='noopener noreferrer'
+                                                    className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                                                    onClick={(e) => e.stopPropagation()}
+                                                  >
+                                                    {inner}
+                                                  </a>
+                                                )
+                                              })()}
+                                            </span>
+                                            {copiedHeaderField === f.field ? (
+                                              <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                            ) : (
+                                              <button
+                                                type='button'
+                                                className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                onClick={(e) => {
+                                                  const cell =
+                                                    e.currentTarget.closest<HTMLElement>('.group')
+                                                  const valueSpan =
+                                                    cell?.querySelectorAll<HTMLElement>(
+                                                      ':scope > span'
+                                                    )[1]
+                                                  let text = ''
+                                                  if (valueSpan) {
+                                                    const clone = valueSpan.cloneNode(
+                                                      true
+                                                    ) as HTMLElement
+                                                    clone
+                                                      .querySelectorAll('[data-copy-skip]')
+                                                      .forEach((el) => el.remove())
+                                                    text = clone.textContent?.trim() ?? ''
+                                                  }
+                                                  if (text) {
+                                                    navigator.clipboard
+                                                      .writeText(text)
+                                                      .catch(() => {})
+                                                    setCopiedHeaderField(f.field)
+                                                    setTimeout(
+                                                      () =>
+                                                        setCopiedHeaderField((prev) =>
+                                                          prev === f.field ? null : prev
+                                                        ),
+                                                      1500
+                                                    )
+                                                  }
+                                                }}
+                                              >
+                                                <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                              </button>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    {!isNew && itemId && (
+                                      <div className='ml-auto self-center py-2 pl-3'>
+                                        <ExternalRequestsChip
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
 
-        <div
-          className={cn(
-            'flex-1 min-h-0',
-            summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
-          )}
-        >
-          <div
-            ref={bodyRef}
-            className={cn(
-              'p-6 space-y-4',
-              summaryEnabled ? 'flex-1 overflow-y-auto' : ''
-            )}
-          >
-            {extraTopContent}
-            {!isNew && itemId && (
-              <RecordRecapStrip collection={collection} itemId={String(itemId)} />
-            )}
-            {importIssues.length > 0 && (
-              <ImportIssuesPanel issues={importIssues} onDismiss={() => setImportIssues([])} />
-            )}
-            {showLockBanner && (
-              <ItemLockBanner
-                lockHolder={lockHolder}
-                onTakeOver={takeOver}
-                takingOver={takingOver}
-                isAdmin={isAdmin}
-              />
-            )}
-            {staleBy && (
-              <div
-                className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
-                data-stale-record-banner
-              >
-                <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
-                <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
-                  <span className='font-semibold'>{staleBy}</span> changed this record while you had
-                  it open
-                  {userTouchedRef.current.size > 0
-                    ? ' — review their changes before saving, or your edits may overwrite theirs.'
-                    : ' — refresh to see the latest values.'}
-                </p>
-                <button
-                  type='button'
-                  onClick={refreshStaleRecord}
-                  className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
-                >
-                  {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
-                </button>
-              </div>
-            )}
-            {hasTabs ? (isStepsMode ? renderStepsMode() : renderTabMode()) : renderSectionMode()}
-            {extraBottomContent}
-          </div>
-          {summaryEnabled && (
-            <div className='flex shrink-0 border-l border-slate-200'>
-              <button
-                type='button'
-                onClick={() => setSummaryCollapsed(v => !v)}
-                title={summaryCollapsed ? 'Expand summary' : 'Collapse summary'}
-                className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
-              >
-                {summaryCollapsed
-                  ? <ChevronLeft className='h-3.5 w-3.5' />
-                  : <ChevronRight className='h-3.5 w-3.5' />}
-              </button>
-              <div
-                className='overflow-hidden transition-all duration-200'
-                style={{ width: summaryCollapsed ? 0 : 232 }}
-              >
-                <div className='w-[232px] overflow-y-auto h-full'>
-                  <SummaryPanel
-                    allSteps={allTabGroups.length > 0 ? allTabGroups.map((g) => ({ key: g.key, label: g.label })) : allSteps}
-                    groupedMap={groupedMap}
-                    ungroupedFields={ungroupedFields}
-                    sectionGroups={sectionGroups.filter((g) => g.type !== 'metadata')}
-                    draft={draft}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    staging={m2mStagingCtx}
-                    errors={validationErrors}
-                    staleFields={staleFields}
-                    // M2M alias values never live in the draft, so the panel
-                    // cannot judge them empty on its own — it would mark a
-                    // populated field "required". Hand it the state the form
-                    // already tracks, and say nothing while it is unsettled.
-                    aliasEmptiness={Object.fromEntries(
-                      Object.entries(m2mAliasFieldStates).map(([field, st]) => [
-                        field,
-                        st.known ? st.ids.length === 0 : null
-                      ])
-                    )}
-                    onFieldClick={(stepKey, fieldKey) => {
-                      // An empty step key means the field belongs to no step
-                      // (the Related child collections) — there is no tab to
-                      // open, so go straight to where it is rendered.
-                      if (stepKey) {
-                        if (hasContainers) {
-                          const ownerContainer = containerGroups.find((c) =>
-                            groups.some(
-                              (g) => g.type === 'tab' && g.container_id === c.id && g.key === stepKey
-                            )
-                          )
-                          if (ownerContainer) {
-                            setContainerTab(ownerContainer, stepKey)
-                            bodyRef.current?.scrollTo({ top: 0 })
-                          } else {
-                            setActiveTab(stepKey)
-                          }
-                        } else {
-                          setActiveTab(stepKey)
-                        }
-                      }
-                      // Switching a tab mounts that panel, and an inline grid
-                      // does not exist in the DOM until it does — one 80ms
-                      // shot missed it and the click read as doing nothing.
-                      // Poll briefly instead, then give up quietly.
-                      let tries = 0
-                      const find = () => {
-                        const el = (document.querySelector(`[data-field="${fieldKey}"]`) ??
-                          document.querySelector(
-                            `[data-header-field="${fieldKey}"]`
-                          )) as HTMLElement | null
-                        if (!el) {
-                          if (tries++ < 12) setTimeout(find, 60)
-                          return
-                        }
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        el.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
-                        setTimeout(
-                          () =>
-                            el.classList.remove(
-                              'ring-2',
-                              'ring-nvr-cyan',
-                              'ring-offset-2',
-                              'rounded-md'
-                            ),
-                          1500
-                        )
-                        // Only pull focus for a field you can actually type
-                        // in; focusing a grid's first button scrolls it back
-                        // out from under the highlight.
-                        const input = el.querySelector('input,textarea,select') as HTMLElement | null
-                        input?.focus()
-                      }
-                      setTimeout(find, 60)
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </M2MStagingContext.Provider>
-    </StagedRelationsContext.Provider>
-    </LiveRowsContext.Provider>
-    </O2MStagingContext.Provider>
-    </StaleFieldReportContext.Provider>
-    </GridFlushContext.Provider>
-    </ParentDraftContext.Provider>
-    </AddendumFieldContext.Provider>
-    </AddendumViewContext.Provider>
-    </AddendumO2MContext.Provider>
-    </RelationPathDataContext.Provider>
+                              <div
+                                className={cn(
+                                  'flex-1 min-h-0',
+                                  summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
+                                )}
+                              >
+                                <div
+                                  ref={bodyRef}
+                                  className={cn(
+                                    'p-6 space-y-4',
+                                    summaryEnabled ? 'flex-1 overflow-y-auto' : ''
+                                  )}
+                                >
+                                  {extraTopContent}
+                                  {!isNew && itemId && (
+                                    <RecordRecapStrip
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                    />
+                                  )}
+                                  {importIssues.length > 0 && (
+                                    <ImportIssuesPanel
+                                      issues={importIssues}
+                                      onDismiss={() => setImportIssues([])}
+                                    />
+                                  )}
+                                  {showLockBanner && (
+                                    <ItemLockBanner
+                                      lockHolder={lockHolder}
+                                      onTakeOver={takeOver}
+                                      takingOver={takingOver}
+                                      isAdmin={isAdmin}
+                                    />
+                                  )}
+                                  {staleBy && (
+                                    <div
+                                      className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+                                      data-stale-record-banner
+                                    >
+                                      <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
+                                      <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+                                        <span className='font-semibold'>{staleBy}</span> changed
+                                        this record while you had it open
+                                        {userTouchedRef.current.size > 0
+                                          ? ' — review their changes before saving, or your edits may overwrite theirs.'
+                                          : ' — refresh to see the latest values.'}
+                                      </p>
+                                      <button
+                                        type='button'
+                                        onClick={refreshStaleRecord}
+                                        className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                                      >
+                                        {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
+                                      </button>
+                                    </div>
+                                  )}
+                                  {hasTabs
+                                    ? isStepsMode
+                                      ? renderStepsMode()
+                                      : renderTabMode()
+                                    : renderSectionMode()}
+                                  {extraBottomContent}
+                                </div>
+                                {summaryEnabled && (
+                                  <div className='flex shrink-0 border-l border-slate-200'>
+                                    <button
+                                      type='button'
+                                      onClick={() => setSummaryCollapsed((v) => !v)}
+                                      title={
+                                        summaryCollapsed ? 'Expand summary' : 'Collapse summary'
+                                      }
+                                      className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
+                                    >
+                                      {summaryCollapsed ? (
+                                        <ChevronLeft className='h-3.5 w-3.5' />
+                                      ) : (
+                                        <ChevronRight className='h-3.5 w-3.5' />
+                                      )}
+                                    </button>
+                                    <div
+                                      className='overflow-hidden transition-all duration-200'
+                                      style={{ width: summaryCollapsed ? 0 : 232 }}
+                                    >
+                                      <div className='w-[232px] overflow-y-auto h-full'>
+                                        <SummaryPanel
+                                          allSteps={
+                                            allTabGroups.length > 0
+                                              ? allTabGroups.map((g) => ({
+                                                  key: g.key,
+                                                  label: g.label
+                                                }))
+                                              : allSteps
+                                          }
+                                          groupedMap={groupedMap}
+                                          ungroupedFields={ungroupedFields}
+                                          sectionGroups={sectionGroups.filter(
+                                            (g) => g.type !== 'metadata'
+                                          )}
+                                          draft={draft}
+                                          relations={relations}
+                                          collection={collection}
+                                          itemId={itemId}
+                                          staging={m2mStagingCtx}
+                                          errors={validationErrors}
+                                          staleFields={staleFields}
+                                          // M2M alias values never live in the draft, so the panel
+                                          // cannot judge them empty on its own — it would mark a
+                                          // populated field "required". Hand it the state the form
+                                          // already tracks, and say nothing while it is unsettled.
+                                          aliasEmptiness={Object.fromEntries(
+                                            Object.entries(m2mAliasFieldStates).map(
+                                              ([field, st]) => [
+                                                field,
+                                                st.known ? st.ids.length === 0 : null
+                                              ]
+                                            )
+                                          )}
+                                          onFieldClick={(stepKey, fieldKey) => {
+                                            // An empty step key means the field belongs to no step
+                                            // (the Related child collections) — there is no tab to
+                                            // open, so go straight to where it is rendered.
+                                            if (stepKey) {
+                                              if (hasContainers) {
+                                                const ownerContainer = containerGroups.find((c) =>
+                                                  groups.some(
+                                                    (g) =>
+                                                      g.type === 'tab' &&
+                                                      g.container_id === c.id &&
+                                                      g.key === stepKey
+                                                  )
+                                                )
+                                                if (ownerContainer) {
+                                                  setContainerTab(ownerContainer, stepKey)
+                                                  bodyRef.current?.scrollTo({ top: 0 })
+                                                } else {
+                                                  setActiveTab(stepKey)
+                                                }
+                                              } else {
+                                                setActiveTab(stepKey)
+                                              }
+                                            }
+                                            // Switching a tab mounts that panel, and an inline grid
+                                            // does not exist in the DOM until it does — one 80ms
+                                            // shot missed it and the click read as doing nothing.
+                                            // Poll briefly instead, then give up quietly.
+                                            let tries = 0
+                                            const find = () => {
+                                              const el = (document.querySelector(
+                                                `[data-field="${fieldKey}"]`
+                                              ) ??
+                                                document.querySelector(
+                                                  `[data-header-field="${fieldKey}"]`
+                                                )) as HTMLElement | null
+                                              if (!el) {
+                                                if (tries++ < 12) setTimeout(find, 60)
+                                                return
+                                              }
+                                              el.scrollIntoView({
+                                                behavior: 'smooth',
+                                                block: 'center'
+                                              })
+                                              el.classList.add(
+                                                'ring-2',
+                                                'ring-nvr-cyan',
+                                                'ring-offset-2',
+                                                'rounded-md'
+                                              )
+                                              setTimeout(
+                                                () =>
+                                                  el.classList.remove(
+                                                    'ring-2',
+                                                    'ring-nvr-cyan',
+                                                    'ring-offset-2',
+                                                    'rounded-md'
+                                                  ),
+                                                1500
+                                              )
+                                              // Only pull focus for a field you can actually type
+                                              // in; focusing a grid's first button scrolls it back
+                                              // out from under the highlight.
+                                              const input = el.querySelector(
+                                                'input,textarea,select'
+                                              ) as HTMLElement | null
+                                              input?.focus()
+                                            }
+                                            setTimeout(find, 60)
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </M2MStagingContext.Provider>
+                        </StagedRelationsContext.Provider>
+                      </LiveRowsContext.Provider>
+                    </O2MStagingContext.Provider>
+                  </StaleFieldReportContext.Provider>
+                </GridFlushContext.Provider>
+              </ParentDraftContext.Provider>
+            </AddendumFieldContext.Provider>
+          </AddendumViewContext.Provider>
+        </AddendumO2MContext.Provider>
+      </RelationPathDataContext.Provider>
     </ReimportHandlerContext.Provider>
   )
 }

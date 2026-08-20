@@ -589,8 +589,50 @@ function ImportWizard({
   const [idField, setIdField] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [savedMappingNote, setSavedMappingNote] = useState<string | null>(null)
+  const mappingLookupRef = useRef<string | null>(null)
 
   const { headers, rows, rowCount } = useMemo(() => parseCsvPreview(csv), [csv])
+
+  // Mapping memory: the server remembers each (collection, header shape)'s
+  // last column mapping — creation IS the save, so re-importing the same
+  // shaped file starts fully mapped. Applied only while the map is still
+  // untouched; a hand-corrected mapping is never clobbered.
+  useEffect(() => {
+    if (!collection || headers.length === 0) return
+    const key = `${collection}|${headers.join('\u0001')}`
+    if (mappingLookupRef.current === key) return
+    mappingLookupRef.current = key
+    client
+      .request<{
+        data: {
+          column_map: Record<string, string>
+          id_field: string | null
+          duplicate_strategy: string | null
+          updated_at: string | null
+        } | null
+      }>(post('/imports/mappings/lookup', { collection, headers }))
+      .then((r) => {
+        const saved = r.data
+        if (!saved) return
+        setColumnMap((current) => {
+          if (Object.values(current).some((v) => v?.trim())) return current
+          const next: Record<string, string> = {}
+          for (const h of headers) if (saved.column_map[h]) next[h] = saved.column_map[h]
+          if (Object.keys(next).length === 0) return current
+          setSavedMappingNote(
+            saved.updated_at
+              ? `Applied your saved mapping from ${new Date(saved.updated_at).toLocaleDateString()}`
+              : 'Applied your saved mapping'
+          )
+          if (saved.id_field) setIdField((cur) => cur || saved.id_field || '')
+          if (saved.duplicate_strategy)
+            setStrategy((cur) => (cur === 'skip' ? saved.duplicate_strategy || cur : cur))
+          return next
+        })
+      })
+      .catch(() => {})
+  }, [collection, headers, client])
 
   // Diff preview — the server classifies every row (new / unchanged /
   // changed / conflict) against the live collection WITHOUT writing, using
@@ -744,6 +786,7 @@ function ImportWizard({
   }
 
   const mappedCount = headers.filter((h) => columnMap[h]?.trim()).length
+  const mappingNote = savedMappingNote
   const canAdvance =
     step === 0 ? headers.length > 0 : step === 1 ? !!collection && mappedCount > 0 : true
 
@@ -985,6 +1028,11 @@ function ImportWizard({
             </div>
             <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               {mappedCount} of {headers.length} columns mapped — unmapped columns are ignored.
+              {mappingNote && (
+                <span className='ml-1.5 rounded bg-sky-500/10 px-1.5 py-0.5 text-[10.5px] font-medium text-sky-700 dark:text-sky-400'>
+                  {mappingNote}
+                </span>
+              )}
             </p>
           </div>
         )}

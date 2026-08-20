@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
@@ -312,8 +312,55 @@ interface CreateJobInput {
   created_by: string | null
 }
 
+/** Header signature for mapping memory: sorted + lowercased so column order
+ *  (which re-exports shuffle freely) never splits one shape into two. */
+function headerSignature(headers: string[]): string {
+  return createHash('sha256')
+    .update(
+      headers
+        .map((h) => h.trim().toLowerCase())
+        .sort()
+        .join('\u0001')
+    )
+    .digest('hex')
+}
+
+/** Remember this import's mapping for the next same-shaped file — creation
+ *  IS the save, so the wizard never needs an explicit "save mapping" step.
+ *  Best-effort: memory must never block an import. */
+async function rememberMapping(input: CreateJobInput): Promise<void> {
+  try {
+    if (!input.column_map || Object.keys(input.column_map).length === 0) return
+    const firstLine = String(input.csv_data).split(/\r?\n/)[0] ?? ''
+    const headers = parseCSVLine(firstLine)
+    if (headers.length === 0) return
+    const hash = headerSignature(headers)
+    const row = {
+      headers: JSON.stringify(headers),
+      column_map: JSON.stringify(input.column_map),
+      id_field: input.id_field ?? null,
+      duplicate_strategy: input.duplicate_strategy ?? null,
+      updated_by: input.created_by,
+      updated_at: new Date()
+    }
+    const updated = await db('nivaro_import_mappings')
+      .where({ collection: input.collection, header_hash: hash })
+      .update(row)
+    if (!updated) {
+      await db('nivaro_import_mappings').insert({
+        collection: input.collection,
+        header_hash: hash,
+        ...row
+      })
+    }
+  } catch {
+    /* memory is a convenience, never a failure */
+  }
+}
+
 async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
   const id = randomUUID()
+  void rememberMapping(input)
 
   await db('nivaro_import_jobs').insert({
     id,
@@ -394,6 +441,29 @@ export async function importsRoutes(app: FastifyInstance) {
    * ("100.0" vs 100 is not a change). Field-level old→new diffs return for
    * the first 50 changed/conflicted rows.
    */
+  /** Mapping memory lookup: "have we mapped this file shape before?" The
+   *  wizard calls it right after parsing headers and auto-applies a hit. */
+  app.post('/mappings/lookup', async (req, reply) => {
+    const body = req.body as { collection?: string; headers?: string[] }
+    const collection = String(body?.collection ?? '')
+    const headers = Array.isArray(body?.headers) ? body.headers.map(String) : []
+    if (!collection || headers.length === 0) {
+      return reply.code(400).send({ error: 'collection and headers are required' })
+    }
+    const row = await db('nivaro_import_mappings')
+      .where({ collection, header_hash: headerSignature(headers) })
+      .first()
+    if (!row) return reply.send({ data: null })
+    return reply.send({
+      data: {
+        column_map: JSON.parse(String(row.column_map)) as Record<string, string>,
+        id_field: row.id_field ?? null,
+        duplicate_strategy: row.duplicate_strategy ?? null,
+        updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : null
+      }
+    })
+  })
+
   app.post('/preview', async (req, reply) => {
     const body = req.body as {
       collection?: string
