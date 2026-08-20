@@ -610,7 +610,9 @@ export interface SessionRecording {
 }
 
 /** Is session recording enabled instance-wide? (Recorders no-op when false.) */
-export function sessionRecordingEnabled(): Command<{ data: { enabled: boolean } }> {
+export function sessionRecordingEnabled(): Command<{
+  data: { enabled: boolean; error_replay?: boolean }
+}> {
   return cmd('GET', '/session-recordings/enabled')
 }
 

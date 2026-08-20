@@ -73,7 +73,8 @@ function cacheKey(
   layoutId?: number,
   layoutSlug?: string
 ): string {
-  if (layoutSlug) return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::slug=${layoutSlug}`
+  if (layoutSlug)
+    return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::slug=${layoutSlug}`
   return `${clientUrl}::${collection}::${includeHidden ? 'h' : ''}::${layoutId ?? 'active'}`
 }
 
@@ -142,7 +143,10 @@ export async function fetchSchema(
     client.request<{ data: CMSCollectionResponse }>(get(`/collections/${collection}`)),
     client
       .request<{ data: ActiveLayoutData }>(
-        get('/collection-layouts/active', layoutSlug ? { collection, slug: layoutSlug } : { collection })
+        get(
+          '/collection-layouts/active',
+          layoutSlug ? { collection, slug: layoutSlug } : { collection }
+        )
       )
       .catch(() => ({
         data: {

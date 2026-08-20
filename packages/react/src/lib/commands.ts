@@ -11,6 +11,10 @@ export function post<T>(path: string, body?: unknown): Command<T> {
   return { _method: 'POST', _path: path, _body: body } as Command<T>
 }
 
+export function put<T>(path: string, body?: unknown): Command<T> {
+  return { _method: 'PUT', _path: path, _body: body } as Command<T>
+}
+
 export function patch<T>(path: string, body?: unknown): Command<T> {
   return { _method: 'PATCH', _path: path, _body: body } as Command<T>
 }
