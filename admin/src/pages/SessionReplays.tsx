@@ -437,6 +437,7 @@ interface PersonGroup {
   name: string
   recordings: Recording[]
   totalBytes: number
+  count: number
   lastActive: string
   live: boolean
 }
@@ -558,6 +559,7 @@ export function SessionReplaysPage() {
       name: p.user_name || p.user.slice(0, 8),
       recordings: [],
       totalBytes: Number(p.total_bytes ?? 0),
+      count: Number(p.recording_count ?? 0),
       lastActive: p.last_active,
       live: p.live === 1
     }))
@@ -728,7 +730,7 @@ export function SessionReplaysPage() {
                     {p.name}
                   </span>
                   <span className='block text-[11px] text-slate-400'>
-                    {p.recordings.length} session{p.recordings.length === 1 ? '' : 's'} ·{' '}
+                    {p.count} session{p.count === 1 ? '' : 's'} ·{' '}
                     {formatRelative(p.lastActive)}
                   </span>
                 </span>
@@ -766,13 +768,7 @@ export function SessionReplaysPage() {
                   {selected.name}
                 </h2>
                 <span className='text-[12px] text-slate-400'>
-                  {(peopleAgg.find((p) => p.user === selected.user)?.recording_count ??
-                    selectedFiltered.length)}{' '}
-                  session
-                  {(peopleAgg.find((p) => p.user === selected.user)?.recording_count ?? 0) === 1
-                    ? ''
-                    : 's'}{' '}
-                  ·{' '}
+                  {selected.count} session{selected.count === 1 ? '' : 's'} ·{' '}
                   {formatFileSize(selected.totalBytes)} recorded
                 </span>
               </div>
