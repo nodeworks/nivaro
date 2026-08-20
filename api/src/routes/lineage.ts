@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { readItems } from '../services/items.js'
 import { getLabels } from '../services/queues.js'
 import { can } from '../services/permissions.js'
 import { parseRollupFormula } from '../services/rollups.js'
@@ -94,16 +95,30 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
               rows: []
             }
           }
+          // The caller must be able to READ the child collection to see its
+          // rows — the parent's read permission covers the aggregate, not the
+          // per-row breakdown (labels + editors disclose more than a sum).
+          if (!(await can(req.user!, 'read', src.related_collection))) {
+            return {
+              collection: src.related_collection,
+              aggregate: src.aggregate,
+              restricted: true,
+              note: 'You can read the total but not the contributing records.',
+              rows: []
+            }
+          }
           try {
-            const q = db(src.related_collection).where(src.fk_field, item as never)
-            // Reuse the exact null-safe filter semantics the recalc uses, by
-            // fetching raw rows and filtering only via the value read — the
-            // rollup service's filter helper is private, so simple filters
-            // re-apply here conservatively: unknown shapes fetch unfiltered
-            // and the subtotal states what it covers.
-            const cols = ['id']
-            if (src.value_field) cols.push(src.value_field)
-            const raw = (await q.select(cols).limit(200)) as Array<Record<string, unknown>>
+            // Through the items service, not raw knex: row-level security and
+            // User Scopes must narrow the listed contributions exactly as they
+            // narrow any other read of this collection.
+            const result = await readItems(req.user!, src.related_collection, {
+              filter: { [src.fk_field]: { _eq: item } },
+              fields: src.value_field ? ['id', src.value_field] : ['id'],
+              limit: 200
+            })
+            const raw = ((result as { data?: Array<Record<string, unknown>> }).data ??
+              result ??
+              []) as Array<Record<string, unknown>>
             // value_formula rows can't be recomputed cheaply here — surface
             // the rows with their base value_field where present.
             const ids = raw.map((r) => String(r.id))
