@@ -33,7 +33,11 @@ interface CascadeCheck {
   /** Parent is an M2M alias on the source collection (value = junction set). */
   parentIsM2M: boolean
   parentJunction?: { table: string; srcFk: string; tgtFk: string }
-  /** Target collection of the child M2O field. */
+  /** The cascaded field itself is an M2M alias — its "value" is the set of
+   *  linked ids, each of which must be available under the parent. */
+  childIsM2M: boolean
+  childJunction?: { table: string; srcFk: string; tgtFk: string }
+  /** Target collection the child value(s) point at. */
   target: string
   filter_column: string
   /** Filter column is an M2M alias on the TARGET collection. */
@@ -41,9 +45,16 @@ interface CascadeCheck {
   filterJunction?: { table: string; srcFk: string; tgtFk: string }
 }
 
+interface RequiredCheck {
+  field: string
+  label: string
+  kind: 'column' | 'm2m'
+  junction?: { table: string; srcFk: string; tgtFk: string }
+}
+
 interface CompiledChecks {
   collection: string
-  requiredFields: Array<{ field: string; label: string }>
+  requiredFields: RequiredCheck[]
   validation: Array<{ field: string; label: string; rules: ValidationRule[] }>
   cascades: CascadeCheck[]
   /** Rules present in config but not evaluable by this sweep. */
@@ -79,11 +90,13 @@ async function hasPhysicalColumn(table: string, column: string): Promise<boolean
 /** Resolve an M2M alias field to its junction wiring. The alias relation row
  *  carries junction_field as the pairing marker (many = junction table,
  *  many_field = fk to the alias's own collection, junction_field = fk to the
- *  target) — the same reading the auto-id and scope resolvers use. */
+ *  target) — the same reading the auto-id and scope resolvers use. The
+ *  companion leg (same junction, many_field = tgtFk) names the TARGET
+ *  collection when it exists. */
 async function resolveAlias(
   collection: string,
   alias: string
-): Promise<{ table: string; srcFk: string; tgtFk: string } | null> {
+): Promise<{ table: string; srcFk: string; tgtFk: string; target: string | null } | null> {
   const rel = (await db('nivaro_relations')
     .where({ one_collection: collection, one_field: alias })
     .whereNotNull('junction_field')
@@ -94,7 +107,41 @@ async function resolveAlias(
   if (![rel.many_collection, rel.many_field, rel.junction_field].every((v) => IDENT.test(v))) {
     return null
   }
-  return { table: rel.many_collection, srcFk: rel.many_field, tgtFk: rel.junction_field }
+  const companion = (await db('nivaro_relations')
+    .where({ many_collection: rel.many_collection, many_field: rel.junction_field })
+    .first('one_collection')) as { one_collection: string | null } | undefined
+  const target =
+    companion?.one_collection && IDENT.test(companion.one_collection)
+      ? companion.one_collection
+      : null
+  return { table: rel.many_collection, srcFk: rel.many_field, tgtFk: rel.junction_field, target }
+}
+
+/** Which grouped layouts show each field. A field absent from SOME grouped
+ *  layout is layout-dependent: records opened on that layout never see it,
+ *  so a required/validation finding would be a false positive for them (the
+ *  CAR/PUB workflows case — vendor is required on the default layout but the
+ *  pub-request layout has no vendor at all). */
+async function layoutPresence(
+  collection: string
+): Promise<{ layouts: Array<{ id: number; name: string }>; visibleOn: Map<string, Set<number>> }> {
+  const layouts = (await db('nivaro_collection_layouts')
+    .where({ collection, layout_type: 'grouped' })
+    .select('id', 'name')) as Array<{ id: number; name: string }>
+  const visibleOn = new Map<string, Set<number>>()
+  if (layouts.length === 0) return { layouts, visibleOn }
+  const assignments = (await db('nivaro_layout_field_assignments')
+    .whereIn(
+      'layout_id',
+      layouts.map((l) => l.id)
+    )
+    .where('is_visible', true)
+    .select('layout_id', 'field')) as Array<{ layout_id: number; field: string }>
+  for (const a of assignments) {
+    if (!visibleOn.has(a.field)) visibleOn.set(a.field, new Set())
+    visibleOn.get(a.field)?.add(a.layout_id)
+  }
+  return { layouts, visibleOn }
 }
 
 export async function compileChecks(collection: string): Promise<CompiledChecks> {
@@ -114,15 +161,46 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     cascades: [],
     skipped: []
   }
+  const { layouts, visibleOn } = await layoutPresence(collection)
+
+  // A form-entry rule (required/validation) only binds records whose layout
+  // actually SHOWS the field. With multiple grouped layouts we cannot know
+  // per record which one a host renders, so a field absent from any of them
+  // is layout-dependent — skipped honestly rather than flagged wrongly.
+  const onEveryLayout = (field: string): { ok: boolean; missing: string[] } => {
+    if (layouts.length === 0) return { ok: true, missing: [] }
+    const present = visibleOn.get(field) ?? new Set<number>()
+    const missing = layouts.filter((l) => !present.has(l.id)).map((l) => l.name)
+    return { ok: missing.length === 0, missing }
+  }
 
   for (const f of fields) {
     if (!IDENT.test(f.field)) continue
     if (f.required === true || f.required === 1) {
-      out.requiredFields.push({ field: f.field, label: label(f.field) })
+      const presence = onEveryLayout(f.field)
+      if (!presence.ok) {
+        out.skipped.push(
+          `${f.field}: required, but layout-dependent (not on ${presence.missing.join(', ')})`
+        )
+      } else {
+        const alias = await resolveAlias(collection, f.field)
+        out.requiredFields.push(
+          alias
+            ? { field: f.field, label: label(f.field), kind: 'm2m', junction: alias }
+            : { field: f.field, label: label(f.field), kind: 'column' }
+        )
+      }
     }
     const rules = parseJson<ValidationRule[]>(f.validation_rules)
     if (Array.isArray(rules) && rules.length > 0) {
-      out.validation.push({ field: f.field, label: label(f.field), rules })
+      const presence = onEveryLayout(f.field)
+      if (!presence.ok) {
+        out.skipped.push(
+          `${f.field}: validation rules, but layout-dependent (not on ${presence.missing.join(', ')})`
+        )
+      } else {
+        out.validation.push({ field: f.field, label: label(f.field), rules })
+      }
     }
     const dep = parseJson<{
       cascade_filters?: Array<{
@@ -139,12 +217,26 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         continue
       }
       if (!IDENT.test(c.parent_field) || !IDENT.test(c.filter_column)) continue
-      // Target collection of the child M2O field.
+      // The cascaded field is either a plain M2O column or an M2M alias —
+      // an alias's "value" is its junction set, each link checked.
+      let target: string | null = null
+      let childIsM2M = false
+      let childJunction: { table: string; srcFk: string; tgtFk: string } | undefined
       const m2o = (await db('nivaro_relations')
         .where({ many_collection: collection, many_field: f.field })
         .whereNull('junction_field')
         .first('one_collection')) as { one_collection: string | null } | undefined
-      if (!m2o?.one_collection || !IDENT.test(m2o.one_collection)) {
+      if (m2o?.one_collection && IDENT.test(m2o.one_collection)) {
+        target = m2o.one_collection
+      } else {
+        const childAlias = await resolveAlias(collection, f.field)
+        if (childAlias?.target) {
+          childIsM2M = true
+          childJunction = childAlias
+          target = childAlias.target
+        }
+      }
+      if (!target) {
         out.skipped.push(`${f.field}: cascade target unresolvable`)
         continue
       }
@@ -152,7 +244,9 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         field: f.field,
         parent_field: c.parent_field,
         parentIsM2M: false,
-        target: m2o.one_collection,
+        childIsM2M,
+        childJunction,
+        target,
         filter_column: c.filter_column,
         filterIsM2M: false
       }
@@ -223,10 +317,12 @@ async function evaluate(
 ): Promise<ConformanceSummary> {
   const { collection } = checks
   const columns = new Set<string>(['id'])
-  for (const r of checks.requiredFields) columns.add(r.field)
+  for (const r of checks.requiredFields) {
+    if (r.kind === 'column') columns.add(r.field)
+  }
   for (const v of checks.validation) columns.add(v.field)
   for (const c of checks.cascades) {
-    columns.add(c.field)
+    if (!c.childIsM2M) columns.add(c.field)
     if (!c.parentIsM2M) columns.add(c.parent_field)
   }
   // Only real columns survive — required flags on alias fields (M2M pickers)
@@ -263,7 +359,7 @@ async function evaluate(
     // ── required + validation, plain JS per row ──────────────────────────
     for (const row of rows) {
       for (const r of checks.requiredFields) {
-        if (!physical.has(r.field)) continue
+        if (r.kind !== 'column' || !physical.has(r.field)) continue
         const msg = applyValidationRule({ type: 'required' }, row[r.field], r.label)
         if (msg) findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
       }
@@ -279,10 +375,56 @@ async function evaluate(
       }
     }
 
+    // ── required M2M aliases: zero junction rows = empty ─────────────────
+    for (const r of checks.requiredFields) {
+      if (r.kind !== 'm2m' || !r.junction) continue
+      // NOTE: .distinct(col).select(col) doubles the column on mssql and the
+      // value comes back as a nested array (the chat-DM .pluck trap) — plain
+      // .distinct(col) alone selects it correctly.
+      const linked = new Set(
+        (
+          (await db(r.junction.table)
+            .whereIn(r.junction.srcFk, rows.map((x) => x.id) as never[])
+            .distinct(r.junction.srcFk)) as Array<Record<string, unknown>>
+        ).map((l) => String(l[r.junction?.srcFk ?? '']))
+      )
+      for (const row of rows) {
+        if (!linked.has(String(row.id))) {
+          findings.push({
+            item_id: String(row.id),
+            field: r.field,
+            rule: 'required',
+            message: `${r.label} has no linked records`
+          })
+        }
+      }
+    }
+
     // ── cascade availability, batched per rule ───────────────────────────
     for (const c of checks.cascades) {
-      if (!physical.has(c.field)) continue
+      if (!c.childIsM2M && !physical.has(c.field)) continue
       const rowIds = rows.map((r) => r.id)
+
+      // Child value(s) per row: a plain M2O reads the column; an M2M alias
+      // reads its junction set (each linked id must be available).
+      const childSets = new Map<string, Set<string>>()
+      if (c.childIsM2M && c.childJunction) {
+        const links = (await db(c.childJunction.table)
+          .whereIn(c.childJunction.srcFk, rowIds as never[])
+          .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<
+          Record<string, unknown>
+        >
+        for (const l of links) {
+          const key = String(l[c.childJunction.srcFk])
+          if (!childSets.has(key)) childSets.set(key, new Set())
+          childSets.get(key)?.add(String(l[c.childJunction.tgtFk]))
+        }
+      } else {
+        for (const row of rows) {
+          const v = row[c.field]
+          if (v != null && v !== '') childSets.set(String(row.id), new Set([String(v)]))
+        }
+      }
 
       // Parent value set per row.
       const parentSets = new Map<string, Set<string>>()
@@ -305,11 +447,7 @@ async function evaluate(
       }
 
       // Availability of the DISTINCT child values under each parent.
-      const childVals = [
-        ...new Set(
-          rows.map((r) => r[c.field]).filter((v) => v != null && v !== '')
-        )
-      ]
+      const childVals = [...new Set([...childSets.values()].flatMap((set) => [...set]))]
       if (childVals.length === 0) continue
       // childValue → the set of parent values it is available under
       const availability = new Map<string, Set<string>>()
@@ -335,20 +473,24 @@ async function evaluate(
       }
 
       for (const row of rows) {
-        const child = row[c.field]
-        if (child == null || child === '') continue
+        const children = childSets.get(String(row.id))
+        if (!children || children.size === 0) continue
         const parents = parentSets.get(String(row.id))
         // No parent value on the row: the picker would show all (or prune the
         // clause) — not a conformance failure.
         if (!parents || parents.size === 0) continue
-        const avail = availability.get(String(child))
-        const ok = !!avail && [...avail].some((a) => parents.has(a))
-        if (!ok) {
+        const bad = [...children].filter((child) => {
+          const avail = availability.get(child)
+          return !(avail && [...avail].some((a) => parents.has(a)))
+        })
+        if (bad.length > 0) {
           findings.push({
             item_id: String(row.id),
             field: c.field,
             rule: 'cascade',
-            message: `${label(c.field)} value is not an available option for the current ${label(c.parent_field)}`
+            message: c.childIsM2M
+              ? `${bad.length} linked ${label(c.field)} value(s) are not available options for the current ${label(c.parent_field)}`
+              : `${label(c.field)} value is not an available option for the current ${label(c.parent_field)}`
           })
         }
       }
@@ -364,16 +506,19 @@ async function evaluate(
         const labels = await getLabels(new Map([[collection, new Set(ids)]])).catch(
           () => ({}) as Record<string, string>
         )
-        await db('nivaro_conformance_findings').insert(
-          keep.map((f) => ({
-            run: runId,
-            item_id: f.item_id,
-            item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
-            field: f.field,
-            rule: f.rule,
-            message: f.message.slice(0, 1000)
-          }))
-        )
+        const inserts = keep.map((f) => ({
+          run: runId,
+          item_id: f.item_id,
+          item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
+          field: f.field,
+          rule: f.rule,
+          message: f.message.slice(0, 1000)
+        }))
+        // MSSQL caps bound parameters at ~2100 — 6 columns per row means a
+        // whole-chunk insert can blow it when most rows violate.
+        for (let i = 0; i < inserts.length; i += 200) {
+          await db('nivaro_conformance_findings').insert(inserts.slice(i, i + 200))
+        }
       }
       if (violations >= FINDINGS_CAP) {
         truncated = true
