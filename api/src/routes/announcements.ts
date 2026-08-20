@@ -250,6 +250,24 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       const html = `<p style="margin:0 0 12px;white-space:pre-wrap;">${message
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')}</p>`
+      // Per-user, per-channel receipts — "who got what and when" is the
+      // history's whole value, so every outcome (incl. no-address skips) is
+      // a row, not just a counter.
+      const receipts: Array<{
+        announcement: number
+        user: string
+        channel: string
+        status: 'sent' | 'failed' | 'skipped'
+        delivered_at: Date
+      }> = []
+      const record = (userId: string, channel: string, status: 'sent' | 'failed' | 'skipped') =>
+        receipts.push({
+          announcement: Number(id),
+          user: userId,
+          channel,
+          status,
+          delivered_at: new Date()
+        })
       for (const u of users) {
         let reached = false
         if (channels.includes('message')) {
@@ -260,24 +278,38 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
           })
             .then(() => {
               reached = true
+              record(u.id, 'message', 'sent')
             })
-            .catch(() => {})
+            .catch(() => record(u.id, 'message', 'failed'))
         }
-        if (channels.includes('email') && u.email) {
-          await sendRawMail({ to: u.email, subject, html })
-            .then(() => {
-              reached = true
-            })
-            .catch(() => {})
+        if (channels.includes('email')) {
+          if (!u.email) record(u.id, 'email', 'skipped')
+          else {
+            await sendRawMail({ to: u.email, subject, html })
+              .then(() => {
+                reached = true
+                record(u.id, 'email', 'sent')
+              })
+              .catch(() => record(u.id, 'email', 'failed'))
+          }
         }
-        if (channels.includes('sms') && u.phone) {
-          await sendSms(String(u.phone), `${subject}: ${message}`.slice(0, 500))
-            .then(() => {
-              reached = true
-            })
-            .catch(() => {})
+        if (channels.includes('sms')) {
+          if (!u.phone) record(u.id, 'sms', 'skipped')
+          else {
+            await sendSms(String(u.phone), `${subject}: ${message}`.slice(0, 500))
+              .then(() => {
+                reached = true
+                record(u.id, 'sms', 'sent')
+              })
+              .catch(() => record(u.id, 'sms', 'failed'))
+          }
         }
         if (reached) delivered++
+      }
+      for (let i = 0; i < receipts.length; i += 300) {
+        await db('nivaro_announcement_deliveries')
+          .insert(receipts.slice(i, i + 300))
+          .catch(() => {})
       }
       await db('nivaro_announcements').where('id', id).update({ delivered_count: delivered })
     }
@@ -292,6 +324,44 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     })
     return reply.code(201).send({ data: { id, delivered } })
   })
+
+  /** Who saw / received what, and when: banner dismissals (acks) + every
+   *  send-channel outcome per user. */
+  app.get<{ Params: { id: string } }>(
+    '/:id/receipts',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_announcements').where('id', req.params.id).first('id')
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const [acks, deliveries] = await Promise.all([
+        db('nivaro_announcement_acks as a')
+          .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+          .where('a.announcement', row.id)
+          .orderBy('a.acked_at', 'desc')
+          .select(
+            'a.acked_at',
+            db.raw(
+              "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
+            ),
+            'u.email as user_email'
+          ),
+        db('nivaro_announcement_deliveries as d')
+          .leftJoin('nivaro_users as u', 'u.id', 'd.user')
+          .where('d.announcement', row.id)
+          .orderBy('d.id', 'asc')
+          .select(
+            'd.channel',
+            'd.status',
+            'd.delivered_at',
+            db.raw(
+              "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
+            ),
+            'u.email as user_email'
+          )
+      ])
+      return { data: { acks, deliveries } }
+    }
+  )
 
   app.patch<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const row = await db('nivaro_announcements').where('id', req.params.id).first()

@@ -413,53 +413,145 @@ export function BroadcastView({ className }: { className?: string }) {
           <p className='text-[12px] text-slate-400'>Nothing sent yet.</p>
         )}
         {history.map((a) => (
-          <div
-            key={a.id}
-            className='flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
-          >
-            <span
-              className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', SEVERITY_DOT[a.severity])}
-            />
-            <div className='min-w-0 flex-1'>
-              {a.subject && (
-                <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-                  {a.subject}
-                </p>
-              )}
-              <p className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-                {a.message}
-              </p>
-              <p className='mt-0.5 text-[11px] text-slate-400'>
-                {(a.channels ?? []).join(' + ')}
-                {a.delivered_count != null && ` · reached ${a.delivered_count}`}
-                {` · seen by ${a.ack_count}`}
-                {a.created_at && ` · ${new Date(a.created_at).toLocaleString()}`}
-              </p>
-            </div>
-            {(a.channels ?? []).includes('banner') && (
-              <button
-                type='button'
-                onClick={() => patchRow.mutate({ id: a.id, body: { is_active: !a.is_active } })}
-                className={cn(
-                  'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium',
-                  a.is_active
-                    ? 'border-emerald-300 text-emerald-700 dark:border-emerald-500/40 dark:text-emerald-400'
-                    : 'border-slate-200 text-slate-400 dark:border-border'
-                )}
-              >
-                {a.is_active ? 'Live' : 'Off'}
-              </button>
-            )}
-            <button
-              type='button'
-              onClick={() => removeRow.mutate(a.id)}
-              className='shrink-0 text-[13px] text-slate-300 transition-colors hover:text-red-500'
-            >
-              ✕
-            </button>
-          </div>
+          <HistoryRow key={a.id} broadcast={a} onPatch={patchRow.mutate} onRemove={removeRow.mutate} />
         ))}
       </div>
+    </div>
+  )
+}
+
+/** One past broadcast, expandable into full receipts: banner dismissals
+ *  (who saw it, when) and every send-channel outcome per user. */
+function HistoryRow({
+  broadcast: a,
+  onPatch,
+  onRemove
+}: {
+  broadcast: Broadcast
+  onPatch: (v: { id: number; body: Record<string, unknown> }) => void
+  onRemove: (id: number) => void
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const { data: receipts } = useQuery<{
+    acks: Array<{ acked_at: string | null; user_name: string | null; user_email: string | null }>
+    deliveries: Array<{
+      channel: string
+      status: string
+      delivered_at: string | null
+      user_name: string | null
+      user_email: string | null
+    }>
+  }>({
+    queryKey: ['broadcast-receipts', a.id],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/announcements/${a.id}/receipts`))
+        .then((r) => r.data),
+    enabled: open,
+    staleTime: 30_000
+  })
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='flex items-start gap-3 px-4 py-3'>
+        <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', SEVERITY_DOT[a.severity])} />
+        <div className='min-w-0 flex-1'>
+          {a.subject && (
+            <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+              {a.subject}
+            </p>
+          )}
+          <p className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>{a.message}</p>
+          <p className='mt-0.5 text-[11px] text-slate-400'>
+            {(a.channels ?? []).join(' + ')}
+            {a.delivered_count != null && ` · reached ${a.delivered_count}`}
+            {` · seen by ${a.ack_count}`}
+            {a.created_at && ` · ${new Date(a.created_at).toLocaleString()}`}
+            {' · '}
+            <button
+              type='button'
+              onClick={() => setOpen((v) => !v)}
+              className='underline decoration-dotted underline-offset-2 hover:text-slate-600 dark:hover:text-muted-foreground'
+            >
+              {open ? 'hide receipts' : 'who saw this?'}
+            </button>
+          </p>
+        </div>
+        {(a.channels ?? []).includes('banner') && (
+          <button
+            type='button'
+            onClick={() => onPatch({ id: a.id, body: { is_active: !a.is_active } })}
+            className={cn(
+              'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+              a.is_active
+                ? 'border-emerald-300 text-emerald-700 dark:border-emerald-500/40 dark:text-emerald-400'
+                : 'border-slate-200 text-slate-400 dark:border-border'
+            )}
+          >
+            {a.is_active ? 'Live' : 'Off'}
+          </button>
+        )}
+        <button
+          type='button'
+          onClick={() => onRemove(a.id)}
+          className='shrink-0 text-[13px] text-slate-300 transition-colors hover:text-red-500'
+        >
+          ✕
+        </button>
+      </div>
+      {open && (
+        <div className='grid grid-cols-1 gap-4 border-t border-slate-100 px-4 py-3 dark:border-border sm:grid-cols-2'>
+          <div>
+            <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              Seen (banner dismissed)
+            </p>
+            {!receipts && <p className='text-[11.5px] text-slate-400'>Loading…</p>}
+            {receipts && receipts.acks.length === 0 && (
+              <p className='text-[11.5px] text-slate-400'>Nobody has dismissed it yet.</p>
+            )}
+            {receipts?.acks.map((r, i) => (
+              <p key={i} className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+                {r.user_name || r.user_email || 'Unknown'}
+                <span className='text-slate-400'>
+                  {r.acked_at ? ` · ${new Date(r.acked_at).toLocaleString()}` : ''}
+                </span>
+              </p>
+            ))}
+          </div>
+          <div>
+            <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              Deliveries
+            </p>
+            {!receipts && <p className='text-[11.5px] text-slate-400'>Loading…</p>}
+            {receipts && receipts.deliveries.length === 0 && (
+              <p className='text-[11.5px] text-slate-400'>
+                Banner-only — no send channels on this broadcast.
+              </p>
+            )}
+            {receipts?.deliveries.map((r, i) => (
+              <p key={i} className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+                {r.user_name || r.user_email || 'Unknown'}
+                <span
+                  className={cn(
+                    'ml-1.5 rounded px-1 py-px text-[9.5px] font-medium uppercase',
+                    r.status === 'sent'
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                      : r.status === 'failed'
+                        ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                        : 'bg-slate-500/10 text-slate-500'
+                  )}
+                >
+                  {r.channel} {r.status !== 'sent' ? r.status : ''}
+                </span>
+                <span className='text-slate-400'>
+                  {r.delivered_at ? ` · ${new Date(r.delivered_at).toLocaleString()}` : ''}
+                </span>
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

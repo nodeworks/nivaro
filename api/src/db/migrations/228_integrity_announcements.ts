@@ -54,6 +54,23 @@ export async function up(knex: Knex): Promise<void> {
       t.dateTime('updated_at').nullable()
     })
   }
+  if (!(await knex.schema.hasTable('nivaro_announcement_deliveries'))) {
+    await knex.schema.createTable('nivaro_announcement_deliveries', (t) => {
+      t.increments('id')
+      t.integer('announcement')
+        .notNullable()
+        .references('id')
+        .inTable('nivaro_announcements')
+        .onDelete('CASCADE')
+      t.uuid('user').notNullable()
+      /** 'message' | 'email' | 'sms' */
+      t.string('channel', 20).notNullable()
+      /** 'sent' | 'failed' | 'skipped' (no address/number on file) */
+      t.string('status', 20).notNullable().defaultTo('sent')
+      t.dateTime('delivered_at').nullable()
+      t.index(['announcement'])
+    })
+  }
   if (!(await knex.schema.hasTable('nivaro_announcement_acks'))) {
     await knex.schema.createTable('nivaro_announcement_acks', (t) => {
       t.increments('id')
@@ -70,6 +87,7 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('nivaro_announcement_deliveries')
   await knex.schema.dropTableIfExists('nivaro_announcement_acks')
   await knex.schema.dropTableIfExists('nivaro_announcements')
   await knex.schema.dropTableIfExists('nivaro_readiness_snapshots')
