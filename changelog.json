@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-20T00:59:38.539Z",
+  "generated_at": "2026-08-20T01:19:06.372Z",
   "releases": [
+    {
+      "version": "0.1.79",
+      "tag": "v0.1.79",
+      "date": "2026-08-19T21:19:04-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "import mapping memory + record viewers chip",
+              "hash": "3849692a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.78",
       "tag": "v0.1.78",
-      "date": "2026-08-19T20:59:36-04:00",
+      "date": "2026-08-19T20:59:38-04:00",
       "sections": [
         {
           "label": "Added",
