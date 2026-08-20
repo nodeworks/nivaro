@@ -131,6 +131,7 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
+export * from './components/ConformanceView'
 export * from './lib/commands'
 export * from './lib/expression'
 export * from './lib/format-value'

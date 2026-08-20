@@ -29,6 +29,7 @@ import { commentsRoutes } from './comments.js'
 import { configDiffRoutes } from './config-diff.js'
 import { environmentRoutes } from './environments.js'
 import { lineageRoutes } from './lineage.js'
+import { configConformanceRoutes } from './config-conformance.js'
 import { readinessRoutes } from './readiness.js'
 import { contentExportRoutes } from './content-export.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
@@ -157,6 +158,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(environmentRoutes, { prefix: '/environments' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
+  await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(myWorkRoutes)

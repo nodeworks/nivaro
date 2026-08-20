@@ -75,6 +75,7 @@ export {
   type ChatTheme,
   CloneDialog,
   CollectionBrowserView,
+  ConformanceView,
   CollectionImportPanel,
   CommentPanel,
   canOpenChatRoom,
