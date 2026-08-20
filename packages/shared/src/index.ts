@@ -121,6 +121,7 @@ export type {
 export { ReviewListWidget } from './components/widgets/ReviewListWidget'
 export * from './context'
 export * from './hooks/useDebounced'
+export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'

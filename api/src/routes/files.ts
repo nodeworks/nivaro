@@ -4,6 +4,7 @@ import mime from 'mime-types'
 import sharp from 'sharp'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
 import {
   createPresignedFile,
   deleteFile,
@@ -14,7 +15,6 @@ import {
   updateFileMeta,
   uploadFile
 } from '../services/files.js'
-import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
 import { getStorage } from '../services/storage/index.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
@@ -59,6 +59,20 @@ export async function filesRoutes(app: FastifyInstance) {
       ids
     })
     return reply.send(result)
+  })
+
+  /** Batch dead-link check for whatever the user is looking at: stats each
+   *  file against the storage provider NOW, persists the verdict on the row
+   *  (missing_at set/cleared), and returns it. Cap 100 per call. */
+  app.post('/verify', async (req, reply) => {
+    const body = req.body as { ids?: unknown[] }
+    const ids = (Array.isArray(body?.ids) ? body.ids : []).map(String).slice(0, 100)
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
+    const { verifyFiles } = await import('../services/file-integrity.js')
+    const verdicts = await verifyFiles(ids)
+    return reply.send({
+      data: Object.fromEntries(verdicts.map((v) => [v.id, { missing: v.missing }]))
+    })
   })
 
   app.post('/upload', async (req, reply) => {

@@ -537,4 +537,34 @@ export async function meNotificationRoutes(app: FastifyInstance) {
     entries.sort((a, b) => b.at.localeCompare(a.at))
     return reply.send({ data: entries.slice(0, limit) })
   })
+  /** Pre-OOO exposure check: what goes uncovered if this user goes out of
+   *  office WITHOUT a working delegate — open records they currently resolve
+   *  as an owner of, plus SLA rules that escalate to them. The delegation
+   *  card shows this at the moment the person can still fix it. Owner
+   *  resolution is the my-work resolver (seconds, not ms) — the card fetches
+   *  lazily, only when OOO is being enabled with no delegate. */
+  app.get('/users/me/ooo-exposure', { preHandler: requireAuth }, async (req, reply) => {
+    const uid = req.user!.id
+    const [owned, slaRules] = await Promise.all([
+      import('../services/queues.js')
+        .then((m) => m.resolveOwnedByMeSource(uid))
+        .then((r) =>
+          Array.isArray((r as { items?: unknown[] }).items)
+            ? (r as { items: unknown[] }).items.length
+            : 0
+        )
+        .catch(() => 0),
+      db('nivaro_sla_rules')
+        .where({ escalation_user: uid, is_active: 1 })
+        .count({ c: '*' })
+        .first()
+        .catch(() => ({ c: 0 }))
+    ])
+    return reply.send({
+      data: {
+        owned_open_records: owned,
+        sla_escalations: Number((slaRules as { c?: unknown })?.c ?? 0)
+      }
+    })
+  })
 }

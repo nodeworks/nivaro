@@ -16,6 +16,7 @@ import { createHash, createHmac } from 'node:crypto'
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client
@@ -82,6 +83,15 @@ export class S3Storage implements StorageProvider {
     if (!res.Body) throw new Error(`S3 object has no body: ${key}`)
     const bytes = await res.Body.transformToByteArray()
     return Buffer.from(bytes)
+  }
+
+  async exists(key: string): Promise<boolean> {
+    try {
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }))
+      return true
+    } catch {
+      return false
+    }
   }
 
   async delete(key: string): Promise<void> {

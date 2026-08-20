@@ -1,16 +1,31 @@
-import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, Download, File, FileAudio, FileCode, FileSpreadsheet, FileText, FileVideo, Loader2, Plus, Upload, X } from 'lucide-react'
+import {
+  Clock,
+  Download,
+  File,
+  FileAudio,
+  FileCode,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
+  Loader2,
+  Plus,
+  Upload,
+  X
+} from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useGridFlush, useNivaroClient } from '../../context'
+import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSRelation } from './types'
 
 interface NivaroFile {
   id: string
   filename_download: string
+  missing_at?: string | null
   title: string | null
   type: string | null
   filesize: number | null
@@ -30,8 +45,11 @@ function fmtSize(bytes: number | null) {
 function fmtDate(iso: string | null) {
   if (!iso) return null
   const d = new Date(iso)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
-    ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return (
+    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  )
 }
 
 function isImage(type: string | null) {
@@ -48,7 +66,12 @@ function fileIcon(type: string | null, cls: string) {
     return <FileSpreadsheet className={cls} strokeWidth={1.5} />
   if (type.includes('wordprocessing') || type.includes('msword'))
     return <FileText className={cls} strokeWidth={1.5} />
-  if (type.includes('json') || type.includes('javascript') || type.includes('typescript') || type.includes('xml'))
+  if (
+    type.includes('json') ||
+    type.includes('javascript') ||
+    type.includes('typescript') ||
+    type.includes('xml')
+  )
     return <FileCode className={cls} strokeWidth={1.5} />
   return <File className={cls} strokeWidth={1.5} />
 }
@@ -72,7 +95,7 @@ function FileThumb({
         alt={filename}
         className={cn(dim, 'object-cover rounded shrink-0')}
         loading='lazy'
-        onError={e => {
+        onError={(e) => {
           ;(e.target as HTMLImageElement).style.display = 'none'
         }}
       />
@@ -109,20 +132,18 @@ function FileBrowserPanel({
           get('/files', {
             limit: '60',
             sort: '-uploaded_on',
-            fields: 'id,filename_download,title,type,filesize,width,height',
+            fields: 'id,filename_download,title,type,filesize,width,height,missing_at',
             ...(search ? { search } : {})
           })
         )
-        .then(r => r.data ?? []),
+        .then((r) => r.data ?? []),
     staleTime: 30_000
   })
 
   return (
     <div className='flex flex-col' style={{ width: 480, maxHeight: 420 }}>
       <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 shrink-0'>
-        <p className='text-[12px] font-medium text-slate-700'>
-          Select file{multi ? 's' : ''}
-        </p>
+        <p className='text-[12px] font-medium text-slate-700'>Select file{multi ? 's' : ''}</p>
         <button type='button' onClick={onClose} className='text-slate-400 hover:text-slate-600'>
           <X className='h-3.5 w-3.5' />
         </button>
@@ -132,7 +153,7 @@ function FileBrowserPanel({
           type='text'
           placeholder='Search files…'
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={(e) => setSearch(e.target.value)}
           className='w-full h-7 rounded border border-slate-200 px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
           autoFocus
         />
@@ -148,7 +169,7 @@ function FileBrowserPanel({
         )}
         {!isLoading && files.length > 0 && (
           <div className='grid grid-cols-5 gap-2'>
-            {files.map(f => {
+            {files.map((f) => {
               const isSel = selected.includes(f.id)
               return (
                 <button
@@ -233,7 +254,10 @@ export function FilePickerField({
 
   // manage object URL lifecycle
   useEffect(() => {
-    if (!pendingFile) { setPreviewUrl(null); return }
+    if (!pendingFile) {
+      setPreviewUrl(null)
+      return
+    }
     const url = URL.createObjectURL(pendingFile)
     setPreviewUrl(url)
     return () => URL.revokeObjectURL(url)
@@ -251,12 +275,15 @@ export function FilePickerField({
     return () => flush.unregister(flushKey)
   }, [flush, pendingFile, flushKey, client, onChange, qc])
 
+  // Auto-check on load: re-verify the referenced file against storage so a
+  // dead link shows immediately, not after the nightly sweep.
+  const health = useFileHealth([fileId])
   const { data: file, isLoading } = useQuery<NivaroFile | null>({
     queryKey: ['file-meta', fileId],
     queryFn: () =>
       client
-        .request<{ data: NivaroFile }>( get(`/files/${fileId}/meta`) )
-        .then(r => r.data ?? null),
+        .request<{ data: NivaroFile }>(get(`/files/${fileId}/meta`))
+        .then((r) => r.data ?? null),
     enabled: !!fileId,
     staleTime: 60_000
   })
@@ -336,22 +363,40 @@ export function FilePickerField({
             <div className='flex items-center gap-1'>
               {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
               <p className='text-[12px] font-medium text-slate-700 truncate'>
-                {hasPending ? pendingFile!.name : (file?.title || file?.filename_download || fileId)}
+                {hasPending ? pendingFile!.name : file?.title || file?.filename_download || fileId}
               </p>
+              {/* Dead link: the row exists but the bytes are gone — stamped by
+                  the file-integrity sweep / verify route. */}
+              {!hasPending && (health.verdict(fileId) ?? !!file?.missing_at) && (
+                <span
+                  className='shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                  title='The stored file is missing from storage — downloading or previewing will fail. Re-upload it.'
+                >
+                  file missing
+                </span>
+              )}
             </div>
             <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
               {hasPending ? (
                 <>
-                  {pendingFile!.type && <span className='text-[10px] text-slate-400'>{pendingFile!.type}</span>}
+                  {pendingFile!.type && (
+                    <span className='text-[10px] text-slate-400'>{pendingFile!.type}</span>
+                  )}
                   <span className='text-[10px] text-slate-400'>{fmtSize(pendingFile!.size)}</span>
                   <span className='text-[10px] text-amber-500'>Pending upload</span>
                 </>
               ) : (
                 <>
                   {file?.type && <span className='text-[10px] text-slate-400'>{file.type}</span>}
-                  {file?.filesize != null && <span className='text-[10px] text-slate-400'>{fmtSize(file.filesize)}</span>}
-                  {file?.uploaded_on && <span className='text-[10px] text-slate-400'>{fmtDate(file.uploaded_on)}</span>}
-                  {file?.uploaded_by_name && <span className='text-[10px] text-slate-500'>by {file.uploaded_by_name}</span>}
+                  {file?.filesize != null && (
+                    <span className='text-[10px] text-slate-400'>{fmtSize(file.filesize)}</span>
+                  )}
+                  {file?.uploaded_on && (
+                    <span className='text-[10px] text-slate-400'>{fmtDate(file.uploaded_on)}</span>
+                  )}
+                  {file?.uploaded_by_name && (
+                    <span className='text-[10px] text-slate-500'>by {file.uploaded_by_name}</span>
+                  )}
                 </>
               )}
             </div>
@@ -498,7 +543,10 @@ export function FileM2MField({
   // cleanup pending object URLs on unmount
   useEffect(() => {
     return () => {
-      setPendingFiles(prev => { prev.forEach(pf => URL.revokeObjectURL(pf.url)); return [] })
+      setPendingFiles((prev) => {
+        prev.forEach((pf) => URL.revokeObjectURL(pf.url))
+        return []
+      })
     }
   }, [])
 
@@ -522,7 +570,10 @@ export function FileM2MField({
   useEffect(() => {
     if (!flush || !pendingSave) return
     const hasWork = localAdds.length > 0 || localRemovals.size > 0 || pendingFiles.length > 0
-    if (!hasWork) { flush.unregister(pendingSaveFlushKey); return }
+    if (!hasWork) {
+      flush.unregister(pendingSaveFlushKey)
+      return
+    }
     const snapshotAdds = localAdds
     const snapshotRemovals = new Set(localRemovals)
     const snapshotPending = pendingFiles
@@ -537,12 +588,15 @@ export function FileM2MField({
       // commit adds
       for (const fileId of [...snapshotAdds, ...uploadedIds]) {
         await client.request(
-          post(`/items/${relation.many_collection}`, { [manyField]: parentId, [junctionField]: fileId })
+          post(`/items/${relation.many_collection}`, {
+            [manyField]: parentId,
+            [junctionField]: fileId
+          })
         )
       }
       // commit removes
       for (const fileId of snapshotRemovals) {
-        const junction = junctionItems.find(j => String(j[junctionField]) === fileId)
+        const junction = junctionItems.find((j) => String(j[junctionField]) === fileId)
         if (junction?.id) {
           await client.request(del(`/items/${relation.many_collection}/${junction.id}`))
         }
@@ -550,7 +604,9 @@ export function FileM2MField({
       setLocalAdds([])
       setLocalRemovals(new Set())
       setPendingFiles([])
-      qc.invalidateQueries({ queryKey: ['m2m-items', relation.many_collection, manyField, parentId] })
+      qc.invalidateQueries({
+        queryKey: ['m2m-items', relation.many_collection, manyField, parentId]
+      })
       qc.invalidateQueries({ queryKey: ['file-browser'] })
     })
     return () => flush.unregister(pendingSaveFlushKey)
@@ -567,19 +623,21 @@ export function FileM2MField({
             fields: `id,${junctionField}`
           })
         )
-        .then(r => r.data ?? []),
+        .then((r) => r.data ?? []),
     enabled: !!parentId && !isNew,
     staleTime: 30_000
   })
 
   const stagedLinks = isNew && staging ? (staging.getStagedLinks(stagingKey) as string[]) : []
-  const committedIds = junctionItems.map(j => String(j[junctionField]))
+  const committedIds = junctionItems.map((j) => String(j[junctionField]))
   const allFileIds = isNew
     ? stagedLinks
     : pendingSave
-      ? [...committedIds.filter(id => !localRemovals.has(id)), ...localAdds]
+      ? [...committedIds.filter((id) => !localRemovals.has(id)), ...localAdds]
       : committedIds
 
+  // Auto-check on load — live storage verdict beats the stored stamp.
+  const health = useFileHealth(allFileIds)
   const { data: filesMap = {} } = useQuery<Record<string, NivaroFile>>({
     queryKey: ['files-meta', ...allFileIds.sort()],
     queryFn: async () => {
@@ -589,10 +647,11 @@ export function FileM2MField({
           get('/files', {
             filter: JSON.stringify({ id: { _in: allFileIds } }),
             limit: String(allFileIds.length),
-            fields: 'id,filename_download,title,type,filesize,uploaded_on,uploaded_by_name'
+            fields:
+              'id,filename_download,title,type,filesize,uploaded_on,uploaded_by_name,missing_at'
           })
         )
-        .then(r => r.data ?? [])
+        .then((r) => r.data ?? [])
       const map: Record<string, NivaroFile> = {}
       for (const f of data) map[f.id] = f
       return map
@@ -608,13 +667,13 @@ export function FileM2MField({
     }
     if (pendingSave) {
       if (localAdds.includes(fileId)) {
-        setLocalAdds(prev => prev.filter(id => id !== fileId))
+        setLocalAdds((prev) => prev.filter((id) => id !== fileId))
       } else {
-        setLocalRemovals(prev => new Set([...prev, fileId]))
+        setLocalRemovals((prev) => new Set([...prev, fileId]))
       }
       return
     }
-    const junction = junctionItems.find(j => String(j[junctionField]) === fileId)
+    const junction = junctionItems.find((j) => String(j[junctionField]) === fileId)
     if (!junction?.id) return
     await client.request(del(`/items/${relation.many_collection}/${junction.id}`))
     qc.invalidateQueries({ queryKey: ['m2m-items', relation.many_collection, manyField, parentId] })
@@ -627,7 +686,7 @@ export function FileM2MField({
       return
     }
     if (pendingSave) {
-      setLocalAdds(prev => prev.includes(fileId) ? prev : [...prev, fileId])
+      setLocalAdds((prev) => (prev.includes(fileId) ? prev : [...prev, fileId]))
       return
     }
     await client.request(
@@ -638,7 +697,7 @@ export function FileM2MField({
 
   function removePending(url: string) {
     URL.revokeObjectURL(url)
-    setPendingFiles(prev => prev.filter(pf => pf.url !== url))
+    setPendingFiles((prev) => prev.filter((pf) => pf.url !== url))
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -646,8 +705,8 @@ export function FileM2MField({
     if (!files.length) return
     if (uploadRef.current) uploadRef.current.value = ''
     if (flush) {
-      const newPending = files.map(f => ({ file: f, url: URL.createObjectURL(f) }))
-      setPendingFiles(prev => [...prev, ...newPending])
+      const newPending = files.map((f) => ({ file: f, url: URL.createObjectURL(f) }))
+      setPendingFiles((prev) => [...prev, ...newPending])
     } else {
       setUploading(true)
       try {
@@ -669,10 +728,13 @@ export function FileM2MField({
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {(allFileIds.length > 0 || pendingFiles.length > 0) && (
         <div className='flex flex-col gap-1.5'>
-          {allFileIds.map(id => {
+          {allFileIds.map((id) => {
             const f = filesMap[id]
             return (
-              <div key={id} className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'>
+              <div
+                key={id}
+                className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'
+              >
                 <button
                   type='button'
                   title='Preview'
@@ -712,11 +774,25 @@ export function FileM2MField({
                   </button>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                     {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}
-                    {f?.filesize != null && <span className='text-[10px] text-slate-400'>{fmtSize(f.filesize)}</span>}
-                    {f?.uploaded_on && <span className='text-[10px] text-slate-400'>{fmtDate(f.uploaded_on)}</span>}
-                    {f?.uploaded_by_name && <span className='text-[10px] text-slate-500'>by {f.uploaded_by_name}</span>}
+                    {f?.filesize != null && (
+                      <span className='text-[10px] text-slate-400'>{fmtSize(f.filesize)}</span>
+                    )}
+                    {f?.uploaded_on && (
+                      <span className='text-[10px] text-slate-400'>{fmtDate(f.uploaded_on)}</span>
+                    )}
+                    {f?.uploaded_by_name && (
+                      <span className='text-[10px] text-slate-500'>by {f.uploaded_by_name}</span>
+                    )}
                   </div>
                 </div>
+                {(health.verdict(id) ?? !!f?.missing_at) && (
+                  <span
+                    className='shrink-0 self-center rounded bg-red-500/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                    title='The stored file is missing from storage — downloading or previewing will fail. Re-upload it.'
+                  >
+                    file missing
+                  </span>
+                )}
                 <a
                   href={`${getUrl(id)}?download=1`}
                   title='Download'
@@ -736,8 +812,11 @@ export function FileM2MField({
               </div>
             )
           })}
-          {pendingFiles.map(pf => (
-            <div key={pf.url} className='flex items-center gap-2 rounded-lg border border-amber-200 p-2 bg-amber-50/50'>
+          {pendingFiles.map((pf) => (
+            <div
+              key={pf.url}
+              className='flex items-center gap-2 rounded-lg border border-amber-200 p-2 bg-amber-50/50'
+            >
               <FileThumb
                 url={pf.url}
                 type={pf.file.type || null}
@@ -750,7 +829,9 @@ export function FileM2MField({
                   <p className='text-[12px] font-medium text-slate-700 truncate'>{pf.file.name}</p>
                 </div>
                 <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
-                  {pf.file.type && <span className='text-[10px] text-slate-400'>{pf.file.type}</span>}
+                  {pf.file.type && (
+                    <span className='text-[10px] text-slate-400'>{pf.file.type}</span>
+                  )}
                   <span className='text-[10px] text-slate-400'>{fmtSize(pf.file.size)}</span>
                   <span className='text-[10px] text-amber-500'>Pending upload</span>
                 </div>
@@ -775,7 +856,7 @@ export function FileM2MField({
             <div className='relative'>
               <button
                 type='button'
-                onClick={() => setOpen(v => !v)}
+                onClick={() => setOpen((v) => !v)}
                 className='flex h-8 items-center gap-1.5 rounded border border-dashed border-slate-300 px-3 text-[12px] text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors'
               >
                 <Plus className='h-3.5 w-3.5' />
@@ -789,7 +870,7 @@ export function FileM2MField({
                   <FileBrowserPanel
                     selected={allFileIds}
                     multi
-                    onSelect={id => addFile(id)}
+                    onSelect={(id) => addFile(id)}
                     onClose={() => setOpen(false)}
                     getUrl={getUrl}
                   />
@@ -812,7 +893,13 @@ export function FileM2MField({
                 )}
                 Upload…
               </button>
-              <input ref={uploadRef} type='file' multiple className='hidden' onChange={handleUpload} />
+              <input
+                ref={uploadRef}
+                type='file'
+                multiple
+                className='hidden'
+                onChange={handleUpload}
+              />
             </>
           )}
         </div>

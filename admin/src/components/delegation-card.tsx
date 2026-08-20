@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -92,6 +92,7 @@ export function DelegationCard({
           <Switch checked={isOutOfOffice} onCheckedChange={setIsOutOfOffice} />
           <Label className='text-[13px]'>Out of office</Label>
         </div>
+        {mode === 'self' && <OooExposureWarning show={isOutOfOffice && !delegateId} />}
 
         {/* Delegate user picker */}
         <div className='space-y-1.5'>
@@ -135,6 +136,43 @@ export function DelegationCard({
           {save.isPending ? 'Saving…' : 'Save delegation'}
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** Pre-OOO exposure: what nothing covers while you're out without a delegate.
+ *  Self-mode only — the endpoint answers for the REQUESTING user, and owner
+ *  resolution costs seconds, so it fetches only while the warning applies. */
+function OooExposureWarning({ show }: { show: boolean }) {
+  const { data } = useQuery<{ owned_open_records: number; sla_escalations: number }>({
+    queryKey: ['ooo-exposure'],
+    queryFn: () =>
+      api
+        .get<{ data: { owned_open_records: number; sla_escalations: number } }>(
+          '/users/me/ooo-exposure'
+        )
+        .then((r) => r.data.data),
+    enabled: show,
+    staleTime: 60_000
+  })
+  if (!show || !data || data.owned_open_records + data.sla_escalations === 0) return null
+  return (
+    <div className='rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+      <span className='font-semibold'>No delegate is set.</span> While you're out,{' '}
+      {data.owned_open_records > 0 && (
+        <>
+          <span className='font-semibold'>{data.owned_open_records}</span> open record
+          {data.owned_open_records === 1 ? '' : 's'} you own
+        </>
+      )}
+      {data.owned_open_records > 0 && data.sla_escalations > 0 && ' and '}
+      {data.sla_escalations > 0 && (
+        <>
+          <span className='font-semibold'>{data.sla_escalations}</span> SLA escalation rule
+          {data.sla_escalations === 1 ? '' : 's'} that page you
+        </>
+      )}{' '}
+      will have nobody covering them. Pick a delegate below.
     </div>
   )
 }

@@ -25,6 +25,9 @@ export interface StorageProvider {
   getUploadUrl?(key: string, mime: string): Promise<string>
   /** List object keys under a prefix (used by the cleanup job). */
   list?(prefix: string): Promise<string[]>
+  /** Cheap existence check — never downloads the object. Used by the
+   *  dead-file-link detection (nightly sweep + on-demand verify). */
+  exists?(key: string): Promise<boolean>
 }
 
 let _storage: StorageProvider | null = null

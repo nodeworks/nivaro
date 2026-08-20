@@ -161,6 +161,14 @@ function FileCard({
           {file.filename_download}
         </p>
         <div className='mt-1 flex items-center gap-1.5'>
+          {file.missing_at && (
+            <span
+              className='rounded bg-red-500/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-red-600'
+              title='Dead link — the physical file is missing from storage. Downloads and previews will fail; re-upload it.'
+            >
+              missing
+            </span>
+          )}
           <span
             className='rounded px-1 py-px text-[9px] font-semibold text-white'
             style={{ background: color }}
@@ -276,6 +284,27 @@ export function FilesPage() {
     onError: () => toast.error('Upload failed')
   })
 
+  // On-demand dead-link check for the visible page — the nightly sweep covers
+  // everything eventually; this answers "is THIS one dead" right now.
+  const verifyPage = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: Record<string, { missing: boolean }> }>('/files/verify', {
+          ids: files.map((f) => f.id)
+        })
+        .then((r) => r.data.data),
+    onSuccess: (verdicts) => {
+      const missing = Object.values(verdicts).filter((v) => v.missing).length
+      toast[missing > 0 ? 'warning' : 'success'](
+        missing > 0
+          ? `${missing} dead link${missing === 1 ? '' : 's'} found on this page`
+          : 'All files on this page are present in storage'
+      )
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => toast.error('Verification failed')
+  })
+
   const deleteFile = useMutation({
     mutationFn: (id: string) => api.delete(`/files/${id}`),
     onSuccess: () => {
@@ -364,6 +393,15 @@ export function FilesPage() {
               className='hidden'
               onChange={handleFileInput}
             />
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => verifyPage.mutate()}
+              disabled={verifyPage.isPending || files.length === 0}
+              title='Check every file on this page against storage — flags dead links whose physical bytes are gone'
+            >
+              {verifyPage.isPending ? 'Checking…' : 'Verify files'}
+            </Button>
             <Button
               size='sm'
               onClick={() => fileInputRef.current?.click()}
@@ -465,6 +503,14 @@ export function FilesPage() {
                           >
                             {file.filename_download}
                           </span>
+                          {file.missing_at && (
+                            <span
+                              className='ml-1.5 shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-red-600'
+                              title='Dead link — the physical file is missing from storage. Downloads and previews will fail; re-upload it.'
+                            >
+                              missing
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className='px-4 py-2.5'>

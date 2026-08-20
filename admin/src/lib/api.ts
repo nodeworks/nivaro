@@ -180,6 +180,7 @@ export type CMSSettings = {
 }
 
 export type CMSFile = {
+  missing_at?: string | null
   id: string
   storage: string
   filename_disk: string | null

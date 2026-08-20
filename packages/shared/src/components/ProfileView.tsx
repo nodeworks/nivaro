@@ -892,6 +892,10 @@ function SubscriptionsCard() {
 function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => void }) {
   const client = useNivaroClient()
   const [ooo, setOoo] = useState(!!user.is_out_of_office)
+  const [exposure, setExposure] = useState<{
+    owned_open_records: number
+    sla_escalations: number
+  } | null>(null)
   const [delegate, setDelegate] = useState<string | null>(user.delegate_id ?? null)
   const [expires, setExpires] = useState(
     user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : ''
@@ -905,6 +909,29 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
     expires !== (user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '') ||
     oooStart !== (u.ooo_start ? String(u.ooo_start).slice(0, 10) : '') ||
     oooEnd !== (u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
+
+  // Pre-OOO exposure: what nothing will cover while you're out. Fetched
+  // lazily — only when OOO is being enabled (or scheduled) with no delegate,
+  // because owner resolution costs seconds, not milliseconds.
+  const goingOooUncovered = (ooo || (!!oooStart && !!oooEnd)) && !delegate
+  useEffect(() => {
+    if (!goingOooUncovered) {
+      setExposure(null)
+      return
+    }
+    let cancelled = false
+    client
+      .request<{ data: { owned_open_records: number; sla_escalations: number } }>(
+        get('/users/me/ooo-exposure')
+      )
+      .then((r) => {
+        if (!cancelled) setExposure(r.data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [goingOooUncovered, client])
 
   const save = useMutation({
     mutationFn: () =>
@@ -982,6 +1009,29 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
           tone='amber'
         />
       </label>
+
+      {goingOooUncovered &&
+        exposure &&
+        exposure.owned_open_records + exposure.sla_escalations > 0 && (
+          <div className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+            <span className='font-semibold'>No delegate is set.</span> While you're out,{' '}
+            {exposure.owned_open_records > 0 && (
+              <>
+                <span className='font-semibold'>{exposure.owned_open_records}</span> open record
+                {exposure.owned_open_records === 1 ? '' : 's'} you own
+              </>
+            )}
+            {exposure.owned_open_records > 0 && exposure.sla_escalations > 0 && ' and '}
+            {exposure.sla_escalations > 0 && (
+              <>
+                <span className='font-semibold'>{exposure.sla_escalations}</span> SLA escalation
+                rule
+                {exposure.sla_escalations === 1 ? '' : 's'} that page you
+              </>
+            )}{' '}
+            will have nobody covering them. Pick a delegate below.
+          </div>
+        )}
 
       <div className='mt-3 grid gap-3 border-t border-slate-100 pt-3 dark:border-border/60 sm:grid-cols-2'>
         <div>

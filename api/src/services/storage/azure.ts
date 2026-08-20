@@ -66,6 +66,14 @@ export class AzureStorage implements StorageProvider {
     return this.container.getBlockBlobClient(key).downloadToBuffer()
   }
 
+  async exists(key: string): Promise<boolean> {
+    try {
+      return await this.container.getBlockBlobClient(key).exists()
+    } catch {
+      return false
+    }
+  }
+
   async delete(key: string): Promise<void> {
     await this.container
       .getBlockBlobClient(key)

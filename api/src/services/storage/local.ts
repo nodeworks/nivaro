@@ -6,7 +6,7 @@
  * resolved under the root with path-traversal protection.
  */
 import { mkdirSync } from 'node:fs'
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { config } from '../../config.js'
 import type { StorageProvider } from './index.js'
@@ -37,6 +37,15 @@ export class LocalStorage implements StorageProvider {
 
   async get(key: string): Promise<Buffer> {
     return readFile(this.resolveKey(key))
+  }
+
+  async exists(key: string): Promise<boolean> {
+    try {
+      await access(this.resolveKey(key))
+      return true
+    } catch {
+      return false
+    }
   }
 
   async delete(key: string): Promise<void> {
