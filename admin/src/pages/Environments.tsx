@@ -471,8 +471,7 @@ function CiPanel({ component }: { component: Component }) {
           `/environments/components/${component.id}/pipelines`
         )
         .then((r) => r.data.data),
-    // Live while anything runs; lazy when the pipeline board is quiet.
-    refetchInterval: (q) => (q.state.data?.active ? 6_000 : 60_000),
+    refetchInterval: 5_000,
     retry: false
   })
 
@@ -498,7 +497,7 @@ function CiPanel({ component }: { component: Component }) {
         )
         .then((r) => r.data.data),
     enabled: component.git_provider === 'gitlab',
-    staleTime: 60_000,
+    refetchInterval: 5_000,
     retry: false
   })
 
