@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-20T22:31:40.668Z",
+  "generated_at": "2026-08-20T22:37:44.183Z",
   "releases": [
+    {
+      "version": "0.1.86",
+      "tag": "v0.1.86",
+      "date": "2026-08-20T18:37:41-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "conformance",
+              "text": "green all-clear only on a settled empty answer",
+              "hash": "fe9df852"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.85",
       "tag": "v0.1.85",
-      "date": "2026-08-20T18:31:38-04:00",
+      "date": "2026-08-20T18:31:40-04:00",
       "sections": [
         {
           "label": "Added",
