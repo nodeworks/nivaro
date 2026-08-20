@@ -69,6 +69,7 @@ export function ConformanceView({ className }: { className?: string }) {
   const [activeRunId, setActiveRunId] = useState<number | null>(null)
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
+  const [sampleSize, setSampleSize] = useState('5000')
 
   const { data: collections = [], isLoading: loadingCollections } = useQuery<
     CheckableCollection[]
@@ -101,7 +102,9 @@ export function ConformanceView({ className }: { className?: string }) {
     setStartError(null)
     try {
       const res = await client.request<{ data: { id: number } }>(
-        post(`/config-conformance/${collection}/run`, {})
+        post(`/config-conformance/${collection}/run`, {
+          limit: Number(sampleSize) || 5000
+        })
       )
       setActiveRunId(res.data.id)
       void qc.invalidateQueries({ queryKey: ['conformance-runs'] })
@@ -140,6 +143,24 @@ export function ConformanceView({ className }: { className?: string }) {
             {selected.skipped > 0 && ` · ${selected.skipped} not evaluable`}
           </p>
         )}
+        <div className='w-[170px]'>
+          <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
+            Sample size
+          </p>
+          <PickList
+            value={sampleSize}
+            onChange={setSampleSize}
+            options={[
+              { value: '1000', label: '1,000 newest' },
+              { value: '5000', label: '5,000 newest' },
+              { value: '10000', label: '10,000 newest' },
+              { value: '25000', label: '25,000 newest' },
+              { value: '50000', label: '50,000 newest' }
+            ]}
+            placeholder='5,000 newest'
+            className='h-8'
+          />
+        </div>
         <button
           type='button'
           disabled={!collection || starting || runs.some((r) => r.status === 'running')}
