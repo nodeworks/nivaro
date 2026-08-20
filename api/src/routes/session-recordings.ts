@@ -275,15 +275,26 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     }
   )
 
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { after_seq?: string } }>(
     '/:id/events',
     { preHandler: requireAdmin },
     async (req, reply) => {
+      // ?after_seq= powers live-follow: the player fetches only chunks newer
+      // than what it already holds and feeds them into a liveMode Replayer.
+      const afterSeq = Number(req.query?.after_seq)
+      const incremental = Number.isFinite(afterSeq)
       const chunks = (await db('nivaro_session_events')
         .where({ recording: req.params.id })
+        .modify((qb) => {
+          if (incremental) qb.where('seq', '>', afterSeq)
+        })
         .orderBy('seq', 'asc')
-        .select('events')) as Array<{ events: string }>
-      if (chunks.length === 0) return reply.code(404).send({ error: 'No events' })
+        .select('seq', 'events')) as Array<{ seq: number; events: string }>
+      if (chunks.length === 0) {
+        // Incremental polls with nothing new are a normal empty answer.
+        if (incremental) return reply.send({ data: { events: [], last_seq: afterSeq } })
+        return reply.code(404).send({ error: 'No events' })
+      }
       const events: unknown[] = []
       for (const c of chunks) {
         try {
@@ -292,7 +303,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           /* skip corrupt chunk */
         }
       }
-      return reply.send({ data: { events } })
+      return reply.send({ data: { events, last_seq: chunks[chunks.length - 1].seq } })
     }
   )
 

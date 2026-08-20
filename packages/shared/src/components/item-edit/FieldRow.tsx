@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartLine, History, Info, Loader2, Lock, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { ChartLine, History, Info, Loader2, Lock, Sigma, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
@@ -165,6 +165,184 @@ function FieldSparkline({
  * only when opened. Every field type, not just numerics (the old sparkline
  * covered numbers only and was never enabled).
  */
+/**
+ * "Why is this number what it is?" — lineage for computed fields. A rollup
+ * shows the actual contributing child rows (label, value, who last touched
+ * each) and whether their sum still matches the stored figure; a
+ * write-computed field shows its formula and the current inputs.
+ */
+function FieldLineageButton({
+  collection,
+  itemId,
+  field
+}: {
+  collection: string
+  itemId: string
+  field: string
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const { data, isLoading } = useQuery<{
+    kind: 'rollup' | 'write'
+    stored_value?: unknown
+    formula?: string
+    inputs?: Record<string, unknown>
+    sources?: Array<{
+      collection: string
+      aggregate?: string
+      value_field?: string | null
+      value_formula?: string | null
+      filtered?: boolean
+      note?: string
+      error?: string
+      subtotal?: number
+      truncated?: boolean
+      rows: Array<{
+        id: string
+        label: string
+        value: number | null
+        updated_at: string | null
+        updated_by: string | null
+      }>
+    }>
+  }>({
+    queryKey: ['field-lineage', collection, itemId, field],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(
+          get(`/lineage/${collection}/${encodeURIComponent(itemId)}/${field}`)
+        )
+        .then((r) => r.data),
+    enabled: open,
+    staleTime: 30_000
+  })
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const num = (v: unknown): string =>
+    v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
+  const stored = data?.stored_value != null ? Number(data.stored_value) : null
+  return (
+    <div ref={rootRef} className='relative inline-flex'>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        title='Where does this number come from?'
+        className={cn(
+          'inline-flex items-center rounded p-0.5 transition-opacity',
+          open
+            ? 'text-nvr-cyan opacity-100'
+            : 'text-slate-400 hover:text-nvr-cyan dark:text-slate-300 dark:hover:text-nvr-cyan'
+        )}
+        data-field-lineage
+      >
+        <Sigma className='h-3 w-3' />
+      </button>
+      {open && (
+        <div className='absolute left-0 top-full z-40 mt-1 max-h-[340px] w-[360px] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
+          <p className='mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            Where this number comes from
+          </p>
+          {isLoading && <p className='px-1 py-2 text-[11.5px] text-slate-400'>Loading…</p>}
+          {data?.kind === 'write' && (
+            <div className='space-y-1 px-1 py-1'>
+              <p className='font-mono text-[11px] text-slate-600 dark:text-slate-300'>
+                {data.formula}
+              </p>
+              {Object.entries(data.inputs ?? {}).map(([k, v]) => (
+                <p key={k} className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  <span className='font-mono'>{k}</span> = {num(v)}
+                </p>
+              ))}
+              <p className='pt-1 text-[11.5px] font-medium text-slate-700 dark:text-slate-200'>
+                = {num(data.stored_value)}
+              </p>
+            </div>
+          )}
+          {data?.kind === 'rollup' &&
+            (data.sources ?? []).map((src, i) => (
+              <div key={i} className='mb-1.5'>
+                <p className='px-1 text-[10.5px] text-slate-400'>
+                  {(src.aggregate ?? 'sum').toUpperCase()}
+                  {src.value_field ? ` of ${src.value_field}` : ''} across {src.collection}
+                  {src.filtered ? ' (filtered)' : ''}
+                </p>
+                {src.error && (
+                  <p className='px-1 py-1 text-[11.5px] text-amber-600 dark:text-amber-400'>
+                    {src.error}
+                  </p>
+                )}
+                {src.note && (
+                  <p className='px-1 py-1 text-[11.5px] text-slate-400'>{src.note}</p>
+                )}
+                {src.rows.length > 0 && (
+                  <div className='mt-0.5 space-y-px'>
+                    {src.rows.map((r) => (
+                      <div
+                        key={r.id}
+                        className='flex items-baseline gap-2 rounded px-1 py-0.5 text-[11.5px] hover:bg-slate-50 dark:hover:bg-muted'
+                      >
+                        <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+                          {r.label}
+                        </span>
+                        <span className='shrink-0 font-mono tabular-nums text-slate-800 dark:text-slate-100'>
+                          {num(r.value)}
+                        </span>
+                        <span
+                          className='w-[88px] shrink-0 truncate text-right text-[10px] text-slate-400'
+                          data-tip={
+                            r.updated_at
+                              ? `${r.updated_by ?? 'unknown'} · ${new Date(r.updated_at).toLocaleString()}`
+                              : undefined
+                          }
+                        >
+                          {r.updated_by ?? ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {src.truncated && (
+                  <p className='px-1 pt-0.5 text-[10.5px] text-amber-600 dark:text-amber-400'>
+                    Showing the first 200 rows — the subtotal covers only these.
+                  </p>
+                )}
+                {src.subtotal != null && (
+                  <p className='border-t border-slate-100 px-1 pt-1 text-right text-[11.5px] font-medium text-slate-700 dark:border-border dark:text-slate-200'>
+                    subtotal {num(src.subtotal)}
+                  </p>
+                )}
+              </div>
+            ))}
+          {data?.kind === 'rollup' && stored != null && (
+            <p className='px-1 pt-0.5 text-right text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              stored {num(stored)}
+              {(() => {
+                const sum = (data.sources ?? []).reduce((a, s) => a + (s.subtotal ?? 0), 0)
+                const truncated = (data.sources ?? []).some((s) => s.truncated)
+                if (truncated) return null
+                return Math.abs(sum - stored) < 0.01 ? (
+                  <span className='ml-1 text-emerald-600 dark:text-emerald-400'>✓ matches</span>
+                ) : (
+                  <span className='ml-1 text-amber-600 dark:text-amber-400'>
+                    ✕ differs from contributions
+                  </span>
+                )
+              })()}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FieldHistoryButton({
   collection,
   itemId,
@@ -573,6 +751,11 @@ export function FieldRow({
           {itemId && itemId !== 'new' && (
             <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
           )}
+          {itemId &&
+            itemId !== 'new' &&
+            (field.computed_type === 'rollup' || field.computed_type === 'write') && (
+              <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
+            )}
           {isAiEligible(field) && layoutAiEnabled && (
             <button
               type='button'

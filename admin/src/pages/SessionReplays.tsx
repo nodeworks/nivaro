@@ -124,7 +124,15 @@ function EnvironmentBadge({ origin }: { origin: string | null }) {
   )
 }
 
-function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?: number | null }) {
+function ReplayPlayer({
+  recordingId,
+  startAt,
+  live
+}: {
+  recordingId: string
+  startAt?: number | null
+  live?: boolean
+}) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
     play: (t?: number) => void
@@ -145,6 +153,8 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
   const [total, setTotal] = useState(0)
   const playingRef = useRef(false)
   playingRef.current = playing
+  const lastSeqRef = useRef<number>(-1)
+  const [following, setFollowing] = useState(!!live)
 
   useEffect(() => {
     let cancelled = false
@@ -170,11 +180,12 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
 
     async function load() {
       try {
-        const r = await api.get<{ data: { events: unknown[] } }>(
+        const r = await api.get<{ data: { events: unknown[]; last_seq?: number } }>(
           `/session-recordings/${recordingId}/events`
         )
         if (cancelled || !frameRef.current) return
         const events = r.data.data.events
+        lastSeqRef.current = r.data.data.last_seq ?? -1
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
           return
@@ -185,7 +196,10 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
         frameRef.current.replaceChildren()
         const replayer = new rrweb.Replayer(events as never[], {
           root: frameRef.current,
-          skipInactive: true,
+          skipInactive: !following,
+          // Live-follow: rrweb's liveMode plays events as they are appended,
+          // pinned to the tail of the stream.
+          liveMode: following,
           speed: 1,
           mouseTail: { strokeStyle: '#00ceff' }
         }) as unknown as NonNullable<typeof replayerRef.current>
@@ -200,15 +214,24 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
           setPlaying(false)
         })
         setReady(true)
-        // ?t= deep link (issue log's Watch-replay): open AT the error moment,
-        // a few seconds early so the action that caused it is on screen.
-        const meta = replayer.getMetaData()
-        const seekTo =
-          startAt != null && Number.isFinite(startAt)
-            ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
-            : 0
-        replayer.play(seekTo)
-        setPlaying(true)
+        if (following) {
+          // Start at the live edge: a small lag budget absorbs poll jitter so
+          // playback never overruns the buffered stream and stalls.
+          const liveRep = replayer as unknown as { startLive: (t?: number) => void }
+          const lastTs = (events[events.length - 1] as { timestamp?: number })?.timestamp
+          liveRep.startLive(lastTs ? lastTs - 4_000 : undefined)
+          setPlaying(true)
+        } else {
+          // ?t= deep link (issue log's Watch-replay): open AT the error moment,
+          // a few seconds early so the action that caused it is on screen.
+          const meta = replayer.getMetaData()
+          const seekTo =
+            startAt != null && Number.isFinite(startAt)
+              ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
+              : 0
+          replayer.play(seekTo)
+          setPlaying(true)
+        }
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
             setTime(
@@ -233,7 +256,37 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
       replayerRef.current?.destroy?.()
       replayerRef.current = null
     }
-  }, [recordingId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingId, following])
+
+  // Live-follow poll: fetch only chunks newer than what the player holds and
+  // feed them straight into the live Replayer. 3s matches the recorder's
+  // flush cadence closely enough to feel continuous.
+  useEffect(() => {
+    if (!following || !ready) return
+    let stopped = false
+    const timer = setInterval(async () => {
+      if (stopped) return
+      try {
+        const r = await api.get<{ data: { events: unknown[]; last_seq?: number } }>(
+          `/session-recordings/${recordingId}/events?after_seq=${lastSeqRef.current}`
+        )
+        if (stopped) return
+        const fresh = r.data.data.events
+        if (r.data.data.last_seq != null) lastSeqRef.current = r.data.data.last_seq
+        const rep = replayerRef.current as unknown as {
+          addEvent?: (e: unknown) => void
+        } | null
+        if (rep?.addEvent) for (const e of fresh) rep.addEvent(e)
+      } catch {
+        /* transient poll failure — next tick retries */
+      }
+    }, 3_000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [following, ready, recordingId])
 
   function togglePlay() {
     const rep = replayerRef.current
@@ -269,8 +322,38 @@ function ReplayPlayer({ recordingId, startAt }: { recordingId: string; startAt?:
         className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
         style={{ minHeight: 400 }}
       />
-      {ready && (
+      {ready && following && (
         <div className='mt-2 flex items-center gap-3'>
+          <span className='flex items-center gap-1.5 rounded-full bg-red-500/10 px-2.5 py-1 text-[11.5px] font-medium text-red-600 dark:text-red-400'>
+            <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
+            LIVE — following in real time
+          </span>
+          <span className='text-[11.5px] text-slate-400'>
+            New activity streams in as it happens.
+          </span>
+          <span className='flex-1' />
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 text-[12px]'
+            onClick={() => setFollowing(false)}
+          >
+            Exit live · scrub recording
+          </Button>
+        </div>
+      )}
+      {ready && !following && (
+        <div className='mt-2 flex items-center gap-3'>
+          {live && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1.5 text-[12px] text-red-600 dark:text-red-400'
+              onClick={() => setFollowing(true)}
+            >
+              <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' /> Go live
+            </Button>
+          )}
           <Button size='sm' variant='outline' className='h-7 w-16 text-[12px]' onClick={togglePlay}>
             {playing ? 'Pause' : time >= total && total > 0 ? 'Replay' : 'Play'}
           </Button>
@@ -764,7 +847,9 @@ export function SessionReplaysPage() {
               </span>
             </SheetTitle>
           </SheetHeader>
-          {playing && <ReplayPlayer recordingId={playing.id} startAt={startAt} />}
+          {playing && (
+            <ReplayPlayer recordingId={playing.id} startAt={startAt} live={isLive(playing)} />
+          )}
         </SheetContent>
       </Sheet>
     </div>

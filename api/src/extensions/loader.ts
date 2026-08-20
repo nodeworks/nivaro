@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { registerDigestSection } from '../services/daily-digest.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -134,6 +135,10 @@ export interface ExtensionContext {
     /** Add a per-user section to the daily action digest email. */
     registerSection(fn: import('../services/daily-digest.js').DigestSectionProvider): void
   }
+  readiness: {
+    /** Register a scored check on the go-live readiness scorecard. */
+    registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
+  }
   flows: {
     /**
      * Register a custom operation type. The handler receives parsed options,
@@ -242,6 +247,7 @@ async function loadExtension(
     | 'auth'
     | 'flows'
     | 'digest'
+    | 'readiness'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -355,6 +361,9 @@ async function loadExtension(
       digest: {
         registerSection: (fn) => registerDigestSection(fn)
       },
+      readiness: {
+        registerCheck: (check) => registerReadinessCheck(check)
+      },
       flows: {
         registerOperation: (op) => registerOp(op),
         registerTrigger: (trigger) => registerTrigger(trigger),
@@ -441,6 +450,7 @@ export async function loadExtensions(
     | 'auth'
     | 'flows'
     | 'digest'
+    | 'readiness'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -504,6 +514,7 @@ export async function loadCloudExtensions(
     | 'importParsers'
     | 'validators'
     | 'digest'
+    | 'readiness'
   >
 ) {
   let entries: string[]
@@ -555,6 +566,9 @@ export async function loadCloudExtensions(
         callExternalApi,
         digest: {
           registerSection: (fn) => registerDigestSection(fn)
+        },
+        readiness: {
+          registerCheck: (check) => registerReadinessCheck(check)
         },
         logActivity: (entry) =>
           logActivity({
@@ -707,6 +721,7 @@ export async function scanNewExtensions(
     | 'importParsers'
     | 'validators'
     | 'digest'
+    | 'readiness'
   >
 ): Promise<string[]> {
   let entries: string[]
