@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-20T15:09:24.465Z",
+  "generated_at": "2026-08-20T17:17:55.511Z",
   "releases": [
+    {
+      "version": "0.1.82",
+      "tag": "v0.1.82",
+      "date": "2026-08-20T13:17:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "dead-file-link detection + pre-OOO delegation exposure check",
+              "hash": "057c6cd7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.81",
       "tag": "v0.1.81",
-      "date": "2026-08-20T11:09:22-04:00",
+      "date": "2026-08-20T11:09:24-04:00",
       "sections": [
         {
           "label": "Added",
