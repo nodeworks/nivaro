@@ -188,6 +188,28 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
 
   // ── Admin: list + replay + delete ──────────────────────────────────────────
 
+  /**
+   * People aggregate — the rail must reflect EVERYONE with recordings, not
+   * whoever owns the newest 50 rows: one heavy recorder (dev automation, a
+   * power user) previously flooded the first page and every other person
+   * "disappeared" from the list.
+   */
+  app.get('/people', { preHandler: requireAdmin }, async (_req, reply) => {
+    const rows = (await db.raw(
+      `SELECT r.[user] AS [user],
+              LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) AS user_name,
+              COUNT(*) AS recording_count,
+              SUM(CAST(r.byte_size AS BIGINT)) AS total_bytes,
+              MAX(COALESCE(r.last_event_at, r.started_at)) AS last_active,
+              MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > DATEADD(minute, -2, GETUTCDATE()) THEN 1 ELSE 0 END) AS live
+       FROM nivaro_session_recordings r
+       LEFT JOIN nivaro_users u ON u.id = r.[user]
+       GROUP BY r.[user], u.first_name, u.last_name
+       ORDER BY last_active DESC`
+    )) as Array<Record<string, unknown>>
+    return reply.send({ data: rows })
+  })
+
   app.get<{ Querystring: { user?: string; page?: string } }>(
     '/',
     { preHandler: requireAdmin },

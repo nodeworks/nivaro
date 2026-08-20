@@ -465,7 +465,29 @@ export function SessionReplaysPage() {
   const enabled = modes?.enabled
   const errorReplay = modes?.error_replay
 
-  const { data: recordings = [], isLoading } = useQuery({
+  // The rail comes from a server-side aggregate over EVERY recording — one
+  // heavy recorder used to own the newest page and everyone else vanished.
+  const { data: peopleAgg = [], isLoading } = useQuery<
+    Array<{
+      user: string
+      user_name: string | null
+      recording_count: number
+      total_bytes: number
+      last_active: string
+      live: number
+    }>
+  >({
+    queryKey: ['session-recording-people'],
+    queryFn: () =>
+      api
+        .get<{ data: never }>('/session-recordings/people')
+        .then((r) => r.data.data),
+    refetchInterval: 60_000
+  })
+
+  // Recent rows still load for app filters + deep links; the SELECTED
+  // person's sessions come from their own filtered fetch below.
+  const { data: recordings = [] } = useQuery({
     queryKey: ['session-recordings'],
     queryFn: () => api.get<{ data: Recording[] }>('/session-recordings/').then((r) => r.data.data),
     refetchInterval: 60_000
@@ -529,45 +551,50 @@ export function SessionReplaysPage() {
     [recordings, appFilter]
   )
 
-  // People rail — grouped, most recently active first
+  // People rail from the aggregate — complete, most recently active first.
   const people = useMemo((): PersonGroup[] => {
-    const byUser = new Map<string, PersonGroup>()
-    for (const rec of filtered) {
-      const key = rec.user
-      const g = byUser.get(key) ?? {
-        user: key,
-        name: rec.user_name || rec.user.slice(0, 8),
-        recordings: [],
-        totalBytes: 0,
-        lastActive: rec.last_event_at ?? rec.started_at,
-        live: false
-      }
-      g.recordings.push(rec)
-      g.totalBytes += rec.byte_size
-      const activity = rec.last_event_at ?? rec.started_at
-      if (new Date(activity) > new Date(g.lastActive)) g.lastActive = activity
-      g.live = g.live || isLive(rec)
-      byUser.set(key, g)
-    }
-    return [...byUser.values()].sort(
-      (a, b) => new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
-    )
-  }, [filtered])
+    return peopleAgg.map((p) => ({
+      user: p.user,
+      name: p.user_name || p.user.slice(0, 8),
+      recordings: [],
+      totalBytes: Number(p.total_bytes ?? 0),
+      lastActive: p.last_active,
+      live: p.live === 1
+    }))
+  }, [peopleAgg])
 
   const selected = people.find((p) => p.user === selectedUser) ?? people[0] ?? null
 
+  // The selected person's sessions come from THEIR filtered fetch — the
+  // newest 50 of that user, not whatever survived the global page.
+  const { data: selectedRecordings = [] } = useQuery({
+    queryKey: ['session-recordings-user', selected?.user ?? null],
+    queryFn: () =>
+      api
+        .get<{ data: Recording[] }>(`/session-recordings/?user=${selected?.user}`)
+        .then((r) => r.data.data),
+    enabled: !!selected,
+    refetchInterval: 60_000
+  })
+  const selectedFiltered = useMemo(
+    () =>
+      appFilter
+        ? selectedRecordings.filter((r) => (r.app ?? 'admin') === appFilter)
+        : selectedRecordings,
+    [selectedRecordings, appFilter]
+  )
+
   // Selected person's sessions grouped by day, newest first
   const days = useMemo(() => {
-    if (!selected) return []
     const byDay = new Map<string, Recording[]>()
-    for (const rec of selected.recordings) {
+    for (const rec of selectedFiltered) {
       const label = dayLabel(rec.started_at)
       const list = byDay.get(label) ?? []
       list.push(rec)
       byDay.set(label, list)
     }
     return [...byDay.entries()]
-  }, [selected])
+  }, [selectedFiltered])
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -739,8 +766,13 @@ export function SessionReplaysPage() {
                   {selected.name}
                 </h2>
                 <span className='text-[12px] text-slate-400'>
-                  {selected.recordings.length} session
-                  {selected.recordings.length === 1 ? '' : 's'} ·{' '}
+                  {(peopleAgg.find((p) => p.user === selected.user)?.recording_count ??
+                    selectedFiltered.length)}{' '}
+                  session
+                  {(peopleAgg.find((p) => p.user === selected.user)?.recording_count ?? 0) === 1
+                    ? ''
+                    : 's'}{' '}
+                  ·{' '}
                   {formatFileSize(selected.totalBytes)} recorded
                 </span>
               </div>
