@@ -1,7 +1,5 @@
-import { UserAvatar } from '../UserAvatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ClipboardPlus, Check, ChevronDown, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, ClipboardPlus, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -10,6 +8,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
 import { formatRelative } from '../../lib/utils'
+import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
@@ -359,13 +358,12 @@ export function CommentPanel({
   })
   const related: RelatedNote[] = relatedData ?? []
 
-  /** One time-ordered thread: written comments and recorded notes together. */
+  /** One time-ordered thread, NEWEST FIRST: the latest note is what a reader
+   *  opens the panel for — history scrolls down, not up. */
   const threadEntries = useMemo(() => {
     const own = comments.map((c) => ({ kind: 'comment' as const, at: c.created_at, comment: c }))
     const rel = related.map((r) => ({ kind: 'related' as const, at: r.created_at, note: r }))
-    return [...own, ...rel].sort(
-      (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
-    )
+    return [...own, ...rel].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   }, [comments, related])
 
   const create = useMutation({
@@ -402,7 +400,10 @@ export function CommentPanel({
         post('/tasks', {
           collection,
           item,
-          title: c.text.replace(/<[^>]*>/g, '').replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 200),
+          title: c.text
+            .replace(/<[^>]*>/g, '')
+            .replace(/@\[([^\]]+)\]/g, '@$1')
+            .slice(0, 200),
           assignee: userId
         })
       ),
@@ -455,7 +456,8 @@ export function CommentPanel({
           !isNew &&
           threadEntries.length > 0 &&
           (() => {
-            const last = threadEntries[threadEntries.length - 1]
+            // Newest entry — the thread sorts newest-first now.
+            const last = threadEntries[0]
             const who =
               last.kind === 'comment'
                 ? displayName(last.comment.user)
@@ -526,8 +528,8 @@ export function CommentPanel({
                 />
                 <div className='flex items-center justify-between'>
                   <p className='text-[11px] text-slate-400'>
-                    Type @ plus two letters to mention a teammate, or @owners to
-                    notify everyone currently assigned.
+                    Type @ plus two letters to mention a teammate, or @owners to notify everyone
+                    currently assigned.
                   </p>
                   <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
                     {create.isPending ? 'Posting…' : 'Comment'}

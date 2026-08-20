@@ -198,7 +198,8 @@ export function CommentsSlot({
             <p data-nf-empty>No comments yet.</p>
           ) : (
             <div data-nf-comment-list>
-              {comments.map((c) => {
+              {/* Newest first — matches the shared CommentPanel ordering. */}
+              {[...comments].reverse().map((c) => {
                 const isEditing = editingId === c.id
                 const edited = c.updated_at && c.updated_at !== c.created_at
                 return (

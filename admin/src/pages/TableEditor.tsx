@@ -63,7 +63,6 @@ import {
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import {
@@ -75,6 +74,7 @@ import {
 } from '@/components/field-picker'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
+import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
 import { Badge } from '@/components/ui/badge'
@@ -103,7 +103,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
-import { QuickFiltersEditor, type QuickFilterDef } from '@/components/quick-filters-editor'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
@@ -120,6 +119,7 @@ import {
   parseJson,
   SLIDER_INTERFACES
 } from '@/lib/field-config'
+import { useGoBack } from '@/lib/nav'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import {
   type CMSRelationRow,
@@ -557,8 +557,8 @@ function RollupConfigEditor({
   return (
     <div className='space-y-3'>
       <p className='text-[11px] text-slate-400'>
-        Aggregate values from related items in one or more collections — each source's aggregate
-        is summed together.
+        Aggregate values from related items in one or more collections — each source's aggregate is
+        summed together.
       </p>
 
       <div className='space-y-2'>
@@ -591,8 +591,8 @@ function RollupConfigEditor({
             Store value (recalculate on writes)
           </p>
           <p className='text-[11px] text-slate-400'>
-            Off: computed fresh on every read. On: cached in the DB column and recalculated
-            whenever a contributing row changes.
+            Off: computed fresh on every read. On: cached in the DB column and recalculated whenever
+            a contributing row changes.
           </p>
         </div>
         <Switch checked={computedStore} onCheckedChange={onComputedStoreChange} />
@@ -728,7 +728,8 @@ function AddColumnForm({
           ? {
               computed_formula: computedFormulaValue,
               computed_type: computedType,
-              computed_store: computedType === 'write' || computedType === 'rollup' ? computedStore : false
+              computed_store:
+                computedType === 'write' || computedType === 'rollup' ? computedStore : false
             }
           : {})
       })
@@ -736,7 +737,9 @@ function AddColumnForm({
         // Fire-and-forget backfill — the column starts NULL/0 otherwise until
         // the next write to a contributing row triggers a recalc.
         api.post(`/data-model/${table}/fields/${form.name}/rollup-recalc`).catch(() => {
-          toast.error(`"${form.name}" was added, but backfilling existing rows failed — recalc it manually`)
+          toast.error(
+            `"${form.name}" was added, but backfilling existing rows failed — recalc it manually`
+          )
         })
       }
       toast.success(`${isVirtual ? 'Computed field' : 'Column'} "${form.name}" added`)
@@ -1148,9 +1151,7 @@ function FieldsTab({
               } catch {
                 impactNote = '\n\n(Impact scan unavailable — references were not checked.)'
               }
-              if (
-                confirm(`Drop column "${col.name}"? This cannot be undone.${impactNote}`)
-              ) {
+              if (confirm(`Drop column "${col.name}"? This cannot be undone.${impactNote}`)) {
                 dropColumn.mutate(col.name)
               }
             }}
@@ -1806,9 +1807,12 @@ function FieldMetaEditor({
   // dbColumnNames entry are marked virtual) — toggling store on for a rollup
   // that's still virtual means we must provision the column before saving
   // metadata, or every recalc write silently fails against a nonexistent column.
-  const isStoredRollup = computedEnabled && computedReady && computedType === 'rollup' && computedStore
+  const isStoredRollup =
+    computedEnabled && computedReady && computedType === 'rollup' && computedStore
   const needsColumnProvisioning = isStoredRollup && col.is_virtual
-  const columnType = isStoredRollup ? rollupColumnType(fieldType) : (fieldType as CreateColumnBody['type'])
+  const columnType = isStoredRollup
+    ? rollupColumnType(fieldType)
+    : (fieldType as CreateColumnBody['type'])
 
   async function handleSave() {
     if (needsColumnProvisioning) {
@@ -1861,7 +1865,9 @@ function FieldMetaEditor({
       // next write to a contributing row triggers a recalc. Only reachable once
       // the metadata save above actually succeeded, so nivaro_fields is current.
       api.post(`/data-model/${tableName}/fields/${col.name}/rollup-recalc`).catch(() => {
-        toast.error(`"${col.name}" saved, but backfilling existing rows failed — recalc it manually`)
+        toast.error(
+          `"${col.name}" saved, but backfilling existing rows failed — recalc it manually`
+        )
       })
     }
   }
@@ -2263,51 +2269,51 @@ function FieldMetaEditor({
 
       {/* ── Auto ID ── (hidden for choice interfaces: their options are a bare array) */}
       {!CHOICE_INTERFACES.has(fieldInterface) && (
-      <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
-        <p className='mb-2 text-[11px] font-medium text-slate-600'>Auto ID</p>
-        <div className='space-y-2'>
-          <div>
-            <Label className='mb-1 block text-[11px]'>Pattern</Label>
-            <Input
-              value={autoIdPattern}
-              onChange={(e) => setAutoIdPattern(e.target.value)}
-              placeholder='{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
-              className='h-7 text-[12px] font-mono'
-            />
-          </div>
-          {autoIdPattern && (
-            <div className='grid grid-cols-2 gap-3'>
-              <div>
-                <Label className='mb-1 block text-[11px]'>Padding</Label>
-                <Input
-                  type='number'
-                  min={0}
-                  value={autoIdPadding}
-                  onChange={(e) => setAutoIdPadding(Math.max(0, Number(e.target.value) || 0))}
-                  className='h-7 text-[12px]'
-                />
-              </div>
-              <div>
-                <Label className='mb-1 block text-[11px]'>
-                  Next number
-                  {seedInfo && (
-                    <span className='ml-1 font-normal text-slate-400'>
-                      (current: {seedInfo.current ?? '—'}, suggested: {seedInfo.suggested})
-                    </span>
-                  )}
-                </Label>
-                <Input
-                  type='number'
-                  min={1}
-                  value={autoIdSeed ?? seedInfo?.current ?? seedInfo?.suggested ?? 1}
-                  onChange={(e) => setAutoIdSeed(Math.max(1, Number(e.target.value) || 1))}
-                  className='h-7 text-[12px]'
-                />
-              </div>
+        <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
+          <p className='mb-2 text-[11px] font-medium text-slate-600'>Auto ID</p>
+          <div className='space-y-2'>
+            <div>
+              <Label className='mb-1 block text-[11px]'>Pattern</Label>
+              <Input
+                value={autoIdPattern}
+                onChange={(e) => setAutoIdPattern(e.target.value)}
+                placeholder='{project.project_type.short_code}{funding_years[0] % 100}-{seq}'
+                className='h-7 text-[12px] font-mono'
+              />
             </div>
-          )}
+            {autoIdPattern && (
+              <div className='grid grid-cols-2 gap-3'>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Padding</Label>
+                  <Input
+                    type='number'
+                    min={0}
+                    value={autoIdPadding}
+                    onChange={(e) => setAutoIdPadding(Math.max(0, Number(e.target.value) || 0))}
+                    className='h-7 text-[12px]'
+                  />
+                </div>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>
+                    Next number
+                    {seedInfo && (
+                      <span className='ml-1 font-normal text-slate-400'>
+                        (current: {seedInfo.current ?? '—'}, suggested: {seedInfo.suggested})
+                      </span>
+                    )}
+                  </Label>
+                  <Input
+                    type='number'
+                    min={1}
+                    value={autoIdSeed ?? seedInfo?.current ?? seedInfo?.suggested ?? 1}
+                    onChange={(e) => setAutoIdSeed(Math.max(1, Number(e.target.value) || 1))}
+                    className='h-7 text-[12px]'
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       {/* ── Encryption ── */}
@@ -4263,8 +4269,8 @@ function AddendumsSection({ tableName }: { tableName: string }) {
                   Start state
                 </p>
                 <p className='text-[11px] text-slate-500 dark:text-slate-400 mt-0.5'>
-                  Which state a new addendum's pipeline starts in, per pipeline connected through
-                  an addendum form layout. Default is the pipeline's initial state.
+                  Which state a new addendum's pipeline starts in, per pipeline connected through an
+                  addendum form layout. Default is the pipeline's initial state.
                 </p>
               </div>
               <Button
@@ -4418,7 +4424,16 @@ function ChangeReasonSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-cr', tableName],
     queryFn: () =>
       api
-        .get<{ data: { change_reason_config: { fields?: string[]; reasons?: string[]; allow_free_text?: boolean } | null; fields?: { field: string; label?: string | null; hidden?: boolean }[] } }>(`/collections/${tableName}`)
+        .get<{
+          data: {
+            change_reason_config: {
+              fields?: string[]
+              reasons?: string[]
+              allow_free_text?: boolean
+            } | null
+            fields?: { field: string; label?: string | null; hidden?: boolean }[]
+          }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 60 * 1000
@@ -4438,12 +4453,20 @@ function ChangeReasonSection({ tableName }: { tableName: string }) {
   }, [col, init, cfg])
 
   const save = async () => {
-    const fields = fieldsDraft.split(',').map((f) => f.trim()).filter(Boolean)
-    const reasons = reasonsDraft.split('\n').map((r) => r.trim()).filter(Boolean)
+    const fields = fieldsDraft
+      .split(',')
+      .map((f) => f.trim())
+      .filter(Boolean)
+    const reasons = reasonsDraft
+      .split('\n')
+      .map((r) => r.trim())
+      .filter(Boolean)
     const body = fields.length > 0 ? { fields, reasons, allow_free_text: freeText } : null
     await api.patch(`/collections/${tableName}`, { change_reason_config: body })
     qc.invalidateQueries({ queryKey: ['collection-meta-cr', tableName] })
-    toast.success(fields.length > 0 ? 'Change-reason requirement saved' : 'Change-reason requirement removed')
+    toast.success(
+      fields.length > 0 ? 'Change-reason requirement saved' : 'Change-reason requirement removed'
+    )
   }
 
   return (
@@ -4467,7 +4490,9 @@ function ChangeReasonSection({ tableName }: { tableName: string }) {
           />
         </div>
         <div>
-          <p className='mb-1 text-[12.5px] font-medium text-slate-700'>Preset reasons (one per line)</p>
+          <p className='mb-1 text-[12.5px] font-medium text-slate-700'>
+            Preset reasons (one per line)
+          </p>
           <textarea
             value={reasonsDraft}
             onChange={(e) => setReasonsDraft(e.target.value)}
@@ -4484,7 +4509,9 @@ function ChangeReasonSection({ tableName }: { tableName: string }) {
           <Switch checked={freeText} onCheckedChange={setFreeText} />
         </div>
         <div className='flex justify-end'>
-          <Button size='sm' onClick={() => void save()}>Save</Button>
+          <Button size='sm' onClick={() => void save()}>
+            Save
+          </Button>
         </div>
       </div>
     </div>
@@ -4542,7 +4569,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     toast.success('Browser settings saved')
   }
 
-  const row = (label: string, desc: string, key: 'checkbox_selection' | 'show_actions' | 'allow_create') => (
+  const row = (
+    label: string,
+    desc: string,
+    key: 'checkbox_selection' | 'show_actions' | 'allow_create'
+  ) => (
     <div className='flex items-center justify-between gap-4'>
       <div>
         <p className='text-[12.5px] font-medium text-slate-700'>{label}</p>
@@ -4565,7 +4596,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           </p>
         </div>
         {row('Row selection', 'Checkbox column + bulk actions bar', 'checkbox_selection')}
-        {row('Row actions menu', 'Per-row Actions dropdown (transitions, audit log…)', 'show_actions')}
+        {row(
+          'Row actions menu',
+          'Per-row Actions dropdown (transitions, audit log…)',
+          'show_actions'
+        )}
         {row('New item button', 'Allow creating records from the browser', 'allow_create')}
         <div className='flex items-center justify-between gap-4'>
           <div>
@@ -5014,34 +5049,34 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
             <div className='space-y-3 pl-1'>
               {/* Mode describes the save-time check only. */}
               {validationEnabled && (
-              <div>
-                <Label className='mb-1 block text-[12px]'>Mode</Label>
-                <div className='inline-flex rounded-md border border-slate-200 p-0.5'>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={validationMode === 'soft' ? 'default' : 'ghost'}
-                    className='h-6 px-3 text-[11px]'
-                    onClick={() => setValidationMode('soft')}
-                  >
-                    Warn
-                  </Button>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={validationMode === 'hard' ? 'default' : 'ghost'}
-                    className='h-6 px-3 text-[11px]'
-                    onClick={() => setValidationMode('hard')}
-                  >
-                    Block
-                  </Button>
+                <div>
+                  <Label className='mb-1 block text-[12px]'>Mode</Label>
+                  <div className='inline-flex rounded-md border border-slate-200 p-0.5'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={validationMode === 'soft' ? 'default' : 'ghost'}
+                      className='h-6 px-3 text-[11px]'
+                      onClick={() => setValidationMode('soft')}
+                    >
+                      Warn
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={validationMode === 'hard' ? 'default' : 'ghost'}
+                      className='h-6 px-3 text-[11px]'
+                      onClick={() => setValidationMode('hard')}
+                    >
+                      Block
+                    </Button>
+                  </div>
+                  <p className='mt-1 text-[11px] text-slate-400'>
+                    {validationMode === 'soft'
+                      ? 'Violations notify the editor but the save still goes through'
+                      : 'Violations reject the save with a 422 error'}
+                  </p>
                 </div>
-                <p className='mt-1 text-[11px] text-slate-400'>
-                  {validationMode === 'soft'
-                    ? 'Violations notify the editor but the save still goes through'
-                    : 'Violations reject the save with a 422 error'}
-                </p>
-              </div>
               )}
 
               <div>
@@ -8483,7 +8518,10 @@ function ColumnPresetRow({
             className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
           >
             <span
-              className={cn('truncate', preset.columns.length ? 'text-slate-700' : 'text-slate-400')}
+              className={cn(
+                'truncate',
+                preset.columns.length ? 'text-slate-700' : 'text-slate-400'
+              )}
             >
               {preset.columns.length
                 ? preset.columns
@@ -8516,9 +8554,13 @@ function ColumnPresetRow({
                         }
                         className='text-[11px] flex items-center gap-2'
                       >
-                        <Check className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')} />
+                        <Check
+                          className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')}
+                        />
                         <span className='flex-1 truncate'>{f.label}</span>
-                        <span className='font-mono text-[9px] text-slate-400 shrink-0'>{f.field}</span>
+                        <span className='font-mono text-[9px] text-slate-400 shrink-0'>
+                          {f.field}
+                        </span>
                       </CommandItem>
                     )
                   })}
@@ -8539,7 +8581,9 @@ function ColumnPresetRow({
               {token}
               <button
                 type='button'
-                onClick={() => onChange({ ...preset, columns: preset.columns.filter((x) => x !== token) })}
+                onClick={() =>
+                  onChange({ ...preset, columns: preset.columns.filter((x) => x !== token) })
+                }
                 className='text-amber-500 hover:text-amber-800'
               >
                 ✕
@@ -8882,7 +8926,9 @@ function FieldDefaultValueSection({
   abstractType?: string
 }) {
   const qc = useQueryClient()
-  const { data: layouts = [] } = useQuery<Array<{ id: number; default_values?: Record<string, unknown> | string | null }>>({
+  const { data: layouts = [] } = useQuery<
+    Array<{ id: number; default_values?: Record<string, unknown> | string | null }>
+  >({
     queryKey: ['collection-layouts', collection],
     queryFn: () =>
       api.get('/collection-layouts', { params: { collection } }).then((r) => r.data.data ?? []),
@@ -8891,7 +8937,16 @@ function FieldDefaultValueSection({
   const layoutRow = layouts.find((l) => l.id === layoutId)
   const dv = useMemo(() => {
     const raw = layoutRow?.default_values
-    const parsed = typeof raw === 'string' ? (() => { try { return JSON.parse(raw) } catch { return null } })() : raw
+    const parsed =
+      typeof raw === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(raw)
+            } catch {
+              return null
+            }
+          })()
+        : raw
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {}
@@ -8976,7 +9031,13 @@ function FieldDefaultValueSection({
     const opts = (() => {
       const raw = settings.options as unknown
       if (raw && typeof raw === 'object') return raw as Record<string, unknown>
-      if (typeof raw === 'string') { try { return JSON.parse(raw) as Record<string, unknown> } catch { return {} } }
+      if (typeof raw === 'string') {
+        try {
+          return JSON.parse(raw) as Record<string, unknown>
+        } catch {
+          return {}
+        }
+      }
       return {}
     })()
     const choices = Array.isArray(opts.choices)
@@ -9003,7 +9064,11 @@ function FieldDefaultValueSection({
         </select>
       )
     } else {
-      const numeric = abstractType === 'integer' || abstractType === 'decimal' || abstractType === 'float' || abstractType === 'number'
+      const numeric =
+        abstractType === 'integer' ||
+        abstractType === 'decimal' ||
+        abstractType === 'float' ||
+        abstractType === 'number'
       control = (
         <Input
           value={value != null ? String(value) : ''}
@@ -9817,7 +9882,8 @@ function FieldSettingsPopover({
       required,
       hidden,
       readonly,
-      ...(layoutId != null && (settings.computed_type === 'rollup' || settings.computed_type === 'write')
+      ...(layoutId != null &&
+      (settings.computed_type === 'rollup' || settings.computed_type === 'write')
         ? { editable_computed: editableComputed }
         : {}),
       inline_relation: inlineRelation,
@@ -9947,19 +10013,28 @@ function FieldSettingsPopover({
                     />
                   </div>
                 )}
-                {layoutId != null && (settings.computed_type === 'rollup' || settings.computed_type === 'write') && (
-                  <div className='flex items-center justify-between gap-3 px-3 py-2'>
-                    <div className='min-w-0'>
-                      <span className='text-[12px] text-slate-700'>Allow manual entry</span>
-                      <p className='text-[10.5px] leading-snug text-slate-400'>
-                        This field is computed ({settings.computed_type}) and normally read-only.
-                        On this layout, let people type a value — the next recalculation still
-                        overwrites it{settings.computed_type === 'write' ? ' on every save' : ' when its source rows change'}.
-                      </p>
+                {layoutId != null &&
+                  (settings.computed_type === 'rollup' || settings.computed_type === 'write') && (
+                    <div className='flex items-center justify-between gap-3 px-3 py-2'>
+                      <div className='min-w-0'>
+                        <span className='text-[12px] text-slate-700'>Allow manual entry</span>
+                        <p className='text-[10.5px] leading-snug text-slate-400'>
+                          This field is computed ({settings.computed_type}) and normally read-only.
+                          On this layout, let people type a value — the next recalculation still
+                          overwrites it
+                          {settings.computed_type === 'write'
+                            ? ' on every save'
+                            : ' when its source rows change'}
+                          .
+                        </p>
+                      </div>
+                      <Switch
+                        checked={editableComputed}
+                        onCheckedChange={setEditableComputed}
+                        className='scale-90 shrink-0'
+                      />
                     </div>
-                    <Switch checked={editableComputed} onCheckedChange={setEditableComputed} className='scale-90 shrink-0' />
-                  </div>
-                )}
+                  )}
               </div>
               {isM2M && (
                 <div className='space-y-1'>
@@ -10761,7 +10836,9 @@ function FieldSettingsPopover({
                     <Textarea
                       value={catalogModeLocal}
                       onChange={(e) => setCatalogModeLocal(e.target.value)}
-                      placeholder={'{\n  "item_field": "item",\n  "section_by": "bom_category.name",\n  "filter": {"status": {"_eq": true}},\n  "copy_fields": {"price": "price"},\n  "compute_fields": {"total": "{{price}} * {{quantity}}"}\n}'}
+                      placeholder={
+                        '{\n  "item_field": "item",\n  "section_by": "bom_category.name",\n  "filter": {"status": {"_eq": true}},\n  "copy_fields": {"price": "price"},\n  "compute_fields": {"total": "{{price}} * {{quantity}}"}\n}'
+                      }
                       rows={5}
                       className='font-mono text-[11px]'
                     />
@@ -11444,8 +11521,7 @@ function SortableUngroupedZone({
   onLockConditions,
   collection,
   getPrefillFromParent,
-  onPrefillFromParent
-,
+  onPrefillFromParent,
   layoutId
 }: {
   localFieldOrder: Record<string, string[]>
@@ -11986,8 +12062,7 @@ function SortableGroupCard({
   onInlineDisplayChange,
   collection,
   getPrefillFromParent,
-  onPrefillFromParent
-,
+  onPrefillFromParent,
   layoutId
 }: {
   group: FieldGroup
@@ -12219,10 +12294,12 @@ function SortableGroupCard({
                   </label>
                   {group.type === 'tab' && (
                     <div>
-                      <Label className='mb-1 block text-[11px]'>Skip as initial step when filled</Label>
+                      <Label className='mb-1 block text-[11px]'>
+                        Skip as initial step when filled
+                      </Label>
                       <p className='mb-1.5 text-[10px] text-slate-400'>
-                        Comma-separated field names — an existing record with all of them filled opens
-                        on the next step instead of this one
+                        Comma-separated field names — an existing record with all of them filled
+                        opens on the next step instead of this one
                       </p>
                       {/* Popover-hosted input: commit onChange — blur never
                           fires when Radix unmounts the content on close. */}
@@ -12231,12 +12308,17 @@ function SortableGroupCard({
                           try {
                             const p = JSON.parse(group.skip_if_filled ?? '[]')
                             return Array.isArray(p) ? p.join(', ') : ''
-                          } catch { return '' }
+                          } catch {
+                            return ''
+                          }
                         })()}
                         placeholder='e.g. unit'
                         className='h-7 text-[12px]'
                         onChange={(e) => {
-                          const list = e.target.value.split(',').map((x) => x.trim()).filter(Boolean)
+                          const list = e.target.value
+                            .split(',')
+                            .map((x) => x.trim())
+                            .filter(Boolean)
                           onGroupSettings(group.id, {
                             skip_if_filled: list.length ? JSON.stringify(list) : null
                           })
@@ -12872,24 +12954,47 @@ function LayoutDefaultValueInput({
   field: string
   value: unknown
   onChange: (v: unknown) => void
-  fieldMeta: Array<{ field: string; type?: string | null; interface?: string | null; options?: unknown }>
-  relations: Array<{ many_collection: string | null; many_field: string | null; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+  fieldMeta: Array<{
+    field: string
+    type?: string | null
+    interface?: string | null
+    options?: unknown
+  }>
+  relations: Array<{
+    many_collection: string | null
+    many_field: string | null
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }>
 }) {
   const meta = fieldMeta.find((f) => f.field === field)
   const opts =
     typeof meta?.options === 'string'
-      ? (() => { try { return JSON.parse(meta.options as string) as Record<string, unknown> } catch { return {} } })()
+      ? (() => {
+          try {
+            return JSON.parse(meta.options as string) as Record<string, unknown>
+          } catch {
+            return {}
+          }
+        })()
       : ((meta?.options ?? {}) as Record<string, unknown>)
 
   // M2M alias: the relation whose one_field (or legacy junction-name) is this
   // field; the target collection comes from the junction's companion leg.
   const m2mRel =
-    relations.find((r) => r.one_collection === tableName && r.one_field === field && r.junction_field != null) ??
-    relations.find((r) => r.one_collection === tableName && r.many_collection === field && r.junction_field != null)
+    relations.find(
+      (r) => r.one_collection === tableName && r.one_field === field && r.junction_field != null
+    ) ??
+    relations.find(
+      (r) =>
+        r.one_collection === tableName && r.many_collection === field && r.junction_field != null
+    )
   const m2mTarget = m2mRel
-    ? relations.find(
-        (cr) => cr.many_collection === m2mRel.many_collection && cr.many_field === m2mRel.junction_field
-      )?.one_collection ?? null
+    ? (relations.find(
+        (cr) =>
+          cr.many_collection === m2mRel.many_collection && cr.many_field === m2mRel.junction_field
+      )?.one_collection ?? null)
     : null
   if (m2mRel && m2mTarget) {
     const ids = Array.isArray(value) ? (value as Array<string | number>) : []
@@ -13043,7 +13148,13 @@ function LayoutsTab({
   // control per field (relation pickers with friendly labels, choice lists,
   // booleans) instead of a raw text input.
   const { data: layoutFieldMeta = [] } = useQuery<
-    Array<{ field: string; type?: string | null; interface?: string | null; options?: unknown; label?: string | null }>
+    Array<{
+      field: string
+      type?: string | null
+      interface?: string | null
+      options?: unknown
+      label?: string | null
+    }>
   >({
     queryKey: ['layouts-field-config', tableName],
     queryFn: () => api.get(`/field-config/${tableName}`).then((r) => r.data.data ?? []),
@@ -13051,7 +13162,14 @@ function LayoutsTab({
     staleTime: 60_000
   })
   const { data: layoutRelations = [] } = useQuery<
-    Array<{ id: number; many_collection: string | null; many_field: string | null; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+    Array<{
+      id: number
+      many_collection: string | null
+      many_field: string | null
+      one_collection: string | null
+      one_field: string | null
+      junction_field: string | null
+    }>
   >({
     queryKey: ['layouts-relations', tableName],
     queryFn: () => api.get(`/data-model/relations/for/${tableName}`).then((r) => r.data.data ?? []),
@@ -13213,9 +13331,9 @@ function LayoutsTab({
   const [conditionRows, setConditionRows] = useState<
     Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
   >([])
-  const [defaultValueRows, setDefaultValueRows] = useState<Array<{ field: string; value: unknown }>>(
-    []
-  )
+  const [defaultValueRows, setDefaultValueRows] = useState<
+    Array<{ field: string; value: unknown }>
+  >([])
 
   // Sync condition / default-value rows when selection changes
   useEffect(() => {
@@ -13232,7 +13350,8 @@ function LayoutsTab({
         : []
     )
     const rawDefaults = selected?.default_values
-    const parsedDefaults = typeof rawDefaults === 'string' ? safeJsonParse(rawDefaults) : rawDefaults
+    const parsedDefaults =
+      typeof rawDefaults === 'string' ? safeJsonParse(rawDefaults) : rawDefaults
     setDefaultValueRows(
       parsedDefaults && typeof parsedDefaults === 'object' && !Array.isArray(parsedDefaults)
         ? Object.entries(parsedDefaults as Record<string, unknown>).map(([field, value]) => ({
@@ -14463,9 +14582,15 @@ function LayoutVersionsSection({ layoutId }: { layoutId: number }) {
     queryKey: ['layout-versions', layoutId],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: number; version: number; note: string | null; created_at: string; created_by_name: string | null }> }>(
-          `/collection-layouts/${layoutId}/versions`
-        )
+        .get<{
+          data: Array<{
+            id: number
+            version: number
+            note: string | null
+            created_at: string
+            created_by_name: string | null
+          }>
+        }>(`/collection-layouts/${layoutId}/versions`)
         .then((r) => r.data.data),
     enabled: open
   })
@@ -15160,8 +15285,7 @@ function FieldGroupsTab({
     // grid view on the same relation binds by many_collection; FieldRenderer parity)
     const o2m = relations.find(
       (r) =>
-        r.junction_field === null &&
-        (r.one_field === fieldName || r.many_collection === fieldName)
+        r.junction_field === null && (r.one_field === fieldName || r.many_collection === fieldName)
     )
     if (o2m) return 'O2M'
     // M2O FK column on this collection
@@ -15302,6 +15426,14 @@ function FieldGroupsTab({
   const [slotLabelDraft, setSlotLabelDraft] = useState('')
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const performSaveRef = useRef<(() => void) | null>(null)
+  // Unmount flush: a pending debounced save must not die with the component.
+  useEffect(
+    () => () => {
+      if (saveTimerRef.current && hasLocalChangeRef.current) performSaveRef.current?.()
+    },
+    []
+  )
   // True only after user makes a drag change — prevents saving on server-data reloads
   const hasLocalChangeRef = useRef(false)
   // Bumped on every local change — lets the save know whether newer edits arrived while in flight
@@ -15630,13 +15762,10 @@ function FieldGroupsTab({
     () => qc.invalidateQueries({ queryKey: ['field-groups', tableName] }),
     [qc, tableName]
   )
-  const invalidateFieldConfig = useCallback(
-    () => {
-      qc.invalidateQueries({ queryKey: ['field-config', tableName] })
-      qc.invalidateQueries({ queryKey: ['layout-field-config', tableName] })
-    },
-    [qc, tableName]
-  )
+  const invalidateFieldConfig = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ['field-config', tableName] })
+    qc.invalidateQueries({ queryKey: ['layout-field-config', tableName] })
+  }, [qc, tableName])
   const invalidateMeta = useCallback(
     () => qc.invalidateQueries({ queryKey: ['collection-meta', tableName] }),
     [qc, tableName]
@@ -15647,7 +15776,7 @@ function FieldGroupsTab({
   useEffect(() => {
     if (!layoutId || !hasLocalChangeRef.current) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
+    const doSave = () => {
       const seq = changeSeqRef.current
       const ungroupedPos = localGroupOrder.indexOf('__ungrouped__')
       // Build assignments from localFieldOrder directly — __pool__ is the static Fields List, skip it
@@ -15825,7 +15954,14 @@ function FieldGroupsTab({
           if (changeSeqRef.current === seq) hasLocalChangeRef.current = false
           invalidateFieldConfig()
         })
-    }, 400)
+    }
+    // Kept in a ref so the unmount flush can fire the LATEST pending save —
+    // the cleanup clearing the timer on unmount used to silently drop a
+    // sub-400ms edit made right before navigating away ("the link template
+    // didn't save"). Dep-change cleanups are fine: the re-armed effect
+    // reschedules the same pending save.
+    performSaveRef.current = doSave
+    saveTimerRef.current = setTimeout(doSave, 400)
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
@@ -16338,12 +16474,12 @@ function FieldGroupsTab({
         editable_computed:
           ov.editable_computed !== undefined
             ? ov.editable_computed === true
-            : ((
+            : (
                 (fc as Record<string, unknown> | undefined)?._overrides as
                   | Record<string, unknown>
                   | null
                   | undefined
-              )?.editable_computed === true)
+              )?.editable_computed === true
       }
     },
     [fieldConfig, localOverrides]
@@ -16571,101 +16707,104 @@ function FieldGroupsTab({
               align='start'
               onClick={(e) => e.stopPropagation()}
             >
-            <div className='flex items-center gap-1.5'>
-              <input
-                type='text'
-                placeholder='Label override'
-                value={meta.label_override ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value || null
-                  setWidgetSlotMeta((prev) => ({ ...prev, [f]: { ...prev[f], label_override: v } }))
-                  hasLocalChangeRef.current = true
-                  changeSeqRef.current++
-                }}
-                className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
-              />
-              <button
-                type='button'
-                title='Remove widget'
-                onClick={() => {
-                  setWidgetSlotMeta((prev) => {
-                    const n = { ...prev }
-                    delete n[f]
-                    return n
-                  })
-                  setLocalFieldOrder((prev) => {
-                    const next: Record<string, string[]> = {}
-                    for (const [k, v] of Object.entries(prev)) next[k] = v.filter((x) => x !== f)
-                    return next
-                  })
-                  hasLocalChangeRef.current = true
-                  changeSeqRef.current++
-                }}
-                className='text-[10px] text-slate-300 hover:text-red-400'
-              >
-                ✕ Remove
-              </button>
-            </div>
-            {wInputs.length > 0 && (
-              <div className='space-y-1'>
-                <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
-                {wInputs.map((inp) => {
-                  const binding = meta.input_bindings.find((b) => b.key === inp.key) ?? {
-                    key: inp.key,
-                    binding_type: 'item_field' as const,
-                    binding_value: ''
-                  }
-                  return (
-                    <div key={inp.key} className='space-y-0.5'>
-                      <div className='flex items-center gap-1'>
-                        <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
-                          {inp.label || inp.key}
-                        </span>
-                        <select
-                          value={binding.binding_type}
-                          onChange={(e) =>
-                            updateBinding(inp.key, {
-                              binding_type: e.target.value,
-                              binding_value: ''
-                            })
-                          }
-                          className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
-                        >
-                          <option value='item_field'>Field</option>
-                          <option value='static'>Static</option>
-                          <option value='url_param'>URL Param</option>
-                        </select>
-                      </div>
-                      {binding.binding_type === 'item_field' ? (
-                        <FieldPicker
-                          collection={tableName}
-                          fields={allFields}
-                          relations={relations as CMSRelation[]}
-                          value={binding.binding_value}
-                          onChange={(picked) =>
-                            updateBinding(inp.key, { binding_value: picked.path.join('.') })
-                          }
-                          onClear={() => updateBinding(inp.key, { binding_value: '' })}
-                          placeholder='Select field…'
-                        />
-                      ) : (
-                        <input
-                          type='text'
-                          value={binding.binding_value}
-                          placeholder={
-                            binding.binding_type === 'url_param' ? 'param name' : 'value'
-                          }
-                          onChange={(e) =>
-                            updateBinding(inp.key, { binding_value: e.target.value })
-                          }
-                          className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                        />
-                      )}
-                    </div>
-                  )
-                })}
+              <div className='flex items-center gap-1.5'>
+                <input
+                  type='text'
+                  placeholder='Label override'
+                  value={meta.label_override ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value || null
+                    setWidgetSlotMeta((prev) => ({
+                      ...prev,
+                      [f]: { ...prev[f], label_override: v }
+                    }))
+                    hasLocalChangeRef.current = true
+                    changeSeqRef.current++
+                  }}
+                  className='w-32 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+                />
+                <button
+                  type='button'
+                  title='Remove widget'
+                  onClick={() => {
+                    setWidgetSlotMeta((prev) => {
+                      const n = { ...prev }
+                      delete n[f]
+                      return n
+                    })
+                    setLocalFieldOrder((prev) => {
+                      const next: Record<string, string[]> = {}
+                      for (const [k, v] of Object.entries(prev)) next[k] = v.filter((x) => x !== f)
+                      return next
+                    })
+                    hasLocalChangeRef.current = true
+                    changeSeqRef.current++
+                  }}
+                  className='text-[10px] text-slate-300 hover:text-red-400'
+                >
+                  ✕ Remove
+                </button>
               </div>
-            )}
+              {wInputs.length > 0 && (
+                <div className='space-y-1'>
+                  <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
+                  {wInputs.map((inp) => {
+                    const binding = meta.input_bindings.find((b) => b.key === inp.key) ?? {
+                      key: inp.key,
+                      binding_type: 'item_field' as const,
+                      binding_value: ''
+                    }
+                    return (
+                      <div key={inp.key} className='space-y-0.5'>
+                        <div className='flex items-center gap-1'>
+                          <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
+                            {inp.label || inp.key}
+                          </span>
+                          <select
+                            value={binding.binding_type}
+                            onChange={(e) =>
+                              updateBinding(inp.key, {
+                                binding_type: e.target.value,
+                                binding_value: ''
+                              })
+                            }
+                            className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
+                          >
+                            <option value='item_field'>Field</option>
+                            <option value='static'>Static</option>
+                            <option value='url_param'>URL Param</option>
+                          </select>
+                        </div>
+                        {binding.binding_type === 'item_field' ? (
+                          <FieldPicker
+                            collection={tableName}
+                            fields={allFields}
+                            relations={relations as CMSRelation[]}
+                            value={binding.binding_value}
+                            onChange={(picked) =>
+                              updateBinding(inp.key, { binding_value: picked.path.join('.') })
+                            }
+                            onClear={() => updateBinding(inp.key, { binding_value: '' })}
+                            placeholder='Select field…'
+                          />
+                        ) : (
+                          <input
+                            type='text'
+                            value={binding.binding_value}
+                            placeholder={
+                              binding.binding_type === 'url_param' ? 'param name' : 'value'
+                            }
+                            onChange={(e) =>
+                              updateBinding(inp.key, { binding_value: e.target.value })
+                            }
+                            className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[9px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </PopoverContent>
           </Popover>
         )
@@ -16852,7 +16991,9 @@ function FieldGroupsTab({
 
       const meta = headerFieldDisplayMeta[f] ?? { label_override: null, display_format: 'text' }
       const update = (patch: Partial<HeaderFieldMeta>) => {
-        setHeaderFieldDisplayMeta((prev) => ({ ...prev, [f]: { ...meta, ...patch } }))
+        // prev[f], never the render-captured meta — two quick edits in one
+        // popover session must not clobber each other.
+        setHeaderFieldDisplayMeta((prev) => ({ ...prev, [f]: { ...(prev[f] ?? meta), ...patch } }))
         hasLocalChangeRef.current = true
         changeSeqRef.current++
       }
@@ -17376,10 +17517,15 @@ function FieldGroupsTab({
                                   // review_list widgets need record_id bound to the host
                                   // record's id to resolve rows — default it so the
                                   // widget works without an extra manual binding step.
-                                  input_bindings:
-                                    ['review_list', 'rollup'].includes(w.widget_type)
-                                      ? [{ key: 'record_id', binding_type: 'item_field', binding_value: 'id' }]
-                                      : []
+                                  input_bindings: ['review_list', 'rollup'].includes(w.widget_type)
+                                    ? [
+                                        {
+                                          key: 'record_id',
+                                          binding_type: 'item_field',
+                                          binding_value: 'id'
+                                        }
+                                      ]
+                                    : []
                                 }
                               }))
                               setLocalFieldOrder((prev) => ({
@@ -19692,7 +19838,10 @@ export function TableEditorPage() {
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
               to='/data-model'
-              onClick={(e) => { e.preventDefault(); goBack() }}
+              onClick={(e) => {
+                e.preventDefault()
+                goBack()
+              }}
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />

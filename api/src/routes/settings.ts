@@ -62,6 +62,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'mail_test_mode',
       'mail_test_recipient',
       'mail_test_allowlist',
+      'environment_label',
       'sms_test_mode',
       'sms_test_recipient',
       'sms_test_allowlist',

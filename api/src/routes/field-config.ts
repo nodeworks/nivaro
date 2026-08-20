@@ -193,18 +193,72 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     }
 
     // Multi-group: a field may have multiple assignments (different group_keys)
-    type Assignment = { group_key: string | null; sort: number; label_override: string | null; is_visible: number | null; default_expanded: number | null; show_row_revisions: number | null; show_approval_chain: number | null; col_span: number | null; overrides: Record<string, unknown> | null; widget_id: number | null; input_bindings: string | null; lock_conditions: string | null; allow_revision_restore: number | null }
+    type Assignment = {
+      group_key: string | null
+      sort: number
+      label_override: string | null
+      is_visible: number | null
+      default_expanded: number | null
+      show_row_revisions: number | null
+      show_approval_chain: number | null
+      col_span: number | null
+      overrides: Record<string, unknown> | null
+      widget_id: number | null
+      input_bindings: string | null
+      lock_conditions: string | null
+      allow_revision_restore: number | null
+    }
     const assignmentsByField = new Map<string, Assignment[]>()
     let ungrouped_sort: number | null = null
     if (targetLayoutId !== null) {
       const assignments = await db('nivaro_layout_field_assignments')
         .where({ layout_id: targetLayoutId })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'show_approval_chain', 'col_span', 'overrides', 'widget_id', 'input_bindings', 'lock_conditions', 'allow_revision_restore')
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'default_expanded',
+          'show_row_revisions',
+          'show_approval_chain',
+          'col_span',
+          'overrides',
+          'widget_id',
+          'input_bindings',
+          'lock_conditions',
+          'allow_revision_restore'
+        )
       for (const a of assignments) {
-        if (a.field === '__ungrouped_pos__') { ungrouped_sort = a.sort; continue }
+        if (a.field === '__ungrouped_pos__') {
+          ungrouped_sort = a.sort
+          continue
+        }
         let overrides: Record<string, unknown> | null = null
-        try { overrides = a.overrides ? (typeof a.overrides === 'string' ? JSON.parse(a.overrides) : a.overrides) : null } catch { /* noop */ }
-        const entry: Assignment = { group_key: a.group_key, sort: a.sort, label_override: a.label_override ?? null, is_visible: a.is_visible ?? null, default_expanded: a.default_expanded ?? null, show_row_revisions: a.show_row_revisions ?? null, show_approval_chain: a.show_approval_chain ?? null, col_span: a.col_span ?? null, overrides, widget_id: a.widget_id ?? null, input_bindings: a.input_bindings ?? null, lock_conditions: a.lock_conditions ?? null, allow_revision_restore: a.allow_revision_restore ?? null }
+        try {
+          overrides = a.overrides
+            ? typeof a.overrides === 'string'
+              ? JSON.parse(a.overrides)
+              : a.overrides
+            : null
+        } catch {
+          /* noop */
+        }
+        const entry: Assignment = {
+          group_key: a.group_key,
+          sort: a.sort,
+          label_override: a.label_override ?? null,
+          is_visible: a.is_visible ?? null,
+          default_expanded: a.default_expanded ?? null,
+          show_row_revisions: a.show_row_revisions ?? null,
+          show_approval_chain: a.show_approval_chain ?? null,
+          col_span: a.col_span ?? null,
+          overrides,
+          widget_id: a.widget_id ?? null,
+          input_bindings: a.input_bindings ?? null,
+          lock_conditions: a.lock_conditions ?? null,
+          allow_revision_restore: a.allow_revision_restore ?? null
+        }
         const existing = assignmentsByField.get(a.field)
         if (existing) existing.push(entry)
         else assignmentsByField.set(a.field, [entry])
@@ -216,7 +270,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     // emission so they always render via the relation-path virtual branch.
     const dottedLabels = new Map<string, string | null>()
     for (const r of rows) {
-      if (r.field.includes('.') && !r.field.startsWith('__')) dottedLabels.set(r.field, r.label ?? null)
+      if (r.field.includes('.') && !r.field.startsWith('__'))
+        dottedLabels.set(r.field, r.label ?? null)
     }
     const plainRows = rows.filter((r) => !dottedLabels.has(r.field))
     const knownFields = new Set(plainRows.map((r) => r.field))
@@ -229,22 +284,46 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
       if (!fieldAssignments || fieldAssignments.length === 0) {
         // Strip layout-specific options so unassigned fields don't inherit from global field metadata
-        const unassignedOpts = base.options ? { ...(base.options as Record<string, unknown>) } : null
-        if (unassignedOpts) { delete unassignedOpts.col_span; delete unassignedOpts.show_row_revisions }
-        formatted.push({ ...base, options: unassignedOpts, sort: row.sort ?? rowIdx, layout_assigned: false, _overrides: null })
+        const unassignedOpts = base.options
+          ? { ...(base.options as Record<string, unknown>) }
+          : null
+        if (unassignedOpts) {
+          delete unassignedOpts.col_span
+          delete unassignedOpts.show_row_revisions
+        }
+        formatted.push({
+          ...base,
+          options: unassignedOpts,
+          sort: row.sort ?? rowIdx,
+          layout_assigned: false,
+          _overrides: null
+        })
         continue
       }
 
       for (const assignment of fieldAssignments) {
         const ov = assignment.overrides ?? null
         // Start from base.options but strip layout-specific keys so the assignment is authoritative
-        let options: Record<string, unknown> | null = base.options ? { ...(base.options as Record<string, unknown>) } : null
-        if (options) { delete options.col_span; delete options.show_row_revisions }
-        if (assignment.col_span != null) options = { ...(options ?? {}), col_span: assignment.col_span }
-        if (assignment.show_row_revisions) options = { ...(options ?? {}), show_row_revisions: true }
-        if (assignment.lock_conditions) options = { ...(options ?? {}), lock_conditions: assignment.lock_conditions }
-        if (assignment.allow_revision_restore != null) options = { ...(options ?? {}), allow_revision_restore: !!assignment.allow_revision_restore }
-        if (ov?.options && typeof ov.options === 'object') options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
+        let options: Record<string, unknown> | null = base.options
+          ? { ...(base.options as Record<string, unknown>) }
+          : null
+        if (options) {
+          delete options.col_span
+          delete options.show_row_revisions
+        }
+        if (assignment.col_span != null)
+          options = { ...(options ?? {}), col_span: assignment.col_span }
+        if (assignment.show_row_revisions)
+          options = { ...(options ?? {}), show_row_revisions: true }
+        if (assignment.lock_conditions)
+          options = { ...(options ?? {}), lock_conditions: assignment.lock_conditions }
+        if (assignment.allow_revision_restore != null)
+          options = {
+            ...(options ?? {}),
+            allow_revision_restore: !!assignment.allow_revision_restore
+          }
+        if (ov?.options && typeof ov.options === 'object')
+          options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
         formatted.push({
           ...base,
           options,
@@ -271,8 +350,14 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
               : base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
           required: ov?.required !== undefined ? !!ov.required : base.required,
           interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
-          placeholder: ov?.placeholder !== undefined ? (ov.placeholder as string | null) : (base as Record<string, unknown>).placeholder ?? null,
-          dependency_config: ov?.dependency_config !== undefined ? ov.dependency_config : (base as Record<string, unknown>).dependency_config ?? null,
+          placeholder:
+            ov?.placeholder !== undefined
+              ? (ov.placeholder as string | null)
+              : ((base as Record<string, unknown>).placeholder ?? null),
+          dependency_config:
+            ov?.dependency_config !== undefined
+              ? ov.dependency_config
+              : ((base as Record<string, unknown>).dependency_config ?? null),
           group_key: assignment.group_key,
           sort: assignment.sort,
           layout_assigned: true,
@@ -280,7 +365,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
           // editor round-trips it; header field chips read it back on load.
           label_override: assignment.label_override ?? null,
           lock_conditions: assignment.lock_conditions ?? null,
-          allow_revision_restore: assignment.allow_revision_restore == null ? true : !!assignment.allow_revision_restore,
+          allow_revision_restore:
+            assignment.allow_revision_restore == null ? true : !!assignment.allow_revision_restore,
           widget_id: assignment.widget_id ?? null,
           input_bindings: assignment.input_bindings ?? null,
           _overrides: ov
@@ -308,7 +394,9 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
             cur = info.relatedCollection
             pathTarget = cur
           }
-        } catch { /* leave null */ }
+        } catch {
+          /* leave null */
+        }
         for (const a of fieldAssignments) {
           const autoLabel = field
             .split('.')
@@ -322,21 +410,36 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
             // (label_override) -> nivaro_fields alias row -> auto from the path.
             label: (ov?.label as string | null) ?? a.label_override ?? aliasLabel ?? autoLabel,
             note: (ov?.note as string | null) ?? null,
-            hidden: false, readonly: true, required: false,
+            hidden: false,
+            readonly: true,
+            required: false,
             interface: 'relation-path',
-            display: null, display_options: null,
+            display: null,
+            display_options: null,
             options: {
               ...(ov?.options && typeof ov.options === 'object'
                 ? (ov.options as Record<string, unknown>)
                 : {}),
               ...(pathTarget ? { path_target_collection: pathTarget } : {})
             },
-            group_key: a.group_key, sort: a.sort,
-            label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
-            show_row_revisions: false, show_approval_chain: null,
-            lock_conditions: null, allow_revision_restore: false,
-            widget_id: null, input_bindings: null,
-            layout_assigned: true, is_virtual: true as unknown, dependency_config: null,
+            group_key: a.group_key,
+            sort: a.sort,
+            label_override: a.label_override,
+            is_visible: a.is_visible,
+            default_expanded: a.default_expanded,
+            show_row_revisions: false,
+            show_approval_chain: null,
+            lock_conditions: null,
+            allow_revision_restore: false,
+            // Header display bindings (link template, color, format) save per
+            // assignment for dotted fields too — hardcoding null here made the
+            // editor seed empty on reload and the next auto-save WIPE the
+            // stored value.
+            widget_id: null,
+            input_bindings: a.input_bindings ?? null,
+            layout_assigned: true,
+            is_virtual: true as unknown,
+            dependency_config: null,
             type: 'string',
             _overrides: a.overrides ?? null
           })
@@ -345,26 +448,43 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       }
       for (const a of fieldAssignments) {
         const ov = a.overrides ?? null
-        let virtualOpts: Record<string, unknown> | null = a.show_row_revisions ? { show_row_revisions: true } : null
-        if (a.lock_conditions) virtualOpts = { ...(virtualOpts ?? {}), lock_conditions: a.lock_conditions }
-        if (a.allow_revision_restore != null) virtualOpts = { ...(virtualOpts ?? {}), allow_revision_restore: !!a.allow_revision_restore }
+        let virtualOpts: Record<string, unknown> | null = a.show_row_revisions
+          ? { show_row_revisions: true }
+          : null
+        if (a.lock_conditions)
+          virtualOpts = { ...(virtualOpts ?? {}), lock_conditions: a.lock_conditions }
+        if (a.allow_revision_restore != null)
+          virtualOpts = {
+            ...(virtualOpts ?? {}),
+            allow_revision_restore: !!a.allow_revision_restore
+          }
         if (ov?.options && typeof ov.options === 'object') {
           virtualOpts = { ...(virtualOpts ?? {}), ...(ov.options as Record<string, unknown>) }
         }
         formatted.push({
           field,
           label: (ov?.label as string | null) ?? null,
-          note: null, hidden: false, readonly: false, required: false,
+          note: null,
+          hidden: false,
+          readonly: false,
+          required: false,
           interface: ov?.interface !== undefined ? (ov.interface as string | null) : 'o2m',
           options: virtualOpts,
-          group_key: a.group_key, sort: a.sort,
-          label_override: a.label_override, is_visible: a.is_visible, default_expanded: a.default_expanded,
-          show_row_revisions: a.show_row_revisions, show_approval_chain: a.show_approval_chain,
+          group_key: a.group_key,
+          sort: a.sort,
+          label_override: a.label_override,
+          is_visible: a.is_visible,
+          default_expanded: a.default_expanded,
+          show_row_revisions: a.show_row_revisions,
+          show_approval_chain: a.show_approval_chain,
           lock_conditions: a.lock_conditions ?? null,
-          allow_revision_restore: a.allow_revision_restore == null ? true : !!a.allow_revision_restore,
+          allow_revision_restore:
+            a.allow_revision_restore == null ? true : !!a.allow_revision_restore,
           widget_id: a.widget_id ?? null,
           input_bindings: a.input_bindings ?? null,
-          layout_assigned: true, is_virtual: true as unknown, dependency_config: null,
+          layout_assigned: true,
+          is_virtual: true as unknown,
+          dependency_config: null,
           _overrides: ov
         })
       }
@@ -387,13 +507,27 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       // Auto-create an alias row for virtual fields (M2M/O2M) that have no nivaro_fields row.
       try {
         await db('nivaro_fields').insert({
-          collection, field, type: 'alias', interface: null,
-          hidden: false, readonly: false, required: false,
-          sort: null, label: null, note: null, options: null,
-          group_key: null, visibility_rules: null, dependency_config: null,
-          validation_rules: null, lock_condition: null, default_formula: null,
-          cross_record_defaults: null, remote_options_config: null,
-          repeater_schema: null, is_translatable: false
+          collection,
+          field,
+          type: 'alias',
+          interface: null,
+          hidden: false,
+          readonly: false,
+          required: false,
+          sort: null,
+          label: null,
+          note: null,
+          options: null,
+          group_key: null,
+          visibility_rules: null,
+          dependency_config: null,
+          validation_rules: null,
+          lock_condition: null,
+          default_formula: null,
+          cross_record_defaults: null,
+          remote_options_config: null,
+          repeater_schema: null,
+          is_translatable: false
         })
         existing = await db('nivaro_fields').where({ collection, field }).first()
       } catch (insertErr) {
@@ -430,19 +564,29 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
     if ('label' in body) patch.label = body.label ?? null
     if ('note' in body) patch.note = body.note ?? null
-    if ('placeholder' in body) patch.placeholder = (body as Record<string, unknown>).placeholder ?? null
+    if ('placeholder' in body)
+      patch.placeholder = (body as Record<string, unknown>).placeholder ?? null
     if ('hidden' in body) patch.hidden = body.hidden ? 1 : 0
     if ('readonly' in body) patch.readonly = body.readonly ? 1 : 0
     if ('required' in body) patch.required = body.required ? 1 : 0
     if ('interface' in body) patch.interface = body.interface ?? null
     if ('group_key' in body) patch.group_key = body.group_key ?? null
     if ('sort' in body) patch.sort = body.sort ?? null
-    if ('options' in body && !('col_span' in body) && !('inline_relation' in body) && !('max_values' in body)) {
+    if (
+      'options' in body &&
+      !('col_span' in body) &&
+      !('inline_relation' in body) &&
+      !('max_values' in body)
+    ) {
       patch.options = body.options ?? null
     }
     if ('col_span' in body || 'inline_relation' in body || 'max_values' in body) {
       let opts: Record<string, unknown> = {}
-      try { opts = JSON.parse(String(existing.options ?? '{}')) } catch { /* noop */ }
+      try {
+        opts = JSON.parse(String(existing.options ?? '{}'))
+      } catch {
+        /* noop */
+      }
       if ('col_span' in body) {
         if (body.col_span == null) delete opts.col_span
         else opts.col_span = body.col_span

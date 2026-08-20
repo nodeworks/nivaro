@@ -49,6 +49,9 @@ interface SmtpConfig {
   testMode: boolean
   testRecipient: string | null
   testAllowlist: string[]
+  /** "[STAGING]" etc. — prefixed onto every outgoing subject when set, so
+   *  recipients always know which instance is talking. Null = no prefix. */
+  envLabel: string | null
 }
 
 /**
@@ -67,7 +70,8 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
         'smtp_secure',
         'mail_test_mode',
         'mail_test_recipient',
-        'mail_test_allowlist'
+        'mail_test_allowlist',
+        'environment_label'
       )
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined
@@ -82,7 +86,8 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
         ? row.smtp_secure === 1 || row.smtp_secure === true
         : config.SMTP_SECURE
 
-    return { host, port, secure, user, pass, from, ...resolveTestMode(row) }
+    const envLabel = String(row?.environment_label ?? '').trim() || null
+    return { host, port, secure, user, pass, from, envLabel, ...resolveTestMode(row) }
   } catch {
     // DB not ready during startup — fall back to env vars
     return {
@@ -92,6 +97,7 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
       user: config.SMTP_USER || null,
       pass: config.SMTP_PASSWORD || null,
       from: config.MAIL_FROM,
+      envLabel: null,
       ...resolveTestMode(undefined)
     }
   }
@@ -102,6 +108,11 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
 // single test inbox instead of its real recipients. The env vars WIN over the
 // settings row so a staging box restored from a prod backup (test bit off)
 // stays protected. (Read via process.env, not config.ts, deliberately.)
+
+/** "[STAGING] [TEST — was: x] Subject" — the environment always leads. */
+function withEnvLabel(smtp: SmtpConfig, subject: string): string {
+  return smtp.envLabel ? `[${smtp.envLabel}] ${subject}` : subject
+}
 
 function envBool(v: string | undefined): boolean {
   return v === '1' || v?.toLowerCase() === 'true'
@@ -163,7 +174,6 @@ export function applyMailTestMode(
   }
 }
 
-
 /**
  * Daily-digest deferral: recipients whose preferences.email_digest is 'daily'
  * are pulled OUT of the send and captured in nivaro_deferred_emails — the
@@ -222,10 +232,7 @@ async function applyDigestDeferral(
   try {
     const lower = recipients.map((r) => r.toLowerCase())
     const users = (await db('nivaro_users')
-      .whereRaw(
-        `LOWER(email) IN (${lower.map(() => '?').join(',')})`,
-        lower
-      )
+      .whereRaw(`LOWER(email) IN (${lower.map(() => '?').join(',')})`, lower)
       .select('id', 'email', 'preferences')) as Array<{
       id: string
       email: string
@@ -264,7 +271,10 @@ async function applyDigestDeferral(
     if (deferredRows.length > 0) await db('nivaro_deferred_emails').insert(deferredRows)
     return recipients.filter((r) => !daily.has(r.toLowerCase()))
   } catch (err) {
-    console.warn('[mail] digest deferral failed — sending normally:', err instanceof Error ? err.message : err)
+    console.warn(
+      '[mail] digest deferral failed — sending normally:',
+      err instanceof Error ? err.message : err
+    )
     return recipients
   }
 }
@@ -333,7 +343,7 @@ export async function sendMail(opts: MailOptions): Promise<void> {
   await buildTransporter(smtp).sendMail({
     from: smtp.from,
     to: routed.to,
-    subject: routed.subject,
+    subject: withEnvLabel(smtp, routed.subject),
     html,
     text: opts.text
   })
@@ -389,6 +399,6 @@ export async function sendRawMail(opts: {
     ...mailOpts,
     html,
     to: routed.to,
-    subject: routed.subject
+    subject: withEnvLabel(smtp, routed.subject)
   })
 }

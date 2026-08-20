@@ -350,6 +350,7 @@ export function SettingsPage() {
   const [mailTestMode, setMailTestMode] = useState(false)
   const [mailTestRecipient, setMailTestRecipient] = useState('')
   const [mailTestAllowlist, setMailTestAllowlist] = useState('')
+  const [environmentLabel, setEnvironmentLabel] = useState('')
   const [smsTestMode, setSmsTestMode] = useState(false)
   const [smsTestRecipient, setSmsTestRecipient] = useState('')
   const [smsTestAllowlist, setSmsTestAllowlist] = useState('')
@@ -411,6 +412,7 @@ export function SettingsPage() {
     setMailTestMode(s.mail_test_mode === 1 || s.mail_test_mode === true)
     setMailTestRecipient((s.mail_test_recipient as string) ?? '')
     setMailTestAllowlist((s.mail_test_allowlist as string) ?? '')
+    setEnvironmentLabel((s.environment_label as string) ?? '')
     setSmsTestMode(s.sms_test_mode === 1 || s.sms_test_mode === true)
     setSmsTestRecipient((s.sms_test_recipient as string) ?? '')
     setSmsTestAllowlist((s.sms_test_allowlist as string) ?? '')
@@ -507,7 +509,8 @@ export function SettingsPage() {
       smtp_secure: smtpSecure,
       mail_test_mode: mailTestMode,
       mail_test_recipient: mailTestRecipient || null,
-      mail_test_allowlist: mailTestAllowlist || null
+      mail_test_allowlist: mailTestAllowlist || null,
+      environment_label: environmentLabel.trim() || null
     } as unknown as Partial<CMSSettings>)
   }
 
@@ -1334,6 +1337,24 @@ export function SettingsPage() {
                     )}
                   </div>
 
+                  {/* Environment label */}
+                  <div className='rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'>
+                    <p className='mb-2 text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                      Environment label
+                    </p>
+                    <p className='mb-3 text-[11px] text-slate-400'>
+                      Prefixed onto every outgoing email subject — "[STAGING] Approval needed" — so
+                      recipients always know which instance is talking. Leave empty on production.
+                    </p>
+                    <Input
+                      placeholder='STAGING'
+                      value={environmentLabel}
+                      onChange={(e) => setEnvironmentLabel(e.target.value)}
+                      className='h-8 w-56 text-[13px]'
+                      maxLength={50}
+                    />
+                  </div>
+
                   {/* Test email */}
                   <div className='rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-border dark:bg-muted/30'>
                     <p className='mb-2 text-[12px] font-medium text-slate-700 dark:text-foreground'>
@@ -1473,8 +1494,8 @@ export function SettingsPage() {
                         </div>
                         <p className='mb-3 text-[11px] text-slate-400'>
                           When on, every outgoing SMS is redirected to the test number instead of
-                          its real recipient — the message is prefixed with the original number.
-                          Use in dev and staging so real users never receive system texts. The
+                          its real recipient — the message is prefixed with the original number. Use
+                          in dev and staging so real users never receive system texts. The
                           SMS_TEST_MODE env var forces this on regardless of this switch.
                         </p>
                         {smsTestMode && (
