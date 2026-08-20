@@ -454,6 +454,9 @@ export function SessionReplaysPage() {
   const deepLinkT = searchParams.get('t')
   const deepLinkApplied = useRef(false)
   const [appFilter, setAppFilter] = useState<string | null>(null)
+  // Environment filter — buckets by recording origin host, defaulting to the
+  // environment this admin is running in. null = all environments.
+  const [envFilter, setEnvFilter] = useState<string | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const { data: modes } = useQuery({
@@ -465,6 +468,54 @@ export function SessionReplaysPage() {
   })
   const enabled = modes?.enabled
   const errorReplay = modes?.error_replay
+
+  const { data: originRows = [] } = useQuery<Array<{ origin: string | null; c: number }>>({
+    queryKey: ['session-recording-origins'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ origin: string | null; c: number }> }>('/session-recordings/origins')
+        .then((r) => r.data.data),
+    staleTime: 5 * 60_000
+  })
+
+  // Origin hosts → environment buckets: any localhost variant is 'Local',
+  // everything else groups by host with '-api' folded into its base host
+  // (efp-staging and efp-staging-api are one environment).
+  const envBuckets = useMemo(() => {
+    const buckets = new Map<string, string[]>()
+    for (const row of originRows) {
+      let label = 'Unknown'
+      if (row.origin) {
+        try {
+          const host = new URL(row.origin).hostname
+          label = /^(localhost|127\.)/.test(host)
+            ? 'Local'
+            : host.replace(/^([^.]+?)-api(\.|$)/, '$1$2')
+        } catch {
+          label = row.origin
+        }
+      }
+      const list = buckets.get(label) ?? []
+      list.push(row.origin ?? '__none__')
+      buckets.set(label, list)
+    }
+    return buckets
+  }, [originRows])
+
+  // Default to the environment we're on, once buckets exist.
+  useEffect(() => {
+    if (envFilter !== undefined || envBuckets.size === 0) return
+    const here = /^(localhost|127\.)/.test(window.location.hostname)
+      ? 'Local'
+      : window.location.hostname.replace(/^([^.]+?)-api(\.|$)/, '$1$2')
+    setEnvFilter(envBuckets.has(here) ? here : null)
+  }, [envBuckets, envFilter])
+
+  const originsParam = useMemo(() => {
+    if (!envFilter) return ''
+    const list = envBuckets.get(envFilter) ?? []
+    return list.length > 0 ? `origins=${encodeURIComponent(list.join(','))}` : ''
+  }, [envFilter, envBuckets])
 
   // The rail comes from a server-side aggregate over EVERY recording — one
   // heavy recorder used to own the newest page and everyone else vanished.
@@ -478,11 +529,12 @@ export function SessionReplaysPage() {
       live: number
     }>
   >({
-    queryKey: ['session-recording-people'],
+    queryKey: ['session-recording-people', originsParam],
     queryFn: () =>
       api
-        .get<{ data: never }>('/session-recordings/people')
+        .get<{ data: never }>(`/session-recordings/people${originsParam ? `?${originsParam}` : ''}`)
         .then((r) => r.data.data),
+    enabled: envFilter !== undefined,
     refetchInterval: 60_000
   })
 
@@ -570,10 +622,12 @@ export function SessionReplaysPage() {
   // The selected person's sessions come from THEIR filtered fetch — the
   // newest 50 of that user, not whatever survived the global page.
   const { data: selectedRecordings = [] } = useQuery({
-    queryKey: ['session-recordings-user', selected?.user ?? null],
+    queryKey: ['session-recordings-user', selected?.user ?? null, originsParam],
     queryFn: () =>
       api
-        .get<{ data: Recording[] }>(`/session-recordings/?user=${selected?.user}`)
+        .get<{ data: Recording[] }>(
+          `/session-recordings/?user=${selected?.user}${originsParam ? `&${originsParam}` : ''}`
+        )
         .then((r) => r.data.data),
     enabled: !!selected,
     refetchInterval: 60_000
@@ -615,7 +669,7 @@ export function SessionReplaysPage() {
               {retention === 1 ? '' : 's'}.
             </p>
           </div>
-          {apps.length > 1 && (
+          {(apps.length > 1 || envBuckets.size > 1) && (
             <div className='ml-6 flex items-center gap-1.5'>
               <button
                 type='button'
@@ -644,6 +698,38 @@ export function SessionReplaysPage() {
                   {a}
                 </button>
               ))}
+              {envBuckets.size > 1 && (
+                <>
+                  <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
+                  <button
+                    type='button'
+                    onClick={() => setEnvFilter(null)}
+                    className={cn(
+                      'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                      envFilter === null
+                        ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                        : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                    )}
+                  >
+                    All environments
+                  </button>
+                  {[...envBuckets.keys()].sort().map((env) => (
+                    <button
+                      key={env}
+                      type='button'
+                      onClick={() => setEnvFilter(env)}
+                      className={cn(
+                        'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                        envFilter === env
+                          ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                          : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                      )}
+                    >
+                      {env}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
           {/* Beside the on/off switch: how long recordings live is the other

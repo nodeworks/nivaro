@@ -42,6 +42,26 @@ export async function recordingRetentionDays(): Promise<number> {
 const MAX_BYTES = 15_000_000 // 15MB per recording
 const MAX_CHUNK = 1_500_000 // 1.5MB per chunk
 
+/** '__none__' in the comma list means rows with no recorded origin. */
+function parseOrigins(raw: string | undefined): { list: string[]; includeNull: boolean } {
+  const parts = String(raw ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .slice(0, 20)
+  return { list: parts.filter((v) => v !== '__none__'), includeNull: parts.includes('__none__') }
+}
+
+function originsClause(raw: string | undefined): { clause: string; binds: string[] } {
+  if (!raw) return { clause: '', binds: [] }
+  const { list, includeNull } = parseOrigins(raw)
+  const parts: string[] = []
+  if (list.length > 0) parts.push(`r.origin IN (${list.map(() => '?').join(',')})`)
+  if (includeNull) parts.push('r.origin IS NULL')
+  if (parts.length === 0) return { clause: '', binds: [] }
+  return { clause: `WHERE ${parts.join(' OR ')}`, binds: list }
+}
+
 export async function purgeExpiredRecordings(): Promise<void> {
   const days = await recordingRetentionDays()
   const cutoff = new Date(Date.now() - days * 86_400_000)
@@ -194,23 +214,39 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
    * power user) previously flooded the first page and every other person
    * "disappeared" from the list.
    */
-  app.get('/people', { preHandler: requireAdmin }, async (_req, reply) => {
-    const rows = (await db.raw(
-      `SELECT r.[user] AS [user],
-              LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) AS user_name,
-              COUNT(*) AS recording_count,
-              SUM(CAST(r.byte_size AS BIGINT)) AS total_bytes,
-              MAX(COALESCE(r.last_event_at, r.started_at)) AS last_active,
-              MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > DATEADD(minute, -2, GETUTCDATE()) THEN 1 ELSE 0 END) AS live
-       FROM nivaro_session_recordings r
-       LEFT JOIN nivaro_users u ON u.id = r.[user]
-       GROUP BY r.[user], u.first_name, u.last_name
-       ORDER BY last_active DESC`
-    )) as Array<Record<string, unknown>>
+  app.get<{ Querystring: { origins?: string } }>(
+    '/people',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { clause, binds } = originsClause(req.query.origins)
+      const rows = (await db.raw(
+        `SELECT r.[user] AS [user],
+                LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) AS user_name,
+                COUNT(*) AS recording_count,
+                SUM(CAST(r.byte_size AS BIGINT)) AS total_bytes,
+                MAX(COALESCE(r.last_event_at, r.started_at)) AS last_active,
+                MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > DATEADD(minute, -2, GETUTCDATE()) THEN 1 ELSE 0 END) AS live
+         FROM nivaro_session_recordings r
+         LEFT JOIN nivaro_users u ON u.id = r.[user]
+         ${clause}
+         GROUP BY r.[user], u.first_name, u.last_name
+         ORDER BY last_active DESC`,
+        binds
+      )) as Array<Record<string, unknown>>
+      return reply.send({ data: rows })
+    }
+  )
+
+  /** Distinct recording origins with counts — feeds the environment filter. */
+  app.get('/origins', { preHandler: requireAdmin }, async (_req, reply) => {
+    const rows = await db('nivaro_session_recordings')
+      .groupBy('origin')
+      .count({ c: '*' })
+      .select('origin')
     return reply.send({ data: rows })
   })
 
-  app.get<{ Querystring: { user?: string; page?: string } }>(
+  app.get<{ Querystring: { user?: string; page?: string; origins?: string } }>(
     '/',
     { preHandler: requireAdmin },
     async (req, reply) => {
@@ -235,6 +271,16 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           )
         )
       if (req.query.user) q.where('r.user', req.query.user)
+      if (req.query.origins) {
+        const { list, includeNull } = parseOrigins(req.query.origins)
+        q.where((qb) => {
+          if (list.length > 0) qb.whereIn('r.origin', list)
+          if (includeNull) {
+            if (list.length > 0) qb.orWhereNull('r.origin')
+            else qb.whereNull('r.origin')
+          }
+        })
+      }
       const rows = await q.offset((page - 1) * limit).limit(limit)
       return reply.send({ data: rows, page })
     }
