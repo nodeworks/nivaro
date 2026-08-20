@@ -27,6 +27,7 @@ import { collectionPresetsRoutes } from './collection-presets.js'
 import { collectionsRoutes } from './collections.js'
 import { commentsRoutes } from './comments.js'
 import { configDiffRoutes } from './config-diff.js'
+import { environmentRoutes } from './environments.js'
 import { contentExportRoutes } from './content-export.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
@@ -151,6 +152,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(preflightRoutes)
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
+  await app.register(environmentRoutes, { prefix: '/environments' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(myWorkRoutes)
