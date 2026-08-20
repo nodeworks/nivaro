@@ -320,6 +320,22 @@ export function NotificationSourcesCard() {
       client.request<{ data: Sources }>(get('/users/me/notification-sources')).then((r) => r.data),
     staleTime: 30_000
   })
+  // Hygiene: per-source unread piles + read rate over 30 days — a source
+  // nobody reads is a candidate to mute.
+  const { data: hygiene = [] } = useQuery<
+    Array<{ collection: string | null; total: number; unread: number; read_rate: number }>
+  >({
+    queryKey: ['me-notification-stats'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ collection: string | null; total: number; unread: number; read_rate: number }> }>(
+          get('/users/me/notification-stats')
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+
   const historyQuery = useQuery<HistoryEntry[]>({
     queryKey: ['me-notification-history'],
     queryFn: () =>
@@ -447,6 +463,27 @@ export function NotificationSourcesCard() {
       </div>
 
       {tab === 'sources' && (
+        <>
+          {hygiene.some((h) => h.unread >= 25) && (
+            <div className='mb-3 space-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-400/10'>
+              <p className='text-[11.5px] font-medium text-amber-800 dark:text-amber-300'>
+                Unread piles — the important ones drown under these:
+              </p>
+              {hygiene
+                .filter((h) => h.unread >= 25)
+                .slice(0, 4)
+                .map((h) => (
+                  <p key={h.collection ?? 'general'} className='text-[11.5px] text-amber-700 dark:text-amber-200/90'>
+                    {h.unread.toLocaleString()} unread from{' '}
+                    <span className='font-mono text-[11px]'>{h.collection ?? 'general'}</span>
+                    {` — you read ${h.read_rate}% of these in the last 30 days`}
+                  </p>
+                ))}
+              <p className='text-[11px] text-amber-600/90 dark:text-amber-400/80'>
+                Consider muting or switching the source below to a daily digest.
+              </p>
+            </div>
+          )}
         <div className='space-y-5 px-5 py-4'>
           {stateSubs.length > 0 && (
             <Section
@@ -744,6 +781,7 @@ export function NotificationSourcesCard() {
             </div>
           )}
         </div>
+        </>
       )}
 
       {tab === 'history' && (

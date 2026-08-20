@@ -320,7 +320,88 @@ export function TeamThroughputPage() {
             </p>
           )}
         </div>
+        <SendbackThemesCard collection={collection || 'workflows'} />
       </div>
+    </div>
+  )
+}
+
+/** WHY records come back — send-back comments clustered into named themes by
+ *  one AI call. Throughput says who reworks; this says what causes it. */
+function SendbackThemesCard({ collection }: { collection: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading, isError } = useQuery<{
+    themes: Array<{ theme: string; count: number; examples?: string[] }>
+    sample_size: number
+    note?: string
+  }>({
+    queryKey: ['sendback-themes', collection],
+    queryFn: () =>
+      api
+        .get<{ data: { themes: Array<{ theme: string; count: number; examples?: string[] }>; sample_size: number; note?: string } }>(
+          `/reports/sendback-themes?collection=${collection}&days=90`
+        )
+        .then((r) => r.data.data),
+    enabled: open,
+    staleTime: 30 * 60_000,
+    retry: false
+  })
+  return (
+    <div className='mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
+        <div>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+            Why records come back
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Send-back comments from the last 90 days, clustered into themes — the rework causes
+            behind the counts above.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Analyze'}</span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
+          {isLoading && <p className='text-[12px] text-slate-400'>Clustering comments…</p>}
+          {isError && (
+            <p className='text-[12px] text-amber-600 dark:text-amber-400'>
+              Analysis unavailable — AI may not be configured.
+            </p>
+          )}
+          {data?.note && <p className='text-[12px] text-slate-400'>{data.note}</p>}
+          {data && data.themes.length > 0 && (
+            <div className='space-y-2.5'>
+              <p className='text-[11px] text-slate-400'>
+                {data.sample_size} send-back comment{data.sample_size === 1 ? '' : 's'} analyzed
+              </p>
+              {data.themes
+                .slice()
+                .sort((a, b) => b.count - a.count)
+                .map((t) => (
+                  <div key={t.theme}>
+                    <div className='flex items-baseline gap-2'>
+                      <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                        {t.theme}
+                      </span>
+                      <span className='text-[11.5px] tabular-nums text-slate-400'>
+                        {t.count} comment{t.count === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    {(t.examples ?? []).slice(0, 2).map((ex, i) => (
+                      <p key={i} className='ml-3 text-[11.5px] italic text-slate-500 dark:text-muted-foreground'>
+                        &ldquo;{ex}&rdquo;
+                      </p>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

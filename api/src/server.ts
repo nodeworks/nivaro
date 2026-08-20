@@ -437,6 +437,70 @@ export async function buildServer() {
       // so file chips and the Files page render dead links honestly.
       // Manual: POST /api/cron/file-integrity-sweep/run.
       app.cron.schedule('file-integrity-sweep', '50 3 * * *', async () => {
+
+    // Nightly config-conformance runs for scheduled collections, with a
+    // regression note when a collection's issue count grew since last run.
+    app.cron.schedule('conformance-nightly', '40 2 * * *', async () => {
+      const { runConformance } = await import('./services/config-conformance.js')
+      const schedules = (await db('nivaro_conformance_schedules').where('is_active', true)) as Array<{
+        collection: string
+        row_cap: number
+        created_by: string | null
+      }>
+      for (const sch of schedules) {
+        const running = await db('nivaro_conformance_runs')
+          .where({ collection: sch.collection, status: 'running' })
+          .first('id')
+        if (running) continue
+        const prev = (await db('nivaro_conformance_runs')
+          .where({ collection: sch.collection, status: 'completed' })
+          .orderBy('id', 'desc')
+          .first('violation_count')) as { violation_count: number } | undefined
+        const [inserted] = await db('nivaro_conformance_runs')
+          .insert({ collection: sch.collection, status: 'running', started_at: new Date() })
+          .returning('id')
+        const runId = Number(typeof inserted === 'object' ? (inserted as { id: number }).id : inserted)
+        await runConformance(runId, sch.collection, sch.row_cap > 0 ? sch.row_cap : Number.MAX_SAFE_INTEGER)
+        const done = (await db('nivaro_conformance_runs').where('id', runId).first()) as
+          | { status: string; violation_count: number }
+          | undefined
+        if (
+          done?.status === 'completed' &&
+          prev &&
+          done.violation_count > prev.violation_count &&
+          sch.created_by
+        ) {
+          const { notifyUser } = await import('./services/notification-channels.js')
+          await notifyUser(app, sch.created_by, {
+            subject: `Data integrity regression: ${sch.collection}`,
+            message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
+            collection: 'nivaro_conformance_runs',
+            item: String(runId)
+          }).catch(() => {})
+        }
+      }
+    })
+
+    // Daily readiness score snapshot — the trend line toward cutover.
+    app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
+      const { runReadinessChecks } = await import('./services/readiness.js')
+      const report = await runReadinessChecks()
+      if (report.checks.length === 0) return
+      const today = new Date().toISOString().slice(0, 10)
+      const exists = await db('nivaro_readiness_snapshots').where('snapshot_date', today).first('id')
+      if (exists) {
+        await db('nivaro_readiness_snapshots')
+          .where('snapshot_date', today)
+          .update({ score: report.score, counts: JSON.stringify(report.counts) })
+      } else {
+        await db('nivaro_readiness_snapshots').insert({
+          snapshot_date: today,
+          score: report.score,
+          counts: JSON.stringify(report.counts),
+          created_at: new Date()
+        })
+      }
+    })
         const { fileIntegritySweep } = await import('./services/file-integrity.js')
         const r = await fileIntegritySweep()
         if (r.newly_missing > 0) {

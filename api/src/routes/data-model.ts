@@ -141,6 +141,50 @@ async function columnExists(table: string, column: string): Promise<boolean> {
 export async function dataModelRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
+  /**
+   * Field usage — % populated per physical column, one table scan regardless
+   * of column count (COUNT(col) skips NULLs; columns batched 60 per query).
+   * Finds dead fields worth pruning and half-adopted ones worth requiring.
+   */
+  app.get<{ Params: { table: string } }>('/:table/field-usage', async (req, reply) => {
+    const { table } = req.params
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table)) {
+      return reply.code(400).send({ error: 'Invalid table' })
+    }
+    const cols = (
+      (await db.raw(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`,
+        [table]
+      )) as Array<{ COLUMN_NAME: string }>
+    )
+      .map((c) => c.COLUMN_NAME)
+      .filter((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c))
+    if (cols.length === 0) return reply.code(404).send({ error: 'No such table' })
+    const usage: Array<{ field: string; populated: number }> = []
+    let total = 0
+    for (let i = 0; i < cols.length; i += 60) {
+      const chunk = cols.slice(i, i + 60)
+      const exprs = chunk.map((c) => `COUNT([${c}]) AS [${c}]`).join(', ')
+      const rows = (await db.raw(`SELECT COUNT(*) AS __total, ${exprs} FROM [${table}]`)) as Array<
+        Record<string, number>
+      >
+      const row = rows[0] ?? {}
+      total = Number(row.__total ?? 0)
+      for (const c of chunk) usage.push({ field: c, populated: Number(row[c] ?? 0) })
+    }
+    return {
+      data: {
+        total,
+        fields: usage
+          .map((u) => ({
+            ...u,
+            pct: total > 0 ? Math.round((u.populated / total) * 1000) / 10 : 0
+          }))
+          .sort((a, b) => a.pct - b.pct)
+      }
+    }
+  })
+
   // ─── GET / — list all tables ──────────────────────────────────────────────
 
   app.get('/', async (_req, reply) => {

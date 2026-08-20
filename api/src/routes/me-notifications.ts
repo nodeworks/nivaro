@@ -15,6 +15,39 @@ import { classifyRelationSegment, getLabels } from '../services/queues.js'
  * read model; the client wires each row to its existing own-CRUD endpoint.
  */
 export async function meNotificationRoutes(app: FastifyInstance) {
+  /**
+   * Notification hygiene — per-source unread pile and read rate over the
+   * last 30 days. A source someone never reads is a candidate to mute; the
+   * client prompts when a pile crosses the threshold.
+   */
+  app.get('/users/me/notification-stats', { preHandler: requireAuth }, async (req) => {
+    const since = new Date(Date.now() - 30 * 86_400_000)
+    const rows = (await db('nivaro_notifications')
+      .where('recipient', req.user!.id)
+      .where('timestamp', '>=', since)
+      .groupBy('collection')
+      .select('collection')
+      .count({ total: '*' })
+      .sum({ unread: db.raw("CASE WHEN status = 'inbox' THEN 1 ELSE 0 END") } as never)) as Array<{
+      collection: string | null
+      total: number
+      unread: number
+    }>
+    return {
+      data: rows
+        .map((r) => ({
+          collection: r.collection,
+          total: Number(r.total),
+          unread: Number(r.unread ?? 0),
+          read_rate:
+            Number(r.total) > 0
+              ? Math.round(((Number(r.total) - Number(r.unread ?? 0)) / Number(r.total)) * 100)
+              : 100
+        }))
+        .sort((a, b) => b.unread - a.unread)
+    }
+  })
+
   app.get('/users/me/notification-sources', { preHandler: requireAuth }, async (req, reply) => {
     const uid = req.user!.id
 

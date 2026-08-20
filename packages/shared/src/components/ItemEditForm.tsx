@@ -89,6 +89,7 @@ import {
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
+import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -375,6 +376,8 @@ export interface ItemEditFormProps {
    *  header toolbar. Off by default — the admin's ItemEdit page renders its
    *  own copy in the page header; headless hosts opt in. */
   showItemActions?: boolean
+  /** Scroll to + flash a field on load (deep links: ?focus=<field>). */
+  focusField?: string | null
   /**
    * When set, a Duplicate button renders on saved records. Receives the full
    * copy payload — scalar/M2O values, M2M link id arrays (keyed by staging
@@ -691,6 +694,7 @@ export function ItemEditForm({
   onSaved,
   onDeleted,
   showHeader = true,
+  focusField,
   showItemActions = false,
   onDuplicate,
   showRevisions = true,
@@ -2882,6 +2886,32 @@ export function ItemEditForm({
   }, [accordionMode, sectionGroups])
 
   const bodyRef = useRef<HTMLDivElement>(null)
+
+  /** Shared scroll+flash used by the integrity banner and ?focus= deep links. */
+  const flashField = (key: string) => {
+    const el = document.querySelector<HTMLElement>(`[data-field="${key}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.style.transition = 'box-shadow 0.15s ease'
+    el.style.boxShadow = '0 0 0 2px #00ceff, 0 0 0 5px rgba(0,206,255,0.25)'
+    el.style.borderRadius = '12px'
+    setTimeout(() => {
+      el.style.boxShadow = 'none'
+      setTimeout(() => {
+        el.style.transition = ''
+        el.style.borderRadius = ''
+      }, 300)
+    }, 1200)
+  }
+  const focusedOnceRef = useRef(false)
+  useEffect(() => {
+    if (!focusField || focusedOnceRef.current) return
+    focusedOnceRef.current = true
+    // The field may live on another tab/step and the form may still be
+    // painting — give layout a beat.
+    setTimeout(() => flashField(focusField), 600)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusField])
   // Per-container active tab: Map<containerId, tabKey>
   const [containerTabs, setContainerTabs] = useState<Map<number, string>>(() => new Map())
   const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(
@@ -6441,6 +6471,13 @@ export function ItemEditForm({
                                     <RecordRecapStrip
                                       collection={collection}
                                       itemId={String(itemId)}
+                                    />
+                                  )}
+                                  {!isNew && itemId && (
+                                    <RecordIntegrityBanner
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      onJumpToField={flashField}
                                     />
                                   )}
                                   {importIssues.length > 0 && (

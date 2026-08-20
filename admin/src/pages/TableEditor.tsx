@@ -3878,6 +3878,8 @@ function SettingsTab({
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
+      <IntegrityBadgeSection tableName={tableName} />
+      <FieldUsageSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
@@ -3964,6 +3966,121 @@ function AuditDepthSection({ tableName }: { tableName: string }) {
             Changes are logged without snapshots — the Revisions panel and field history stay empty
             for new writes.
           </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Integrity badge toggle (Settings tab) ────────────────────────────────────
+
+function IntegrityBadgeSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-integrity', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { integrity_badge?: boolean } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const saveMut = useMutation({
+    mutationFn: (integrity_badge: boolean) =>
+      api.patch(`/collections/${tableName}`, { integrity_badge }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-integrity', tableName] })
+      toast.success('Integrity banner setting saved')
+    },
+    onError: () => toast.error('Failed to update setting')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='flex items-center justify-between px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Data integrity banner</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Shows this collection&rsquo;s latest Data Integrity findings as a banner on the record
+            form, so editors fix issues where they live.
+          </p>
+        </div>
+        <Switch
+          checked={meta?.integrity_badge !== false}
+          onCheckedChange={(v) => saveMut.mutate(v)}
+          disabled={saveMut.isPending || meta === undefined}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ─── Field usage (Settings tab) ───────────────────────────────────────────────
+
+function FieldUsageSection({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery<{
+    total: number
+    fields: Array<{ field: string; populated: number; pct: number }>
+  }>({
+    queryKey: ['field-usage', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { total: number; fields: Array<{ field: string; populated: number; pct: number }> } }>(
+          `/data-model/${tableName}/field-usage`
+        )
+        .then((r) => r.data.data),
+    enabled: open && !!tableName,
+    staleTime: 5 * 60_000
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Field usage</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            How populated each column actually is — dead fields worth pruning float to the top.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 px-4 py-3'>
+          {isLoading && <p className='text-[12px] text-slate-400'>Scanning…</p>}
+          {data && (
+            <>
+              <p className='mb-2 text-[11.5px] text-slate-400'>
+                {data.total.toLocaleString()} row{data.total === 1 ? '' : 's'} · least-populated
+                first
+              </p>
+              <div className='grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2'>
+                {data.fields.map((f) => (
+                  <div key={f.field} className='flex items-center gap-2 text-[12px]'>
+                    <span className='w-[180px] shrink-0 truncate font-mono text-[11px] text-slate-600'>
+                      {f.field}
+                    </span>
+                    <span className='h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100'>
+                      <span
+                        className={
+                          f.pct < 5
+                            ? 'block h-full bg-red-400'
+                            : f.pct < 40
+                              ? 'block h-full bg-amber-400'
+                              : 'block h-full bg-emerald-400'
+                        }
+                        style={{ width: `${Math.max(f.pct, 1.5)}%` }}
+                      />
+                    </span>
+                    <span className='w-[48px] shrink-0 text-right font-mono text-[11px] tabular-nums text-slate-500'>
+                      {f.pct}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

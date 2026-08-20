@@ -92,12 +92,13 @@ export async function issuesRoutes(app: FastifyInstance) {
 
   // GET /issues?collection=&item=&status=&severity=&assigned_to=me
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
-    const { collection, item, status, severity, assigned_to } = req.query as {
+    const { collection, item, status, severity, assigned_to, source } = req.query as {
       collection?: string
       item?: string
       status?: string
       severity?: string
       assigned_to?: string
+      source?: string
     }
 
     let query = db<Issue>('nivaro_issues as i')
@@ -139,6 +140,7 @@ export async function issuesRoutes(app: FastifyInstance) {
     if (item) query = query.where('i.item', item)
     if (status) query = query.where('i.status', status)
     if (severity) query = query.where('i.severity', severity)
+    if (source) query = query.where('i.source', source)
     if (assigned_to) {
       query = query.where('i.assigned_to', assigned_to === 'me' ? req.user!.id : assigned_to)
     }
@@ -247,6 +249,29 @@ export async function issuesRoutes(app: FastifyInstance) {
   })
 
   // PATCH /issues/:id — assignee, raiser, or admin only
+  /** Bulk status change — same transition semantics as the single PATCH,
+   *  one activity row per issue. */
+  app.post('/bulk-status', { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body as { ids?: Array<number | string>; status?: string }
+    const status = String(b.status ?? '')
+    if (!['open', 'acknowledged', 'resolved'].includes(status)) {
+      return reply.code(400).send({ error: 'status must be open, acknowledged or resolved' })
+    }
+    const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 200)
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
+    const updated = await db('nivaro_issues')
+      .whereIn('id', ids as never[])
+      .update({ status, updated_at: new Date() })
+    await logActivity({
+      action: 'issue-bulk-status',
+      user: req.user?.id,
+      collection: 'nivaro_issues',
+      comment: `${updated} issue(s) -> ${status}`,
+      req
+    })
+    return { data: { updated } }
+  })
+
   app.patch('/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const existing = await db<Issue>('nivaro_issues')

@@ -349,6 +349,7 @@ export function ItemEditPage() {
   // configured to open items with a chosen layout). Absent → default active
   // layout resolution, exactly as before.
   const layoutSlug = searchParams.get('layout') || undefined
+  const focusField = searchParams.get('focus') || undefined
   const location = useLocation()
 
   // Back returns to wherever the user came from (queue worklist, browser, etc).
@@ -971,6 +972,7 @@ export function ItemEditPage() {
                 collection={collection!}
                 itemId={isNew ? undefined : id}
                 layoutSlug={layoutSlug}
+          focusField={focusField}
                 showHeader={true}
                 onBack={undefined}
                 onSaved={(newId) => {

@@ -47,6 +47,18 @@ export default function Readiness() {
     retry: false
   })
 
+  const { data: trend = [] } = useQuery<
+    Array<{ snapshot_date: string; score: number | null }>
+  >({
+    queryKey: ['readiness-trend'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ snapshot_date: string; score: number | null }> }>('/readiness/trend')
+        .then((r) => r.data.data),
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+
   const groups = new Map<string, Check[]>()
   for (const c of data?.checks ?? []) {
     const g = c.group ?? 'General'
@@ -112,6 +124,14 @@ export default function Readiness() {
                   {(data.counts.fail ?? 0) + (data.counts.error ?? 0)} blocking
                 </p>
               </div>
+              {trend.length >= 2 && (
+                <div className='ml-auto text-right'>
+                  <TrendLine points={trend} />
+                  <p className='mt-1 text-[10.5px] text-slate-400'>
+                    daily score · {trend.length} snapshot{trend.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -225,3 +245,33 @@ function ScoreRing({ score }: { score: number | null }) {
     </svg>
   )
 }
+
+/** Daily readiness score, oldest → newest — the line that should climb
+ *  toward 100 as cutover approaches. */
+function TrendLine({ points }: { points: Array<{ snapshot_date: string; score: number | null }> }) {
+  const pts = points.filter((p) => p.score != null).slice(-30)
+  if (pts.length < 2) return null
+  const w = 160
+  const h = 40
+  const line = pts
+    .map((p, i) => `${(i / (pts.length - 1)) * (w - 4) + 2},${h - 3 - ((p.score ?? 0) / 100) * (h - 6)}`)
+    .join(' ')
+  const last = pts[pts.length - 1]
+  return (
+    <svg width={w} height={h} className='overflow-visible'>
+      <title>
+        {pts[0].snapshot_date}: {pts[0].score} → {last.snapshot_date}: {last.score}
+      </title>
+      <polyline
+        points={line}
+        fill='none'
+        strokeWidth='2'
+        strokeLinecap='round'
+        className={
+          (last.score ?? 0) >= (pts[0].score ?? 0) ? 'stroke-emerald-500' : 'stroke-amber-500'
+        }
+      />
+    </svg>
+  )
+}
+

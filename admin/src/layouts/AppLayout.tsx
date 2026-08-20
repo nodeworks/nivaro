@@ -26,6 +26,7 @@ import {
   FileText,
   GitBranch,
   GitCompare,
+  Megaphone,
   Rocket,
   ScanSearch,
   ServerCog,
@@ -91,7 +92,10 @@ import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
-import { ApiUpdateBanner } from '@nivaro/shared'
+import { AnnouncementBanner, ApiUpdateBanner, NivaroProvider } from '@nivaro/shared'
+import { createNivaro } from '@nivaro/sdk'
+
+const announcementsClient = createNivaro(window.location.origin)
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'
@@ -196,6 +200,7 @@ export const navCategories: NavCategory[] = [
       { icon: GitCompare, label: 'Environment Config', to: '/config-diff' },
       { icon: ServerCog, label: 'Environments', to: '/environments' },
       { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness' },
+      { icon: Megaphone, label: 'Announcements', to: '/announcements' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
@@ -651,6 +656,9 @@ export function AppLayout() {
         {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
         <ApiUpdateBanner appName='Nivaro' />
+        <NivaroProvider client={announcementsClient}>
+          <AnnouncementBanner />
+        </NivaroProvider>
         <div className='flex min-h-0 flex-1 overflow-hidden'>
         <a
           href='#main-content'

@@ -2,15 +2,137 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { requireAuth } from '../middleware/authenticate.js'
+import { can } from '../services/permissions.js'
 import { runConformance, summarizeAllCollections } from '../services/config-conformance.js'
+import { updateOne } from '../services/items.js'
 
 /** Config conformance runs — admin-only, access-audit execution model:
  *  fire-and-forget run, pollable status, findings paged per run. */
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/** Record-scoped integrity lookup — authenticated (not admin): the banner on
+ *  a record form is for whoever can read the record. Separate plugin because
+ *  the main router is requireAdmin-hooked. */
+export async function configConformanceRecordRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/record/:collection/:id',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Invalid collection' })
+      }
+      const meta = (await db('nivaro_collections')
+        .where({ collection })
+        .first('integrity_badge')) as { integrity_badge?: unknown } | undefined
+      // Toggle off = the banner has nothing to say, deliberately.
+      if (meta && meta.integrity_badge === false) return { data: { enabled: false, findings: [] } }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const run = (await db('nivaro_conformance_runs')
+        .where({ collection, status: 'completed' })
+        .orderBy('id', 'desc')
+        .first('id', 'finished_at')) as { id: number; finished_at: Date | null } | undefined
+      if (!run) return { data: { enabled: true, findings: [] } }
+      const findings = await db('nivaro_conformance_findings')
+        .where({ run: run.id, item_id: String(id) })
+        .select('field', 'rule', 'message')
+      return {
+        data: {
+          enabled: true,
+          run_id: run.id,
+          checked_at: run.finished_at,
+          findings
+        }
+      }
+    }
+  )
+}
+
 export async function configConformanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+
+  // ── Nightly schedules ─────────────────────────────────────────────────────
+  app.get('/schedules', async () => {
+    return { data: await db('nivaro_conformance_schedules').orderBy('collection') }
+  })
+
+  app.put<{ Params: { collection: string } }>('/schedules/:collection', async (req, reply) => {
+    const { collection } = req.params
+    if (!IDENT.test(collection)) return reply.code(400).send({ error: 'Invalid collection' })
+    const b = req.body as { is_active?: boolean; row_cap?: number }
+    const existing = await db('nivaro_conformance_schedules').where({ collection }).first('id')
+    if (existing) {
+      await db('nivaro_conformance_schedules')
+        .where({ collection })
+        .update({
+          is_active: b.is_active !== false,
+          row_cap: Math.max(0, Number(b.row_cap ?? 0) || 0)
+        })
+    } else {
+      await db('nivaro_conformance_schedules').insert({
+        collection,
+        is_active: b.is_active !== false,
+        row_cap: Math.max(0, Number(b.row_cap ?? 0) || 0),
+        created_by: req.user?.id ?? null,
+        created_at: new Date()
+      })
+    }
+    await logActivity({
+      action: 'conformance-schedule',
+      user: req.user?.id,
+      collection: 'nivaro_conformance_schedules',
+      item: collection,
+      comment: b.is_active !== false ? 'nightly on' : 'nightly off',
+      req
+    })
+    return { data: await db('nivaro_conformance_schedules').where({ collection }).first() }
+  })
+
+  /** Bulk remediation: clear the offending values behind a run's findings for
+   *  one field+rule, through the items service (RBAC/hooks/revisions apply —
+   *  every clear is an audited write attributed to the admin). */
+  app.post<{ Params: { id: string } }>('/runs/:id/remediate', async (req, reply) => {
+    const run = await db('nivaro_conformance_runs').where('id', req.params.id).first()
+    if (!run) return reply.code(404).send({ error: 'Not found' })
+    const b = req.body as { field?: string; rule?: string; action?: string }
+    if (b.action !== 'clear' || !b.field || !IDENT.test(b.field)) {
+      return reply.code(400).send({ error: 'action=clear and a valid field are required' })
+    }
+    // Only value-holding rules are clearable; a required-empty finding has
+    // nothing to clear.
+    if (b.rule && !['cascade', 'validation', 'display'].includes(b.rule)) {
+      return reply.code(400).send({ error: `Rule "${b.rule}" is not clearable` })
+    }
+    const findings = (await db('nivaro_conformance_findings')
+      .where({ run: run.id, field: b.field })
+      .modify((qb) => {
+        if (b.rule) qb.where('rule', b.rule)
+      })
+      .select('item_id')) as Array<{ item_id: string }>
+    const ids = [...new Set(findings.map((f) => f.item_id))].slice(0, 1000)
+    let cleared = 0
+    let failed = 0
+    for (const id of ids) {
+      try {
+        await updateOne(req.user!, String(run.collection), id, { [b.field]: null })
+        cleared++
+      } catch {
+        failed++
+      }
+    }
+    await logActivity({
+      action: 'conformance-remediate',
+      user: req.user?.id,
+      collection: String(run.collection),
+      comment: `cleared ${b.field} on ${cleared} record(s) from run #${run.id}${failed ? ` (${failed} failed)` : ''}`,
+      req
+    })
+    return { data: { cleared, failed, total: ids.length } }
+  })
 
   /** Which collections have anything to check, with per-kind counts — the
    *  picker only offers collections where a run can find something. */

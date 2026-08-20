@@ -141,6 +141,7 @@ const ConfigDiffPage = lazy(() =>
 const EnvironmentsPage = lazy(() => import('@/pages/Environments'))
 const ReadinessPage = lazy(() => import('@/pages/Readiness'))
 const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
+const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
 const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
 const CoverageGapsPage = lazy(() =>
   import('@/pages/CoverageGaps').then((m) => ({ default: m.CoverageGapsPage }))
@@ -434,6 +435,7 @@ export default function App() {
                   <Route path='environments' element={<EnvironmentsPage />} />
                   <Route path='readiness' element={<ReadinessPage />} />
                   <Route path='data-integrity' element={<DataIntegrityPage />} />
+                  <Route path='announcements' element={<AnnouncementsPage />} />
                   <Route path='coverage-gaps' element={<CoverageGapsPage />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />

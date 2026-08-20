@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { useItemNavigation, useNivaroClient } from '../context'
-import { get, post } from '../lib/commands'
+import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
+import { get, post, put } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { TipLayer } from './TipLayer'
@@ -88,6 +88,7 @@ export function ConformanceView({ className }: { className?: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const nav = useItemNavigation()
+  const navCtx = useNavigation()
   const [collection, setCollection] = useState<string>('')
   const [activeRunId, setActiveRunId] = useState<number | null>(null)
   const [starting, setStarting] = useState(false)
@@ -196,6 +197,10 @@ export function ConformanceView({ className }: { className?: string }) {
         >
           {starting ? 'Starting…' : 'Run checks'}
         </button>
+        {collection && <ScheduleToggle collection={collection} />}
+        {runs.filter((r) => r.status === 'completed').length >= 2 && (
+          <TrendSpark runs={runs} />
+        )}
         {startError && (
           <p className='pb-1.5 text-[12px] text-red-600 dark:text-red-400'>{startError}</p>
         )}
@@ -208,7 +213,14 @@ export function ConformanceView({ className }: { className?: string }) {
       {shownRun && (
         <RunDetail
           run={shownRun}
-          onOpenItem={(id) => nav.open({ collection: shownRun.collection, itemId: id })}
+          onOpenItem={(id, focus) => {
+            if (focus) {
+              const url = nav.urlFor({ collection: shownRun.collection, itemId: id })
+              navCtx.navigate(`${url}${url.includes('?') ? '&' : '?'}focus=${encodeURIComponent(focus)}`)
+            } else {
+              nav.open({ collection: shownRun.collection, itemId: id })
+            }
+          }}
         />
       )}
 
@@ -229,6 +241,90 @@ export function ConformanceView({ className }: { className?: string }) {
         </div>
       )}
     </div>
+  )
+}
+
+/** Nightly sweep toggle for the selected collection — the cron picks up
+ *  active schedules; a regression since the previous run notifies whoever
+ *  enabled it. Hidden for non-admins (the schedules routes are admin-only). */
+function ScheduleToggle({ collection }: { collection: string }) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: schedules, isError } = useQuery<Array<{ collection: string; is_active: boolean }>>({
+    queryKey: ['conformance-schedules'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ collection: string; is_active: boolean }> }>(
+          get('/config-conformance/schedules')
+        )
+        .then((r) => r.data ?? []),
+    retry: false,
+    staleTime: 60_000
+  })
+  if (isError || !schedules) return null
+  const active = schedules.some((sc) => sc.collection === collection && sc.is_active)
+  return (
+    <label className='flex cursor-pointer items-center gap-1.5 pb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+      <button
+        type='button'
+        role='switch'
+        aria-checked={active}
+        onClick={() =>
+          void client
+            .request(
+              put(`/config-conformance/schedules/${collection}`, { is_active: !active })
+            )
+            .then(() => qc.invalidateQueries({ queryKey: ['conformance-schedules'] }))
+        }
+        className={cn(
+          'relative h-4 w-7 rounded-full transition-colors',
+          active ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+            active ? 'translate-x-3.5' : 'translate-x-0.5'
+          )}
+        />
+      </button>
+      Nightly sweep
+    </label>
+  )
+}
+
+/** Issue count over the completed runs, oldest → newest — is the backlog
+ *  shrinking? */
+function TrendSpark({ runs }: { runs: Run[] }) {
+  const pts = runs
+    .filter((r) => r.status === 'completed')
+    .slice(0, 12)
+    .reverse()
+  if (pts.length < 2) return null
+  const max = Math.max(...pts.map((p) => p.violation_count), 1)
+  const w = 90
+  const h = 22
+  const line = pts
+    .map(
+      (p, i) =>
+        `${(i / (pts.length - 1)) * (w - 4) + 2},${h - 3 - (p.violation_count / max) * (h - 6)}`
+    )
+    .join(' ')
+  const improving = pts[pts.length - 1].violation_count <= pts[0].violation_count
+  return (
+    <span
+      className='flex items-end gap-1.5 pb-1'
+      data-tip={`${pts[0].violation_count.toLocaleString()} → ${pts[pts.length - 1].violation_count.toLocaleString()} issues across the last ${pts.length} runs`}
+    >
+      <svg width={w} height={h} className='overflow-visible'>
+        <polyline
+          points={line}
+          fill='none'
+          strokeWidth='1.5'
+          className={improving ? 'stroke-emerald-500' : 'stroke-amber-500'}
+        />
+      </svg>
+    </span>
   )
 }
 
@@ -268,7 +364,7 @@ function RunHistory({
               className={cn(
                 'cursor-pointer border-b border-slate-50 transition-colors last:border-0 dark:border-border/50',
                 activeId === r.id
-                  ? 'bg-[#f2fdff] dark:bg-[#20303a]'
+                  ? 'bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/10'
                   : 'hover:bg-slate-50 dark:hover:bg-background/40'
               )}
             >
@@ -278,8 +374,8 @@ function RunHistory({
               <td className='px-2 py-1.5 text-slate-700 dark:text-foreground'>{r.collection}</td>
               <td className='px-2 py-1.5'>
                 {r.status === 'running' ? (
-                  <span className='flex items-center gap-1.5 text-sky-600 dark:text-sky-400'>
-                    <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500' />
+                  <span className='flex items-center gap-1.5 text-nvr-cyan-dark dark:text-nvr-cyan'>
+                    <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
                     running
                   </span>
                 ) : r.status === 'error' ? (
@@ -333,7 +429,13 @@ interface FindingGroup {
   findings: Finding[]
 }
 
-function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => void }) {
+function RunDetail({
+  run,
+  onOpenItem
+}: {
+  run: Run
+  onOpenItem: (id: string, focus?: string) => void
+}) {
   const client = useNivaroClient()
   const [page, setPage] = useState(1)
   const [rule, setRule] = useState('')
@@ -381,8 +483,8 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
           Run #{run.id}
         </span>
         {run.status === 'running' && (
-          <span className='flex items-center gap-1.5 text-[11.5px] text-sky-600 dark:text-sky-400'>
-            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500' />
+          <span className='flex items-center gap-1.5 text-[11.5px] text-nvr-cyan-dark dark:text-nvr-cyan'>
+            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
             running — {run.checked_records.toLocaleString()} checked so far
           </span>
         )}
@@ -463,6 +565,10 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
         </div>
       )}
 
+      {rule && field && ['cascade', 'validation', 'display'].includes(rule) && (
+        <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />
+      )}
+
       <div className='min-h-0 flex-1 overflow-y-auto'>
         {/* Only a SETTLED empty answer earns the green all-clear — while the
             findings are loading (fresh run, run switch) nothing shows. */}
@@ -495,9 +601,14 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
                 <div className='mt-1 space-y-0.5'>
                   {g.findings.map((f) => (
                     <div key={f.id} className='flex items-baseline gap-2 text-[12px]'>
-                      <span className='w-[150px] shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                      <button
+                        type='button'
+                        onClick={() => onOpenItem(g.item_id, f.field)}
+                        data-tip='Open the record at this field'
+                        className='w-[150px] shrink-0 text-left font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
+                      >
                         {f.field}
-                      </span>
+                      </button>
                       <span
                         className={cn(
                           'shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium',
@@ -532,8 +643,15 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
                     {f.item_label || `#${f.item_id}`}
                   </button>
                 </td>
-                <td className='w-[160px] px-2 py-1.5 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-                  {f.field}
+                <td className='w-[160px] px-2 py-1.5'>
+                  <button
+                    type='button'
+                    onClick={() => onOpenItem(f.item_id, f.field)}
+                    data-tip='Open the record at this field'
+                    className='font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
+                  >
+                    {f.field}
+                  </button>
                 </td>
                 <td className='w-[150px] px-2 py-1.5'>
                   <span
@@ -581,3 +699,84 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
     </div>
   )
 }
+
+/** Bulk remediation for a filtered finding set: clears the offending field on
+ *  every affected record THROUGH the items service (RBAC, hooks, revisions —
+ *  each clear is an audited write). Two-step confirm; irreversible only in
+ *  the sense that the old values move into revision history. */
+function RemediateBar({
+  run,
+  rule,
+  field,
+  total
+}: {
+  run: Run
+  rule: string
+  field: string
+  total: number
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  if (total === 0 && !result) return null
+  return (
+    <div className='flex flex-wrap items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-4 py-2 dark:border-border dark:bg-background/40'>
+      <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+        Bulk fix: clear <span className='font-mono'>{field}</span> on the affected records — each
+        write is revisioned and attributed to you.
+      </span>
+      {result ? (
+        <span className='text-[11.5px] font-medium text-emerald-600 dark:text-emerald-400'>
+          {result}
+        </span>
+      ) : confirming ? (
+        <span className='flex items-center gap-2'>
+          <button
+            type='button'
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              void client
+                .request<{ data: { cleared: number; failed: number } }>(
+                  post(`/config-conformance/runs/${run.id}/remediate`, {
+                    action: 'clear',
+                    field,
+                    rule
+                  })
+                )
+                .then((r) => {
+                  setResult(
+                    `Cleared on ${r.data.cleared} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
+                  )
+                  void qc.invalidateQueries({ queryKey: ['conformance-run', run.id] })
+                })
+                .catch((err: Error) => setResult(err.message))
+                .finally(() => setBusy(false))
+            }}
+            className='h-6 rounded-md bg-red-600 px-2.5 text-[11.5px] font-medium text-white disabled:opacity-50'
+          >
+            {busy ? 'Clearing…' : `Yes, clear ${total.toLocaleString()} value(s)`}
+          </button>
+          <button
+            type='button'
+            onClick={() => setConfirming(false)}
+            className='text-[11.5px] text-slate-400 hover:text-slate-600'
+          >
+            Cancel
+          </button>
+        </span>
+      ) : (
+        <button
+          type='button'
+          onClick={() => setConfirming(true)}
+          className='h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 hover:border-red-300 hover:text-red-600 dark:border-border dark:text-muted-foreground'
+        >
+          Clear values…
+        </button>
+      )}
+    </div>
+  )
+}
+

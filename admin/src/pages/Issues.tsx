@@ -438,12 +438,16 @@ function IssueRows({
   issue,
   users,
   isOpen,
-  onToggle
+  onToggle,
+  selected,
+  onSelect
 }: {
   issue: Issue
   users: CmsUser[]
   isOpen: boolean
   onToggle: () => void
+  selected: boolean
+  onSelect: (v: boolean) => void
 }) {
   return (
     <>
@@ -451,7 +455,15 @@ function IssueRows({
         className='cursor-pointer border-b border-slate-100 text-[12px] hover:bg-slate-50 dark:border-border/50 dark:hover:bg-muted/40'
         onClick={onToggle}
       >
-        <td className='px-3 py-2.5 text-center'>
+        <td className='px-3 py-2.5 text-center' onClick={(e) => e.stopPropagation()}>
+          <input
+            type='checkbox'
+            checked={selected}
+            onChange={(e) => onSelect(e.target.checked)}
+            className='h-3.5 w-3.5'
+          />
+        </td>
+        <td className='px-1 py-2.5 text-center'>
           {isOpen ? (
             <ChevronDown className='inline h-3.5 w-3.5 text-muted-foreground' />
           ) : (
@@ -468,8 +480,14 @@ function IssueRows({
         <td className='truncate px-2 py-2.5 text-muted-foreground'>
           {issue.assigned_to_name || issue.assigned_to_email || '—'}
         </td>
+        <td className='truncate px-2 py-2.5 text-muted-foreground'>
+          {issue.raised_by_name || issue.raised_by_email || '—'}
+        </td>
         <td className='truncate px-2 py-2.5 font-mono text-[11px] text-muted-foreground'>
           {issue.collection ?? '—'}
+        </td>
+        <td className='px-2 py-2.5 text-right text-muted-foreground'>
+          {formatRelative(issue.created_at)}
         </td>
         <td className='px-4 py-2.5 text-right text-muted-foreground'>
           {formatRelative(issue.updated_at)}
@@ -477,7 +495,7 @@ function IssueRows({
       </tr>
       {isOpen && (
         <tr className='border-b border-slate-100 dark:border-border/50'>
-          <td colSpan={7} className='p-0'>
+          <td colSpan={10} className='p-0'>
             <IssueDetail issue={issue} users={users} />
           </td>
         </tr>
@@ -493,13 +511,17 @@ export function IssuesPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
   const [collectionFilter, setCollectionFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
   const [creating, setCreating] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   const params = new URLSearchParams()
   if (statusFilter) params.set('status', statusFilter)
   if (severityFilter) params.set('severity', severityFilter)
   if (collectionFilter) params.set('collection', collectionFilter)
+  if (sourceFilter) params.set('source', sourceFilter)
   const qs = params.toString()
 
   const { data: issues = [], isLoading } = useQuery<Issue[]>({
@@ -598,12 +620,76 @@ export function IssuesPage() {
               setStatusFilter('')
               setSeverityFilter('')
               setCollectionFilter('')
+              setSourceFilter('')
             }}
           >
             Clear
           </Button>
         )}
+        <span className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {[
+            { value: '', label: 'All sources' },
+            { value: 'client', label: 'Client' },
+            { value: 'server', label: 'Server' },
+            { value: 'manual', label: 'Manual' }
+          ].map((opt) => (
+            <button
+              key={opt.value || 'all'}
+              type='button'
+              onClick={() => setSourceFilter(opt.value)}
+              className={
+                sourceFilter === opt.value
+                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </span>
       </div>
+
+      {/* Bulk status bar */}
+      {selected.size > 0 && (
+        <div className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-2 dark:border-border dark:bg-background/60'>
+          <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+            {selected.size} selected
+          </span>
+          {['acknowledged', 'resolved', 'open'].map((st) => (
+            <Button
+              key={st}
+              size='sm'
+              variant='outline'
+              className='h-7 text-[12px] capitalize'
+              disabled={bulkBusy}
+              onClick={async () => {
+                setBulkBusy(true)
+                try {
+                  await api.post('/issues/bulk-status', { ids: [...selected], status: st })
+                  toast.success(`${selected.size} issue(s) marked ${st}`)
+                  setSelected(new Set())
+                  qc.invalidateQueries({ queryKey: ['issues'] })
+                  qc.invalidateQueries({ queryKey: ['issues-summary'] })
+                } catch {
+                  toast.error('Bulk update failed')
+                } finally {
+                  setBulkBusy(false)
+                }
+              }}
+            >
+              Mark {st}
+            </Button>
+          ))}
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 text-[12px] text-slate-400'
+            onClick={() => setSelected(new Set())}
+          >
+            Clear selection
+          </Button>
+        </div>
+      )}
 
       {/* Table */}
       <div className='flex-1 overflow-y-auto'>
@@ -625,12 +711,24 @@ export function IssuesPage() {
           <table className='w-full'>
             <thead className='sticky top-0 bg-white dark:bg-card'>
               <tr className='border-b border-slate-200 text-left text-[11px] text-muted-foreground dark:border-border'>
-                <th className='w-10 px-3 py-2' />
+                <th className='w-9 px-3 py-2'>
+                  <input
+                    type='checkbox'
+                    checked={issues.length > 0 && selected.size === issues.length}
+                    onChange={(e) =>
+                      setSelected(e.target.checked ? new Set(issues.map((i) => i.id)) : new Set())
+                    }
+                    className='h-3.5 w-3.5'
+                  />
+                </th>
+                <th className='w-8 px-1 py-2' />
                 <th className='px-2 py-2 font-medium'>Title</th>
                 <th className='w-24 px-2 py-2 font-medium'>Severity</th>
                 <th className='w-28 px-2 py-2 font-medium'>Status</th>
                 <th className='w-40 px-2 py-2 font-medium'>Assignee</th>
+                <th className='w-36 px-2 py-2 font-medium'>Raised By</th>
                 <th className='w-36 px-2 py-2 font-medium'>Collection</th>
+                <th className='w-28 px-2 py-2 text-right font-medium'>Created</th>
                 <th className='w-28 px-4 py-2 text-right font-medium'>Updated</th>
               </tr>
             </thead>
@@ -644,6 +742,15 @@ export function IssuesPage() {
                     users={users}
                     isOpen={isOpen}
                     onToggle={() => setExpandedId(isOpen ? null : issue.id)}
+                    selected={selected.has(issue.id)}
+                    onSelect={(v) =>
+                      setSelected((prev) => {
+                        const next = new Set(prev)
+                        if (v) next.add(issue.id)
+                        else next.delete(issue.id)
+                        return next
+                      })
+                    }
                   />
                 )
               })}
