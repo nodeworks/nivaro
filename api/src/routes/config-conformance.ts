@@ -38,13 +38,21 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
 
   app.get('/runs', async (req) => {
     const q = req.query as { collection?: string; limit?: string }
-    const rows = await db('nivaro_conformance_runs')
+    const rows = await db('nivaro_conformance_runs as r')
+      .leftJoin('nivaro_users as u', 'u.id', 'r.triggered_by')
       .modify((qb) => {
-        if (q.collection) qb.where('collection', q.collection)
+        if (q.collection) qb.where('r.collection', q.collection)
       })
-      .orderBy('id', 'desc')
+      .orderBy('r.id', 'desc')
       .limit(Math.min(Number(q.limit ?? 20) || 20, 100))
-    return { data: rows }
+      .select('r.*', 'u.first_name as triggered_by_first', 'u.last_name as triggered_by_last')
+    return {
+      data: rows.map((r: Record<string, unknown>) => ({
+        ...r,
+        triggered_by_name:
+          [r.triggered_by_first, r.triggered_by_last].filter(Boolean).join(' ') || null
+      }))
+    }
   })
 
   app.get<{ Params: { id: string } }>('/runs/:id', async (req, reply) => {

@@ -4,6 +4,7 @@ import { useItemNavigation, useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
+import { TipLayer } from './TipLayer'
 
 /**
  * Config conformance — which items would FAIL their own form today.
@@ -35,6 +36,24 @@ interface Run {
   error: string | null
   started_at: string | null
   finished_at: string | null
+  triggered_by_name?: string | null
+}
+
+function relTime(iso: string | null): string {
+  if (!iso) return ''
+  const diff = Date.now() - new Date(iso).getTime()
+  const m = Math.round(diff / 60_000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+function runDuration(r: Run): string {
+  if (!r.started_at || !r.finished_at) return ''
+  const s = Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
 interface Finding {
@@ -97,7 +116,9 @@ export function ConformanceView({ className }: { className?: string }) {
     refetchInterval: (q) => (q.state.data?.some((r) => r.status === 'running') ? 3_000 : false)
   })
 
-  const shownRun = activeRunId != null ? runs.find((r) => r.id === activeRunId) : runs[0]
+  // A just-started run isn't in the list until the next poll — fall back to
+  // the newest known run instead of flashing the empty-state overview.
+  const shownRun = (activeRunId != null ? runs.find((r) => r.id === activeRunId) : undefined) ?? runs[0]
   const selected = collections.find((c) => c.collection === collection)
 
   const startRun = async () => {
@@ -121,6 +142,7 @@ export function ConformanceView({ className }: { className?: string }) {
 
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col gap-4 p-6', className)} data-conformance>
+      <TipLayer />
       <div className='flex flex-wrap items-end gap-3'>
         <div className='w-[300px]'>
           <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
@@ -180,30 +202,7 @@ export function ConformanceView({ className }: { className?: string }) {
       </div>
 
       {runs.length > 0 && (
-        <div className='flex flex-wrap gap-1.5'>
-          {runs.slice(0, 8).map((r) => (
-            <button
-              key={r.id}
-              type='button'
-              onClick={() => setActiveRunId(r.id)}
-              className={cn(
-                'rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
-                shownRun?.id === r.id
-                  ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                  : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
-              )}
-            >
-              #{r.id} · {r.collection} ·{' '}
-              {r.status === 'running' ? (
-                <span className='text-sky-600 dark:text-sky-400'>running…</span>
-              ) : r.status === 'error' ? (
-                <span className='text-red-600 dark:text-red-400'>error</span>
-              ) : (
-                `${r.violation_count} issue${r.violation_count === 1 ? '' : 's'}`
-              )}
-            </button>
-          ))}
-        </div>
+        <RunHistory runs={runs} activeId={shownRun?.id ?? null} onSelect={setActiveRunId} />
       )}
 
       {shownRun && (
@@ -226,6 +225,100 @@ export function ConformanceView({ className }: { className?: string }) {
             the newest records.
           </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** Run history as a dense, scannable table — collection, outcome, size, who
+ *  and when — instead of an ever-growing pill strip. Collapsed to the recent
+ *  few; the selected run row is tinted. */
+function RunHistory({
+  runs,
+  activeId,
+  onSelect
+}: {
+  runs: Run[]
+  activeId: number | null
+  onSelect: (id: number) => void
+}) {
+  const [showAll, setShowAll] = useState(false)
+  const visible = showAll ? runs : runs.slice(0, 5)
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <table className='w-full border-collapse text-[12px] tabular-nums'>
+        <thead>
+          <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border'>
+            <th className='px-3 py-1.5 font-medium'>Run</th>
+            <th className='px-2 py-1.5 font-medium'>Collection</th>
+            <th className='px-2 py-1.5 font-medium'>Result</th>
+            <th className='px-2 py-1.5 text-right font-medium'>Checked</th>
+            <th className='px-2 py-1.5 text-right font-medium'>Duration</th>
+            <th className='px-2 py-1.5 font-medium'>Started</th>
+            <th className='px-3 py-1.5 font-medium'>By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r) => (
+            <tr
+              key={r.id}
+              onClick={() => onSelect(r.id)}
+              className={cn(
+                'cursor-pointer border-b border-slate-50 transition-colors last:border-0 dark:border-border/50',
+                activeId === r.id
+                  ? 'bg-[#f2fdff] dark:bg-[#20303a]'
+                  : 'hover:bg-slate-50 dark:hover:bg-background/40'
+              )}
+            >
+              <td className='px-3 py-1.5 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                #{r.id}
+              </td>
+              <td className='px-2 py-1.5 text-slate-700 dark:text-foreground'>{r.collection}</td>
+              <td className='px-2 py-1.5'>
+                {r.status === 'running' ? (
+                  <span className='flex items-center gap-1.5 text-sky-600 dark:text-sky-400'>
+                    <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500' />
+                    running
+                  </span>
+                ) : r.status === 'error' ? (
+                  <span className='text-red-600 dark:text-red-400' data-tip={r.error ?? undefined}>
+                    error
+                  </span>
+                ) : r.violation_count === 0 ? (
+                  <span className='text-emerald-600 dark:text-emerald-400'>clean</span>
+                ) : (
+                  <span className='text-slate-700 dark:text-foreground'>
+                    {r.violation_count.toLocaleString()} issue{r.violation_count === 1 ? '' : 's'}
+                  </span>
+                )}
+              </td>
+              <td className='px-2 py-1.5 text-right text-slate-500 dark:text-muted-foreground'>
+                {r.checked_records.toLocaleString()}
+              </td>
+              <td className='px-2 py-1.5 text-right text-slate-500 dark:text-muted-foreground'>
+                {runDuration(r)}
+              </td>
+              <td
+                className='px-2 py-1.5 text-slate-500 dark:text-muted-foreground'
+                data-tip={r.started_at ? new Date(r.started_at).toLocaleString() : undefined}
+              >
+                {relTime(r.started_at)}
+              </td>
+              <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
+                {r.triggered_by_name ?? '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {runs.length > 5 && (
+        <button
+          type='button'
+          onClick={() => setShowAll((v) => !v)}
+          className='w-full border-t border-slate-100 py-1.5 text-[11px] text-slate-400 transition-colors hover:text-slate-600 dark:border-border dark:hover:text-muted-foreground'
+        >
+          {showAll ? 'Show fewer' : `Show all ${runs.length} runs`}
+        </button>
       )}
     </div>
   )
@@ -303,18 +396,29 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
           <span className='text-[11.5px] text-red-600 dark:text-red-400'>{run.error}</span>
         )}
         <span className='flex-1' />
-        <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          <input
-            type='checkbox'
-            checked={grouped}
-            onChange={(e) => {
-              setGrouped(e.target.checked)
-              setPage(1)
-            }}
-            className='h-3.5 w-3.5'
-          />
-          Group by record
-        </label>
+        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {([
+            { value: false, label: 'All issues' },
+            { value: true, label: 'By record' }
+          ] as const).map((opt) => (
+            <button
+              key={opt.label}
+              type='button'
+              onClick={() => {
+                setGrouped(opt.value)
+                setPage(1)
+              }}
+              className={cn(
+                'rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+                grouped === opt.value
+                  ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                  : 'text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </span>
         {chips.rules.map((r) => (
           <button
             key={r.rule}

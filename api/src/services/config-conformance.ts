@@ -28,7 +28,9 @@ const DEFAULT_ROW_CAP = 5000
 
 interface CascadeCheck {
   field: string
+  fieldLabel: string
   parent_field: string
+  parentLabel: string
   /** Parent is an M2M alias on the source collection (value = junction set). */
   parentIsM2M: boolean
   parentJunction?: { table: string; srcFk: string; tgtFk: string }
@@ -200,12 +202,39 @@ async function layoutPresence(
 export async function compileChecks(collection: string): Promise<CompiledChecks> {
   const fields = (await db('nivaro_fields')
     .where({ collection })
-    .select('field', 'required', 'validation_rules', 'dependency_config')) as Array<{
+    .select('field', 'label', 'required', 'validation_rules', 'dependency_config')) as Array<{
     field: string
+    label: string | null
     required: unknown
     validation_rules: unknown
     dependency_config: unknown
   }>
+
+  // Human labels, the way the FORM shows them: the active layout's
+  // assignment label wins (that's where "Zone" and "Ship-To Contact" live),
+  // then the field's own label, then a title-cased machine name.
+  const labelMap = new Map<string, string>()
+  for (const f of fields) {
+    if (f.label) labelMap.set(f.field, f.label)
+  }
+  const activeLayout = (await db('nivaro_collection_layouts')
+    .where({ collection, layout_type: 'grouped', is_active: true })
+    .first('id')) as { id: number } | undefined
+  if (activeLayout) {
+    const asg = (await db('nivaro_layout_field_assignments')
+      .where('layout_id', activeLayout.id)
+      .select('field', 'label_override', 'overrides')) as Array<{
+      field: string
+      label_override: string | null
+      overrides: unknown
+    }>
+    for (const a of asg) {
+      const o = parseJson<{ label?: string }>(a.overrides)
+      const l = o?.label || a.label_override
+      if (l) labelMap.set(a.field, l)
+    }
+  }
+  const labelFor = (field: string): string => labelMap.get(field) ?? label(field)
 
   const out: CompiledChecks = {
     collection,
@@ -281,8 +310,8 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         const alias = await resolveAlias(collection, f.field)
         out.requiredFields.push(
           alias
-            ? { field: f.field, label: label(f.field), kind: 'm2m', junction: alias }
-            : { field: f.field, label: label(f.field), kind: 'column' }
+            ? { field: f.field, label: labelFor(f.field), kind: 'm2m', junction: alias }
+            : { field: f.field, label: labelFor(f.field), kind: 'column' }
         )
       }
     }
@@ -301,7 +330,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
           if (creationBaseline && Number.isFinite(days)) {
             out.dateOffsets.push({
               field: f.field,
-              label: label(f.field),
+              label: labelFor(f.field),
               op: r.type === 'min_days_from_today' ? 'min' : 'max',
               days,
               baseline: creationBaseline
@@ -322,7 +351,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
             `${f.field}: validation rules, but layout-dependent (not on ${presence.missing.join(', ')})`
           )
         } else {
-          out.validation.push({ field: f.field, label: label(f.field), rules: sweepable })
+          out.validation.push({ field: f.field, label: labelFor(f.field), rules: sweepable })
         }
       }
     }
@@ -366,7 +395,9 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       }
       const check: CascadeCheck = {
         field: f.field,
+        fieldLabel: labelFor(f.field),
         parent_field: c.parent_field,
+        parentLabel: labelFor(c.parent_field),
         parentIsM2M: false,
         childIsM2M,
         childJunction,
@@ -656,7 +687,7 @@ async function evaluate(
     // failing parent, not one row per rule.
     const cascadeFails = new Map<
       string,
-      { field: string; isM2M: boolean; badCount: number; parents: string[] }
+      { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
     >()
     for (const c of checks.cascades) {
       if (!c.childIsM2M && !physical.has(c.field)) continue
@@ -744,11 +775,11 @@ async function evaluate(
           const key = `${row.id}|${c.field}`
           let agg = cascadeFails.get(key)
           if (!agg) {
-            agg = { field: c.field, isM2M: c.childIsM2M, badCount: 0, parents: [] }
+            agg = { field: c.field, fieldLabel: c.fieldLabel, isM2M: c.childIsM2M, badCount: 0, parents: [] }
             cascadeFails.set(key, agg)
           }
           agg.badCount = Math.max(agg.badCount, bad.length)
-          agg.parents.push(label(c.parent_field))
+          agg.parents.push(c.parentLabel)
         }
       }
     }
@@ -764,8 +795,8 @@ async function evaluate(
         field: agg.field,
         rule: 'cascade',
         message: agg.isM2M
-          ? `${agg.badCount} linked ${label(agg.field)} value(s) are not available options for the current ${parents}`
-          : `${label(agg.field)} value is not an available option for the current ${parents}`
+          ? `${agg.badCount} linked ${agg.fieldLabel} value(s) are not available options for the current ${parents}`
+          : `${agg.fieldLabel} value is not an available option for the current ${parents}`
       })
     }
 
