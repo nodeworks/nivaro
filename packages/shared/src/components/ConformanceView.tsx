@@ -464,7 +464,9 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
       )}
 
       <div className='min-h-0 flex-1 overflow-y-auto'>
-        {(data?.findings ?? []).length === 0 && run.status === 'completed' && (
+        {/* Only a SETTLED empty answer earns the green all-clear — while the
+            findings are loading (fresh run, run switch) nothing shows. */}
+        {data !== undefined && (data?.findings ?? []).length === 0 && run.status === 'completed' && (
           <p className='px-4 py-6 text-[12.5px] text-emerald-600 dark:text-emerald-400'>
             {rule || field
               ? 'No findings match the filters.'
