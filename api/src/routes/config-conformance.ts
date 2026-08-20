@@ -118,7 +118,10 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
     if (running) {
       return reply.code(409).send({ error: 'A run is already in progress for this collection' })
     }
-    const limit = Math.min(Number((req.body as { limit?: number })?.limit ?? 5000) || 5000, 50000)
+    // limit 0 = the whole collection (long run — fire-and-forget + progress
+    // polling make that fine); otherwise clamp to 50k.
+    const rawLimit = Number((req.body as { limit?: number })?.limit ?? 5000)
+    const limit = rawLimit === 0 ? Number.MAX_SAFE_INTEGER : Math.min(rawLimit || 5000, 50000)
     const [inserted] = await db('nivaro_conformance_runs')
       .insert({
         collection,

@@ -103,7 +103,7 @@ export function ConformanceView({ className }: { className?: string }) {
     try {
       const res = await client.request<{ data: { id: number } }>(
         post(`/config-conformance/${collection}/run`, {
-          limit: Number(sampleSize) || 5000
+          limit: sampleSize === '0' ? 0 : Number(sampleSize) || 5000
         })
       )
       setActiveRunId(res.data.id)
@@ -155,7 +155,8 @@ export function ConformanceView({ className }: { className?: string }) {
               { value: '5000', label: '5,000 newest' },
               { value: '10000', label: '10,000 newest' },
               { value: '25000', label: '25,000 newest' },
-              { value: '50000', label: '50,000 newest' }
+              { value: '50000', label: '50,000 newest' },
+              { value: '0', label: 'All records' }
             ]}
             placeholder='5,000 newest'
             className='h-8'

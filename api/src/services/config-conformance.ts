@@ -520,10 +520,10 @@ async function evaluate(
           await db('nivaro_conformance_findings').insert(inserts.slice(i, i + 200))
         }
       }
-      if (violations >= FINDINGS_CAP) {
-        truncated = true
-        break
-      }
+      // Past the findings cap we stop PERSISTING but keep counting — an
+      // unlimited run's violation total must describe the whole collection,
+      // not the first 2,000 rows that happened to store.
+      if (violations >= FINDINGS_CAP) truncated = true
     }
 
     // Progress is visible to pollers without waiting for the end.
