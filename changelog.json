@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-20T20:26:36.753Z",
+  "generated_at": "2026-08-20T20:33:30.255Z",
   "releases": [
+    {
+      "version": "0.1.84",
+      "tag": "v0.1.84",
+      "date": "2026-08-20T16:33:27-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "pipelines and deployments auto-refresh every 5 seconds",
+              "hash": "5ab39a56"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.83",
       "tag": "v0.1.83",
-      "date": "2026-08-20T16:26:34-04:00",
+      "date": "2026-08-20T16:26:36-04:00",
       "sections": [
         {
           "label": "Added",
