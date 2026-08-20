@@ -37,7 +37,10 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
           'r.id',
           'r.delta',
           'r.data',
+          'r.legacy_id',
           'a.action',
+          'a.comment',
+          'a.user as actor',
           'a.timestamp',
           'u.first_name',
           'u.last_name',
@@ -46,12 +49,41 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
         id: number
         delta: string | null
         data: string | null
+        legacy_id: number | null
         action: string | null
+        comment: string | null
+        actor: string | null
         timestamp: Date | null
         first_name: string | null
         last_name: string | null
         email: string | null
       }>
+
+      /** Lineage: WHERE a value came from, not just who. Classified from the
+       *  signals the rows already carry — the activity comment's machine
+       *  markers, a null actor (system write), integration-identity emails,
+       *  and legacy-import provenance. Heuristic and labeled honestly. */
+      const classifyOrigin = (r: {
+        comment: string | null
+        actor: string | null
+        email: string | null
+        legacy_id: number | null
+      }): { kind: string; label: string | null } => {
+        const c = (r.comment ?? '').toLowerCase()
+        if (r.legacy_id != null || c === 'legacy-import') {
+          return { kind: 'import', label: 'Legacy import' }
+        }
+        if (c === 'reforecast') return { kind: 'automation', label: 'Nightly reforecast' }
+        if (c.startsWith('forecast-import:'))
+          return { kind: 'import', label: 'Forecast history import' }
+        if (c.includes('replay')) return { kind: 'automation', label: 'Flow replay' }
+        const email = (r.email ?? '').toLowerCase()
+        if (email.endsWith('@nivaro.local') || email.includes('integration')) {
+          return { kind: 'integration', label: null }
+        }
+        if (!r.actor) return { kind: 'automation', label: null }
+        return { kind: 'user', label: null }
+      }
 
       const entries: Array<{
         value: unknown
@@ -59,6 +91,8 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
         timestamp: string | null
         user_name: string | null
         action: string
+        origin: { kind: string; label: string | null }
+        note: string | null
       }> = []
       for (const r of rows) {
         if (entries.length >= 40) break
@@ -81,13 +115,17 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
           }
         }
         if (!source || !(field in source)) continue
+        const origin = classifyOrigin(r)
         entries.push({
           value: source[field],
           display: null,
           timestamp: r.timestamp ? new Date(r.timestamp).toISOString() : null,
-          user_name:
-            [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null,
-          action
+          user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null,
+          action,
+          origin,
+          // A human change-reason (change_reason_config) rides the activity
+          // comment — surface it; machine markers already became the origin.
+          note: origin.kind === 'user' && r.comment && r.comment.length <= 200 ? r.comment : null
         })
       }
 

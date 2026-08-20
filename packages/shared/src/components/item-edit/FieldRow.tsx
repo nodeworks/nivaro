@@ -1,13 +1,13 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  History, ChartLine, Info, Lock, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { ChartLine, History, Info, Loader2, Lock, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { FieldRenderer } from './FieldRenderer'
 import {
@@ -18,24 +18,56 @@ import {
   SYSTEM_FIELDS
 } from './helpers'
 import { useM2MStaging } from './M2MStagingContext'
-import { useAddendumFields } from './AddendumFieldContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
 const TEXTUAL_TYPES = new Set(['string', 'text', 'richtext', 'textarea', 'markdown', 'json', 'csv'])
-const TEXTUAL_INTERFACES = new Set(['input', 'textarea', 'wysiwyg', 'markdown', 'input-rich-text-html', 'rich_text', 'extension-editorjs'])
-const RELATION_INTERFACES = new Set(['relation-m2o', 'relation-m2m', 'select-multiple-m2m', 'list-o2m', 'relation-list', 'inline-grid', 'inline-table', 'file', 'files', 'image'])
+const TEXTUAL_INTERFACES = new Set([
+  'input',
+  'textarea',
+  'wysiwyg',
+  'markdown',
+  'input-rich-text-html',
+  'rich_text',
+  'extension-editorjs'
+])
+const RELATION_INTERFACES = new Set([
+  'relation-m2o',
+  'relation-m2m',
+  'select-multiple-m2m',
+  'list-o2m',
+  'relation-list',
+  'inline-grid',
+  'inline-table',
+  'file',
+  'files',
+  'image'
+])
 
 function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
   const iface = field.interface ?? ''
-  if (RELATION_INTERFACES.has(iface) || iface.startsWith('relation-') || iface.endsWith('-m2o') || iface.endsWith('-m2m')) return false
+  if (
+    RELATION_INTERFACES.has(iface) ||
+    iface.startsWith('relation-') ||
+    iface.endsWith('-m2o') ||
+    iface.endsWith('-m2m')
+  )
+    return false
   if (TEXTUAL_TYPES.has(field.type ?? '') || TEXTUAL_INTERFACES.has(iface)) return true
   // Fallback: no interface + scalar type → renders as text Input
   if (!iface && field.type && !NUMERIC_TYPES.has(field.type)) return true
   return false
 }
 
-function FieldSparkline({ collection, itemId, field }: { collection: string; itemId: string; field: string }) {
+function FieldSparkline({
+  collection,
+  itemId,
+  field
+}: {
+  collection: string
+  itemId: string
+  field: string
+}) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const { data, isLoading } = useQuery({
@@ -43,14 +75,18 @@ function FieldSparkline({ collection, itemId, field }: { collection: string; ite
     queryFn: () =>
       client
         .request<{ data: Array<{ timestamp: string; value: unknown }> }>(
-          get(`/items/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}/field-history/${encodeURIComponent(field)}`)
+          get(
+            `/items/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}/field-history/${encodeURIComponent(field)}`
+          )
         )
         .then((r) => r.data ?? []),
     enabled: open,
     staleTime: 30_000
   })
 
-  const W = 120, H = 28, PAD = 3
+  const W = 120,
+    H = 28,
+    PAD = 3
   const points = (data ?? [])
     .slice()
     .reverse()
@@ -62,10 +98,15 @@ function FieldSparkline({ collection, itemId, field }: { collection: string; ite
     if (isLoading) {
       chart = <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
     } else if (points.length < 2) {
-      chart = <span className='text-[10px] text-slate-400 italic'>{points.length === 0 ? 'No history' : 'One value only'}</span>
+      chart = (
+        <span className='text-[10px] text-slate-400 italic'>
+          {points.length === 0 ? 'No history' : 'One value only'}
+        </span>
+      )
     } else {
       const vals = points.map((p) => p.v)
-      const min = Math.min(...vals), max = Math.max(...vals)
+      const min = Math.min(...vals),
+        max = Math.max(...vals)
       const range = max - min || 1
       const stepX = (W - PAD * 2) / (points.length - 1)
       const coords = points.map((p, i) => ({
@@ -75,12 +116,24 @@ function FieldSparkline({ collection, itemId, field }: { collection: string; ite
       const poly = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ')
       const last = coords[coords.length - 1]
       chart = (
-        <span className='inline-flex items-center gap-1.5' title={`min ${min} · max ${max} · current ${vals[vals.length - 1]}`}>
+        <span
+          className='inline-flex items-center gap-1.5'
+          title={`min ${min} · max ${max} · current ${vals[vals.length - 1]}`}
+        >
           <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className='overflow-visible'>
-            <polyline points={poly} fill='none' stroke='#00ceff' strokeWidth={1.5} strokeLinejoin='round' strokeLinecap='round' />
+            <polyline
+              points={poly}
+              fill='none'
+              stroke='#00ceff'
+              strokeWidth={1.5}
+              strokeLinejoin='round'
+              strokeLinecap='round'
+            />
             <circle cx={last.x} cy={last.y} r={2.5} fill='#00ceff' />
           </svg>
-          <span className='font-mono text-[10px] text-slate-400'>{min}–{max}</span>
+          <span className='font-mono text-[10px] text-slate-400'>
+            {min}–{max}
+          </span>
         </span>
       )
     }
@@ -93,7 +146,9 @@ function FieldSparkline({ collection, itemId, field }: { collection: string; ite
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'inline-flex items-center rounded px-1 py-0.5 transition-colors',
-          open ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-cyan'
+          open
+            ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+            : 'text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-cyan'
         )}
         title='Field change history'
       >
@@ -129,7 +184,15 @@ function FieldHistoryButton({
     queryFn: () =>
       client
         .request<{
-          data: Array<{ value: unknown; display: string | null; timestamp: string | null; user_name: string | null; action: string }>
+          data: Array<{
+            value: unknown
+            display: string | null
+            timestamp: string | null
+            user_name: string | null
+            action: string
+            origin?: { kind: string; label: string | null }
+            note?: string | null
+          }>
         }>(get(`/field-history/${collection}/${encodeURIComponent(itemId)}/${field}`))
         .then((r) => r.data ?? []),
     enabled: open,
@@ -192,12 +255,34 @@ function FieldHistoryButton({
                   key={i}
                   className='rounded px-1 py-1 text-[11.5px] leading-snug hover:bg-slate-50 dark:hover:bg-muted'
                 >
-                  <span className='font-medium text-slate-700 dark:text-slate-200'>{fmt(e.value, e.display)}</span>
+                  <span className='font-medium text-slate-700 dark:text-slate-200'>
+                    {fmt(e.value, e.display)}
+                  </span>
                   <span className='block text-[10.5px] text-slate-400'>
                     {e.action === 'create' ? 'initial value' : 'changed'}
                     {e.timestamp ? ` · ${new Date(e.timestamp).toLocaleString()}` : ''}
                     {e.user_name ? ` · ${e.user_name}` : ''}
+                    {/* Lineage: WHERE the value came from, when it wasn't a
+                        plain user edit — import, integration, automation. */}
+                    {e.origin && e.origin.kind !== 'user' && (
+                      <span
+                        className={
+                          e.origin.kind === 'integration'
+                            ? 'ml-1 rounded bg-purple-500/10 px-1 py-px text-[9.5px] font-medium text-purple-700 dark:text-purple-400'
+                            : e.origin.kind === 'import'
+                              ? 'ml-1 rounded bg-sky-500/10 px-1 py-px text-[9.5px] font-medium text-sky-700 dark:text-sky-400'
+                              : 'ml-1 rounded bg-amber-500/10 px-1 py-px text-[9.5px] font-medium text-amber-700 dark:text-amber-400'
+                        }
+                      >
+                        {e.origin.label ?? e.origin.kind}
+                      </span>
+                    )}
                   </span>
+                  {e.note && (
+                    <span className='block text-[10.5px] italic text-slate-500 dark:text-slate-400'>
+                      “{e.note}”
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -251,11 +336,18 @@ export function FieldRow({
     setIsGenerating(true)
     try {
       const res = await client.request<{ data: { value: string } }>(
-        post('/ai/generate', { collection, item_id: itemId !== 'new' ? itemId : undefined, field: field.field })
+        post('/ai/generate', {
+          collection,
+          item_id: itemId !== 'new' ? itemId : undefined,
+          field: field.field
+        })
       )
       if (res.data?.value != null) onChange(field.field, res.data.value)
-    } catch { /* silently ignore — API returns 503 when no key configured */ }
-    finally { setIsGenerating(false) }
+    } catch {
+      /* silently ignore — API returns 503 when no key configured */
+    } finally {
+      setIsGenerating(false)
+    }
   }
 
   // Compute cascade rules before early return so useQueries can subscribe
@@ -298,7 +390,11 @@ export function FieldRow({
 
   const addendumHints = useAddendumFields()[field.field] ?? []
 
-  if (!forceVisible && (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field))))) return null
+  if (
+    !forceVisible &&
+    (!visible || (!field.layout_assigned && (field.hidden || SYSTEM_FIELDS.has(field.field))))
+  )
+    return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
   const autoIdPattern = parseJson<{ auto_id?: { pattern?: string } }>(field.options)?.auto_id
@@ -332,9 +428,7 @@ export function FieldRow({
     ? (m2mRelForField.one_field ??
       `${m2mRelForField.many_collection}.${m2mRelForField.junction_field}`)
     : null
-  const m2mStagedForCascade = m2mStagingKey
-    ? (m2mStaging?.getStagedLinks(m2mStagingKey) ?? [])
-    : []
+  const m2mStagedForCascade = m2mStagingKey ? (m2mStaging?.getStagedLinks(m2mStagingKey) ?? []) : []
   const m2mCommittedForCascade = m2mRelForField
     ? (
         queryClient.getQueryData<Record<string, unknown>[]>([
@@ -374,8 +468,7 @@ export function FieldRow({
           else return null
         }
         const key =
-          parentM2mRel.one_field ??
-          `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
+          parentM2mRel.one_field ?? `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
         const staged = m2mStaging?.getStagedLinks(key) ?? []
         if (staged.length > 0) return staged[0]
         const committed = m2mParentCommitted[rule.parent_field] ?? []
@@ -389,9 +482,7 @@ export function FieldRow({
       if (rule.value_map && typeof rule.value_map === 'object') {
         filterVal = rule.value_map[String(parentVal)] ?? rule.value_map_default ?? parentVal
       }
-      const clause = Array.isArray(filterVal)
-        ? { _in: filterVal }
-        : { _eq: filterVal }
+      const clause = Array.isArray(filterVal) ? { _in: filterVal } : { _eq: filterVal }
       if (rule.filter_is_m2m) {
         cascadeFilter[rule.filter_column] = { _some: { id: clause } }
       } else if (rule.filter_column.includes('.')) {
@@ -424,7 +515,10 @@ export function FieldRow({
       el.style.borderRadius = '12px'
       setTimeout(() => {
         el.style.boxShadow = 'none'
-        setTimeout(() => { el.style.transition = ''; el.style.borderRadius = '' }, 300)
+        setTimeout(() => {
+          el.style.transition = ''
+          el.style.borderRadius = ''
+        }, 300)
       }, 900)
     }
   }
@@ -456,134 +550,165 @@ export function FieldRow({
           onClear={handleCascadeClear}
         />
       )}
-      {(label !== '' || addendumHints.length > 0) && <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
-        {label !== '' && <Label className='text-sm font-medium'>
-          {label}
-          {field.required && <span className='ml-0.5 text-destructive'>*</span>}
-        </Label>}
-        {field.note && (
-          <TooltipProvider delayDuration={100}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600' />
-              </TooltipTrigger>
-              <TooltipContent side='top' className='max-w-[240px] text-[12px]'>
-                {field.note}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-        {itemId && itemId !== 'new' && (
-          <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
-        )}
-        {isAiEligible(field) && layoutAiEnabled && (
-          <button
-            type='button'
-            onClick={handleGenerate}
-            disabled={isGenerating}
-            className='inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 disabled:opacity-50 transition-colors'
-            title='Generate with AI'
-          >
-            {isGenerating ? <Loader2 className='h-3 w-3 animate-spin' /> : <Sparkles className='h-3 w-3' />}
-            AI
-          </button>
-        )}
-        {swapButton}
-        {addendumHints.length > 0 && (
-          <TooltipProvider delayDuration={100}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20 cursor-default'>
-                  <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
-                  addendum
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side='top' className='max-w-[220px] text-[12px]'>
-                <p className='font-medium mb-1'>In active addendum{addendumHints.length > 1 ? 's' : ''}:</p>
-                {addendumHints.map((h) => (
-                  <p key={h.id} className='text-slate-400'>{h.title} <span className='capitalize'>({h.status})</span></p>
-                ))}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-        {locked && (
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className='inline-flex items-center text-amber-400 dark:text-amber-500'>
-                  <Lock className='h-3 w-3' />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side='top' className='text-[12px]'>
-                This field is locked
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-        {cascadeRules.length > 0 && (() => {
-          // Icon always shows for a cascade-configured field: cyan when the
-          // filter is actively narrowing options, gray when parents are unset.
-          const cascadeActive =
-            !!cascadeFilter && Object.keys(cascadeFilter).length > 0 && cascadeParentLabels.length > 0
-          const allParentLabels = cascadeRules.map((r) => titleCase(String(r.parent_field)))
-          return (
+      {(label !== '' || addendumHints.length > 0) && (
+        <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
+          {label !== '' && (
+            <Label className='text-sm font-medium'>
+              {label}
+              {field.required && <span className='ml-0.5 text-destructive'>*</span>}
+            </Label>
+          )}
+          {field.note && (
             <TooltipProvider delayDuration={100}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type='button'
-                    onClick={flashParentFields}
-                    className={cn(
-                      'inline-flex items-center transition-colors',
-                      cascadeActive
-                        ? 'text-nvr-cyan hover:text-nvr-cyan'
-                        : 'text-slate-300 hover:text-nvr-cyan dark:text-slate-600 dark:hover:text-nvr-cyan'
-                    )}
-                  >
-                    <SlidersHorizontal className='h-3 w-3' />
-                  </button>
+                  <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600' />
                 </TooltipTrigger>
-                <TooltipContent side='top' className='text-[12px]'>
-                  {cascadeActive
-                    ? `Filtered by ${cascadeParentLabels.join(', ')} — click to highlight`
-                    : `Options filter by ${allParentLabels.join(', ')} once set`}
+                <TooltipContent side='top' className='max-w-[240px] text-[12px]'>
+                  {field.note}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          )
-        })()}
-      </div>}
-      {swapContent ?? <div className={cn(locked && 'cursor-not-allowed')}><div className={cn(locked && 'pointer-events-none opacity-60', error && 'ring-1 ring-red-400 rounded-md')}>
-        {autoIdPattern ? (
-          <AutoIdPreviewField collection={collection} field={field} draft={draft} itemId={itemId} />
-        ) : renderField ? (
-          renderField({
-            field,
-            value,
-            onChange: (v) => onChange(field.field, v),
-            disabled: locked,
-            collection,
-            itemId,
-            relations,
-            cascadeFilter,
-            unsatisfiedParentLabel,
-            requiredParentLabel
-          })
-        ) : (
-          <FieldRenderer
-            field={field}
-            value={value}
-            onChange={(v) => onChange(field.field, v)}
-            relations={relations}
-            collection={collection}
-            itemId={itemId}
-            cascadeFilter={cascadeFilter}
-            requiredParentLabel={requiredParentLabel}
-            onCountChange={onCountChange ? (count) => onCountChange(field.field, count) : undefined}
-          />
-        )}
-      </div></div>}
+          )}
+          {itemId && itemId !== 'new' && (
+            <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
+          )}
+          {isAiEligible(field) && layoutAiEnabled && (
+            <button
+              type='button'
+              onClick={handleGenerate}
+              disabled={isGenerating}
+              className='inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 disabled:opacity-50 transition-colors'
+              title='Generate with AI'
+            >
+              {isGenerating ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <Sparkles className='h-3 w-3' />
+              )}
+              AI
+            </button>
+          )}
+          {swapButton}
+          {addendumHints.length > 0 && (
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20 cursor-default'>
+                    <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
+                    addendum
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side='top' className='max-w-[220px] text-[12px]'>
+                  <p className='font-medium mb-1'>
+                    In active addendum{addendumHints.length > 1 ? 's' : ''}:
+                  </p>
+                  {addendumHints.map((h) => (
+                    <p key={h.id} className='text-slate-400'>
+                      {h.title} <span className='capitalize'>({h.status})</span>
+                    </p>
+                  ))}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {locked && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className='inline-flex items-center text-amber-400 dark:text-amber-500'>
+                    <Lock className='h-3 w-3' />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side='top' className='text-[12px]'>
+                  This field is locked
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {cascadeRules.length > 0 &&
+            (() => {
+              // Icon always shows for a cascade-configured field: cyan when the
+              // filter is actively narrowing options, gray when parents are unset.
+              const cascadeActive =
+                !!cascadeFilter &&
+                Object.keys(cascadeFilter).length > 0 &&
+                cascadeParentLabels.length > 0
+              const allParentLabels = cascadeRules.map((r) => titleCase(String(r.parent_field)))
+              return (
+                <TooltipProvider delayDuration={100}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={flashParentFields}
+                        className={cn(
+                          'inline-flex items-center transition-colors',
+                          cascadeActive
+                            ? 'text-nvr-cyan hover:text-nvr-cyan'
+                            : 'text-slate-300 hover:text-nvr-cyan dark:text-slate-600 dark:hover:text-nvr-cyan'
+                        )}
+                      >
+                        <SlidersHorizontal className='h-3 w-3' />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[12px]'>
+                      {cascadeActive
+                        ? `Filtered by ${cascadeParentLabels.join(', ')} — click to highlight`
+                        : `Options filter by ${allParentLabels.join(', ')} once set`}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )
+            })()}
+        </div>
+      )}
+      {swapContent ?? (
+        <div className={cn(locked && 'cursor-not-allowed')}>
+          <div
+            className={cn(
+              locked && 'pointer-events-none opacity-60',
+              error && 'ring-1 ring-red-400 rounded-md'
+            )}
+          >
+            {autoIdPattern ? (
+              <AutoIdPreviewField
+                collection={collection}
+                field={field}
+                draft={draft}
+                itemId={itemId}
+              />
+            ) : renderField ? (
+              renderField({
+                field,
+                value,
+                onChange: (v) => onChange(field.field, v),
+                disabled: locked,
+                collection,
+                itemId,
+                relations,
+                cascadeFilter,
+                unsatisfiedParentLabel,
+                requiredParentLabel
+              })
+            ) : (
+              <FieldRenderer
+                field={field}
+                value={value}
+                onChange={(v) => onChange(field.field, v)}
+                relations={relations}
+                collection={collection}
+                itemId={itemId}
+                cascadeFilter={cascadeFilter}
+                requiredParentLabel={requiredParentLabel}
+                onCountChange={
+                  onCountChange ? (count) => onCountChange(field.field, count) : undefined
+                }
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

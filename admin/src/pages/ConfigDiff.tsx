@@ -72,7 +72,122 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   )
 }
 
-function TableDiffRow({ diff }: { diff: TableDiff }) {
+/** Pull this table's rows FROM the uploaded snapshot onto this instance —
+ *  preview first (exact insert/update counts), then an inline amber confirm.
+ *  Upsert-only server-side; rows present here but absent in the snapshot are
+ *  never deleted. */
+function ApplyControls({
+  table,
+  snapshot,
+  onApplied
+}: {
+  table: string
+  snapshot: unknown
+  onApplied: () => void
+}) {
+  const [preview, setPreview] = useState<{
+    inserts: number
+    updates: number
+    unchanged: number
+    skipped_keyless: number
+  } | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function run(mode: 'preview' | 'apply') {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await api.post<{
+        data: Record<string, number> & { errors?: Array<{ key: string; error: string }> }
+      }>('/config-diff/apply', { snapshot, table, mode })
+      if (mode === 'preview') {
+        setPreview(r.data.data as never)
+        setConfirming(false)
+      } else {
+        const d = r.data.data
+        setResult(
+          `${d.inserted} inserted, ${d.updated} updated${(d.errors?.length ?? 0) > 0 ? `, ${d.errors?.length} failed` : ''}`
+        )
+        setPreview(null)
+        setConfirming(false)
+        onApplied()
+      }
+    } catch (e) {
+      setErr(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
+          (e instanceof Error ? e.message : 'Apply failed')
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className='rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <span className='text-[11px] font-medium text-muted-foreground'>
+          Apply from the uploaded snapshot
+        </span>
+        <button
+          type='button'
+          disabled={busy}
+          onClick={() => void run('preview')}
+          className='rounded-md border border-slate-300 px-2 py-1 text-[11.5px] font-medium hover:bg-muted disabled:opacity-50 dark:border-border'
+        >
+          {busy && !confirming ? 'Working…' : 'Preview'}
+        </button>
+        {preview && (
+          <span className='text-[11.5px] text-muted-foreground'>
+            {preview.inserts} inserts · {preview.updates} updates · {preview.unchanged} unchanged
+            {preview.skipped_keyless > 0 ? ` · ${preview.skipped_keyless} keyless skipped` : ''}
+          </span>
+        )}
+        {preview && preview.inserts + preview.updates > 0 && !confirming && (
+          <button
+            type='button'
+            onClick={() => setConfirming(true)}
+            className='rounded-md bg-nvr-cyan px-2 py-1 text-[11.5px] font-medium text-white hover:opacity-90'
+          >
+            Apply {preview.inserts + preview.updates} rows…
+          </button>
+        )}
+        {confirming && (
+          <span className='flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11.5px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+            Writes {preview ? preview.inserts + preview.updates : 0} rows to this instance — sure?
+            <button
+              type='button'
+              disabled={busy}
+              onClick={() => void run('apply')}
+              className='font-semibold underline disabled:opacity-50'
+            >
+              {busy ? 'Applying…' : 'Yes, apply'}
+            </button>
+            <button type='button' onClick={() => setConfirming(false)} className='underline'>
+              Cancel
+            </button>
+          </span>
+        )}
+        {result && (
+          <span className='text-[11.5px] text-emerald-600 dark:text-emerald-400'>{result}</span>
+        )}
+        {err && <span className='text-[11.5px] text-red-600 dark:text-red-400'>{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+function TableDiffRow({
+  diff,
+  snapshot,
+  onApplied
+}: {
+  diff: TableDiff
+  snapshot?: unknown
+  onApplied?: () => void
+}) {
   const [open, setOpen] = useState(false)
   const Chevron = open ? ChevronDown : ChevronRight
 
@@ -106,6 +221,11 @@ function TableDiffRow({ diff }: { diff: TableDiff }) {
 
       {open && (
         <div className='space-y-3 bg-slate-50 px-3 py-3 dark:bg-background'>
+          {snapshot != null &&
+            onApplied &&
+            (diff.removed.length > 0 || diff.changed.length > 0) && (
+              <ApplyControls table={diff.table} snapshot={snapshot} onApplied={onApplied} />
+            )}
           {diff.added.length > 0 && (
             <div>
               <p className='mb-1 text-[11px] font-medium text-green-600 dark:text-green-400'>
@@ -180,6 +300,9 @@ function TableDiffRow({ diff }: { diff: TableDiff }) {
 export function ConfigDiffPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // The raw uploaded snapshot survives past the compare so per-table Apply
+  // can send it back; re-comparing after an apply shows the drift shrinking.
+  const [uploadedSnapshot, setUploadedSnapshot] = useState<unknown>(null)
 
   const { data: inventory } = useQuery<Inventory>({
     queryKey: ['config-inventory'],
@@ -217,6 +340,7 @@ export function ConfigDiffPage() {
         parsed && typeof parsed === 'object' && !('tables' in parsed)
           ? ((parsed.data ?? parsed.snapshot ?? parsed) as unknown)
           : parsed
+      setUploadedSnapshot(unwrapped)
       compare.mutate(unwrapped)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not read that file as JSON')
@@ -417,7 +541,12 @@ export function ConfigDiffPage() {
                   <span className='w-20' />
                 </div>
                 {diff.tables.map((t) => (
-                  <TableDiffRow key={t.table} diff={t} />
+                  <TableDiffRow
+                    key={t.table}
+                    diff={t}
+                    snapshot={uploadedSnapshot}
+                    onApplied={() => uploadedSnapshot != null && compare.mutate(uploadedSnapshot)}
+                  />
                 ))}
               </div>
             )}

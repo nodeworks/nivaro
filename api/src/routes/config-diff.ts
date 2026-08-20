@@ -141,4 +141,179 @@ export async function configDiffRoutes(app: FastifyInstance) {
       return reply.send({ data: diffSnapshots(mine, theirs) })
     }
   )
+
+  /**
+   * Apply one table's rows FROM an uploaded snapshot onto this instance —
+   * the "fix the drift" half the diff page never had.
+   *
+   * Semantics, all deliberate:
+   * - CONFIG tables only (this instance's classification is the authority).
+   *   DERIVED/RUNTIME tables are regenerated or per-instance by definition.
+   * - Upsert only, NEVER delete — a row present here but absent in the
+   *   snapshot stays (the promotion-route precedent; deletions are a human
+   *   decision, not a sync side effect).
+   * - Only columns PRESENT in the snapshot row are written, and only ones
+   *   that exist on the live table — so redacted secret columns (dropped at
+   *   export, not masked) are never nulled out, and a schema mismatch skips
+   *   the missing column instead of failing the row.
+   * - Rows keyed `#<hash>` (no id column) cannot be upserted by identity and
+   *   are reported as skipped.
+   * - mode 'preview' computes the exact plan and writes nothing; 'apply'
+   *   executes it. The client always previews first, but the server does not
+   *   trust it to.
+   */
+  app.post(
+    '/config-diff/apply',
+    { preHandler: requireAdmin, bodyLimit: 128 * 1024 * 1024 },
+    async (req, reply) => {
+      const body = req.body as {
+        snapshot?: ConfigSnapshot
+        table?: string
+        keys?: string[]
+        mode?: 'preview' | 'apply'
+      }
+      const theirs = body?.snapshot
+      const table = String(body?.table ?? '')
+      const mode = body?.mode === 'apply' ? 'apply' : 'preview'
+      if (!theirs || typeof theirs !== 'object' || !theirs.tables || theirs.format !== 1) {
+        return reply.code(400).send({ error: 'Body must carry a format-1 config snapshot' })
+      }
+      if (!/^nivaro_[a-z0-9_]+$/i.test(table)) {
+        return reply.code(400).send({ error: 'table must be a nivaro_* table name' })
+      }
+      const theirRows = theirs.tables[table]
+      if (!theirRows) {
+        return reply.code(400).send({ error: `The snapshot does not carry ${table}` })
+      }
+      const presentRows = (await db.raw(
+        `SELECT name FROM sys.tables WHERE name LIKE 'nivaro[_]%'`
+      )) as Array<{ name: string }>
+      const classification = classifyTables(presentRows.map((r) => r.name))
+      if (!classification.config.includes(table)) {
+        return reply
+          .code(400)
+          .send({ error: `${table} is not a CONFIG table on this instance — only config applies` })
+      }
+
+      // Live side, same redaction/hashing as the snapshot so comparison is honest.
+      const mine = await buildConfigSnapshot({
+        tables: [table],
+        version: NIVARO_VERSION,
+        environment: config.NODE_ENV
+      })
+      const mineRows = mine.tables[table] ?? {}
+
+      const scope =
+        Array.isArray(body?.keys) && body.keys.length > 0 ? new Set(body.keys.map(String)) : null
+      const inserts: string[] = []
+      const updates: string[] = []
+      const skippedKeyless: string[] = []
+      for (const [key, row] of Object.entries(theirRows)) {
+        if (scope && !scope.has(key)) continue
+        if (key.startsWith('#')) {
+          skippedKeyless.push(key)
+          continue
+        }
+        const current = mineRows[key]
+        if (!current) inserts.push(key)
+        else if (current.hash !== row.hash) updates.push(key)
+      }
+
+      const CAP = 5000
+      const planned = inserts.length + updates.length
+      if (planned > CAP) {
+        return reply.code(400).send({
+          error: `${planned} rows planned — the per-apply cap is ${CAP}. Scope with keys[].`
+        })
+      }
+
+      if (mode === 'preview') {
+        return reply.send({
+          data: {
+            table,
+            inserts: inserts.length,
+            updates: updates.length,
+            unchanged: Object.keys(theirRows).length - planned - skippedKeyless.length,
+            skipped_keyless: skippedKeyless.length,
+            insert_keys: inserts.slice(0, 50),
+            update_keys: updates.slice(0, 50)
+          }
+        })
+      }
+
+      // Live column set — snapshot keys are untrusted; only plain identifiers
+      // that exist on the target table reach SQL (the promotion precedent).
+      const colRows = (await db.raw(
+        `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
+        [table]
+      )) as Array<{ name: string }>
+      const liveCols = new Set(colRows.map((c) => c.name))
+      const identRe = /^[A-Za-z_][A-Za-z0-9_]*$/
+      const identityRows = (await db.raw(
+        `SELECT COLUMN_NAME AS name FROM information_schema.columns
+         WHERE TABLE_NAME = ? AND COLUMNPROPERTY(OBJECT_ID(TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1`,
+        [table]
+      )) as Array<{ name: string }>
+      const hasIdentity = identityRows.some((c) => c.name === 'id')
+
+      const filterCols = (data: Record<string, unknown>) => {
+        const out: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(data)) {
+          if (!identRe.test(k) || !liveCols.has(k)) continue
+          out[k] = v
+        }
+        return out
+      }
+
+      let inserted = 0
+      let updated = 0
+      const errors: Array<{ key: string; error: string }> = []
+      for (const key of updates) {
+        try {
+          const patch = filterCols(theirRows[key].data)
+          delete patch.id
+          if (Object.keys(patch).length === 0) continue
+          await db(table).where('id', key).update(patch)
+          updated++
+        } catch (err) {
+          errors.push({ key, error: err instanceof Error ? err.message.slice(0, 200) : 'failed' })
+        }
+      }
+      for (const key of inserts) {
+        try {
+          const row = filterCols(theirRows[key].data)
+          if (hasIdentity && row.id != null) {
+            // IDENTITY_INSERT must live inside ONE batch (trash-restore precedent).
+            const cols = Object.keys(row)
+            await db.raw(
+              `SET IDENTITY_INSERT [${table}] ON;
+               INSERT INTO [${table}] (${cols.map((c) => `[${c}]`).join(', ')})
+               VALUES (${cols.map(() => '?').join(', ')});
+               SET IDENTITY_INSERT [${table}] OFF;`,
+              cols.map((c) => {
+                const v = row[c]
+                return v !== null && typeof v === 'object' ? JSON.stringify(v) : (v as never)
+              })
+            )
+          } else {
+            await db(table).insert(row)
+          }
+          inserted++
+        } catch (err) {
+          errors.push({ key, error: err instanceof Error ? err.message.slice(0, 200) : 'failed' })
+        }
+      }
+
+      await logActivity({
+        action: 'config-apply',
+        user: req.user?.id,
+        collection: table,
+        comment: `applied from snapshot (${theirs.instance?.environment ?? '?'} ${theirs.instance?.version ?? ''}): ${inserted} inserted, ${updated} updated${errors.length ? `, ${errors.length} failed` : ''}`,
+        req
+      })
+      return reply.send({
+        data: { table, inserted, updated, skipped_keyless: skippedKeyless.length, errors }
+      })
+    }
+  )
 }
