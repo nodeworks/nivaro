@@ -10,6 +10,8 @@ import { Label } from '../ui/label'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { StagingColumnsBuilder, ValidationBuilder } from './SchemaValidationBuilders'
+import { ServiceConfigBuilder } from './ServiceConfigBuilder'
 import { type ImportDefinition, definitionTitle } from './types'
 
 const NEW = '__new__'
@@ -58,6 +60,20 @@ function toDraft(d: ImportDefinition | null): Draft {
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Declared staging column names off the (possibly mid-edit) JSON draft —
+ *  the builder seeds one mapping row per declared column. */
+function declaredColumnNames(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((c) => (c && typeof c === 'object' ? String((c as { name?: unknown }).name ?? '') : ''))
+      .filter((n) => n && n !== 'id')
+  } catch {
+    return []
+  }
+}
 
 /**
  * Definition registry (admin). Master-detail rather than a dialog: an operator
@@ -374,16 +390,11 @@ export function DefinitionsPanel({
 
               {draft.processor === 'service' && (
                 <div className='sm:col-span-2'>
-                  <Field
-                    label='Service config (JSON)'
-                    hint='{"collection", "match_by": [key fields], "columns": {stagingCol: {field, type?, lookup?}}, "month_from"?, "require_value"?, "timestamps"?} — rows diff against existing on match_by; only changes write.'
-                  >
-                    <Textarea
+                  <Field label='Service mapping'>
+                    <ServiceConfigBuilder
                       value={draft.service_config}
-                      onChange={(e) => setDraft((d) => ({ ...d, service_config: e.target.value }))}
-                      rows={9}
-                      className='font-mono text-[11.5px]'
-                      placeholder='{"collection": "warehouse_usage", "match_by": ["warehouse", "cifa", "month"], "columns": {…}}'
+                      onChange={(json) => setDraft((d) => ({ ...d, service_config: json }))}
+                      stagingColumns={declaredColumnNames(draft.staging_columns)}
                     />
                     {serviceConfigProblem && <Problem>{serviceConfigProblem}</Problem>}
                   </Field>
@@ -557,22 +568,19 @@ function AdvancedConfigSection({
       {open && (
         <div className='space-y-4 border-t border-slate-100 p-4 dark:border-border'>
           <Field
-            label='Declared staging columns (JSON)'
-            hint='[{"name":"po_number","from_header":"PO Number","required":true,"type":"text"}] — when set, the staging table converges on this schema and only these columns load.'
+            label='Declared staging columns'
+            hint='When set, the staging table converges on this schema and only these columns load — a sheet column can never invent a staging column.'
           >
-            <Textarea
+            <StagingColumnsBuilder
               value={draft.staging_columns}
-              onChange={(e) => setDraft((d) => ({ ...d, staging_columns: e.target.value }))}
-              rows={5}
-              className='font-mono text-[11.5px]'
-              placeholder='Empty = derive the schema from each file (historic behavior)'
+              onChange={(json) => setDraft((d) => ({ ...d, staging_columns: json }))}
             />
             {stagingColsProblem && <Problem>{stagingColsProblem}</Problem>}
           </Field>
 
           <Field
-            label='Pre-flight validation (JSON)'
-            hint='key_columns (duplicate detection), target_table + target_match (new/update counts), lookups (join-miss detection), required, numeric. Runs in the preview and blocks queueing on hard errors.'
+            label='Pre-flight checks'
+            hint='Run in the upload preview; hard errors block queueing before anything loads.'
           >
             <div className='mb-1.5'>
               <Button
@@ -585,12 +593,10 @@ function AdvancedConfigSection({
                 {suggest.isPending ? 'Reading procedure…' : 'Suggest from procedure'}
               </Button>
             </div>
-            <Textarea
+            <ValidationBuilder
               value={draft.validation}
-              onChange={(e) => setDraft((d) => ({ ...d, validation: e.target.value }))}
-              rows={7}
-              className='font-mono text-[11.5px]'
-              placeholder='Empty = no pre-flight checks'
+              onChange={(json) => setDraft((d) => ({ ...d, validation: json }))}
+              stagingColumns={declaredColumnNames(draft.staging_columns)}
             />
             {validationProblem && <Problem>{validationProblem}</Problem>}
           </Field>
