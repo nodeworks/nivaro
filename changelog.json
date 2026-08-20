@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-19T23:16:39.599Z",
+  "generated_at": "2026-08-20T00:01:32.647Z",
   "releases": [
+    {
+      "version": "0.1.76",
+      "tag": "v0.1.76",
+      "date": "2026-08-19T20:01:30-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "react",
+              "text": "parity sweep - invalid published types, validation drift, ~100 missing re-exports",
+              "hash": "5a10575f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.75",
       "tag": "v0.1.75",
-      "date": "2026-08-19T19:16:37-04:00",
+      "date": "2026-08-19T19:16:39-04:00",
       "sections": [
         {
           "label": "Added",
