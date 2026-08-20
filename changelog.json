@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-20T00:01:32.647Z",
+  "generated_at": "2026-08-20T00:23:13.150Z",
   "releases": [
+    {
+      "version": "0.1.77",
+      "tag": "v0.1.77",
+      "date": "2026-08-19T20:23:10-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "error-clip recording for headless hosts + useFormSchema reconciliation",
+              "hash": "3a143a7e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.76",
       "tag": "v0.1.76",
-      "date": "2026-08-19T20:01:30-04:00",
+      "date": "2026-08-19T20:01:32-04:00",
       "sections": [
         {
           "label": "Fixed",
