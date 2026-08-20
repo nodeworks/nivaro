@@ -136,7 +136,7 @@ export function BugReporter() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className='space-y-3'>
+          <div className='space-y-3 px-6 pb-6'>
             <div className='space-y-1.5'>
               <Label htmlFor='bug-description'>What happened?</Label>
               <Textarea

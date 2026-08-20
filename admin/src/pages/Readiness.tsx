@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { AlertTriangle, CheckCircle2, CircleSlash, RefreshCw, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -19,7 +20,15 @@ interface Check {
   status: 'pass' | 'warn' | 'fail' | 'skip' | 'error'
   detail?: string
   blockers?: string[]
+  remediation_label?: string
   duration_ms: number
+}
+
+interface RemediationJob {
+  check_id: string
+  status: 'running' | 'completed' | 'error'
+  detail?: string
+  finished_at?: string
 }
 
 interface Report {
@@ -45,6 +54,28 @@ export default function Readiness() {
     queryFn: () => api.get<{ data: Report }>('/readiness').then((r) => r.data.data),
     staleTime: 60_000,
     retry: false
+  })
+
+  const qc = useQueryClient()
+  // Server-held remediation jobs — polling survives navigation, so a fix
+  // started here keeps reporting after the admin wanders off and back.
+  const { data: remediations = [] } = useQuery<RemediationJob[]>({
+    queryKey: ['readiness-remediations'],
+    queryFn: () =>
+      api
+        .get<{ data: RemediationJob[] }>('/readiness/remediations')
+        .then((r) => r.data.data),
+    refetchInterval: (q) =>
+      q.state.data?.some((j) => j.status === 'running') ? 2_500 : false,
+    retry: false
+  })
+  const remediate = useMutation({
+    mutationFn: (checkId: string) => api.post(`/readiness/${checkId}/remediate`, {}),
+    onSuccess: () => {
+      toast.success('Fix started — running in the background')
+      void qc.invalidateQueries({ queryKey: ['readiness-remediations'] })
+    },
+    onError: (err: Error) => toast.error(err.message)
   })
 
   const { data: trend = [] } = useQuery<
@@ -171,6 +202,52 @@ export default function Readiness() {
                               {c.description}
                             </p>
                           )}
+                          {(() => {
+                            const job = remediations.find((j) => j.check_id === c.id)
+                            if (!c.remediation_label && !job) return null
+                            return (
+                              <div className='mt-2 flex flex-wrap items-center gap-2'>
+                                {c.remediation_label && c.status !== 'pass' && (
+                                  <Button
+                                    size='sm'
+                                    variant='outline'
+                                    className='h-6 px-2 text-[11.5px]'
+                                    disabled={job?.status === 'running' || remediate.isPending}
+                                    onClick={() => remediate.mutate(c.id)}
+                                  >
+                                    {job?.status === 'running' ? (
+                                      <>
+                                        <RefreshCw className='h-3 w-3 animate-spin' /> Fixing…
+                                      </>
+                                    ) : (
+                                      c.remediation_label
+                                    )}
+                                  </Button>
+                                )}
+                                {job && job.status !== 'running' && (
+                                  <span
+                                    className={cn(
+                                      'text-[11.5px]',
+                                      job.status === 'completed'
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-red-600 dark:text-red-400'
+                                    )}
+                                  >
+                                    {job.detail}
+                                    {job.status === 'completed' && (
+                                      <button
+                                        type='button'
+                                        onClick={() => refetch()}
+                                        className='ml-1.5 underline decoration-dotted underline-offset-2'
+                                      >
+                                        re-check
+                                      </button>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })()}
                           {c.blockers && c.blockers.length > 0 && (
                             <ul className='mt-1.5 space-y-0.5'>
                               {c.blockers.map((b) => (

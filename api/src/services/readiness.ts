@@ -26,12 +26,61 @@ export interface ReadinessCheck {
   /** Grouping header on the scorecard (e.g. 'Data', 'Integrations'). */
   group?: string
   run: () => Promise<ReadinessResult>
+  /** Optional automatic fix. Runs as a BACKGROUND job with server-held
+   *  progress, so the admin can navigate away and come back. */
+  remediation?: {
+    label: string
+    run: () => Promise<{ detail: string }>
+  }
 }
 
 const registry = new Map<string, ReadinessCheck>()
 
 export function registerReadinessCheck(check: ReadinessCheck): void {
   registry.set(check.id, check)
+}
+
+// ── Remediation jobs — in-memory, per-process (the scorecard is a live
+// admin surface, not durable history) ─────────────────────────────────────
+export interface RemediationJob {
+  check_id: string
+  status: 'running' | 'completed' | 'error'
+  detail?: string
+  started_at: string
+  finished_at?: string
+}
+
+const remediations = new Map<string, RemediationJob>()
+
+export function listRemediations(): RemediationJob[] {
+  return [...remediations.values()].sort((a, b) => b.started_at.localeCompare(a.started_at))
+}
+
+/** Fire a check's remediation in the background. Returns false when the
+ *  check has no remediation or one is already running. */
+export function startRemediation(checkId: string): 'started' | 'no_remediation' | 'already_running' {
+  const check = registry.get(checkId)
+  if (!check?.remediation) return 'no_remediation'
+  if (remediations.get(checkId)?.status === 'running') return 'already_running'
+  const job: RemediationJob = {
+    check_id: checkId,
+    status: 'running',
+    started_at: new Date().toISOString()
+  }
+  remediations.set(checkId, job)
+  void check.remediation
+    .run()
+    .then((r) => {
+      job.status = 'completed'
+      job.detail = r.detail
+      job.finished_at = new Date().toISOString()
+    })
+    .catch((err) => {
+      job.status = 'error'
+      job.detail = err instanceof Error ? err.message : String(err)
+      job.finished_at = new Date().toISOString()
+    })
+  return 'started'
 }
 
 export interface ReadinessReport {
@@ -45,6 +94,7 @@ export interface ReadinessReport {
     status: ReadinessStatus | 'error'
     detail?: string
     blockers?: string[]
+    remediation_label?: string
     duration_ms: number
   }>
 }
@@ -64,6 +114,7 @@ export async function runReadinessChecks(): Promise<ReadinessReport> {
           status: r.status,
           detail: r.detail,
           blockers: r.blockers?.length ? r.blockers : undefined,
+          remediation_label: c.remediation?.label,
           duration_ms: Date.now() - began
         }
       } catch (err) {
@@ -75,6 +126,7 @@ export async function runReadinessChecks(): Promise<ReadinessReport> {
           group: c.group,
           status: 'error' as const,
           detail: err instanceof Error ? err.message : String(err),
+          remediation_label: c.remediation?.label,
           duration_ms: Date.now() - began
         }
       }
