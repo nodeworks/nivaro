@@ -59,10 +59,21 @@ interface DisplayToken {
   leaf: string
 }
 
+interface DateOffsetCheck {
+  field: string
+  label: string
+  /** 'min' | 'max' days from the record's CREATION date — the historical
+   *  reading of a from-today rule. */
+  op: 'min' | 'max'
+  days: number
+  baseline: string
+}
+
 interface CompiledChecks {
   collection: string
   requiredFields: RequiredCheck[]
   validation: Array<{ field: string; label: string; rules: ValidationRule[] }>
+  dateOffsets: DateOffsetCheck[]
   cascades: CascadeCheck[]
   /** Display-template parts — a record whose parts all resolve empty renders
    *  as its internal id everywhere labels are used. */
@@ -82,6 +93,19 @@ function parseJson<T>(raw: unknown): T | null {
 }
 
 const label = (field: string) => field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+/** Calendar day (UTC ms at midnight) from a Date or date-ish string; bare
+ *  yyyy-mm-dd parses without timezone shifting. */
+function parseDay(v: unknown): number | null {
+  if (v == null || v === '') return null
+  if (v instanceof Date) return Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate())
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const t = Date.parse(String(v))
+  if (Number.isNaN(t)) return null
+  const d = new Date(t)
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+}
 
 const physicalColsCache = new Map<string, Set<string>>()
 async function hasPhysicalColumn(table: string, column: string): Promise<boolean> {
@@ -189,9 +213,17 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     validation: [],
     cascades: [],
     displayTokens: [],
+    dateOffsets: [],
     skipped: []
   }
   const { layouts, visibleOn } = await layoutPresence(collection)
+  // Creation-timestamp column for the historical reading of date-offset
+  // rules ("at least 7 days from today" AT ENTRY = delivery >= created + 7).
+  const creationBaseline = (await hasPhysicalColumn(collection, 'date_created'))
+    ? 'date_created'
+    : (await hasPhysicalColumn(collection, 'created_at'))
+      ? 'created_at'
+      : null
 
   // Display template completeness — each {{token}} should resolve to a value,
   // or the record renders as its internal id in pickers, queues and labels.
@@ -257,13 +289,31 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     const rules = parseJson<ValidationRule[]>(f.validation_rules)
     if (Array.isArray(rules) && rules.length > 0) {
       // Date-offset rules ('at least N days from today') judge the moment of
-      // ENTRY — every record naturally ages past them, so sweeping history
-      // with them flags perfectly good records.
-      const sweepable = rules.filter(
-        (r) => r.type !== 'min_days_from_today' && r.type !== 'max_days_from_today'
-      )
-      if (sweepable.length < rules.length) {
-        out.skipped.push(`${f.field}: date-offset rule judges entry time, not stored data`)
+      // ENTRY — every record naturally ages past them, so a naive history
+      // sweep flags perfectly good records. The historically faithful form
+      // compares against the record's CREATION date instead: a violation
+      // means the rule was already broken when the value was set (imports,
+      // API writes) — that we CAN check.
+      const sweepable: ValidationRule[] = []
+      for (const r of rules) {
+        if (r.type === 'min_days_from_today' || r.type === 'max_days_from_today') {
+          const days = Number(r.value)
+          if (creationBaseline && Number.isFinite(days)) {
+            out.dateOffsets.push({
+              field: f.field,
+              label: label(f.field),
+              op: r.type === 'min_days_from_today' ? 'min' : 'max',
+              days,
+              baseline: creationBaseline
+            })
+          } else {
+            out.skipped.push(
+              `${f.field}: date-offset rule needs a creation timestamp column to check historically`
+            )
+          }
+        } else {
+          sweepable.push(r)
+        }
       }
       if (sweepable.length > 0) {
         const presence = onEveryLayout(f.field)
@@ -501,6 +551,10 @@ async function evaluate(
   for (const t of checks.displayTokens) {
     columns.add(t.hops.length > 0 ? t.hops[0].fk : t.leaf)
   }
+  for (const d of checks.dateOffsets) {
+    columns.add(d.field)
+    columns.add(d.baseline)
+  }
   // Only real columns survive — required flags on alias fields (M2M pickers)
   // have no scalar column to test here.
   const physical = new Set(
@@ -553,6 +607,22 @@ async function evaluate(
           }
         }
       }
+      for (const d of checks.dateOffsets) {
+        if (!physical.has(d.field) || !physical.has(d.baseline)) continue
+        const value = parseDay(row[d.field])
+        const created = parseDay(row[d.baseline])
+        if (value == null || created == null) continue
+        const diff = Math.round((value - created) / 86_400_000)
+        const bad = d.op === 'min' ? diff < d.days : diff > d.days
+        if (bad) {
+          findings.push({
+            item_id: String(row.id),
+            field: d.field,
+            rule: 'validation',
+            message: `${d.label} was ${diff} day(s) from creation — the rule required at ${d.op === 'min' ? 'least' : 'most'} ${d.days}`
+          })
+        }
+      }
     }
 
     // ── required M2M aliases: zero junction rows = empty ─────────────────
@@ -581,6 +651,13 @@ async function evaluate(
     }
 
     // ── cascade availability, batched per rule ───────────────────────────
+    // A field with several cascade rules (unit: by project type, unit type
+    // AND install location) reports ONE finding per record listing every
+    // failing parent, not one row per rule.
+    const cascadeFails = new Map<
+      string,
+      { field: string; isM2M: boolean; badCount: number; parents: string[] }
+    >()
     for (const c of checks.cascades) {
       if (!c.childIsM2M && !physical.has(c.field)) continue
       const rowIds = rows.map((r) => r.id)
@@ -664,16 +741,32 @@ async function evaluate(
           return !(avail && [...avail].some((a) => parents.has(a)))
         })
         if (bad.length > 0) {
-          findings.push({
-            item_id: String(row.id),
-            field: c.field,
-            rule: 'cascade',
-            message: c.childIsM2M
-              ? `${bad.length} linked ${label(c.field)} value(s) are not available options for the current ${label(c.parent_field)}`
-              : `${label(c.field)} value is not an available option for the current ${label(c.parent_field)}`
-          })
+          const key = `${row.id}|${c.field}`
+          let agg = cascadeFails.get(key)
+          if (!agg) {
+            agg = { field: c.field, isM2M: c.childIsM2M, badCount: 0, parents: [] }
+            cascadeFails.set(key, agg)
+          }
+          agg.badCount = Math.max(agg.badCount, bad.length)
+          agg.parents.push(label(c.parent_field))
         }
       }
+    }
+
+    for (const [key, agg] of cascadeFails) {
+      const rowId = key.slice(0, key.length - agg.field.length - 1)
+      const parents =
+        agg.parents.length > 1
+          ? `${agg.parents.slice(0, -1).join(', ')} or ${agg.parents[agg.parents.length - 1]}`
+          : agg.parents[0]
+      findings.push({
+        item_id: rowId,
+        field: agg.field,
+        rule: 'cascade',
+        message: agg.isM2M
+          ? `${agg.badCount} linked ${label(agg.field)} value(s) are not available options for the current ${parents}`
+          : `${label(agg.field)} value is not an available option for the current ${parents}`
+      })
     }
 
     // ── display template completeness, hops batch-resolved per level ─────
