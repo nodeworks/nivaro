@@ -231,31 +231,39 @@ export function ConformanceView({ className }: { className?: string }) {
   )
 }
 
+interface FindingGroup {
+  item_id: string
+  item_label: string | null
+  count: number
+  findings: Finding[]
+}
+
 function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => void }) {
   const client = useNivaroClient()
   const [page, setPage] = useState(1)
   const [rule, setRule] = useState('')
   const [field, setField] = useState('')
+  const [grouped, setGrouped] = useState(false)
 
   const { data } = useQuery<{
-    findings: Finding[]
+    findings: Array<Finding | FindingGroup>
     total: number
     by_rule: Array<{ rule: string; c: number }>
     by_field: Array<{ field: string; c: number }>
   }>({
-    queryKey: ['conformance-run', run.id, page, rule, field],
+    queryKey: ['conformance-run', run.id, page, rule, field, grouped],
     queryFn: () =>
       client
         .request<{
           data: {
-            findings: Finding[]
+            findings: Array<Finding | FindingGroup>
             total: number
             by_rule: Array<{ rule: string; c: number }>
             by_field: Array<{ field: string; c: number }>
           }
         }>(
           get(
-            `/config-conformance/runs/${run.id}?page=${page}&limit=50${rule ? `&rule=${rule}` : ''}${field ? `&field=${field}` : ''}`
+            `/config-conformance/runs/${run.id}?page=${page}&limit=50${rule ? `&rule=${rule}` : ''}${field ? `&field=${field}` : ''}${grouped ? '&group=record' : ''}`
           )
         )
         .then((r) => r.data),
@@ -295,6 +303,18 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
           <span className='text-[11.5px] text-red-600 dark:text-red-400'>{run.error}</span>
         )}
         <span className='flex-1' />
+        <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          <input
+            type='checkbox'
+            checked={grouped}
+            onChange={(e) => {
+              setGrouped(e.target.checked)
+              setPage(1)
+            }}
+            className='h-3.5 w-3.5'
+          />
+          Group by record
+        </label>
         {chips.rules.map((r) => (
           <button
             key={r.rule}
@@ -345,9 +365,52 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
               : 'Every checked record satisfies its field configuration.'}
           </p>
         )}
+        {grouped ? (
+          <div>
+            {((data?.findings ?? []) as FindingGroup[]).map((g) => (
+              <div
+                key={g.item_id}
+                className='border-b border-slate-100 px-4 py-2 dark:border-border/60'
+              >
+                <div className='flex items-center gap-2.5'>
+                  <button
+                    type='button'
+                    onClick={() => onOpenItem(g.item_id)}
+                    className='text-[12.5px] font-medium text-nvr-cyan underline decoration-dotted underline-offset-2'
+                  >
+                    {g.item_label || `#${g.item_id}`}
+                  </button>
+                  <span className='rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-background dark:text-muted-foreground'>
+                    {g.count} issue{g.count === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className='mt-1 space-y-0.5'>
+                  {g.findings.map((f) => (
+                    <div key={f.id} className='flex items-baseline gap-2 text-[12px]'>
+                      <span className='w-[150px] shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                        {f.field}
+                      </span>
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium',
+                          RULE_META[f.rule]?.cls ?? 'bg-slate-500/10 text-slate-600'
+                        )}
+                      >
+                        {RULE_META[f.rule]?.label ?? f.rule}
+                      </span>
+                      <span className='min-w-0 text-slate-600 dark:text-muted-foreground'>
+                        {f.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
         <table className='w-full border-collapse text-[12px] tabular-nums'>
           <tbody>
-            {(data?.findings ?? []).map((f) => (
+            {((data?.findings ?? []) as Finding[]).map((f) => (
               <tr
                 key={f.id}
                 className='border-b border-slate-50 transition-colors hover:bg-slate-50 dark:border-border/50 dark:hover:bg-background/40'
@@ -381,6 +444,7 @@ function RunDetail({ run, onOpenItem }: { run: Run; onOpenItem: (id: string) => 
             ))}
           </tbody>
         </table>
+        )}
       </div>
 
       {pages > 1 && (

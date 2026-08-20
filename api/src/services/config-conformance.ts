@@ -135,9 +135,28 @@ async function resolveAlias(
 async function layoutPresence(
   collection: string
 ): Promise<{ layouts: Array<{ id: number; name: string }>; visibleOn: Map<string, Set<number>> }> {
-  const layouts = (await db('nivaro_collection_layouts')
-    .where({ collection, layout_type: 'grouped' })
-    .select('id', 'name')) as Array<{ id: number; name: string }>
+  // Only layouts a record can actually OPEN as its form gate the checks:
+  // the active layout, plus slugged variants (Unit/Non-Unit/Sparing orders).
+  // Excluded: inactive slugless layouts (unreachable — nothing resolves
+  // them) and create_hidden ones (special-purpose sub-forms like the
+  // warehouse-submission line-entry layout) — counting those gated EVERY
+  // required field out of collections that use per-record layout variants.
+  const layouts = (
+    (await db('nivaro_collection_layouts')
+      .where({ collection, layout_type: 'grouped' })
+      .select('id', 'name', 'is_active', 'slug', 'create_hidden')) as Array<{
+      id: number
+      name: string
+      is_active: unknown
+      slug: string | null
+      create_hidden: unknown
+    }>
+  ).filter(
+    (l) =>
+      l.is_active === true ||
+      l.is_active === 1 ||
+      (l.slug && !(l.create_hidden === true || l.create_hidden === 1))
+  )
   const visibleOn = new Map<string, Set<number>>()
   if (layouts.length === 0) return { layouts, visibleOn }
   const assignments = (await db('nivaro_layout_field_assignments')
@@ -237,13 +256,24 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     }
     const rules = parseJson<ValidationRule[]>(f.validation_rules)
     if (Array.isArray(rules) && rules.length > 0) {
-      const presence = onEveryLayout(f.field)
-      if (!presence.ok) {
-        out.skipped.push(
-          `${f.field}: validation rules, but layout-dependent (not on ${presence.missing.join(', ')})`
-        )
-      } else {
-        out.validation.push({ field: f.field, label: label(f.field), rules })
+      // Date-offset rules ('at least N days from today') judge the moment of
+      // ENTRY — every record naturally ages past them, so sweeping history
+      // with them flags perfectly good records.
+      const sweepable = rules.filter(
+        (r) => r.type !== 'min_days_from_today' && r.type !== 'max_days_from_today'
+      )
+      if (sweepable.length < rules.length) {
+        out.skipped.push(`${f.field}: date-offset rule judges entry time, not stored data`)
+      }
+      if (sweepable.length > 0) {
+        const presence = onEveryLayout(f.field)
+        if (!presence.ok) {
+          out.skipped.push(
+            `${f.field}: validation rules, but layout-dependent (not on ${presence.missing.join(', ')})`
+          )
+        } else {
+          out.validation.push({ field: f.field, label: label(f.field), rules: sweepable })
+        }
       }
     }
     const dep = parseJson<{
@@ -355,6 +385,10 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
     >,
     db('nivaro_collection_layouts')
       .where('layout_type', 'grouped')
+      // Same reachability rule as layoutPresence — the two must not drift.
+      .where((qb) =>
+        qb.where('is_active', true).orWhere((q2) => q2.whereNotNull('slug').where('create_hidden', false))
+      )
       .select('id', 'collection') as Promise<Array<{ id: number; collection: string }>>,
     db('nivaro_layout_field_assignments')
       .where('is_visible', true)

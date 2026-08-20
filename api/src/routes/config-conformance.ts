@@ -50,7 +50,13 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
   app.get<{ Params: { id: string } }>('/runs/:id', async (req, reply) => {
     const run = await db('nivaro_conformance_runs').where('id', req.params.id).first()
     if (!run) return reply.code(404).send({ error: 'Not found' })
-    const q = req.query as { page?: string; limit?: string; rule?: string; field?: string }
+    const q = req.query as {
+      page?: string
+      limit?: string
+      rule?: string
+      field?: string
+      group?: string
+    }
     const limit = Math.min(Number(q.limit ?? 50) || 50, 200)
     const page = Math.max(1, Number(q.page ?? 1) || 1)
     const base = () =>
@@ -60,11 +66,41 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
           if (q.rule) qb.where('rule', q.rule)
           if (q.field) qb.where('field', q.field)
         })
-    const findings = await base()
-      .orderBy('id', 'asc')
-      .offset((page - 1) * limit)
-      .limit(limit)
-    const counted = await base().count({ c: '*' }).first()
+    let findings: unknown[]
+    let counted: { c?: unknown } | undefined
+    if (q.group === 'record') {
+      // Grouped mode: page over RECORDS (worst first), then fetch each page
+      // record's full finding set — a record's issues must never split
+      // across pages.
+      const items = (await base()
+        .groupBy('item_id')
+        .count({ c: '*' })
+        .select('item_id')
+        .orderByRaw('count(*) desc, item_id asc')
+        .offset((page - 1) * limit)
+        .limit(limit)) as Array<{ item_id: string; c: number }>
+      const itemIds = items.map((i) => i.item_id)
+      const rows =
+        itemIds.length === 0
+          ? []
+          : await base().whereIn('item_id', itemIds).orderBy('id', 'asc')
+      findings = itemIds.map((id) => ({
+        item_id: id,
+        item_label: rows.find((r: { item_id: string }) => r.item_id === id)?.item_label ?? null,
+        count: Number(items.find((i) => i.item_id === id)?.c ?? 0),
+        findings: rows.filter((r: { item_id: string }) => r.item_id === id)
+      }))
+      const groupCount = (await base()
+        .countDistinct({ c: 'item_id' })
+        .first()) as { c?: unknown } | undefined
+      counted = groupCount
+    } else {
+      findings = await base()
+        .orderBy('id', 'asc')
+        .offset((page - 1) * limit)
+        .limit(limit)
+      counted = (await base().count({ c: '*' }).first()) as { c?: unknown } | undefined
+    }
     const stored = await db('nivaro_conformance_findings')
       .where('run', run.id)
       .count({ c: '*' })
