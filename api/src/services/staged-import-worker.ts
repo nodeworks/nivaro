@@ -116,9 +116,10 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       buffer = await readFileBuffer(stored)
     }
 
-    const { rowCount, durationSeconds } = await runStagedImport({
+    const { rowCount, durationSeconds, summary } = await runStagedImport({
       definition,
       buffer,
+      createdBy: next.created_by ? String(next.created_by) : null,
       onProgress: async (stage, data) => {
         if (stage === 'row_count') {
           await db('nivaro_import_queue')
@@ -129,14 +130,23 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       }
     })
 
-    await db('nivaro_import_queue').where('id', next.id).update({
-      status: 'completed',
-      row_count: rowCount,
-      duration: durationSeconds,
-      finished_at: new Date(),
-      updated_at: new Date()
-    })
-    await notifyCreator(app, next, `${label(next)} import completed`, `Imported ${rowCount} rows.`)
+    await db('nivaro_import_queue')
+      .where('id', next.id)
+      .update({
+        status: 'completed',
+        row_count: rowCount,
+        duration: durationSeconds,
+        finished_at: new Date(),
+        updated_at: new Date(),
+        // Service-mode runs report what actually changed; proc runs keep null.
+        ...(summary ? { logs: summary.slice(0, 4000) } : {})
+      })
+    await notifyCreator(
+      app,
+      next,
+      `${label(next)} import completed`,
+      summary ? summary.split('\n')[0] : `Imported ${rowCount} rows.`
+    )
     app.io?.emit('import:progress', { id: next.id, stage: 'completed', row_count: rowCount })
   } catch (err) {
     // Defence in depth: the share loader sanitises its own failures, but ANY

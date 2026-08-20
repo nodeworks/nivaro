@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
+import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
 
 const execFileAsync = promisify(execFile)
@@ -39,6 +40,11 @@ export interface ImportDefinition {
   procedure_deployed_at?: string | Date | null
   /** Pre-flight validation config (JSON) — see staged-import-validation.ts. */
   validation?: string | null
+  /** null/'proc' = staging table + stored procedure; 'service' = rows go
+   *  through the items service (staged-import-service.ts) — revisions,
+   *  activity, rules and computed fields apply, and only changed rows write. */
+  processor?: string | null
+  service_config?: string | null
 }
 
 export interface ImportProgress {
@@ -453,14 +459,17 @@ async function loadChunked(
 export interface RunImportOptions {
   definition: ImportDefinition
   buffer: Buffer
+  /** Queuing user — service-mode writes run as them (RBAC applies). */
+  createdBy?: string | null
   onProgress?: ImportProgress
 }
 
 export async function runStagedImport({
   definition,
   buffer,
+  createdBy,
   onProgress
-}: RunImportOptions): Promise<{ rowCount: number; durationSeconds: number }> {
+}: RunImportOptions): Promise<{ rowCount: number; durationSeconds: number; summary?: string }> {
   const began = Date.now()
 
   const table = definition.staging_table || `staging_${definition.key}`
@@ -498,6 +507,27 @@ export async function runStagedImport({
     })
     declaredNames = declared.map((c) => c.name).filter((c) => c !== 'id')
     columns = declaredNames
+  }
+
+  // Service mode: no staging table, no procedure — the parsed, header-mapped
+  // rows go through the items service so every write is revisioned/ruled.
+  if (definition.processor === 'service') {
+    const cfg = parseServiceConfig(definition.service_config)
+    if (!cfg) throw new Error(`Import "${definition.key}" is service-mode but has no valid service_config`)
+    await onProgress?.('importing')
+    const summary = await runServiceImport({
+      config: cfg,
+      rows,
+      createdBy: createdBy ?? null,
+      onProgress: (written, total) => onProgress?.('importing', { written, total })
+    })
+    if (summary.failed > 0 && summary.created + summary.updated === 0) {
+      // Nothing landed — surface as a failed run, not a quiet "completed".
+      throw new Error(`Import wrote nothing:\n${summary.log}`)
+    }
+    const durationSeconds = Math.round((Date.now() - began) / 1000)
+    await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })
+    return { rowCount: rows.length, durationSeconds, summary: summary.log }
   }
 
   await onProgress?.('preparing')
