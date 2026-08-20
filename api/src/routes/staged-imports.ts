@@ -442,7 +442,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
 
   function runQuery() {
     return db('nivaro_import_queue as q')
-      .leftJoin('nivaro_import_definitions as d', 'd.id', 'q.definition')
+      // Join on the denormalised key, never the definition FK: rows carried
+      // over from the legacy queue hold ids from the OLD definitions table's
+      // id space, so the id join labelled runs with the wrong import.
+      .leftJoin('nivaro_import_definitions as d', 'd.key', 'q.import_key')
       .leftJoin('nivaro_files as f', 'f.id', 'q.file')
       .leftJoin('nivaro_users as u', 'u.id', 'q.created_by')
   }
