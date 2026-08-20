@@ -1,10 +1,70 @@
 {
-  "generated_at": "2026-08-20T17:17:55.511Z",
+  "generated_at": "2026-08-20T20:26:36.753Z",
   "releases": [
+    {
+      "version": "0.1.83",
+      "tag": "v0.1.83",
+      "date": "2026-08-20T16:26:34-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "environments v2 - components with deep CI (pipelines, jobs, deployments, live)",
+              "hash": "1ecdb007"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "environments registry - the deployment stack as data",
+              "hash": "d3cd26fc"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "per-collection revisioning toggles + MDSi shipment recovery fail-safe",
+              "hash": "348642a0"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "visual builders for service mapping, staging schema and pre-flight checks",
+              "hash": "b342cacb"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "processor mode editable in the Definitions panel",
+              "hash": "0a740a2d"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "service-mode processor - warehouse imports now revisioned",
+              "hash": "83ce3697"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "staged runs showed the wrong import label",
+              "hash": "5f192761"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.1.82",
       "tag": "v0.1.82",
-      "date": "2026-08-20T13:17:53-04:00",
+      "date": "2026-08-20T13:17:55-04:00",
       "sections": [
         {
           "label": "Added",
