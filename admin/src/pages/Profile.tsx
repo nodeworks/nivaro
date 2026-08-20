@@ -1,5 +1,6 @@
+import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider, NotificationSourcesCard } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { BellRing, Copy, Eye, EyeOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -8,6 +9,7 @@ import { RevisionsPanel } from '@/components/revisions-panel'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,7 +17,7 @@ import { UserActivityPanel } from '@/components/user-activity-panel'
 import { api, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useSettings } from '@/lib/useSettings'
-import { formatDate, formatRelative, cn } from '@/lib/utils'
+import { cn, formatDate, formatRelative } from '@/lib/utils'
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4)
@@ -26,15 +28,16 @@ function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   return out
 }
 
+// Shared-component host client (team-chat.tsx precedent — cookie session
+// rides the same-origin requests).
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 function EmailDeliveryCard() {
   const qc = useQueryClient()
   const { data: prefs } = useQuery({
     queryKey: ['profile-email-prefs'],
     queryFn: () =>
-      api
-        .get('/users/me')
-        .then((r) => (r.data.data?.preferences ?? {}) as Record<string, unknown>)
+      api.get('/users/me').then((r) => (r.data.data?.preferences ?? {}) as Record<string, unknown>)
   })
   const mode = prefs?.email_digest === 'daily' ? 'daily' : 'instant'
   const save = useMutation({
@@ -684,6 +687,9 @@ export function ProfilePage() {
 
             {/* Browser push (own save, outside the profile form) */}
             <EmailDeliveryCard />
+            <NivaroProvider client={sharedClient}>
+              <NotificationSourcesCard />
+            </NivaroProvider>
             <BrowserPushCard />
 
             {/* Delegation (own save, outside the profile form) */}

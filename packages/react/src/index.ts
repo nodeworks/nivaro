@@ -141,6 +141,7 @@ export {
   matchScopeDimension,
   NavigationContext,
   type NotificationRouteMap,
+  NotificationSourcesCard,
   type NotificationTarget,
   numericIntlOptions,
   OverlayHistoryContext,

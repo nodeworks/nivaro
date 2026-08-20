@@ -77,6 +77,7 @@ export { JsonMapEditor } from './components/JsonMapEditor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
+export { NotificationSourcesCard } from './components/NotificationSourcesCard'
 export type {
   PageRendererPage,
   PageRendererProps,

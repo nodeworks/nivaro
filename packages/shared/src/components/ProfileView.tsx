@@ -1,14 +1,14 @@
 import {
-  type ManagedUser,
-  type UserScopesInfo,
   deleteNotificationSubscription,
   listNotificationSubscriptions,
+  type ManagedUser,
   readItems,
   readMyScopes,
   readUser,
   readUserCard,
   saveMyScopeDefaults,
   setMyDelegate,
+  type UserScopesInfo,
   updateNotificationSubscription,
   updateUser
 } from '@nivaro/sdk'
@@ -16,10 +16,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BellRing,
   Building2,
-  Filter as FilterIcon,
   Camera,
   Check,
   Clock,
+  Filter as FilterIcon,
   KeyRound,
   Loader2,
   LogOut,
@@ -35,6 +35,7 @@ import { useItemEditAuth, useNivaroClient } from '../context'
 import { get, patch } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
+import { NotificationSourcesCard } from './NotificationSourcesCard'
 
 /**
  * ProfileView — user profile for headless hosts (and reusable by admin).
@@ -82,8 +83,7 @@ const fullName = (u: { first_name?: string | null; last_name?: string | null; em
 
 const initials = (u: { first_name?: string | null; last_name?: string | null; email?: string }) =>
   (
-    `${u.first_name?.[0] ?? ''}${u.last_name?.[0] ?? ''}` ||
-    (u.email ?? '?').slice(0, 2)
+    `${u.first_name?.[0] ?? ''}${u.last_name?.[0] ?? ''}` || (u.email ?? '?').slice(0, 2)
   ).toUpperCase()
 
 function SectionCard({
@@ -104,7 +104,9 @@ function SectionCard({
       <header className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
         <span className='text-nvr-navy dark:text-nvr-cyan'>{icon}</span>
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>{title}</h3>
-        {hint && <p className='hidden text-[11px] text-slate-500 dark:text-slate-400 sm:block'>{hint}</p>}
+        {hint && (
+          <p className='hidden text-[11px] text-slate-500 dark:text-slate-400 sm:block'>{hint}</p>
+        )}
         <span className='ml-auto'>{actions}</span>
       </header>
       <div className='p-4'>{children}</div>
@@ -135,7 +137,11 @@ function Field({
     <label className='block'>
       <span className='mb-1 flex items-baseline justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         {label}
-        {hint && <span className='normal-case tracking-normal text-slate-400 dark:text-slate-500'>{hint}</span>}
+        {hint && (
+          <span className='normal-case tracking-normal text-slate-400 dark:text-slate-500'>
+            {hint}
+          </span>
+        )}
       </span>
       <input
         type={type}
@@ -145,7 +151,8 @@ function Field({
         disabled={disabled}
         className={cn(
           'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-700 outline-none transition-colors focus:border-nvr-cyan focus-visible:ring-2 focus-visible:ring-nvr-cyan/25 dark:border-border dark:bg-background dark:text-slate-200',
-          disabled && 'cursor-not-allowed bg-slate-50 text-slate-400 dark:bg-muted/40 dark:text-slate-500',
+          disabled &&
+            'cursor-not-allowed bg-slate-50 text-slate-400 dark:bg-muted/40 dark:text-slate-500',
           inputClassName
         )}
       />
@@ -238,7 +245,6 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
-
 // ── Email delivery (instant vs daily action digest) ─────────────────────────
 
 function EmailDeliveryCard() {
@@ -322,8 +328,7 @@ function ScopeDefaultsCard() {
   const qc = useQueryClient()
   const { data: scopes } = useQuery({
     queryKey: ['nvr-profile-scopes'],
-    queryFn: () =>
-      client.request(readMyScopes()).then((r) => (r as { data: UserScopesInfo }).data)
+    queryFn: () => client.request(readMyScopes()).then((r) => (r as { data: UserScopesInfo }).data)
   })
   const save = useMutation({
     mutationFn: ({ dimension, values }: { dimension: string; values: Array<string | number> }) =>
@@ -377,7 +382,10 @@ function ScopeDimensionRow({
           limit: 200
         })
       )) as { data: Array<Record<string, unknown>> }
-      return (res.data ?? []).map((r) => ({ id: r.id as string | number, label: String(r[lf] ?? r.id) }))
+      return (res.data ?? []).map((r) => ({
+        id: r.id as string | number,
+        label: String(r[lf] ?? r.id)
+      }))
     }
   })
   const restrictedSet = restricted?.length ? new Set(restricted.map(String)) : null
@@ -424,7 +432,10 @@ function ScopeDimensionRow({
           limit: 100
         })
       )) as { data: Array<Record<string, unknown>> }
-      return (res.data ?? []).map((r) => ({ id: r.id as string | number, label: String(r[lf] ?? r.id) }))
+      return (res.data ?? []).map((r) => ({
+        id: r.id as string | number,
+        label: String(r[lf] ?? r.id)
+      }))
     },
     enabled: missing.length > 0
   })
@@ -490,7 +501,9 @@ function ScopeDimensionRow({
               </button>
             )
           })}
-          {allowed.length === 0 && <span className='text-[11.5px] text-slate-400'>No options.</span>}
+          {allowed.length === 0 && (
+            <span className='text-[11.5px] text-slate-400'>No options.</span>
+          )}
         </div>
       ) : (
         <div className='max-w-xl'>
@@ -536,7 +549,9 @@ function ScopeDimensionRow({
                     onClick={() => toggle(m.id)}
                     className={cn(
                       'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted',
-                      on ? 'font-medium text-nvr-navy dark:text-nvr-cyan' : 'text-slate-600 dark:text-slate-300'
+                      on
+                        ? 'font-medium text-nvr-navy dark:text-nvr-cyan'
+                        : 'text-slate-600 dark:text-slate-300'
                     )}
                   >
                     <span className='truncate'>{m.label}</span>
@@ -609,7 +624,11 @@ function SecurityCard() {
   })
   const verify = useMutation({
     mutationFn: (t: string) =>
-      client.request({ _method: 'POST', _path: '/two-factor/verify', _body: { token: t } } as never),
+      client.request({
+        _method: 'POST',
+        _path: '/two-factor/verify',
+        _body: { token: t }
+      } as never),
     onSuccess: () => {
       setQr(null)
       setToken('')
@@ -654,82 +673,82 @@ function SecurityCard() {
         {/* Hidden entirely when the instance does not use two-factor —
             an inert setup flow is worse than no panel. */}
         {twoFactorOffered && (
-        <div>
-          <div className='flex items-center gap-2'>
-            <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
-              Two-factor authentication
-            </p>
-            <span
-              className={cn(
-                'rounded-full px-1.5 py-px text-[10px] font-semibold',
-                totp?.enabled
-                  ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
-                  : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'
-              )}
-            >
-              {totp?.enabled ? 'Enabled' : 'Off'}
-            </span>
-          </div>
-          {!totp?.enabled && !qr && (
-            <button
-              type='button'
-              onClick={() => setup.mutate()}
-              className='mt-2 h-8 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-300 dark:hover:text-nvr-cyan'
-            >
-              {setup.isPending ? 'Preparing…' : 'Set up 2FA'}
-            </button>
-          )}
-          {qr && (
-            <div className='mt-3 flex flex-wrap items-start gap-4'>
-              <img
-                src={qr.qr}
-                alt='Scan with your authenticator app'
-                className='h-32 w-32 rounded-md border border-slate-200 dark:border-border'
-              />
-              <div className='min-w-[200px] flex-1 space-y-2'>
-                <p className='text-[12px] text-slate-500'>
-                  Scan with your authenticator app, then enter the 6-digit code to confirm.
-                </p>
-                <div className='flex gap-1.5'>
-                  <input
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    placeholder='123456'
-                    inputMode='numeric'
-                    className='h-8 w-[110px] rounded-md border border-slate-200 px-2.5 text-center text-[13px] tabular-nums tracking-widest dark:border-border dark:bg-background'
-                  />
-                  <button
-                    type='button'
-                    disabled={token.trim().length < 6 || verify.isPending}
-                    onClick={() => verify.mutate(token.trim())}
-                    className='h-8 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
-                  >
-                    Confirm
-                  </button>
-                </div>
-              </div>
+          <div>
+            <div className='flex items-center gap-2'>
+              <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+                Two-factor authentication
+              </p>
+              <span
+                className={cn(
+                  'rounded-full px-1.5 py-px text-[10px] font-semibold',
+                  totp?.enabled
+                    ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
+                    : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'
+                )}
+              >
+                {totp?.enabled ? 'Enabled' : 'Off'}
+              </span>
             </div>
-          )}
-          {totp?.enabled && (
-            <div className='mt-2 flex gap-1.5'>
-              <input
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder='Code to disable'
-                inputMode='numeric'
-                className='h-8 w-[130px] rounded-md border border-slate-200 px-2.5 text-[12px] dark:border-border dark:bg-background'
-              />
+            {!totp?.enabled && !qr && (
               <button
                 type='button'
-                disabled={token.trim().length < 6 || disable.isPending}
-                onClick={() => disable.mutate(token.trim())}
-                className='h-8 rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:hover:bg-red-500/10'
+                onClick={() => setup.mutate()}
+                className='mt-2 h-8 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-300 dark:hover:text-nvr-cyan'
               >
-                {disable.isPending ? 'Disabling…' : 'Disable'}
+                {setup.isPending ? 'Preparing…' : 'Set up 2FA'}
               </button>
-            </div>
-          )}
-        </div>
+            )}
+            {qr && (
+              <div className='mt-3 flex flex-wrap items-start gap-4'>
+                <img
+                  src={qr.qr}
+                  alt='Scan with your authenticator app'
+                  className='h-32 w-32 rounded-md border border-slate-200 dark:border-border'
+                />
+                <div className='min-w-[200px] flex-1 space-y-2'>
+                  <p className='text-[12px] text-slate-500'>
+                    Scan with your authenticator app, then enter the 6-digit code to confirm.
+                  </p>
+                  <div className='flex gap-1.5'>
+                    <input
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      placeholder='123456'
+                      inputMode='numeric'
+                      className='h-8 w-[110px] rounded-md border border-slate-200 px-2.5 text-center text-[13px] tabular-nums tracking-widest dark:border-border dark:bg-background'
+                    />
+                    <button
+                      type='button'
+                      disabled={token.trim().length < 6 || verify.isPending}
+                      onClick={() => verify.mutate(token.trim())}
+                      className='h-8 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {totp?.enabled && (
+              <div className='mt-2 flex gap-1.5'>
+                <input
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder='Code to disable'
+                  inputMode='numeric'
+                  className='h-8 w-[130px] rounded-md border border-slate-200 px-2.5 text-[12px] dark:border-border dark:bg-background'
+                />
+                <button
+                  type='button'
+                  disabled={token.trim().length < 6 || disable.isPending}
+                  onClick={() => disable.mutate(token.trim())}
+                  className='h-8 rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:hover:bg-red-500/10'
+                >
+                  {disable.isPending ? 'Disabling…' : 'Disable'}
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         {/* The rule separates this from two-factor above — with that hidden
@@ -848,8 +867,7 @@ function SubscriptionsCard() {
                 </p>
                 <p className='text-[10.5px] text-slate-400'>
                   {s.collection ?? 'queue'} · {s.event_type}
-                  {s.filter_value ? ` · ${s.filter_value}` : ''} ·{' '}
-                  {s.digest_frequency ?? 'instant'}
+                  {s.filter_value ? ` · ${s.filter_value}` : ''} · {s.digest_frequency ?? 'instant'}
                 </p>
               </div>
               <ConfirmButton
@@ -941,7 +959,12 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
               onClick={() => save.mutate()}
               className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity disabled:opacity-50'
             >
-              {save.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Check className='h-3 w-3' />} Save
+              {save.isPending ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <Check className='h-3 w-3' />
+              )}{' '}
+              Save
             </button>
           </span>
         )
@@ -952,7 +975,12 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
         <span className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
           I'm out of office
         </span>
-        <Toggle on={ooo} onChange={() => setOoo((v) => !v)} label="I'm out of office" tone='amber' />
+        <Toggle
+          on={ooo}
+          onChange={() => setOoo((v) => !v)}
+          label="I'm out of office"
+          tone='amber'
+        />
       </label>
 
       <div className='mt-3 grid gap-3 border-t border-slate-100 pt-3 dark:border-border/60 sm:grid-cols-2'>
@@ -1031,7 +1059,9 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
   const { data: card } = useQuery({
     queryKey: ['nvr-profile-card', cardId],
     queryFn: () =>
-      client.request(readUserCard(cardId as string)).then((r) => (r as unknown as { data: UserCard }).data),
+      client
+        .request(readUserCard(cardId as string))
+        .then((r) => (r as unknown as { data: UserCard }).data),
     enabled: !!cardId
   })
 
@@ -1062,8 +1092,35 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
   const fileRef = useRef<HTMLInputElement | null>(null)
   const uploadAvatar = useMutation({
     mutationFn: async (file: File) => {
-      const up = await client.upload(file, { title: `avatar-${me?.id}` })
-      await client.request(updateUser((me as ManagedUser).id, { avatar: up.id } as never))
+      // Downscale to a 96px data URI — the SAME shape the Microsoft Graph
+      // capture stores, which is what GET /users/:id/avatar and UserAvatar
+      // speak. Storing a file id here rendered broken (the route serves the
+      // column verbatim) and orphaned on the next OIDC login anyway.
+      const dataUri = await new Promise<string>((resolve, reject) => {
+        const img = new Image()
+        const url = URL.createObjectURL(file)
+        img.onload = () => {
+          URL.revokeObjectURL(url)
+          const size = 96
+          const canvas = document.createElement('canvas')
+          canvas.width = size
+          canvas.height = size
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return reject(new Error('canvas unavailable'))
+          // Cover-crop from the center.
+          const scale = Math.max(size / img.width, size / img.height)
+          const w = img.width * scale
+          const h = img.height * scale
+          ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h)
+          resolve(canvas.toDataURL('image/jpeg', 0.85))
+        }
+        img.onerror = () => {
+          URL.revokeObjectURL(url)
+          reject(new Error('not an image'))
+        }
+        img.src = url
+      })
+      await client.request(updateUser((me as ManagedUser).id, { avatar: dataUri } as never))
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-user'] })
@@ -1104,7 +1161,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
           <div className='relative'>
             {avatarId ? (
               <img
-                src={`/api/files/${avatarId}`}
+                src={avatarId.startsWith('data:') ? avatarId : `/api/files/${avatarId}`}
                 alt=''
                 className='h-[76px] w-[76px] rounded-full border border-slate-200 object-cover dark:border-border'
               />
@@ -1283,7 +1340,9 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <EmailDeliveryCard />
           </div>
           <div className='space-y-4'>
-            <SubscriptionsCard />
+            {/* The full picture — every notification source in the app,
+                superseding the old subscriptions-only card. */}
+            <NotificationSourcesCard />
             <SecurityCard />
           </div>
         </div>
