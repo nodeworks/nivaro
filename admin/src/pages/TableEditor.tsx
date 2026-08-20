@@ -3877,9 +3877,95 @@ function SettingsTab({
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
+      <AuditDepthSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
+    </div>
+  )
+}
+
+// ─── Audit depth (Settings tab) ───────────────────────────────────────────────
+// nivaro_collections.accountability: 'all' = activity + revisions (default),
+// 'activity' = activity rows only, ''/null-equivalent = neither. Rendered as
+// two switches so "turn off revisioning" doesn't silently kill the audit log.
+
+function AuditDepthSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-audit', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { accountability?: string | null } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+
+  const saveMut = useMutation({
+    mutationFn: (accountability: string) => api.patch(`/collections/${tableName}`, { accountability }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-audit', tableName] })
+      toast.success('Audit setting saved')
+    },
+    onError: () => toast.error('Failed to update audit setting')
+  })
+
+  // null/undefined mean "never configured", which the hooks treat as 'all'.
+  const level = meta === undefined ? undefined : (meta.accountability ?? 'all') || 'none'
+  const activityOn = level === 'all' || level === 'activity'
+  const revisionsOn = level === 'all'
+  const compose = (activity: boolean, revisions: boolean) =>
+    saveMut.mutate(activity ? (revisions ? 'all' : 'activity') : '')
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='flex items-center justify-between px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Activity log</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Records who created, changed or deleted each item — the audit trail on the record
+            timeline and Activity page.
+          </p>
+        </div>
+        <Switch
+          checked={activityOn}
+          onCheckedChange={(v) => compose(v, v && revisionsOn)}
+          disabled={saveMut.isPending || level === undefined}
+        />
+      </div>
+      <div
+        className={`flex items-center justify-between border-t border-slate-100 px-4 py-3 ${activityOn ? '' : 'opacity-50'}`}
+      >
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Revision history</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Stores a full snapshot + field-level delta per change — powers the Revisions panel,
+            field history and time travel. Needs the activity log.
+          </p>
+        </div>
+        <Switch
+          checked={revisionsOn}
+          onCheckedChange={(v) => compose(true, v)}
+          disabled={saveMut.isPending || level === undefined || !activityOn}
+        />
+      </div>
+      {level === 'none' && (
+        <div className='border-t border-slate-100 bg-amber-50 px-4 py-2.5'>
+          <p className='text-[11px] text-amber-700'>
+            No audit trail — writes to this collection leave no activity or revision records.
+            Webhooks and flows still fire.
+          </p>
+        </div>
+      )}
+      {level === 'activity' && (
+        <div className='border-t border-slate-100 bg-slate-50 px-4 py-2.5'>
+          <p className='text-[11px] text-slate-500'>
+            Changes are logged without snapshots — the Revisions panel and field history stay empty
+            for new writes.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
