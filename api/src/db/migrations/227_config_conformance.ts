@@ -18,6 +18,10 @@ export async function up(knex: Knex): Promise<void> {
       t.boolean('truncated').notNullable().defaultTo(false)
       t.text('error').nullable()
       t.uuid('triggered_by').nullable()
+      /** Full-fidelity totals per rule/field (JSON) — counted in memory over
+       *  EVERY violation, while findings rows store only a browsable sample. */
+      t.text('rule_counts').nullable()
+      t.text('field_counts').nullable()
       /** Written explicitly as JS UTC — a GETDATE() default is local time. */
       t.dateTime('started_at').nullable()
       t.dateTime('finished_at').nullable()

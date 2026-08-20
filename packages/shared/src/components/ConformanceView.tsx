@@ -58,6 +58,10 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   cascade: {
     label: 'Not an available option',
     cls: 'bg-purple-500/10 text-purple-700 dark:text-purple-400'
+  },
+  display: {
+    label: 'Broken display label',
+    cls: 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
   }
 }
 

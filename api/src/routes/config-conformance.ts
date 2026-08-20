@@ -65,22 +65,45 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       .offset((page - 1) * limit)
       .limit(limit)
     const counted = await base().count({ c: '*' }).first()
-    // Facets for the filter chips.
-    const byRule = await db('nivaro_conformance_findings')
+    const stored = await db('nivaro_conformance_findings')
       .where('run', run.id)
-      .groupBy('rule')
       .count({ c: '*' })
-      .select('rule')
-    const byField = await db('nivaro_conformance_findings')
-      .where('run', run.id)
-      .groupBy('field')
-      .count({ c: '*' })
-      .select('field')
+      .first()
+    // Facet chips come from the run's FULL totals (counted in memory over
+    // every violation) — the stored findings rows are only a browsable
+    // sample once the cap hits, and chips built from them under-reported.
+    const parse = (raw: unknown): Record<string, number> => {
+      try {
+        const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+        return v && typeof v === 'object' ? (v as Record<string, number>) : {}
+      } catch {
+        return {}
+      }
+    }
+    const ruleTotals = parse(run.rule_counts)
+    const fieldTotals = parse(run.field_counts)
+    const byRule = Object.keys(ruleTotals).length
+      ? Object.entries(ruleTotals).map(([rule, c]) => ({ rule, c }))
+      : await db('nivaro_conformance_findings')
+          .where('run', run.id)
+          .groupBy('rule')
+          .count({ c: '*' })
+          .select('rule')
+    const byField = Object.keys(fieldTotals).length
+      ? Object.entries(fieldTotals)
+          .map(([field, c]) => ({ field, c }))
+          .sort((a, b) => Number(b.c) - Number(a.c))
+      : await db('nivaro_conformance_findings')
+          .where('run', run.id)
+          .groupBy('field')
+          .count({ c: '*' })
+          .select('field')
     return {
       data: {
         run,
         findings,
         total: Number(counted?.c ?? 0),
+        stored_total: Number(stored?.c ?? 0),
         page,
         limit,
         by_rule: byRule,

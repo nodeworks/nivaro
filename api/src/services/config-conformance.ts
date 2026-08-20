@@ -25,7 +25,6 @@ import { type ValidationRule, applyValidationRule } from './validation-rules.js'
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CHUNK = 500
 const DEFAULT_ROW_CAP = 5000
-const FINDINGS_CAP = 2000
 
 interface CascadeCheck {
   field: string
@@ -52,11 +51,22 @@ interface RequiredCheck {
   junction?: { table: string; srcFk: string; tgtFk: string }
 }
 
+interface DisplayToken {
+  raw: string
+  /** Pre-resolved M2O hops for a dotted token; empty for a plain column. */
+  hops: Array<{ fk: string; target: string }>
+  /** The column read at the end of the hop chain (or directly on the row). */
+  leaf: string
+}
+
 interface CompiledChecks {
   collection: string
   requiredFields: RequiredCheck[]
   validation: Array<{ field: string; label: string; rules: ValidationRule[] }>
   cascades: CascadeCheck[]
+  /** Display-template parts — a record whose parts all resolve empty renders
+   *  as its internal id everywhere labels are used. */
+  displayTokens: DisplayToken[]
   /** Rules present in config but not evaluable by this sweep. */
   skipped: string[]
 }
@@ -159,9 +169,43 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     requiredFields: [],
     validation: [],
     cascades: [],
+    displayTokens: [],
     skipped: []
   }
   const { layouts, visibleOn } = await layoutPresence(collection)
+
+  // Display template completeness — each {{token}} should resolve to a value,
+  // or the record renders as its internal id in pickers, queues and labels.
+  const meta = (await db('nivaro_collections')
+    .where({ collection })
+    .first('display_template')) as { display_template: string | null } | undefined
+  for (const m of String(meta?.display_template ?? '').matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
+    const path = m[1].split('.')
+    if (path.length > 3 || path.some((seg) => !IDENT.test(seg))) {
+      out.skipped.push(`display template token {{${m[1]}}} not evaluable`)
+      continue
+    }
+    const hops: Array<{ fk: string; target: string }> = []
+    let cur = collection
+    let ok = true
+    for (let i = 0; i < path.length - 1; i++) {
+      const rel = (await db('nivaro_relations')
+        .where({ many_collection: cur, many_field: path[i] })
+        .whereNull('junction_field')
+        .first('one_collection')) as { one_collection: string | null } | undefined
+      if (!rel?.one_collection || !IDENT.test(rel.one_collection)) {
+        ok = false
+        break
+      }
+      hops.push({ fk: path[i], target: rel.one_collection })
+      cur = rel.one_collection
+    }
+    if (!ok) {
+      out.skipped.push(`display template token {{${m[1]}}} not evaluable`)
+      continue
+    }
+    out.displayTokens.push({ raw: m[1], hops, leaf: path[path.length - 1] })
+  }
 
   // A form-entry rule (required/validation) only binds records whose layout
   // actually SHOWS the field. With multiple grouped layouts we cannot know
@@ -372,6 +416,8 @@ export interface ConformanceSummary {
   checked: number
   violations: number
   truncated: boolean
+  ruleCounts: Record<string, number>
+  fieldCounts: Record<string, number>
 }
 
 export async function runConformance(
@@ -387,6 +433,8 @@ export async function runConformance(
       checked_records: summary.checked,
       violation_count: summary.violations,
       truncated: summary.truncated,
+      rule_counts: JSON.stringify(summary.ruleCounts),
+      field_counts: JSON.stringify(summary.fieldCounts),
       finished_at: new Date()
     })
   } catch (err) {
@@ -416,6 +464,9 @@ async function evaluate(
     if (!c.childIsM2M) columns.add(c.field)
     if (!c.parentIsM2M) columns.add(c.parent_field)
   }
+  for (const t of checks.displayTokens) {
+    columns.add(t.hops.length > 0 ? t.hops[0].fk : t.leaf)
+  }
   // Only real columns survive — required flags on alias fields (M2M pickers)
   // have no scalar column to test here.
   const physical = new Set(
@@ -432,6 +483,10 @@ async function evaluate(
   let violations = 0
   let truncated = false
   let lastId: unknown = null
+  // Full-fidelity totals — every violation counts here even after the
+  // stored-findings cap, so the facet chips always describe the whole run.
+  const ruleCounts = new Map<string, number>()
+  const fieldCounts = new Map<string, number>()
 
   while (checked < rowCap) {
     const rows = (await db(collection)
@@ -587,44 +642,94 @@ async function evaluate(
       }
     }
 
-    // ── persist chunk findings with labels ───────────────────────────────
-    if (findings.length > 0) {
-      const remaining = FINDINGS_CAP - violations
-      const keep = findings.slice(0, Math.max(0, remaining))
-      violations += findings.length
-      if (keep.length > 0) {
-        const ids = [...new Set(keep.map((f) => f.item_id))]
-        const labels = await getLabels(new Map([[collection, new Set(ids)]])).catch(
-          () => ({}) as Record<string, string>
+    // ── display template completeness, hops batch-resolved per level ─────
+    if (checks.displayTokens.length > 0) {
+      const emptyParts = new Map<string, string[]>()
+      for (const t of checks.displayTokens) {
+        // rowId → current value along the hop chain
+        let values = new Map<string, unknown>(
+          rows.map((r) => [String(r.id), r[t.hops.length > 0 ? t.hops[0].fk : t.leaf]])
         )
-        const inserts = keep.map((f) => ({
-          run: runId,
-          item_id: f.item_id,
-          item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
-          field: f.field,
-          rule: f.rule,
-          message: f.message.slice(0, 1000)
-        }))
-        // MSSQL caps bound parameters at ~2100 — 6 columns per row means a
-        // whole-chunk insert can blow it when most rows violate.
-        for (let i = 0; i < inserts.length; i += 200) {
-          await db('nivaro_conformance_findings').insert(inserts.slice(i, i + 200))
+        for (let i = 0; i < t.hops.length; i++) {
+          const nextCol = i + 1 < t.hops.length ? t.hops[i + 1].fk : t.leaf
+          const ids = [...new Set([...values.values()].filter((v) => v != null && v !== ''))]
+          const fetched =
+            ids.length === 0
+              ? []
+              : ((await db(t.hops[i].target)
+                  .whereIn('id', ids as never[])
+                  .select('id', nextCol)) as Array<Record<string, unknown>>)
+          const byId = new Map(fetched.map((f) => [String(f.id), f[nextCol]]))
+          values = new Map(
+            [...values.entries()].map(([rowId, v]) => [
+              rowId,
+              v == null || v === '' ? null : (byId.get(String(v)) ?? null)
+            ])
+          )
+        }
+        for (const [rowId, v] of values) {
+          if (v == null || String(v).trim() === '') {
+            if (!emptyParts.has(rowId)) emptyParts.set(rowId, [])
+            emptyParts.get(rowId)?.push(t.raw)
+          }
         }
       }
-      // Past the findings cap we stop PERSISTING but keep counting — an
-      // unlimited run's violation total must describe the whole collection,
-      // not the first 2,000 rows that happened to store.
-      if (violations >= FINDINGS_CAP) truncated = true
+      for (const [rowId, parts] of emptyParts) {
+        findings.push({
+          item_id: rowId,
+          field: parts[0].split('.')[0],
+          rule: 'display',
+          message: `Display template part(s) empty: ${parts.map((p) => `{{${p}}}`).join(', ')} — the record shows as its internal id`
+        })
+      }
+    }
+
+    // ── persist chunk findings with labels — EVERY finding stores; the
+    // detail is the point, and the rows are small ────────────────────────
+    for (const f of findings) {
+      ruleCounts.set(f.rule, (ruleCounts.get(f.rule) ?? 0) + 1)
+      fieldCounts.set(f.field, (fieldCounts.get(f.field) ?? 0) + 1)
+    }
+    if (findings.length > 0) {
+      violations += findings.length
+      const ids = [...new Set(findings.map((f) => f.item_id))]
+      const labels = await getLabels(new Map([[collection, new Set(ids)]])).catch(
+        () => ({}) as Record<string, string>
+      )
+      const inserts = findings.map((f) => ({
+        run: runId,
+        item_id: f.item_id,
+        item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
+        field: f.field,
+        rule: f.rule,
+        message: f.message.slice(0, 1000)
+      }))
+      // MSSQL caps bound parameters at ~2100 — 6 columns per row means a
+      // whole-chunk insert can blow it when most rows violate.
+      for (let i = 0; i < inserts.length; i += 200) {
+        await db('nivaro_conformance_findings').insert(inserts.slice(i, i + 200))
+      }
     }
 
     // Progress is visible to pollers without waiting for the end.
     await db('nivaro_conformance_runs')
       .where('id', runId)
-      .update({ checked_records: checked, violation_count: violations })
+      .update({
+        checked_records: checked,
+        violation_count: violations,
+        rule_counts: JSON.stringify(Object.fromEntries(ruleCounts)),
+        field_counts: JSON.stringify(Object.fromEntries(fieldCounts))
+      })
       .catch(() => {})
 
     if (rows.length < CHUNK) break
   }
   if (checked >= rowCap) truncated = true
-  return { checked, violations, truncated }
+  return {
+    checked,
+    violations,
+    truncated,
+    ruleCounts: Object.fromEntries(ruleCounts),
+    fieldCounts: Object.fromEntries(fieldCounts)
+  }
 }
