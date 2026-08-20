@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { get } from '../lib/commands'
 import type { FormSchema } from '../types'
 import {
+  type AssignmentEntry,
   buildSchema,
   type CMSCollectionResponse,
   type CMSGroupRow,
@@ -107,10 +108,7 @@ export async function fetchSchema(
       }>(get(`/collection-layouts/${layoutId}/assignments`))
     ])
 
-    const assignmentMap = new Map<
-      string,
-      { group_key: string | null; sort: number; is_visible?: boolean }
-    >()
+    const assignmentMap = new Map<string, AssignmentEntry>()
     let ungroupedSort: number | null = null
     const allAssignments = assignmentsRes.data ?? []
     for (const a of allAssignments) {
@@ -118,10 +116,15 @@ export async function fetchSchema(
         ungroupedSort = a.sort
         continue
       }
+      // Slot sentinels (__pipeline__ etc.) are surfaced via slotAssignments,
+      // never as field assignments (shared parity).
+      if (SLOT_KEYS.has(a.field)) continue
       assignmentMap.set(a.field, {
         group_key: a.group_key,
         sort: a.sort,
-        is_visible: a.is_visible == null ? true : toBool(a.is_visible)
+        is_visible: a.is_visible == null ? true : toBool(a.is_visible),
+        label_override: a.label_override ?? null,
+        default_expanded: a.default_expanded
       })
     }
 
@@ -157,14 +160,19 @@ export async function fetchSchema(
       }))
   ])
 
-  const assignmentMap = new Map<string, { group_key: string | null; sort: number }>()
+  const assignmentMap = new Map<string, AssignmentEntry>()
   let ungroupedSort: number | null = activeRes.data.ungrouped_sort ?? null
   for (const a of activeRes.data.assignments ?? []) {
     if (a.field === UNGROUPED_POS_SENTINEL) {
       ungroupedSort = a.sort
       continue
     }
-    assignmentMap.set(a.field, { group_key: a.group_key, sort: a.sort })
+    if (SLOT_KEYS.has(a.field)) continue
+    assignmentMap.set(a.field, {
+      group_key: a.group_key,
+      sort: a.sort,
+      label_override: a.label_override ?? null
+    })
   }
 
   const schema = buildSchema(

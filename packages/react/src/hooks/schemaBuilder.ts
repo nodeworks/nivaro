@@ -57,10 +57,20 @@ export interface CMSCollectionResponse {
 export interface CMSGroupRow {
   key: string
   label: string
-  type?: 'section' | 'tab' | null
+  // Server may send any of the four group types; unknown values degrade to 'section'.
+  type?: string | null
   icon?: string | null
   sort?: number | null
   is_collapsed?: boolean | number | null
+}
+
+/** Per-field layout assignment overlay (parity with @nivaro/shared's AssignmentEntry). */
+export type AssignmentEntry = {
+  group_key: string | null
+  sort: number
+  is_visible?: boolean
+  label_override?: string | null
+  default_expanded?: boolean | number | null
 }
 
 // Sentinel injected by the active-layout assignments endpoint to mark the
@@ -243,12 +253,18 @@ function buildFieldRelation(
   return null
 }
 
+const GROUP_TYPES = new Set(['section', 'tab', 'metadata', 'container'])
+
+function normalizeGroupType(t: string | null | undefined): FormGroupDescriptor['type'] {
+  return t && GROUP_TYPES.has(t) ? (t as FormGroupDescriptor['type']) : 'section'
+}
+
 export function buildSchema(
   collection: string,
   meta: CMSCollectionResponse,
   groupRows: CMSGroupRow[],
   includeHidden: boolean,
-  assignmentMap?: Map<string, { group_key: string | null; sort: number; is_visible?: boolean }>
+  assignmentMap?: Map<string, AssignmentEntry>
 ): FormSchema {
   const rawFields = meta.fields ?? []
   const relations = meta.relations ?? []
@@ -277,20 +293,20 @@ export function buildSchema(
           : baseRelation
       const type = f.type ?? 'string'
       const iface = f.interface ?? null
-      const groupFromMap = assignmentMap?.get(f.field)?.group_key ?? null
-      const sortFromMap = assignmentMap?.get(f.field)?.sort ?? null
+      const entry = assignmentMap?.get(f.field)
       return {
         field: f.field,
         type,
         fieldType: normalizeFieldType(type, iface, relation),
         interface: iface,
-        label: f.label ?? titleCaseField(f.field),
+        // Layout label_override wins over field metadata label (shared parity).
+        label: (entry?.label_override ?? f.label ?? titleCaseField(f.field)) as string,
         note: f.note ?? null,
         required: toBool(f.required),
         readonly: toBool(f.readonly),
         hidden: toBool(f.hidden),
-        sort: sortFromMap ?? f.sort ?? null,
-        group: assignmentMap != null ? groupFromMap : (f.group_key ?? null),
+        sort: entry?.sort ?? f.sort ?? null,
+        group: assignmentMap != null ? (entry?.group_key ?? null) : (f.group_key ?? null),
         options:
           parseJsonColumn<Record<string, unknown>>(f.options) ??
           parseJsonColumn<Record<string, unknown>>(
@@ -322,7 +338,9 @@ export function buildSchema(
     .map((g) => ({
       key: g.key,
       label: g.label,
-      type: (g.type ?? 'section') as 'section' | 'tab',
+      // Honor all four group types ('section' | 'tab' | 'metadata' | 'container');
+      // unknown/absent values degrade to 'section' so fields never vanish.
+      type: normalizeGroupType(g.type),
       icon: g.icon ?? null,
       sort: g.sort ?? 0,
       isCollapsed: toBool(g.is_collapsed)

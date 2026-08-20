@@ -624,12 +624,16 @@ export function sessionRecordingEnabled(): Command<{
  */
 export function startSessionRecording(
   app?: string,
-  origin?: string
+  origin?: string,
+  clip?: boolean
 ): Command<{ data: { id: UUID } }> {
-  const body: Record<string, string> = {}
+  const body: Record<string, string | boolean> = {}
   if (app) body.app = app
   const resolved = origin ?? (typeof window !== 'undefined' ? window.location.origin : undefined)
   if (resolved) body.origin = resolved
+  // Error clips are gated server-side by the error_replay setting, not the
+  // full-recording bit — see the error-clip mode on useSessionRecorder.
+  if (clip) body.clip = true
   return cmd('POST', '/session-recordings/start', undefined, body)
 }
 
