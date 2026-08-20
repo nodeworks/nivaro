@@ -105,7 +105,7 @@ export function ConformanceView({ className }: { className?: string }) {
     staleTime: 5 * 60_000
   })
 
-  const { data: runs = [] } = useQuery<Run[]>({
+  const { data: runs = [], isFetched: runsFetched } = useQuery<Run[]>({
     queryKey: ['conformance-runs', collection],
     queryFn: () =>
       client
@@ -212,7 +212,9 @@ export function ConformanceView({ className }: { className?: string }) {
         />
       )}
 
-      {!shownRun && !loadingCollections && (
+      {/* The intro renders only once the runs query has SETTLED empty —
+          while a collection switch is fetching, nothing flashes. */}
+      {!shownRun && !loadingCollections && runsFetched && (
         <div className='max-w-[560px] rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
           <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
             Which records would fail their own form?
