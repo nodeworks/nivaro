@@ -1,10 +1,105 @@
 {
-  "generated_at": "2026-08-20T20:33:30.255Z",
+  "generated_at": "2026-08-20T22:31:40.668Z",
   "releases": [
+    {
+      "version": "0.1.85",
+      "tag": "v0.1.85",
+      "date": "2026-08-20T18:31:38-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "run history table + real labels + polish",
+              "hash": "a3fb442e"
+            },
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "historical date-offset checks + merged same-field cascade findings",
+              "hash": "cbfe0798"
+            },
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "group-by-record + reachable-layout gating + IR-class fixes",
+              "hash": "3b2642a7"
+            },
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "full detail, honest facets, display-label check",
+              "hash": "825fe6fe"
+            },
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "'All records' option + sample size actually honored",
+              "hash": "21c45fac"
+            },
+            {
+              "section": "Added",
+              "scope": "conformance",
+              "text": "selectable sample size",
+              "hash": "62d859a3"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "config conformance - records that would fail their own form (shared Data Integrity view)",
+              "hash": "99c63bd0"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "go-live readiness scorecard, number lineage, record compare, live replay follow",
+              "hash": "1a24c0cb"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "conformance",
+              "text": "no intro flash on collection switch",
+              "hash": "32f3cf73"
+            },
+            {
+              "section": "Fixed",
+              "scope": "conformance",
+              "text": "layout-gated required checks + M2M coverage",
+              "hash": "75d03959"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lineage",
+              "text": "child rows go through the items service, per-source RBAC",
+              "hash": "f210e675"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "conformance",
+              "text": "collections picker from three bulk queries",
+              "hash": "2d4b4037"
+            }
+          ]
+        }
+      ],
+      "count": 12
+    },
     {
       "version": "0.1.84",
       "tag": "v0.1.84",
-      "date": "2026-08-20T16:33:27-04:00",
+      "date": "2026-08-20T16:33:30-04:00",
       "sections": [
         {
           "label": "Added",
