@@ -10,6 +10,7 @@ import {
   listImportDefinitions,
   parseImportFile
 } from '../services/staged-imports.js'
+import { parseServiceConfig } from '../services/staged-import-service.js'
 import {
   parseStagingColumns,
   parseValidationConfig,
@@ -362,6 +363,33 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (b.procedure_body !== undefined) {
         patch.procedure_body =
           b.procedure_body === null || b.procedure_body === '' ? null : String(b.procedure_body)
+      }
+      // Processor mode: null/'proc' = staging table + stored procedure,
+      // 'service' = items-service writes (requires a valid service_config —
+      // either already stored or arriving in the same PATCH).
+      if (b.processor !== undefined) {
+        const v = b.processor === null || b.processor === '' || b.processor === 'proc' ? null : String(b.processor)
+        if (v !== null && v !== 'service') {
+          return reply.code(400).send({ error: `Unknown processor "${v}"` })
+        }
+        patch.processor = v
+      }
+      if (b.service_config !== undefined) {
+        if (b.service_config === null || b.service_config === '') {
+          patch.service_config = null
+        } else {
+          const parsed = parseServiceConfig(b.service_config)
+          if (!parsed) return reply.code(400).send({ error: 'service_config is not valid' })
+          patch.service_config = JSON.stringify(parsed)
+        }
+      }
+      const effProcessor = patch.processor !== undefined ? patch.processor : row.processor
+      const effServiceConfig =
+        patch.service_config !== undefined ? patch.service_config : row.service_config
+      if (effProcessor === 'service' && !parseServiceConfig(effServiceConfig)) {
+        return reply.code(400).send({
+          error: 'Processor "service" requires a valid service_config (collection, match_by, columns)'
+        })
       }
       if (b.is_active !== undefined) patch.is_active = !!b.is_active
       if (Object.keys(patch).length > 0) {

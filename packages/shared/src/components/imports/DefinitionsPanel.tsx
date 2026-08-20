@@ -26,6 +26,8 @@ type Draft = {
   staging_columns: string
   validation: string
   procedure_body: string
+  processor: '' | 'service'
+  service_config: string
 }
 
 const prettyJson = (raw: string | null | undefined): string => {
@@ -49,7 +51,9 @@ function toDraft(d: ImportDefinition | null): Draft {
     is_active: d?.is_active ?? true,
     staging_columns: prettyJson(d?.staging_columns),
     validation: prettyJson(d?.validation),
-    procedure_body: d?.procedure_body ?? ''
+    procedure_body: d?.procedure_body ?? '',
+    processor: d?.processor === 'service' ? 'service' : '',
+    service_config: prettyJson(d?.service_config)
   }
 }
 
@@ -117,7 +121,9 @@ export function DefinitionsPanel({
         is_active: draft.is_active,
         staging_columns: draft.staging_columns.trim() || null,
         validation: draft.validation.trim() || null,
-        procedure_body: draft.procedure_body.trim() || null
+        procedure_body: draft.procedure_body.trim() || null,
+        processor: draft.processor || null,
+        service_config: draft.service_config.trim() || null
       }
       if (selectedId === NEW) {
         return client.request(
@@ -163,12 +169,18 @@ export function DefinitionsPanel({
   }
   const stagingColsProblem = jsonProblem(draft.staging_columns)
   const validationProblem = jsonProblem(draft.validation)
+  const serviceConfigProblem =
+    jsonProblem(draft.service_config) ??
+    (draft.processor === 'service' && !draft.service_config.trim()
+      ? 'Service mode needs a config: {"collection", "match_by", "columns"}.'
+      : null)
   const canSave =
     (selectedId === NEW ? IDENT.test(draft.key.trim()) : selectedId != null) &&
     !tableProblem &&
     !procProblem &&
     !stagingColsProblem &&
-    !validationProblem
+    !validationProblem &&
+    !serviceConfigProblem
 
   return (
     <div className='flex min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -331,7 +343,7 @@ export function DefinitionsPanel({
 
               <Field
                 label='Loader'
-                hint='Bulk pushes a file to the share and BULK INSERTs it; insert batches rows directly.'
+                hint='Bulk pushes a file to the share and BULK INSERTs it; insert batches rows directly. Ignored in service mode.'
               >
                 <SimpleSelect
                   value={draft.loader}
@@ -344,6 +356,39 @@ export function DefinitionsPanel({
                   className='h-8 text-[12.5px]'
                 />
               </Field>
+
+              <Field
+                label='Processor'
+                hint='Stored procedure MERGEs staging rows (no revisions). Items service diffs and writes only real changes — revisions, activity, rules and computed fields apply.'
+              >
+                <SimpleSelect
+                  value={draft.processor}
+                  onChange={(v) => setDraft((d) => ({ ...d, processor: v as Draft['processor'] }))}
+                  options={[
+                    { value: '', label: 'Stored procedure' },
+                    { value: 'service', label: 'Items service (revisioned)' }
+                  ]}
+                  className='h-8 text-[12.5px]'
+                />
+              </Field>
+
+              {draft.processor === 'service' && (
+                <div className='sm:col-span-2'>
+                  <Field
+                    label='Service config (JSON)'
+                    hint='{"collection", "match_by": [key fields], "columns": {stagingCol: {field, type?, lookup?}}, "month_from"?, "require_value"?, "timestamps"?} — rows diff against existing on match_by; only changes write.'
+                  >
+                    <Textarea
+                      value={draft.service_config}
+                      onChange={(e) => setDraft((d) => ({ ...d, service_config: e.target.value }))}
+                      rows={9}
+                      className='font-mono text-[11.5px]'
+                      placeholder='{"collection": "warehouse_usage", "match_by": ["warehouse", "cifa", "month"], "columns": {…}}'
+                    />
+                    {serviceConfigProblem && <Problem>{serviceConfigProblem}</Problem>}
+                  </Field>
+                </div>
+              )}
 
               <Field label='Sort' hint='Order in the import picker.'>
                 <Input

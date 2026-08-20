@@ -50,6 +50,9 @@ export interface ImportDefinition {
   procedure_deployed_at?: string | null
   /** Pre-flight validation config (JSON). */
   validation?: string | null
+  /** null = stored-procedure path; 'service' = items-service diff-writes. */
+  processor?: string | null
+  service_config?: string | null
 }
 
 export interface ImportValidationIssue {
