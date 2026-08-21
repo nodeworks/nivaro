@@ -151,6 +151,115 @@ async function smsConfigured(): Promise<boolean> {
   }
 }
 
+/** Human-readable "who this went to" per broadcast, labels resolved in batch:
+ *  scope values via each dimension's target collection, roles via nivaro_roles,
+ *  explicit users by name. */
+async function buildAudienceSummaries(
+  rows: Array<Record<string, unknown>>
+): Promise<Map<number, string>> {
+  const parsed = rows.map((r) => ({
+    id: Number(r.id),
+    aud: parseJsonSafe<Audience>(r.audience) ?? {},
+    roles: parseJsonSafe<string[]>(r.roles) ?? []
+  }))
+
+  // Collect every referenced dimension value, role id, and user id.
+  const valueIdsByDim = new Map<string, Set<string>>()
+  const roleIds = new Set<string>()
+  const userIds = new Set<string>()
+  for (const p of parsed) {
+    for (const g of normalizeGroups(p.aud)) {
+      for (const [dim, vals] of Object.entries(g)) {
+        const set = valueIdsByDim.get(dim) ?? new Set<string>()
+        for (const v of vals) set.add(String(v))
+        valueIdsByDim.set(dim, set)
+      }
+    }
+    for (const rid of p.roles) roleIds.add(String(rid))
+    for (const uid of p.aud.user_ids ?? []) userIds.add(String(uid))
+  }
+
+  const dims = valueIdsByDim.size
+    ? ((await db('nivaro_scope_dimensions')
+        .whereIn('name', [...valueIdsByDim.keys()])
+        .select('name', 'label', 'target_collection', 'display_field')) as Array<{
+        name: string
+        label: string
+        target_collection: string
+        display_field: string | null
+      }>)
+    : []
+  const valueLabels = new Map<string, string>() // `${dim}:${id}` -> label
+  for (const d of dims) {
+    const ids = [...(valueIdsByDim.get(d.name) ?? [])]
+    if (ids.length === 0) continue
+    try {
+      const opts = (await db(d.target_collection)
+        .whereIn('id', ids)
+        .select('id', `${d.display_field || 'name'} as label`)) as Array<{
+        id: unknown
+        label: unknown
+      }>
+      for (const o of opts) valueLabels.set(`${d.name}:${String(o.id)}`, String(o.label ?? o.id))
+    } catch {
+      // renamed collection/column — raw ids still render
+    }
+  }
+  const dimLabel = new Map(dims.map((d) => [d.name, d.label]))
+
+  const roleNames = new Map<string, string>()
+  if (roleIds.size) {
+    const rs = (await db('nivaro_roles')
+      .whereIn('id', [...roleIds])
+      .select('id', 'name')) as Array<{ id: string; name: string }>
+    for (const r of rs) roleNames.set(String(r.id).toLowerCase(), r.name)
+  }
+  const userNames = new Map<string, string>()
+  if (userIds.size) {
+    const us = (await db('nivaro_users')
+      .whereIn('id', [...userIds])
+      .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+    for (const u of us) {
+      userNames.set(
+        String(u.id),
+        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? u.id)
+      )
+    }
+  }
+
+  const out = new Map<number, string>()
+  for (const p of parsed) {
+    const parts: string[] = []
+    const groups = normalizeGroups(p.aud)
+    if (groups.length > 0) {
+      parts.push(
+        groups
+          .map((g) =>
+            Object.entries(g)
+              .map(([dim, vals]) => {
+                const labels = vals.map((v) => valueLabels.get(`${dim}:${String(v)}`) ?? String(v))
+                return `${dimLabel.get(dim) ?? dim}: ${labels.join(', ')}`
+              })
+              .join(' + ')
+          )
+          .join('  —or—  ')
+      )
+    }
+    if (p.roles.length > 0) {
+      parts.push(
+        `roles: ${p.roles.map((rid) => roleNames.get(String(rid).toLowerCase()) ?? rid).join(', ')}`
+      )
+    }
+    const uids = p.aud.user_ids ?? []
+    if (uids.length > 0) {
+      const names = uids.slice(0, 3).map((uid) => userNames.get(String(uid)) ?? String(uid))
+      parts.push(uids.length > 3 ? `${names.join(', ')} +${uids.length - 3} more` : names.join(', '))
+    }
+    out.set(p.id, parts.length > 0 ? parts.join(' · ') : 'Everyone')
+  }
+  return out
+}
+
 export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   /** What the compose form can offer on this instance. */
   app.get('/config', { preHandler: requireAdmin }, async () => {
@@ -249,12 +358,14 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       .count({ c: '*' })
       .select('announcement')) as Array<{ announcement: number; c: number }>
     const ackMap = new Map(ackCounts.map((a) => [Number(a.announcement), Number(a.c)]))
+    const summaries = await buildAudienceSummaries(rows as Array<Record<string, unknown>>)
     return {
       data: rows.map((r: Record<string, unknown>) => ({
         ...r,
         roles: parseJsonSafe<string[]>(r.roles),
         channels: parseJsonSafe<Channel[]>(r.channels) ?? ['banner'],
         audience: parseJsonSafe<Audience>(r.audience),
+        audience_summary: summaries.get(Number(r.id)) ?? 'Everyone',
         ack_count: ackMap.get(Number(r.id)) ?? 0
       }))
     }

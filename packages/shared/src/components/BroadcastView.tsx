@@ -38,6 +38,7 @@ interface Broadcast {
     user_ids?: string[]
   } | null
   delivered_count: number | null
+  audience_summary?: string
   is_active: boolean
   ends_at: string | null
   created_at: string | null
@@ -433,6 +434,9 @@ function HistoryRow({
             </p>
           )}
           <p className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>{a.message}</p>
+          <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+            To: <span className='font-medium'>{a.audience_summary ?? 'Everyone'}</span>
+          </p>
           <p className='mt-0.5 text-[11px] text-slate-400'>
             {(a.channels ?? []).join(' + ')}
             {a.delivered_count != null && ` · reached ${a.delivered_count}`}

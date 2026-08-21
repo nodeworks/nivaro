@@ -2089,6 +2089,9 @@ interface PresenceExtra {
   /** dimension -> labels, e.g. {division: ['Zone 1'], region: ['BLT']} */
   scopes_by_dimension?: Record<string, string[]>
   recording_id?: string | null
+  is_idle?: boolean
+  idle_minutes?: number | null
+  last_active?: string | null
 }
 
 function usePresenceExtras(): {
@@ -2491,7 +2494,15 @@ export function ChatPanel({
                       <span className='font-normal normal-case text-slate-300'>{section.users.length}</span>
                     </div>
                   )}
-                  {section.users.map((u) => (
+                  {section.users.map((u) => {
+                // /presence/online is the ONE classifier of idle: it weighs
+                // last_active freshness against the row's is_idle bit, so a
+                // host feeding raw table rows here (admin) must not disagree
+                // with a host feeding the endpoint's own rows (efp-new).
+                const px = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                const isIdle = px?.is_idle ?? u.is_idle
+                const idleSrc = px ?? u
+                return (
                 <button
                   key={u.user_id}
                   type='button'
@@ -2507,17 +2518,17 @@ export function ChatPanel({
                         // Hollow amber rather than a second solid colour: idle
                         // is a weaker state than online, and should read that
                         // way at a glance rather than competing with it.
-                        u.is_idle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
+                        isIdle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
                       )}
-                      title={u.is_idle ? idleLabel(u) : 'Online'}
+                      title={isIdle ? idleLabel(idleSrc) : 'Online'}
                     />
                   </span>
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                       {u.display_name ?? 'Unknown user'}
-                      {u.is_idle && (
+                      {isIdle && (
                         <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
-                          {idleLabel(u)}
+                          {idleLabel(idleSrc)}
                         </span>
                       )}
                     </span>
@@ -2600,7 +2611,8 @@ export function ChatPanel({
                   })()}
                   <MessageCircle className='h-4 w-4 shrink-0 text-slate-300' strokeWidth={1.8} />
                 </button>
-                  ))}
+                )
+              })}
                 </div>
               ))
             )}

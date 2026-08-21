@@ -31,6 +31,12 @@ const ACTIVITY_EVENTS = [
 ] as const
 
 let lastActivity = Date.now()
+/** The last REAL input, never zeroed — `lastActivity` is also the idle trigger
+ *  (0 = forced idle while the tab is hidden), and reporting `Date.now()` in
+ *  its place made every hidden-tab heartbeat look like fresh activity: the
+ *  server (which trusts last_active over the is_idle bit) kept classifying
+ *  idle people as active, and idle durations reset every beat. */
+let lastRealInput = Date.now()
 let installed = false
 let lastReported: boolean | null = null
 const listeners = new Set<(idle: boolean) => void>()
@@ -71,6 +77,7 @@ export function trackActivity(): void {
     if (now - throttle < 1000) return
     throttle = now
     lastActivity = now
+    lastRealInput = now
     publish()
   }
 
@@ -84,8 +91,11 @@ export function trackActivity(): void {
     // activity immediately, which is what lets idle clear on the next beat.
     if (document.visibilityState === 'visible') {
       lastActivity = Date.now()
+      lastRealInput = lastActivity
       throttle = 0
     } else {
+      // Force idle, but do NOT touch lastRealInput — the moment of the last
+      // genuine input is a fact that hiding the tab doesn't change.
       lastActivity = 0
     }
     publish()
@@ -102,6 +112,6 @@ export function idleState(): { is_idle: boolean; last_active: string } {
   const stale = Date.now() - lastActivity > IDLE_AFTER_MS
   return {
     is_idle: hidden || stale,
-    last_active: new Date(lastActivity || Date.now()).toISOString()
+    last_active: new Date(lastRealInput).toISOString()
   }
 }
