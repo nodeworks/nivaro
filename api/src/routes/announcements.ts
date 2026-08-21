@@ -398,15 +398,18 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   app.post('/preview-audience', { preHandler: requireAdmin }, async (req) => {
     const b = req.body as { audience?: Audience }
     const users = await resolveAudienceUsers(b.audience ?? {})
+    const named = users
+      .map((u) => ({
+        id: u.id,
+        name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
+        email: u.email
+      }))
+      .sort((a, z) => a.name.localeCompare(z.name))
     return {
       data: {
         count: users.length,
-        users: users.slice(0, 500).map((u) => ({
-          id: u.id,
-          name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
-          email: u.email
-        })),
-        truncated: users.length > 500
+        users: named.slice(0, 2000),
+        truncated: users.length > 2000
       }
     }
   })

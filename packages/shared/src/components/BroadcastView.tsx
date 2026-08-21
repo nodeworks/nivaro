@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn } from '../lib/utils'
@@ -553,14 +554,12 @@ function AudienceGroupCard({
         </p>
         <div className='flex items-center gap-2.5'>
           {complete && (
-            <span className='relative'>
-              <AudiencePreviewChip
+            <AudiencePreviewChip
               audience={{ groups: [group] }}
               everyone={false}
-                label='Matches'
-                compact
-              />
-            </span>
+              label='Matches'
+              compact
+            />
           )}
           <button
             type='button'
@@ -671,7 +670,8 @@ function DimValueChips({
 }
 
 /** Live "how many people, and who" — resolved by POST /preview-audience, the
- *  exact resolver the send uses (deduped across groups by construction). */
+ *  exact resolver the send uses (deduped across groups by construction).
+ *  Clicking the count opens a searchable, alphabetical sidebar of everyone. */
 function AudiencePreviewChip({
   audience,
   everyone,
@@ -708,10 +708,10 @@ function AudiencePreviewChip({
     )
   }
   return (
-    <div className={compact ? '' : 'space-y-1.5'}>
+    <>
       <button
         type='button'
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(true)}
         className='text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 dark:text-muted-foreground'
         title='Click to see who'
       >
@@ -722,26 +722,99 @@ function AudiencePreviewChip({
         {!compact && data != null && data.count > 0 && ' (deduped across groups)'}
       </button>
       {open && data && (
-        <div
-          className={cn(
-            'max-h-[180px] overflow-y-auto rounded-md border border-slate-200 bg-white p-2 dark:border-border dark:bg-card',
-            compact && 'absolute z-10 mt-1 w-[260px] shadow-lg'
-          )}
-        >
-          {data.users.length === 0 && (
-            <p className='text-[11.5px] text-slate-400'>No one matches this yet.</p>
-          )}
-          {data.users.map((u) => (
-            <p key={u.id} className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
-              {u.name}
-              {u.email && <span className='text-slate-400'> · {u.email}</span>}
+        <AudienceUserSidebar
+          title={label === 'Matches' ? 'This group matches' : 'Sending to'}
+          count={data.count}
+          users={data.users}
+          truncated={data.truncated}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  )
+}
+
+/** Full-height right sidebar listing an audience: alphabetical, searchable. */
+function AudienceUserSidebar({
+  title,
+  count,
+  users,
+  truncated,
+  onClose
+}: {
+  title: string
+  count: number
+  users: Array<{ id: string; name: string; email: string | null }>
+  truncated: boolean
+  onClose: () => void
+}) {
+  const [search, setSearch] = useState('')
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? users.filter(
+        (u) => u.name.toLowerCase().includes(q) || (u.email ?? '').toLowerCase().includes(q)
+      )
+    : users
+
+  return createPortal(
+    <div className='fixed inset-0 z-[100]'>
+      <div className='absolute inset-0 bg-black/30' onClick={onClose} />
+      <div className='absolute right-0 top-0 flex h-full w-[380px] max-w-[92vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
+        <div className='shrink-0 border-b border-slate-100 px-4 py-3 dark:border-border'>
+          <div className='flex items-center justify-between'>
+            <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+              {title}
+              <span className='ml-1.5 font-normal text-slate-400'>
+                {count} user{count === 1 ? '' : 's'}
+              </span>
             </p>
+            <button
+              type='button'
+              onClick={onClose}
+              className='text-[14px] text-slate-300 transition-colors hover:text-slate-600'
+            >
+              ✕
+            </button>
+          </div>
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder='Search name or email…'
+            className='mt-2 h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] text-slate-800 dark:border-border dark:text-foreground'
+          />
+        </div>
+        <div className='min-h-0 flex-1 overflow-y-auto px-4 py-2'>
+          {filtered.length === 0 && (
+            <p className='py-3 text-[12px] text-slate-400'>
+              {users.length === 0 ? 'No one matches this yet.' : 'No matches for that search.'}
+            </p>
+          )}
+          {filtered.map((u) => (
+            <div
+              key={u.id}
+              className='border-b border-slate-50 py-1.5 last:border-0 dark:border-border/40'
+            >
+              <p className='text-[12.5px] text-slate-700 dark:text-foreground'>{u.name}</p>
+              {u.email && <p className='text-[11px] text-slate-400'>{u.email}</p>}
+            </div>
           ))}
-          {data.truncated && (
-            <p className='mt-1 text-[11px] text-slate-400'>Showing the first 500.</p>
+          {truncated && (
+            <p className='py-2 text-[11px] text-slate-400'>
+              Showing the first {users.length} of {count}.
+            </p>
           )}
         </div>
-      )}
-    </div>
+      </div>
+    </div>,
+    document.body
   )
 }
