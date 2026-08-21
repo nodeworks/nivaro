@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T00:49:43.122Z",
+  "generated_at": "2026-08-21T01:02:07.991Z",
   "releases": [
+    {
+      "version": "0.1.90",
+      "tag": "v0.1.90",
+      "date": "2026-08-20T21:02:05-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "retention",
+              "text": "inactivity resolution no longer times out on a real activity log",
+              "hash": "14f84c5c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.89",
       "tag": "v0.1.89",
-      "date": "2026-08-20T20:49:40-04:00",
+      "date": "2026-08-20T20:49:43-04:00",
       "sections": [
         {
           "label": "Added",
