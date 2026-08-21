@@ -257,6 +257,36 @@ export function ExtensionsPage() {
 
   const extensions = data ?? []
 
+  // Per-extension health: crons + latest outcomes + 7-day error counts, all
+  // from the unified job-run registry (same source as /background-jobs).
+  const { data: jobRegistry } = useQuery({
+    queryKey: ['job-registry'],
+    queryFn: () => api.get('/job-runs/registry').then((r) => r.data.data),
+    refetchInterval: 30_000
+  })
+  const healthByExt = (() => {
+    const m = new Map<
+      string,
+      { crons: number; errors7d: number; lastError: string | null; lastRun: string | null }
+    >()
+    for (const c of (jobRegistry?.crons ?? []) as Array<{
+      extension_id: string | null
+      errors_7d: number
+      last: { status: string; started_at: string; error: string | null } | null
+    }>) {
+      if (!c.extension_id) continue
+      const h = m.get(c.extension_id) ?? { crons: 0, errors7d: 0, lastError: null, lastRun: null }
+      h.crons++
+      h.errors7d += c.errors_7d
+      if (c.last) {
+        if (!h.lastRun || c.last.started_at > h.lastRun) h.lastRun = c.last.started_at
+        if (c.last.status === 'error' && c.last.error) h.lastError = c.last.error
+      }
+      m.set(c.extension_id, h)
+    }
+    return m
+  })()
+
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
@@ -353,6 +383,9 @@ export function ExtensionsPage() {
                     <th className='px-4 py-2.5 text-left text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
                       Status
                     </th>
+                    <th className='px-4 py-2.5 text-left text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
+                      Health
+                    </th>
                     <th className='px-4 py-2.5 text-right text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
                       Enabled
                     </th>
@@ -404,6 +437,38 @@ export function ExtensionsPage() {
                             {ext.status}
                           </Badge>
                         </div>
+                      </td>
+                      <td className='px-4 py-3.5'>
+                        {(() => {
+                          const h = healthByExt.get(ext.id)
+                          if (!h) {
+                            return <span className='text-[11px] text-slate-300'>no jobs</span>
+                          }
+                          return (
+                            <div className='text-[11.5px]'>
+                              <span className='text-slate-600 dark:text-muted-foreground'>
+                                {h.crons} cron{h.crons === 1 ? '' : 's'}
+                              </span>
+                              {h.errors7d > 0 ? (
+                                <span
+                                  className='ml-1.5 rounded bg-red-500/10 px-1.5 py-px text-[10.5px] font-medium text-red-600 dark:text-red-400'
+                                  title={h.lastError ?? ''}
+                                >
+                                  {h.errors7d} error{h.errors7d === 1 ? '' : 's'} · 7d
+                                </span>
+                              ) : (
+                                <span className='ml-1.5 rounded bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-medium text-emerald-700 dark:text-emerald-400'>
+                                  healthy
+                                </span>
+                              )}
+                              {h.lastRun && (
+                                <span className='ml-1.5 text-[10.5px] text-slate-400'>
+                                  last run {new Date(h.lastRun).toLocaleTimeString()}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td className='px-4 py-3.5 text-right'>
                         {ext.status === 'missing' ? (

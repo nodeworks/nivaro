@@ -1,6 +1,7 @@
 import { Cron } from 'croner'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import { startJobRun } from '../services/job-runs.js'
 
 export interface CronEntry {
   id: string
@@ -24,10 +25,15 @@ export class CronManager {
     this.unschedule(id)
 
     const job = new Cron(expression, { protect: true, catch: true }, async () => {
+      // Every tick lands in nivaro_job_runs (best-effort) so the Background
+      // Jobs console and per-extension health read one source of truth.
+      const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
       try {
         await fn()
+        await run.complete()
       } catch (err) {
         console.error({ err, cronId: id }, 'Cron job error')
+        await run.fail(err)
       }
     })
 
@@ -49,10 +55,20 @@ export class CronManager {
    * test window) without waiting for its next tick. Errors propagate to the
    * caller so the endpoint can report them; the scheduled run is unaffected.
    */
-  async runNow(id: string): Promise<boolean> {
+  async runNow(id: string, triggeredBy?: string | null): Promise<boolean> {
     const entry = this.entries.get(id)
     if (!entry) return false
-    await entry.fn()
+    const run = await startJobRun('cron', id, {
+      extensionId: entry.extensionId,
+      triggeredBy: triggeredBy ?? null
+    })
+    try {
+      await entry.fn()
+      await run.complete()
+    } catch (err) {
+      await run.fail(err)
+      throw err
+    }
     return true
   }
 

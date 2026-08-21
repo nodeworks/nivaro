@@ -177,6 +177,7 @@ export const navCategories: NavCategory[] = [
       { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit' },
       { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps' },
       { icon: Link2, label: 'Integrations', to: '/integration-health' },
+      { icon: Activity, label: 'Background Jobs', to: '/background-jobs' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },

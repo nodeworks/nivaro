@@ -23,7 +23,7 @@ export async function cronRoutes(app: FastifyInstance) {
 
       const startedAt = Date.now()
       try {
-        await app.cron.runNow(id)
+        await app.cron.runNow(id, req.user?.id ?? null)
         await logActivity({
           action: 'cron-run-now',
           user: req.user?.id,

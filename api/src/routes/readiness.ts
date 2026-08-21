@@ -15,7 +15,7 @@ export async function readinessRoutes(app: FastifyInstance): Promise<void> {
     '/:id/remediate',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const result = startRemediation(req.params.id)
+      const result = startRemediation(req.params.id, req.user?.id ?? null)
       if (result === 'no_remediation') {
         return reply.code(400).send({ error: 'This check has no automatic fix' })
       }

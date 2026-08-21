@@ -58,7 +58,10 @@ export function listRemediations(): RemediationJob[] {
 
 /** Fire a check's remediation in the background. Returns false when the
  *  check has no remediation or one is already running. */
-export function startRemediation(checkId: string): 'started' | 'no_remediation' | 'already_running' {
+export function startRemediation(
+  checkId: string,
+  triggeredBy?: string | null
+): 'started' | 'no_remediation' | 'already_running' {
   const check = registry.get(checkId)
   if (!check?.remediation) return 'no_remediation'
   if (remediations.get(checkId)?.status === 'running') return 'already_running'
@@ -68,18 +71,28 @@ export function startRemediation(checkId: string): 'started' | 'no_remediation' 
     started_at: new Date().toISOString()
   }
   remediations.set(checkId, job)
-  void check.remediation
-    .run()
-    .then((r) => {
+  // The in-memory map stays the LIVE progress surface (polled by the page);
+  // nivaro_job_runs is the durable record that survives restarts and shows
+  // in the Background Jobs console across replicas.
+  void (async () => {
+    const { startJobRun } = await import('./job-runs.js')
+    const run = await startJobRun('remediation', checkId, {
+      label: check.remediation?.label,
+      triggeredBy: triggeredBy ?? null
+    })
+    try {
+      const r = await check.remediation!.run()
       job.status = 'completed'
       job.detail = r.detail
       job.finished_at = new Date().toISOString()
-    })
-    .catch((err) => {
+      await run.complete(r.detail)
+    } catch (err) {
       job.status = 'error'
       job.detail = err instanceof Error ? err.message : String(err)
       job.finished_at = new Date().toISOString()
-    })
+      await run.fail(err)
+    }
+  })()
   return 'started'
 }
 

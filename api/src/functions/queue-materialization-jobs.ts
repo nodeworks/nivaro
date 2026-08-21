@@ -270,6 +270,21 @@ export const queueMaterializationBackfill = inngest.createFunction(
   { event: 'queues/materialization.backfill' },
   async ({ event, step }) => {
     const queueId = (event.data as { queueId: string }).queueId
+    // Job-run bookkeeping via memoized steps — Inngest replays the function
+    // body on every step round, so a bare insert here would write one row per
+    // replay. A run that dies permanently stays 'running' with an old
+    // started_at, which the console renders as stale rather than lying.
+    const jobRunId = await step.run('job-run-start', async () => {
+      const { startJobRun } = await import('../services/job-runs.js')
+      return (await startJobRun('backfill', queueId, { label: 'Queue materialization' })).id
+    })
+    const finishJobRun = async (status: string, outcome: string) => {
+      if (jobRunId == null) return
+      await db('nivaro_job_runs')
+        .where('id', jobRunId)
+        .update({ status, outcome, finished_at: new Date() })
+        .catch(() => {})
+    }
 
     // Backfill runs as the queue's own owner, not a synthetic system user. Queue-level
     // visibility (canReadQueue, already the gate for who can see the queue at all) is
@@ -282,11 +297,17 @@ export const queueMaterializationBackfill = inngest.createFunction(
     const queueRow = (await db('nivaro_queues').where({ id: queueId }).first()) as
       | { owner: string }
       | undefined
-    if (!queueRow) return { queueId, sourceCount: 0 }
+    if (!queueRow) {
+      await step.run('job-run-complete', () => finishJobRun('completed', 'queue no longer exists'))
+      return { queueId, sourceCount: 0 }
+    }
     const ownerUser = (await db('nivaro_users').where({ id: queueRow.owner }).first()) as
       | User
       | undefined
-    if (!ownerUser) return { queueId, sourceCount: 0 }
+    if (!ownerUser) {
+      await step.run('job-run-complete', () => finishJobRun('completed', 'queue owner missing'))
+      return { queueId, sourceCount: 0 }
+    }
 
     await step.run('wipe-existing-rows', async () => {
       await db('nivaro_queue_items').where({ queue_id: queueId }).delete()
@@ -347,6 +368,9 @@ export const queueMaterializationBackfill = inngest.createFunction(
     await step.run('mark-materialized', async () => {
       await db('nivaro_queues').where({ id: queueId }).update({ materialized: true })
     })
+    await step.run('job-run-complete', () =>
+      finishJobRun('completed', `${sources.length} source(s) rebuilt`)
+    )
 
     return { queueId, sourceCount: sources.length }
   }

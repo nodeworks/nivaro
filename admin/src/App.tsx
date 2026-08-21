@@ -149,6 +149,7 @@ const CoverageGapsPage = lazy(() =>
 const IntegrationHealthPage = lazy(() =>
   import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
 )
+const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
 )
@@ -439,6 +440,7 @@ export default function App() {
                   <Route path='coverage-gaps' element={<CoverageGapsPage />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
+                  <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />

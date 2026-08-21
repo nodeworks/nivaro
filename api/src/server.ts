@@ -247,6 +247,11 @@ export async function buildServer() {
     app.addHook('onReady', async () => {
       async function runRetentionPurge() {
         try {
+          {
+            const { pruneJobRuns } = await import('./services/job-runs.js')
+            await pruneJobRuns().catch(() => {})
+          }
+
           const row = await db('nivaro_settings')
             .first('activity_retention_days', 'revision_retention_count')
             .catch(() => null)

@@ -1080,12 +1080,24 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
       // sequential chunks: selectInChunks runs all chunks concurrently, which
       // on a large table would flood the connection pool with recalc streams
+      const { startJobRun } = await import('../services/job-runs.js')
+      const jobRun = await startJobRun('recalc', `${table}.${field}`, {
+        label: 'Rollup backfill',
+        triggeredBy: req.user?.id ?? null
+      })
       let recalculated = 0
-      for (const chunk of chunkArray(ids, 500)) {
-        for (const id of chunk) {
-          await recalcRollupsForParent(entry, id)
+      try {
+        for (const chunk of chunkArray(ids, 500)) {
+          for (const id of chunk) {
+            await recalcRollupsForParent(entry, id)
+          }
+          recalculated += chunk.length
+          jobRun.progress({ recalculated, total: ids.length })
         }
-        recalculated += chunk.length
+        await jobRun.complete(`${recalculated} row(s) recomputed`)
+      } catch (err) {
+        await jobRun.fail(err)
+        throw err
       }
 
       await logActivity({
