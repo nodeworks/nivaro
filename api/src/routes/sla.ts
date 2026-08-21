@@ -512,9 +512,14 @@ export async function slaRoutes(app: FastifyInstance) {
     // SEE the record may do it. readOne is the full gate (RBAC, row filters,
     // user scopes, tree permissions), so a record the caller can't open can't
     // be quietly un-escalated either.
+    // readOne returns NULL for rows the caller cannot see (it does not throw
+    // for row-filter/scope misses) — both the throw AND the null are denials.
     try {
       const { readOne } = await import('../services/items.js')
-      await readOne(req.user!, collection, item, undefined, ['id'])
+      const visible = await readOne(req.user!, collection, item, undefined, ['id'])
+      if (!visible) {
+        return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
+      }
     } catch {
       return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
     }
