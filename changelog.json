@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T16:57:27.940Z",
+  "generated_at": "2026-08-21T19:44:07.896Z",
   "releases": [
+    {
+      "version": "0.1.94",
+      "tag": "v0.1.94",
+      "date": "2026-08-21T15:44:05-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ux",
+              "text": "line-comment links + labels, visible reactions, styled dialogs, queue context menu",
+              "hash": "12cf99a9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.93",
       "tag": "v0.1.93",
-      "date": "2026-08-21T12:57:25-04:00",
+      "date": "2026-08-21T12:57:27-04:00",
       "sections": [
         {
           "label": "Added",
