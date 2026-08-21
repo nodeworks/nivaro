@@ -548,6 +548,38 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
+    // Custom statuses (#33): from user preferences, expired ones dropped.
+    const statusByUser = new Map<string, { text: string; emoji: string | null }>()
+    if (userIds.length > 0) {
+      try {
+        const prefRows = (await db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('id', 'preferences')) as Array<{ id: string; preferences: unknown }>
+        for (const pr of prefRows) {
+          try {
+            const prefs =
+              typeof pr.preferences === 'string'
+                ? JSON.parse(pr.preferences)
+                : ((pr.preferences as Record<string, unknown>) ?? {})
+            const cs = prefs?.custom_status as
+              | { text?: string; emoji?: string | null; expires_at?: string | null }
+              | null
+              | undefined
+            if (!cs?.text) continue
+            if (cs.expires_at && new Date(cs.expires_at).getTime() < Date.now()) continue
+            statusByUser.set(String(pr.id).toUpperCase(), {
+              text: String(cs.text),
+              emoji: cs.emoji ? String(cs.emoji) : null
+            })
+          } catch {
+            /* one bad prefs blob never breaks the roster */
+          }
+        }
+      } catch {
+        /* decoration only */
+      }
+    }
+
     const recordLabels = await resolveRecordLabels(
       visibleRows.map((r) => (r.current_path as string | null) ?? null),
       req.user!
@@ -602,6 +634,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           app: (r.app as string | null) ?? null,
           typing_room: r.typing_room,
           // Flat list for the subtitle line, keyed map for grouping.
+          custom_status: statusByUser.get(uid) ?? null,
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
           scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
           recording_id: recordingByUser.get(uid) ?? null

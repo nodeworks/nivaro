@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X } from 'lucide-react'
+import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -19,6 +19,7 @@ import { cn } from '../lib/utils'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { HScrollProxy } from './HScrollProxy'
+import { MapView } from './MapView'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -3363,6 +3364,19 @@ export function CollectionBrowserView({
     return conds.length > 0 ? JSON.stringify(conds) : undefined
   }, [filters, effQuickFilters, appliedQuick, debouncedColFilters, linkConds, cellExcludes])
   // Any filter change resets to page 1 (the query key already refetches).
+  // Map display mode (#19): available when the collection carries lat/long
+  // columns; the map consumes the SAME compiled conditions as the table.
+  const geo = useMemo(() => {
+    const names = (meta?.fields ?? []).map((f) => f.field)
+    const latField = names.find((n) => /^(latitude|lat)$/i.test(n)) ?? null
+    const lngField = names.find((n) => /^(longitude|lng|long|lon)$/i.test(n)) ?? null
+    if (!latField || !lngField) return null
+    const labelField =
+      names.find((n) => ['name', 'title', 'label', 'short_name'].includes(n.toLowerCase())) ?? null
+    return { latField, lngField, labelField }
+  }, [meta])
+  const [mapMode, setMapMode] = useState(false)
+
   const prevCondRef = useRef(conditionsParam)
   useEffect(() => {
     if (prevCondRef.current !== conditionsParam) {
@@ -4391,6 +4405,22 @@ export function CollectionBrowserView({
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
+        {geo && (
+          <button
+            type='button'
+            onClick={() => setMapMode((v) => !v)}
+            title={mapMode ? 'Back to the table' : 'Show these records on a map'}
+            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+              mapMode
+                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+            }`}
+            data-cbv-map-toggle
+          >
+            <MapIcon className='h-3.5 w-3.5' />
+            Map
+          </button>
+        )}
         <button
           type='button'
           onClick={() => setAiOpen((o) => !o)}
@@ -4999,9 +5029,22 @@ export function CollectionBrowserView({
         </div>
       )}
 
+      {mapMode && geo ? (
+        <div className='flex min-h-0 flex-1 flex-col p-4 pt-3'>
+          <MapView
+            collection={collection}
+            latField={geo.latField}
+            lngField={geo.lngField}
+            labelField={geo.labelField}
+            conditions={conditionsParam ?? null}
+            search={appliedSearch}
+            onOpen={(id) => openRow(id)}
+          />
+        </div>
+      ) : null}
       {/* Table card — fills the remaining page height; the table scrolls
           inside it with sticky headers, pagination pinned at the bottom */}
-      <div className='flex min-h-0 flex-1 flex-col p-4 pt-3'>
+      <div className={mapMode && geo ? 'hidden' : 'flex min-h-0 flex-1 flex-col p-4 pt-3'}>
         <div className='relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something */}

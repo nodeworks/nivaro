@@ -47,6 +47,7 @@ import { automationTestRoutes } from './automation-tests.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { findReplaceRoutes } from './find-replace.js'
 import { customActionRoutes } from './custom-actions.js'
+import { offboardingRoutes } from './offboarding.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -223,6 +224,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(bulkRecipeRoutes, { prefix: '/bulk-recipes' })
   await app.register(findReplaceRoutes, { prefix: '/find-replace' })
   await app.register(customActionRoutes, { prefix: '/custom-actions' })
+  await app.register(offboardingRoutes, { prefix: '/offboarding' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

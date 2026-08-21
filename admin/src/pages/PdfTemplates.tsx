@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { type PdfBlock, PdfDesigner, generateLiquid } from '@/components/pdf-designer'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -23,6 +24,7 @@ interface PdfTemplate {
   name: string
   collection: string | null
   template: string
+  designer_config?: string | null
   created_by: string | null
   created_at: string
   updated_at: string | null
@@ -124,6 +126,14 @@ function TemplateEditor({
   const [name, setName] = useState(template?.name ?? '')
   const [collection, setCollection] = useState(template?.collection ?? '')
   const [body, setBody] = useState(template?.template ?? DEFAULT_TEMPLATE)
+  const [mode, setMode] = useState<'liquid' | 'designer'>('liquid')
+  const [blocks, setBlocks] = useState<PdfBlock[]>(() => {
+    try {
+      return template?.designer_config ? JSON.parse(template.designer_config) : []
+    } catch {
+      return []
+    }
+  })
   const [testItemId, setTestItemId] = useState('')
   const [testCollection, setTestCollection] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -133,6 +143,11 @@ function TemplateEditor({
     setName(template?.name ?? '')
     setCollection(template?.collection ?? '')
     setBody(template?.template ?? DEFAULT_TEMPLATE)
+    try {
+      setBlocks(template?.designer_config ? JSON.parse(template.designer_config) : [])
+    } catch {
+      setBlocks([])
+    }
     setTestItemId('')
     setTestCollection('')
     setConfirmingDelete(false)
@@ -140,7 +155,7 @@ function TemplateEditor({
 
   const save = useMutation({
     mutationFn: async () => {
-      const payload = { name, collection: collection || null, template: body }
+      const payload = { name, collection: collection || null, template: body, designer_config: blocks.length > 0 ? blocks : null }
       if (template) {
         const r = await api.patch<{ data: PdfTemplate }>(`/pdf-templates/${template.id}`, payload)
         return r.data.data
@@ -208,18 +223,56 @@ function TemplateEditor({
       </div>
 
       <div className='space-y-1.5'>
-        <Label htmlFor='pdf-template'>Liquid Template</Label>
-        <Textarea
-          id='pdf-template'
-          className='min-h-[360px] font-mono text-[12px] leading-relaxed'
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          spellCheck={false}
-        />
-        <p className='text-[11px] text-muted-foreground'>
-          Liquid with item fields in context (also <code>item</code>, <code>collection</code>,{' '}
-          <code>generated_at</code>). Supported tags: h1–h3, p, table/tr/td, hr, strong, br.
-        </p>
+        <div className='flex items-center justify-between'>
+          <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {(['liquid', 'designer'] as const).map((m) => (
+              <button
+                key={m}
+                type='button'
+                onClick={() => setMode(m)}
+                className={
+                  mode === m
+                    ? 'rounded bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-slate-800 dark:text-foreground'
+                    : 'rounded px-2.5 py-1 text-[12px] font-medium text-slate-400'
+                }
+              >
+                {m === 'liquid' ? 'Liquid source' : 'Designer'}
+              </button>
+            ))}
+          </span>
+          {mode === 'designer' && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 text-[12px]'
+              disabled={blocks.length === 0}
+              onClick={() => {
+                setBody(generateLiquid(blocks, name || 'Document'))
+                toast.success('Template regenerated from the block layout — Save to keep it')
+              }}
+            >
+              Apply blocks to template
+            </Button>
+          )}
+        </div>
+        {mode === 'designer' ? (
+          <PdfDesigner collection={collection || null} blocks={blocks} onChange={setBlocks} />
+        ) : (
+          <>
+            <Textarea
+              id='pdf-template'
+              className='min-h-[360px] font-mono text-[12px] leading-relaxed'
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              spellCheck={false}
+            />
+            <p className='text-[11px] text-muted-foreground'>
+              Liquid with item fields in context (also <code>item</code>, <code>collection</code>,{' '}
+              <code>children.&lt;relation&gt;</code>, <code>generated_at</code>). Supported tags:
+              h1–h3, p, table/tr/td, hr, strong, br.
+            </p>
+          </>
+        )}
       </div>
 
       {/* Test render */}

@@ -231,6 +231,34 @@ export async function usersRoutes(app: FastifyInstance) {
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)
     }
+    if ('custom_status' in body) {
+      // Presence status (#33): free text + emoji beside the idle state,
+      // self-clearing at expires_at. null clears immediately.
+      const raw = body.custom_status
+      if (raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return reply.code(400).send({ error: 'custom_status must be an object or null' })
+      }
+      if (raw === null) {
+        patch.custom_status = null
+      } else {
+        const cs = raw as Record<string, unknown>
+        const text = String(cs.text ?? '').trim().slice(0, 100)
+        if (!text) return reply.code(400).send({ error: 'custom_status.text is required' })
+        let expires: string | null = null
+        if (cs.expires_at != null) {
+          const d = new Date(String(cs.expires_at))
+          if (Number.isNaN(d.getTime())) {
+            return reply.code(400).send({ error: 'custom_status.expires_at must be a timestamp' })
+          }
+          expires = d.toISOString()
+        }
+        patch.custom_status = {
+          text,
+          emoji: String(cs.emoji ?? '').slice(0, 8) || null,
+          expires_at: expires
+        }
+      }
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }

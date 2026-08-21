@@ -29,7 +29,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { toast } from 'sonner'
-import { get, post } from '../../lib/commands'
+import { get, patch as patchCmd, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import {
@@ -2092,6 +2092,142 @@ interface PresenceExtra {
   is_idle?: boolean
   idle_minutes?: number | null
   last_active?: string | null
+  custom_status?: { text: string; emoji: string | null } | null
+}
+
+/** Set-your-status control (#33): free text + emoji, self-clearing. Saved in
+ *  user preferences; /presence/online serves it to every host. */
+function MyStatusRow({ myStatus }: { myStatus: { text: string; emoji: string | null } | null }) {
+  const th = useTheme()
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const [emoji, setEmoji] = useState('')
+  const [duration, setDuration] = useState<'30' | '60' | 'today' | 'never'>('60')
+  const QUICK = ['📅', '🍽️', '🏠', '✈️', '🤒', '🎯', '☕']
+
+  const save = useMutation({
+    mutationFn: (status: { text: string; emoji: string | null; expires_at: string | null } | null) =>
+      client.request(patchCmd('/users/me/preferences', { custom_status: status })),
+    onSuccess: () => {
+      setEditing(false)
+      void qc.invalidateQueries({ queryKey: ['presence-online'] })
+    },
+    onError: () => toast.error('Could not update your status')
+  })
+  const expiresAt = (): string | null => {
+    if (duration === 'never') return null
+    if (duration === 'today') {
+      const d = new Date()
+      d.setHours(23, 59, 59, 0)
+      return d.toISOString()
+    }
+    return new Date(Date.now() + Number(duration) * 60_000).toISOString()
+  }
+
+  if (!editing) {
+    return (
+      <div className='mb-1.5 flex items-center gap-1.5 px-1'>
+        <button
+          type='button'
+          onClick={() => {
+            setText(myStatus?.text ?? '')
+            setEmoji(myStatus?.emoji ?? '')
+            setEditing(true)
+          }}
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-dashed px-2 py-1 text-left text-[11.5px]',
+            myStatus
+              ? 'border-slate-200 text-slate-600 dark:border-border dark:text-slate-300'
+              : 'border-slate-200 text-slate-400 dark:border-border'
+          )}
+          data-chat-my-status
+        >
+          {myStatus ? (
+            <span className='truncate'>
+              {myStatus.emoji ? `${myStatus.emoji} ` : ''}
+              {myStatus.text}
+            </span>
+          ) : (
+            <span>Set a status…</span>
+          )}
+        </button>
+        {myStatus && (
+          <button
+            type='button'
+            onClick={() => save.mutate(null)}
+            className='rounded p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+            aria-label='Clear status'
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className='mb-2 space-y-1.5 rounded-lg border border-slate-200 p-2 dark:border-border'>
+      <div className='flex gap-1'>
+        {QUICK.map((e) => (
+          <button
+            key={e}
+            type='button'
+            onClick={() => setEmoji(emoji === e ? '' : e)}
+            className={cn(
+              'rounded-md px-1 py-0.5 text-[15px]',
+              emoji === e ? th.accentSoft : 'hover:bg-slate-100 dark:hover:bg-muted'
+            )}
+          >
+            {e}
+          </button>
+        ))}
+      </div>
+      <input
+        // biome-ignore lint/a11y/noAutofocus: single-purpose inline form
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && text.trim()) {
+            save.mutate({ text: text.trim(), emoji: emoji || null, expires_at: expiresAt() })
+          }
+          if (e.key === 'Escape') setEditing(false)
+        }}
+        maxLength={100}
+        placeholder="What's up? (e.g. In a meeting until 3)"
+        className={cn('h-7 w-full rounded-md border px-2 text-[12px]', th.input)}
+      />
+      <div className='flex items-center gap-1.5'>
+        <select
+          value={duration}
+          onChange={(e) => setDuration(e.target.value as typeof duration)}
+          className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+        >
+          <option value='30'>Clear in 30 min</option>
+          <option value='60'>Clear in 1 hour</option>
+          <option value='today'>Clear today</option>
+          <option value='never'>Don't clear</option>
+        </select>
+        <span className='flex-1' />
+        <button
+          type='button'
+          onClick={() => setEditing(false)}
+          className='rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+        >
+          Cancel
+        </button>
+        <button
+          type='button'
+          disabled={!text.trim() || save.isPending}
+          onClick={() => save.mutate({ text: text.trim(), emoji: emoji || null, expires_at: expiresAt() })}
+          className={cn('rounded-md px-2.5 py-1 text-[11.5px] font-semibold disabled:opacity-50', th.action)}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function usePresenceExtras(): {
@@ -2455,6 +2591,7 @@ export function ChatPanel({
             {/* Group by an attribute of the people listed — role, or any scope
                 dimension the instance tracks (Zone, Region…). Purely a view
                 preference, remembered per browser. */}
+            <MyStatusRow myStatus={me ? (presenceExtras.byUser.get(String(me.id).toUpperCase())?.custom_status ?? null) : null} />
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>
@@ -2532,6 +2669,16 @@ export function ChatPanel({
                         </span>
                       )}
                     </span>
+                    {(() => {
+                      const cs = presenceExtras.byUser.get(String(u.user_id).toUpperCase())?.custom_status
+                      if (!cs) return null
+                      return (
+                        <span className='block truncate text-[11px] italic text-slate-500 dark:text-slate-400' data-chat-status>
+                          {cs.emoji ? `${cs.emoji} ` : ''}
+                          {cs.text}
+                        </span>
+                      )
+                    })()}
                     <span className='block truncate text-[11px] text-slate-400'>
                       {(() => {
                         const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())

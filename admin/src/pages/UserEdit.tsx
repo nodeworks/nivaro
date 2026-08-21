@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { DelegationCard } from '@/components/delegation-card'
+import { UserMergeCard, UserOffboardingCard } from '@/components/user-offboarding-card'
 import { UserScopesCard } from '@/components/user-scopes-card'
 import { JourneyTrail } from '@/components/journey-trail'
 import { RevisionsPanel } from '@/components/revisions-panel'
@@ -352,6 +353,8 @@ export function UserEditPage() {
             {/* Delegation (own save, outside the profile form) */}
             <DelegationCard user={user} mode='admin' />
             <UserScopesCard userId={user.id} />
+            <UserOffboardingCard userId={user.id} />
+            <UserMergeCard userId={user.id} />
 
             {/* Journey trail (admin-only API) */}
             {currentUser?.is_admin && id && <JourneyTrail userId={id} />}

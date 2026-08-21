@@ -58,16 +58,20 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
         name: body.name,
         collection: body.collection ?? null,
         template: body.template,
+        designer_config: (body as Record<string, unknown>).designer_config
+          ? JSON.stringify((body as Record<string, unknown>).designer_config)
+          : null,
         created_by: req.user?.id ?? null,
         created_at: new Date(),
         updated_at: new Date()
       })
-      .returning('id')) as unknown as [string]
-    const row = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first()
+      .returning('id')) as unknown as [string | { id: string }]
+    const newId = typeof id === 'object' && id !== null ? (id as { id: string }).id : id
+    const row = await db<PdfTemplate>('nivaro_pdf_templates').where({ id: newId }).first()
     await logActivity({
       action: 'create',
       collection: 'nivaro_pdf_templates',
-      item: String(id),
+      item: String(newId),
       user: req.user?.id,
       req
     })
@@ -84,6 +88,10 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
     if ('name' in body) patch.name = body.name
     if ('collection' in body) patch.collection = body.collection ?? null
     if ('template' in body) patch.template = body.template
+    if ('designer_config' in (body as Record<string, unknown>)) {
+      const dc = (body as Record<string, unknown>).designer_config
+      patch.designer_config = dc ? JSON.stringify(dc) : null
+    }
     await db('nivaro_pdf_templates').where({ id }).update(patch)
 
     const row = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first()
@@ -139,9 +147,38 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
       .catch(() => undefined)) as Record<string, unknown> | undefined
     if (!item) return reply.code(404).send({ error: 'Item not found' })
 
+    // Designer table blocks loop `children.<alias>` — fetch child rows only
+    // when the template actually references them.
+    const children: Record<string, Array<Record<string, unknown>>> = {}
+    if (String(tpl.template).includes('children.')) {
+      try {
+        const rels = (await db('nivaro_relations')
+          .where({ one_collection: collection })
+          .whereNull('junction_field')
+          .whereNotNull('many_collection')
+          .select('one_field', 'many_collection', 'many_field')) as Array<{
+          one_field: string | null
+          many_collection: string
+          many_field: string
+        }>
+        for (const rel of rels) {
+          const alias = rel.one_field ?? rel.many_collection
+          if (!alias || !String(tpl.template).includes(`children.${alias}`)) continue
+          children[alias] = (await db(rel.many_collection)
+            .where(rel.many_field, body.item_id)
+            .limit(200)
+            .select('*')
+            .catch(() => [])) as Array<Record<string, unknown>>
+        }
+      } catch {
+        /* a broken relation renders an empty table, never a 500 */
+      }
+    }
+
     const pdf = await generatePdf(tpl.template, {
       ...item,
       item,
+      children,
       collection,
       generated_at: new Date().toISOString()
     })

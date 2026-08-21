@@ -24,12 +24,43 @@ interface Relation {
 const PAGE = 25
 const MAX_COLS = 60
 
-function rowLabel(r: Record<string, unknown>): string {
+function fallbackLabel(r: Record<string, unknown>): string {
   for (const f of ['name', 'title', 'label', 'short_name', 'subject', 'description']) {
     const v = r[f]
     if (v != null && String(v).trim()) return String(v).slice(0, 60)
   }
   return `#${r.id}`
+}
+
+/** Display-template label with dotted-path token resolution over the
+ *  expanded row; the name-ish column fallback covers template-less
+ *  collections. */
+function makeLabeler(template: string | null) {
+  return (r: Record<string, unknown>): string => {
+    if (!template) return fallbackLabel(r)
+    const label = template
+      .replace(/\{\{\s*([\w.[\]]+)\s*\}\}/g, (_m, path: string) => {
+        let cur: unknown = r
+        for (const seg of path.replace(/\[(\d+)\]/g, '.$1').split('.')) {
+          if (cur == null || typeof cur !== 'object') return ''
+          cur = (cur as Record<string, unknown>)[seg]
+        }
+        return cur == null ? '' : String(cur)
+      })
+      .replace(/\s+/g, ' ')
+      .trim()
+    return label || fallbackLabel(r)
+  }
+}
+
+/** The fields= param a template needs: id + its tokens (dotted paths expand
+ *  server-side). Null template → full rows for the fallback columns. */
+function templateFields(template: string | null): string | undefined {
+  if (!template) return undefined
+  const tokens = [...template.matchAll(/\{\{\s*([\w.[\]]+)/g)].map((m) =>
+    m[1].replace(/\[\d+\]/g, '')
+  )
+  return ['id', ...tokens].join(',')
 }
 
 export default function M2MMatrix() {
@@ -43,6 +74,12 @@ export default function M2MMatrix() {
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
     queryKey: ['collections'],
     queryFn: () => api.get('/collections').then((r) => r.data.data ?? r.data)
+  })
+
+  const { data: rowMeta } = useQuery<{ display_template?: string | null }>({
+    queryKey: ['m2m-matrix-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data ?? r.data),
+    enabled: !!collection
   })
 
   const { data: relations = [] } = useQuery<Relation[]>({
@@ -78,13 +115,27 @@ export default function M2MMatrix() {
   const targetFk = alias?.junction_field ?? null // junction column → target id
   const targetCollection = companion?.one_collection ?? null
 
+  const { data: targetMeta } = useQuery<{ display_template?: string | null }>({
+    queryKey: ['m2m-matrix-meta', targetCollection],
+    queryFn: () => api.get(`/collections/${targetCollection}`).then((r) => r.data.data ?? r.data),
+    enabled: !!targetCollection
+  })
+  const rowLabel = useMemo(() => makeLabeler(rowMeta?.display_template ?? null), [rowMeta])
+  const colLabel = useMemo(() => makeLabeler(targetMeta?.display_template ?? null), [targetMeta])
+
   // Rows: paged parent records.
   const { data: rowsData } = useQuery<{ data: Array<Record<string, unknown>>; total: number }>({
-    queryKey: ['m2m-matrix-rows', collection, rowSearch, page],
+    queryKey: ['m2m-matrix-rows', collection, rowSearch, page, rowMeta?.display_template ?? null],
     queryFn: () =>
       api
         .get(`/items/${collection}`, {
-          params: { limit: PAGE, page, search: rowSearch || undefined, sort: 'id' }
+          params: {
+            limit: PAGE,
+            page,
+            search: rowSearch || undefined,
+            sort: 'id',
+            fields: templateFields(rowMeta?.display_template ?? null)
+          }
         })
         .then((r) => r.data),
     enabled: !!collection && !!alias
@@ -94,11 +145,16 @@ export default function M2MMatrix() {
 
   // Columns: the whole target catalog (capped, searchable).
   const { data: colsData } = useQuery<{ data: Array<Record<string, unknown>> }>({
-    queryKey: ['m2m-matrix-cols', targetCollection, colSearch],
+    queryKey: ['m2m-matrix-cols', targetCollection, colSearch, targetMeta?.display_template ?? null],
     queryFn: () =>
       api
         .get(`/items/${targetCollection}`, {
-          params: { limit: MAX_COLS + 1, search: colSearch || undefined, sort: 'id' }
+          params: {
+            limit: MAX_COLS + 1,
+            search: colSearch || undefined,
+            sort: 'id',
+            fields: templateFields(targetMeta?.display_template ?? null)
+          }
         })
         .then((r) => r.data),
     enabled: !!targetCollection
@@ -255,9 +311,9 @@ export default function M2MMatrix() {
                       >
                         <span
                           className='inline-block max-w-[100px] truncate text-[10.5px] font-medium text-slate-600 dark:text-slate-300'
-                          data-tip={rowLabel(c)}
+                          data-tip={colLabel(c)}
                         >
-                          {rowLabel(c)}
+                          {colLabel(c)}
                         </span>
                       </th>
                     ))}
@@ -281,7 +337,7 @@ export default function M2MMatrix() {
                               onChange={() =>
                                 toggle.mutate({ rowId: String(r.id), colId: String(c.id) })
                               }
-                              aria-label={`${rowLabel(r)} ↔ ${rowLabel(c)}`}
+                              aria-label={`${rowLabel(r)} ↔ ${colLabel(c)}`}
                               className='h-3.5 w-3.5 accent-[#00ceff]'
                             />
                           </td>

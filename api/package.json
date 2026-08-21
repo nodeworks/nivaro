@@ -31,6 +31,7 @@
     "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts",
     "convert:editorjs": "tsx extensions/efp-ops/scripts/convert-editorjs-richtext.ts",
     "seed:sequences": "tsx extensions/efp-ops/scripts/seed-sequences.ts",
+    "sync:workflow-project-types": "tsx extensions/efp-ops/scripts/sync-workflow-project-types.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
     "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts"
