@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { execCustomQuerySql } from './custom-query-exec.js'
 
 export const DEFAULT_REDACT_FIELDS = [
   'first_name', 'last_name', 'email', 'external_id', 'job_title', 'avatar'
@@ -41,20 +42,23 @@ export async function executeRetentionPolicy(
   })()
   const template = policy.redact_value_template ?? 'Redacted_{{id}}'
 
-  let query = db('nivaro_users')
-    .select('id', 'email')
-    .where('is_redacted', false)
-    .whereNotExists(
-      db('nivaro_activity')
-        .select(db.raw('1'))
-        .whereRaw('[user] = nivaro_users.id')
-        .where('timestamp', '>=', cutoff)
-    )
+  // Who was active in the window — ONE scan of the activity log instead of a
+  // correlated NOT EXISTS probe per user, which blew tedious' 15s request
+  // timeout the first time a real policy ran against the multi-million-row
+  // log. The scan itself rides the long-timeout executor (120s, same escape
+  // hatch as heavy report procs).
+  const activeRows = await execCustomQuerySql(
+    'SELECT DISTINCT [user] AS uid FROM nivaro_activity WHERE [timestamp] >= :cutoff AND [user] IS NOT NULL',
+    { cutoff }
+  )
+  const activeIds = new Set(activeRows.map((r) => String(r.uid).toUpperCase()))
 
+  let query = db('nivaro_users').select('id', 'email').where('is_redacted', false)
   if (exclusionEmails.length > 0) query = query.whereNotIn('email', exclusionEmails)
   if (exclusionRoles.length > 0) query = query.whereNotIn('role', exclusionRoles)
 
-  const candidates: Array<{ id: string; email: string }> = await query
+  const allUsers: Array<{ id: string; email: string }> = await query
+  const candidates = allUsers.filter((u) => !activeIds.has(String(u.id).toUpperCase()))
   const affectedIds = candidates.map((r) => r.id)
 
   if (dryRun || policy.dry_run_mode) {
