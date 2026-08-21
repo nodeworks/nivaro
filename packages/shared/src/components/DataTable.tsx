@@ -66,6 +66,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   onSortChange?: (sort: string) => void
   onPageChange: (page: number) => void
   onRowClick?: (row: T) => void
+  /** Right-click a row for its actions menu (host renders the menu). */
+  onRowContextMenu?: (row: T, e: React.MouseEvent) => void
   searchValue?: string
   onSearchChange?: (val: string) => void
   searchPlaceholder?: string
@@ -462,6 +464,7 @@ export function DataTable<T = Record<string, unknown>>({
   onSortChange,
   onPageChange,
   onRowClick,
+  onRowContextMenu,
   searchValue,
   onSearchChange,
   searchPlaceholder = 'Search…',
@@ -602,6 +605,7 @@ export function DataTable<T = Record<string, unknown>>({
             (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
         )}
         onClick={() => onRowClick?.(row)}
+        onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(row, e) : undefined}
       >
         {onSelectionChange && (
           <TableCell

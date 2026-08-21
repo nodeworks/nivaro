@@ -34,6 +34,7 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import {
   type DrilldownTarget,
@@ -1016,6 +1017,21 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       itemId: row.item_id,
       layoutSlug: displayConfig?.item_layout ?? null
     })
+
+  // Row context menu (#43, queues): right-click a table row for its actions.
+  const [rowCtxMenu, setRowCtxMenu] = useState<{ x: number; y: number; row: QueueItemRow } | null>(
+    null
+  )
+  useEffect(() => {
+    if (!rowCtxMenu) return
+    const close = () => setRowCtxMenu(null)
+    window.addEventListener('mousedown', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [rowCtxMenu])
 
   // Open an item per the queue's row_click mode: 'full' navigates to the
   // (layout-pinned) item page; 'layout' opens the item's layout in a sidebar;
@@ -2621,6 +2637,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   isLoading={showLoading}
                   onPageChange={setPage}
                   onRowClick={(row) => openItem(row)}
+                  onRowContextMenu={(row, e) => {
+                    e.preventDefault()
+                    setRowCtxMenu({ x: e.clientX, y: e.clientY, row })
+                  }}
                   rowClassName={(row) =>
                     highlightedId === rowId(row)
                       ? // Pinned sticky cells use bg-inherit — the highlight must be
@@ -2732,6 +2752,65 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           onClose={() => drill.back(drillStack.length)}
         />
       ) : null}
+
+      {rowCtxMenu &&
+  createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        left: Math.min(rowCtxMenu.x, window.innerWidth - 200),
+        top: Math.min(rowCtxMenu.y, window.innerHeight - 260),
+        zIndex: 125
+      }}
+      className='w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
+      onMouseDown={(e) => e.stopPropagation()}
+      data-queue-row-menu
+    >
+      {[
+        { label: 'Open', run: () => openItem(rowCtxMenu.row) },
+        {
+          label: 'Open full record',
+          run: () => openItemPage(rowCtxMenu.row)
+        },
+        { label: 'Peek', run: () => setSheetItem(rowCtxMenu.row) },
+        ...(claimsEnabled
+          ? [
+              rowCtxMenu.row.claimed_by?.id === userId
+                ? { label: 'Release claim', run: () => releaseMut.mutate(rowCtxMenu.row) }
+                : { label: 'Claim', run: () => claimMut.mutate(rowCtxMenu.row) }
+            ]
+          : []),
+        {
+          label: 'Copy ID',
+          run: () => void navigator.clipboard?.writeText(rowCtxMenu.row.item_id)
+        },
+        {
+          label: 'Copy link',
+          run: () =>
+            void navigator.clipboard?.writeText(
+              `${window.location.origin}${itemNav.urlFor({
+                collection: rowCtxMenu.row.collection,
+                itemId: rowCtxMenu.row.item_id,
+                layoutSlug: displayConfig?.item_layout ?? null
+              })}`
+            )
+        }
+      ].map((a) => (
+        <button
+          key={a.label}
+          type='button'
+          onClick={() => {
+            a.run()
+            setRowCtxMenu(null)
+          }}
+          className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+        >
+          {a.label}
+        </button>
+      ))}
+    </div>,
+    document.body
+  )}
 
       <QueueItemSheet
         item={sheetItem}

@@ -3363,6 +3363,12 @@ export function ItemEditForm({
     refetchInterval: 60_000
   })
 
+  // Save-as-template dialog (#8) — styled, never a browser prompt.
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [templateShared, setTemplateShared] = useState(false)
+  const [templateSaving, setTemplateSaving] = useState(false)
+
   // Completeness meter (#59): filled ÷ visible-editable fields on this layout,
   // with required gaps called out. Display only — nothing blocks on it.
   const completeness = useMemo(() => {
@@ -5849,46 +5855,10 @@ export function ItemEditForm({
                                         type='button'
                                         title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
                                         data-save-as-template
-                                        onClick={async () => {
-                                          const name = window.prompt('Template name:')
-                                          if (!name?.trim()) return
-                                          // Same harvest rules as Duplicate: visible, editable,
-                                          // non-computed, non-auto-id scalars + M2O FKs only.
-                                          const AUDIT = new Set([
-                                            'id', 'user_created', 'date_created', 'user_updated',
-                                            'date_updated', 'created_at', 'updated_at', 'created',
-                                            'changed', 'creator', 'last_state_change'
-                                          ])
-                                          const values: Record<string, unknown> = {}
-                                          for (const fc of fieldConfig ?? []) {
-                                            const opts = fc.options as Record<string, unknown> | null
-                                            if (AUDIT.has(fc.field)) continue
-                                            if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) continue
-                                            if ((fc as { computed_type?: string | null }).computed_type) continue
-                                            if (fc.hidden || (fc as { readonly?: boolean }).readonly) continue
-                                            if ((fc as { layout_assigned?: boolean }).layout_assigned === false) continue
-                                            const v = draft[fc.field]
-                                            if (v === undefined || v === null || v === '') continue
-                                            if (typeof v === 'object') continue
-                                            values[fc.field] = v
-                                          }
-                                          if (Object.keys(values).length === 0) {
-                                            toast.error('Nothing to save — no plain field values on this record')
-                                            return
-                                          }
-                                          try {
-                                            await client.request(
-                                              post('/record-templates', {
-                                                collection,
-                                                name: name.trim(),
-                                                data: values,
-                                                is_shared: false
-                                              })
-                                            )
-                                            toast.success(`Template "${name.trim()}" saved — find it under record templates`)
-                                          } catch {
-                                            toast.error('Failed to save template')
-                                          }
+                                        onClick={() => {
+                                          setTemplateName('')
+                                          setTemplateShared(false)
+                                          setTemplateDialogOpen(true)
                                         }}
                                         className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                       >
@@ -5910,6 +5880,121 @@ export function ItemEditForm({
                                         Save as template
                                       </button>
                                     )}
+                                    {templateDialogOpen &&
+                                      createPortal(
+                                        <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+                                          {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
+                                          <div
+                                            className='absolute inset-0 bg-black/30'
+                                            onClick={() => setTemplateDialogOpen(false)}
+                                          />
+                                          <div
+                                            role='dialog'
+                                            aria-label='Save as template'
+                                            className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Escape') setTemplateDialogOpen(false)
+                                            }}
+                                          >
+                                            <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                                              Save as template
+                                            </p>
+                                            <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                                              This record's plain field values become a reusable
+                                              pre-fill template — same exclusions as Duplicate (no
+                                              ids, audit stamps, computed fields, or line items).
+                                            </p>
+                                            <input
+                                              // biome-ignore lint/a11y/noAutofocus: dialog's single input
+                                              autoFocus
+                                              value={templateName}
+                                              onChange={(e) => setTemplateName(e.target.value)}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && templateName.trim()) {
+                                                  ;(
+                                                    document.querySelector(
+                                                      '[data-template-save-btn]'
+                                                    ) as HTMLButtonElement | null
+                                                  )?.click()
+                                                }
+                                              }}
+                                              placeholder='Template name'
+                                              className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
+                                            />
+                                            <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                                              <input
+                                                type='checkbox'
+                                                checked={templateShared}
+                                                onChange={(e) => setTemplateShared(e.target.checked)}
+                                                className='h-3.5 w-3.5'
+                                              />
+                                              Share with everyone (otherwise it's just yours)
+                                            </label>
+                                            <div className='mt-4 flex justify-end gap-2'>
+                                              <button
+                                                type='button'
+                                                onClick={() => setTemplateDialogOpen(false)}
+                                                className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+                                              >
+                                                Cancel
+                                              </button>
+                                              <button
+                                                type='button'
+                                                data-template-save-btn
+                                                disabled={!templateName.trim() || templateSaving}
+                                                onClick={async () => {
+                                                  // Same harvest rules as Duplicate: visible,
+                                                  // editable, non-computed, non-auto-id scalars
+                                                  // + M2O FKs only.
+                                                  const AUDIT = new Set([
+                                                    'id', 'user_created', 'date_created', 'user_updated',
+                                                    'date_updated', 'created_at', 'updated_at', 'created',
+                                                    'changed', 'creator', 'last_state_change'
+                                                  ])
+                                                  const values: Record<string, unknown> = {}
+                                                  for (const fc of fieldConfig ?? []) {
+                                                    const opts = fc.options as Record<string, unknown> | null
+                                                    if (AUDIT.has(fc.field)) continue
+                                                    if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) continue
+                                                    if ((fc as { computed_type?: string | null }).computed_type) continue
+                                                    if (fc.hidden || (fc as { readonly?: boolean }).readonly) continue
+                                                    if ((fc as { layout_assigned?: boolean }).layout_assigned === false) continue
+                                                    const v = draft[fc.field]
+                                                    if (v === undefined || v === null || v === '') continue
+                                                    if (typeof v === 'object') continue
+                                                    values[fc.field] = v
+                                                  }
+                                                  if (Object.keys(values).length === 0) {
+                                                    toast.error('Nothing to save — no plain field values on this record')
+                                                    return
+                                                  }
+                                                  setTemplateSaving(true)
+                                                  try {
+                                                    await client.request(
+                                                      post('/record-templates', {
+                                                        collection,
+                                                        name: templateName.trim(),
+                                                        data: values,
+                                                        is_shared: templateShared
+                                                      })
+                                                    )
+                                                    toast.success(`Template "${templateName.trim()}" saved`)
+                                                    setTemplateDialogOpen(false)
+                                                  } catch {
+                                                    toast.error('Failed to save template')
+                                                  } finally {
+                                                    setTemplateSaving(false)
+                                                  }
+                                                }}
+                                                className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
+                                              >
+                                                {templateSaving ? 'Saving…' : 'Save template'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </div>,
+                                        document.body
+                                      )}
                                     {!isNew && itemId && onDuplicate && (
                                       <button
                                         type='button'

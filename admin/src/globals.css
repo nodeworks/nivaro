@@ -240,3 +240,13 @@
   pointer-events: none;
   z-index: 20;
 }
+
+/* Line-comment "bring me to the line" flash — a note's link scrolls the grid
+   row into view and pulses it. */
+@keyframes nvr-row-flash-kf {
+  0%, 60% { background-color: rgb(var(--nvr-cyan-rgb) / 0.18); }
+  100% { background-color: transparent; }
+}
+tr.nvr-row-flash > td {
+  animation: nvr-row-flash-kf 2.4s ease-out;
+}

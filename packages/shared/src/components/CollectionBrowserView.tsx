@@ -2516,12 +2516,29 @@ function BulkBar({
         .catch(() => []),
     staleTime: 60_000
   })
-  const saveRecipe = async (action_type: 'update' | 'transition', config: Record<string, unknown>) => {
-    const name = window.prompt('Recipe name (shown as a button on the bulk bar):')
-    if (!name?.trim()) return
+  // Styled inline naming (never a browser prompt): '☆ Save recipe' stages the
+  // config, a name input replaces the row until saved or cancelled.
+  const [recipeNaming, setRecipeNaming] = useState<{
+    action_type: 'update' | 'transition'
+    config: Record<string, unknown>
+  } | null>(null)
+  const [recipeName, setRecipeName] = useState('')
+  const saveRecipe = async () => {
+    if (!recipeNaming || !recipeName.trim()) return
     try {
-      await client.request(post('/bulk-recipes', { collection, name: name.trim(), action_type, config }))
+      await client.request(
+        post('/bulk-recipes', {
+          collection,
+          name: recipeName.trim(),
+          action_type: recipeNaming.action_type,
+          config: recipeNaming.config
+        })
+      )
       void qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] })
+      setNote(`Recipe "${recipeName.trim()}" saved`)
+      setRecipeNaming(null)
+      setRecipeName('')
+      setMode('actions')
     } catch {
       setNote('Failed to save recipe')
     }
@@ -2721,7 +2738,10 @@ function BulkBar({
           <button
             type='button'
             disabled={!field.trim()}
-            onClick={() => void saveRecipe('update', { field: field.trim(), value })}
+            onClick={() => {
+              setRecipeName('')
+              setRecipeNaming({ action_type: 'update', config: { field: field.trim(), value } })
+            }}
             title='Save this update as a reusable recipe'
             className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
           >
@@ -2769,7 +2789,9 @@ function BulkBar({
             disabled={!transitionId}
             onClick={() => {
               const t = transitions.find((x) => x.id === transitionId)
-              if (t) void saveRecipe('transition', { transition_label: t.label })
+              if (!t) return
+              setRecipeName('')
+              setRecipeNaming({ action_type: 'transition', config: { transition_label: t.label } })
             }}
             title='Save this transition as a reusable recipe'
             className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
@@ -2777,6 +2799,39 @@ function BulkBar({
             ☆ Save recipe
           </button>
           <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+            Cancel
+          </button>
+        </form>
+      )}
+      {recipeNaming && (
+        <form
+          className='flex items-center gap-1.5'
+          onSubmit={(e) => {
+            e.preventDefault()
+            void saveRecipe()
+          }}
+        >
+          <span className='text-[12px] text-slate-300'>Recipe name:</span>
+          <input
+            // biome-ignore lint/a11y/noAutofocus: single purpose inline form
+            autoFocus
+            value={recipeName}
+            onChange={(e) => setRecipeName(e.target.value)}
+            placeholder='e.g. Close out — duplicate'
+            className='h-8 w-56 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+          />
+          <button
+            type='submit'
+            disabled={!recipeName.trim()}
+            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+          >
+            Save
+          </button>
+          <button
+            type='button'
+            onClick={() => setRecipeNaming(null)}
+            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+          >
             Cancel
           </button>
         </form>

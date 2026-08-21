@@ -4,7 +4,7 @@ import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
-import { useItemEditAuth, useNivaroClient } from '../../context'
+import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
 import { formatRelative } from '../../lib/utils'
@@ -260,6 +260,8 @@ interface RelatedNote {
   context: string | null
   user_name: string | null
   created_at: string
+  /** Line comments carry the child row they were written on. */
+  link?: { collection: string; item_id: string } | null
 }
 
 /**
@@ -269,6 +271,24 @@ interface RelatedNote {
  * a comment, and carries no edit or delete affordance.
  */
 function RecordedNote({ note }: { note: RelatedNote }) {
+  const drill = useDrilldown()
+  // "Bring me to the line": scroll + flash the grid row when it is on the
+  // page; otherwise open the line record in the drill sheet (row on another
+  // tab/step, or no grid mounted).
+  const openLink = note.link
+    ? () => {
+        const link = note.link
+        if (!link) return
+        const el = document.querySelector(`[data-o2m-row="${link.collection}:${link.item_id}"]`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          el.classList.add('nvr-row-flash')
+          setTimeout(() => el.classList.remove('nvr-row-flash'), 2400)
+          return
+        }
+        drill?.open({ collection: link.collection, itemId: link.item_id })
+      }
+    : null
   const tone =
     note.source === 'transition'
       ? 'border-nvr-cyan/30 bg-nvr-cyan/[0.06] text-nvr-navy dark:text-nvr-cyan'
@@ -288,9 +308,19 @@ function RecordedNote({ note }: { note: RelatedNote }) {
               {note.user_name}
             </span>
           )}
-          {note.context && (
-            <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
-          )}
+          {note.context &&
+            (openLink ? (
+              <button
+                type='button'
+                onClick={openLink}
+                className='truncate text-[11px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+                data-line-comment-link
+              >
+                {note.context}
+              </button>
+            ) : (
+              <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
+            ))}
           <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
         </div>
         <p className='mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-600 dark:text-slate-300'>
@@ -691,9 +721,7 @@ export function CommentPanel({
                                 <button
                                   type='button'
                                   onClick={() => setReactMenuId(reactMenuId === c.id ? null : c.id)}
-                                  className={`rounded p-0.5 text-slate-300 transition-all hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-muted ${
-                                    (c.reactions ?? []).length > 0 ? '' : 'opacity-0 group-hover:opacity-100'
-                                  }`}
+                                  className='rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-muted'
                                   aria-label='Add reaction'
                                 >
                                   <SmilePlus className='h-3.5 w-3.5' />

@@ -317,6 +317,7 @@ export async function commentsRoutes(app: FastifyInstance) {
         user: string | null
         created_at: string | Date
         context: string | null
+        link?: { collection: string; item_id: string }
       }
 
       const instances = (await db('nivaro_workflow_instances')
@@ -534,11 +535,40 @@ export async function commentsRoutes(app: FastifyInstance) {
             .orderBy('created_at', 'desc')
             .limit(CAP)
             .select('id', 'user', 'text', 'item', 'created_at')) as Array<Record<string, unknown>>
+          // Human labels: the collection's display_template first ("CR26-76773 ·
+          // Line 7"), the row's own name-ish column second — a bare internal id
+          // identifies nothing to a reader.
+          let templateLabels: Record<string, string> = {}
+          if (rows.length > 0) {
+            try {
+              const { getLabels } = await import('../services/queues.js')
+              templateLabels = await getLabels(
+                new Map([[cc.collection, new Set(rows.map((r) => String(r.item)))]])
+              )
+            } catch {
+              /* fall through to the name-column label */
+            }
+          }
+          // Display templates with DOTTED tokens render those tokens empty
+          // here (renderTemplateLabels resolves direct columns only), leaving
+          // dangling separators ("· Line 4") — trim them.
+          const cleanLabel = (v: string | null | undefined): string | null => {
+            if (!v) return null
+            const cleaned = v
+              .replace(/\s*[·\-–|]\s*(?=[·\-–|])/g, '')
+              .replace(/^\s*[·\-–|]\s*/, '')
+              .replace(/\s*[·\-–|]\s*$/, '')
+              .trim()
+            return cleaned || null
+          }
           for (const r of rows) {
             lineComments.push({
               ...r,
               child: cc.collection,
-              child_label: labelByChildId.get(String(r.item)) ?? null
+              child_label:
+                cleanLabel(templateLabels[`${cc.collection}:${r.item}`]) ??
+                labelByChildId.get(String(r.item)) ??
+                null
             })
           }
         }
@@ -554,7 +584,8 @@ export async function commentsRoutes(app: FastifyInstance) {
           text: String(r.text ?? ''),
           user: (r.user as string) ?? null,
           created_at: r.created_at as string,
-          context: [titleCase(String(r.child)), r.child_label].filter(Boolean).join(' · ') || null
+          context: [titleCase(String(r.child)), r.child_label].filter(Boolean).join(' · ') || null,
+          link: { collection: String(r.child), item_id: String(r.item) }
         })),
         ...transitions.map((h) => ({
           id: `transition:${h.id}`,

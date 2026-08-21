@@ -3671,6 +3671,7 @@ export function InlineTableField({
               <Fragment key={id}>
               {sectionHeader}
               <tr
+                data-o2m-row={`${relatedCollection}:${id}`}
                 draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
