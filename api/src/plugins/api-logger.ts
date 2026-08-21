@@ -53,6 +53,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       if (Math.random() < CLEANUP_PROBABILITY) {
         const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
         await db('nivaro_api_logs').where('created_at', '<', cutoff).delete()
+        await db('nivaro_rum_events').where('created_at', '<', cutoff).delete().catch(() => {})
       }
     } catch (err) {
       app.log.warn({ err }, 'Failed to flush API logs')

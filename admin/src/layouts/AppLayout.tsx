@@ -71,9 +71,24 @@ import {
   Workflow,
   X as XIcon
 } from 'lucide-react'
-import { Component, type ReactNode, Suspense, useEffect, useMemo, useState } from 'react'
+import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
+import { rumRouteChange, startRum } from '@nivaro/shared'
+
+/** '/collections/workflows/312100' → '/collections/:c/:id' — RUM aggregates
+ *  per page, not per record. */
+function rumPattern(path: string): string {
+  return path
+    .split('/')
+    .map((seg, i) => {
+      if (i <= 1) return seg
+      if (/^\d+$/.test(seg) || /^[0-9a-f-]{16,}$/i.test(seg)) return ':id'
+      return seg
+    })
+    .join('/')
+    .replace(/^\/collections\/[^/]+/, (m) => (m.split('/').length > 2 ? '/collections/:c' : m))
+}
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
@@ -495,6 +510,21 @@ export function AppLayout() {
   const projectName = settings?.project_name ?? 'Nivaro'
 
   const location = useLocation()
+  // Real-user monitoring: one 'load' event per page load, one 'route' event
+  // per SPA navigation, aggregated per ROUTE PATTERN so ids don't explode
+  // the cardinality. Fire-and-forget — never affects the page it measures.
+  useEffect(() => {
+    startRum({ app: 'admin', routePattern: rumPattern })
+  }, [])
+  const firstRouteRef = useRef(true)
+  useEffect(() => {
+    // The initial render is the 'load' event's job, not a route change.
+    if (firstRouteRef.current) {
+      firstRouteRef.current = false
+      return
+    }
+    rumRouteChange(location.pathname)
+  }, [location.pathname])
   const extensionPlugins = useExtensionPlugins()
   const cloudPlugins = useCloudPlugins()
   const extensionNavItems = extensionPlugins.flatMap((p) =>

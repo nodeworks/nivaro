@@ -138,6 +138,7 @@ export * from './lib/commands'
 export * from './lib/expression'
 export * from './lib/format-value'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
+export { rumRouteChange, startRum } from './lib/rum'
 export {
   type NotificationRouteMap,
   type NotificationTarget,

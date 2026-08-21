@@ -193,6 +193,8 @@ export {
   TipLayer,
   titleCase,
   trackActivity,
+  startRum,
+  rumRouteChange,
   translateScopeValues,
   UserAvatar,
   UserChip,

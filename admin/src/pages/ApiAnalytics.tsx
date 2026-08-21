@@ -281,7 +281,172 @@ export function ApiAnalyticsPage() {
         <div className='mt-6'>
           <SlowTracesPanel />
         </div>
+        <div className='mt-6'>
+          <RumPanel />
+        </div>
+        <div className='mt-6'>
+          <IndexAdvisorPanel />
+        </div>
       </div>
+    </div>
+  )
+}
+
+/** What users actually feel: client-measured load vitals + SPA route-change
+ *  p75s per route pattern. Server latency (above) says the API is fast; this
+ *  says whether the pages are. */
+function RumPanel() {
+  const [days, setDays] = useState(1)
+  const { data } = useQuery({
+    queryKey: ['rum-summary', days],
+    queryFn: () => api.get('/rum/summary', { params: { days } }).then((r) => r.data)
+  })
+  const rows: Array<{
+    route: string
+    samples: number
+    load_p75: number | null
+    lcp_p75: number | null
+    route_p75: number | null
+  }> = data?.data ?? []
+  const ms = (v: number | null) => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`)
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Real-user timings
+          </p>
+          <p className='mt-0.5 text-[11.5px] text-slate-400'>
+            Measured in the browser: page-load vitals (LCP) and SPA navigation times, p75 per route.
+          </p>
+        </div>
+        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {[1, 7, 14].map((d) => (
+            <button
+              key={d}
+              type='button'
+              onClick={() => setDays(d)}
+              className={
+                days === d
+                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400'
+              }
+            >
+              {d}d
+            </button>
+          ))}
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className='mt-3 text-[12px] text-slate-400'>
+          No samples yet — timings arrive as people browse (the collector reports a few seconds
+          after each page settles).
+        </p>
+      ) : (
+        <table className='mt-3 w-full text-[12px] tabular-nums'>
+          <thead>
+            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+              <th className='py-1 pr-3 font-semibold'>Route</th>
+              <th className='py-1 pr-3 font-semibold'>Samples</th>
+              <th className='py-1 pr-3 font-semibold'>LCP p75</th>
+              <th className='py-1 pr-3 font-semibold'>Full load p75</th>
+              <th className='py-1 font-semibold'>Route change p75</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 25).map((r) => (
+              <tr key={r.route} className='border-t border-slate-100 dark:border-border'>
+                <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                  {r.route}
+                </td>
+                <td className='py-1.5 pr-3 text-slate-500'>{r.samples}</td>
+                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>{ms(r.lcp_p75)}</td>
+                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>{ms(r.load_p75)}</td>
+                <td className='py-1.5 text-slate-600 dark:text-muted-foreground'>{ms(r.route_p75)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+/** Config-driven index suggestions: hot filter columns (FKs, queue filters,
+ *  RLS, state mirrors) on big tables with no leading-column index. */
+function IndexAdvisorPanel() {
+  const [applying, setApplying] = useState<string | null>(null)
+  const { data, refetch } = useQuery({
+    queryKey: ['index-advisor'],
+    queryFn: () => api.get('/index-advisor').then((r) => r.data.data)
+  })
+  const suggestions: Array<{
+    table: string
+    column: string
+    rows: number
+    reasons: string[]
+    create_sql: string
+  }> = data?.suggestions ?? []
+
+  const apply = async (s: { table: string; column: string }) => {
+    const key = `${s.table}.${s.column}`
+    if (!window.confirm(`Create index on ${key}? On a large table this can take a minute.`)) return
+    setApplying(key)
+    try {
+      await api.post('/index-advisor/apply', s)
+      void refetch()
+    } catch (err: unknown) {
+      window.alert(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed'
+      )
+    } finally {
+      setApplying(null)
+    }
+  }
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Index advisor</p>
+      <p className='mt-0.5 text-[11.5px] text-slate-400'>
+        Columns your config filters on (foreign keys, queue filters, row-level security, workflow
+        state mirrors) that have no index on tables over {((data?.min_rows ?? 50000) / 1000).toFixed(0)}k
+        rows.
+      </p>
+      {suggestions.length === 0 ? (
+        <p className='mt-3 text-[12px] text-emerald-600 dark:text-emerald-400'>
+          No gaps — every hot filter column on a large table is indexed.
+        </p>
+      ) : (
+        <div className='mt-3 space-y-1.5'>
+          {suggestions.map((s) => {
+            const key = `${s.table}.${s.column}`
+            return (
+              <div
+                key={key}
+                className='flex items-center gap-3 rounded-md border border-slate-100 px-3 py-2 dark:border-border'
+              >
+                <div className='min-w-0 flex-1'>
+                  <p className='font-mono text-[12px] text-slate-700 dark:text-foreground'>
+                    {key}
+                    <span className='ml-2 text-[11px] text-slate-400'>
+                      {s.rows.toLocaleString()} rows
+                    </span>
+                  </p>
+                  <p className='text-[11px] text-slate-400'>{s.reasons.join(' · ')}</p>
+                </div>
+                <button
+                  type='button'
+                  disabled={applying === key}
+                  onClick={() => apply(s)}
+                  className='h-7 shrink-0 rounded-md border border-slate-200 px-2.5 text-[12px] text-slate-600 hover:border-slate-300 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+                >
+                  {applying === key ? 'Creating…' : 'Create index'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
