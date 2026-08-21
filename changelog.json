@@ -1,10 +1,82 @@
 {
-  "generated_at": "2026-08-21T01:02:07.991Z",
+  "generated_at": "2026-08-21T14:13:27.228Z",
   "releases": [
+    {
+      "version": "0.1.91",
+      "tag": "v0.1.91",
+      "date": "2026-08-21T10:13:24-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "bulk index creation on the advisor",
+              "hash": "f4960ff5"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "QualityRulesView - quality rules embeddable in headless frontends",
+              "hash": "c7deb9bd"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "security center + maintenance mode",
+              "hash": "f7c88798"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Data Quality folded into Data Integrity; fix Next-run display",
+              "hash": "c7486f1b"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "real-user monitoring + index advisor",
+              "hash": "3446f743"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "inbound integration payload contracts",
+              "hash": "f6eee56e"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "monitors framework - data freshness, deploy regression, synthetic probes",
+              "hash": "34c8645d"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "unified background-job runs + Background Jobs console + extension health",
+              "hash": "752dc741"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "session ids never leave the server; masquerade audit uses validated target",
+              "hash": "432a827b"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.1.90",
       "tag": "v0.1.90",
-      "date": "2026-08-20T21:02:05-04:00",
+      "date": "2026-08-20T21:02:08-04:00",
       "sections": [
         {
           "label": "Fixed",
