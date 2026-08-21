@@ -1060,7 +1060,7 @@ function SimulatorTab({ roleId, collections }: { roleId: string; collections: Co
                 className={cn(
                   'h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors',
                   action === a
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                     : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
                 )}
               >

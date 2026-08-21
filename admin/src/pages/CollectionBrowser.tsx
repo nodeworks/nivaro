@@ -912,7 +912,7 @@ export function CollectionBrowserPage() {
                   className={cn(
                     'px-2.5 py-1 text-[12px] transition-colors',
                     viewMode === 'table'
-                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                      ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                       : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
                   )}
                   onClick={() => setViewMode('table')}
@@ -924,7 +924,7 @@ export function CollectionBrowserPage() {
                   className={cn(
                     'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
                     viewMode === 'grid'
-                      ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                      ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                       : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
                   )}
                   onClick={() => setViewMode('grid')}
@@ -937,7 +937,7 @@ export function CollectionBrowserPage() {
                     className={cn(
                       'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
                       viewMode === 'tree'
-                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                         : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
                     )}
                     onClick={() => setViewMode('tree')}
@@ -951,7 +951,7 @@ export function CollectionBrowserPage() {
                     className={cn(
                       'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
                       viewMode === 'calendar'
-                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                         : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
                     )}
                     onClick={() => setViewMode('calendar')}
@@ -965,7 +965,7 @@ export function CollectionBrowserPage() {
                     className={cn(
                       'px-2.5 py-1 text-[12px] transition-colors border-l border-slate-200 dark:border-border',
                       viewMode === 'gantt'
-                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                        ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                         : 'bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:bg-slate-50'
                     )}
                     onClick={() => setViewMode('gantt')}

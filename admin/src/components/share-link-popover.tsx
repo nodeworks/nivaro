@@ -109,7 +109,7 @@ export function ShareLinkPopover({
                 className={cn(
                   'h-6 rounded-md px-2 text-[11px] font-medium',
                   expiry === o.value
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                     : 'text-slate-400 hover:text-slate-700'
                 )}
               >

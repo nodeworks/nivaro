@@ -546,6 +546,35 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Delete template (cascade removes states, transitions, bindings)
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    // A template with instances cannot hard-delete: instances FK the states
+    // (nivaro_workflow_instances.current_state), so the delete used to die as
+    // a raw FK 500. Answer with WHY and what to do instead.
+    const [openRow, doneRow] = await Promise.all([
+      db('nivaro_workflow_instances as i')
+        .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+        .where('s.template', id)
+        .whereNull('i.completed_at')
+        .count({ c: '*' })
+        .first(),
+      db('nivaro_workflow_instances as i')
+        .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+        .where('s.template', id)
+        .whereNotNull('i.completed_at')
+        .count({ c: '*' })
+        .first()
+    ])
+    const open = Number((openRow as { c?: number | string } | undefined)?.c ?? 0)
+    const done = Number((doneRow as { c?: number | string } | undefined)?.c ?? 0)
+    if (open > 0) {
+      return reply.code(409).send({
+        error: `${open} record(s) are still running this workflow — move them with the instance migration tool (or complete them) before deleting the template`
+      })
+    }
+    if (done > 0) {
+      return reply.code(409).send({
+        error: `${done} completed record(s) carry this workflow's history — deleting the template would orphan it. Archive the template instead (rename it, remove its bindings) if it should stop being used`
+      })
+    }
     // Versions FK the template with NO ACTION — clear them before the delete.
     await db('nivaro_workflow_template_versions').where({ template: id }).delete()
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
