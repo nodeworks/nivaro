@@ -1,10 +1,82 @@
 {
-  "generated_at": "2026-08-20T22:37:44.183Z",
+  "generated_at": "2026-08-21T00:21:05.704Z",
   "releases": [
+    {
+      "version": "0.1.87",
+      "tag": "v0.1.87",
+      "date": "2026-08-20T20:21:03-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "broadcasts",
+              "text": "audience list opens a searchable sidebar",
+              "hash": "f558eb3b"
+            },
+            {
+              "section": "Added",
+              "scope": "broadcasts",
+              "text": "multi-condition audience groups with live counts",
+              "hash": "ec7a1b41"
+            },
+            {
+              "section": "Added",
+              "scope": "broadcasts",
+              "text": "full receipts - who got what, over which channel, when",
+              "hash": "5831cceb"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "resilient presence (online/idle/offline + idle duration) and Broadcasts",
+              "hash": "f231c1f2"
+            },
+            {
+              "section": "Added",
+              "scope": "readiness",
+              "text": "per-check auto-remediation as background jobs + bug modal padding",
+              "hash": "72304a33"
+            },
+            {
+              "section": "Added",
+              "scope": "replays",
+              "text": "environment filter, defaulting to the one you're in",
+              "hash": "51d8b5a4"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "integrity remediation/schedules/badges, announcements, field usage, hygiene, send-back themes, issue log upgrades",
+              "hash": "e679e3fe"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "replays",
+              "text": "sidebar session counts read the aggregate",
+              "hash": "c7ffbbb6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "replays",
+              "text": "people rail from a server aggregate - heavy recorders buried everyone else",
+              "hash": "78b4e032"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.1.86",
       "tag": "v0.1.86",
-      "date": "2026-08-20T18:37:41-04:00",
+      "date": "2026-08-20T18:37:44-04:00",
       "sections": [
         {
           "label": "Fixed",
