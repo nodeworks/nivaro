@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-08-21T16:00:20.684Z",
+  "generated_at": "2026-08-21T16:57:27.940Z",
   "releases": [
+    {
+      "version": "0.1.93",
+      "tag": "v0.1.93",
+      "date": "2026-08-21T12:57:25-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ux",
+              "text": "queue & data-entry batch — line comments, reactions, recipes, provenance, find & replace",
+              "hash": "d5158c98"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "quiet hours + channel matrix, snooze, center filters, message stakeholders",
+              "hash": "95292963"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.92",
       "tag": "v0.1.92",
-      "date": "2026-08-21T12:00:17-04:00",
+      "date": "2026-08-21T12:00:20-04:00",
       "sections": [
         {
           "label": "Added",
