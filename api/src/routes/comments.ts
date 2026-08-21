@@ -318,6 +318,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         created_at: string | Date
         context: string | null
         link?: { collection: string; item_id: string }
+        comment_id?: string
+        reactions?: Array<{ emoji: string; count: number; mine: boolean }>
       }
 
       const instances = (await db('nivaro_workflow_instances')
@@ -561,6 +563,28 @@ export async function commentsRoutes(app: FastifyInstance) {
               .trim()
             return cleaned || null
           }
+          // Reactions ride along: a line comment is a real comment, and the
+          // thread must offer the same chips the child grid's popover does.
+          const reactionRows = rows.length
+            ? ((await db('nivaro_comment_reactions')
+                .whereIn('comment', rows.map((r) => String(r.id)))
+                .select('comment', 'user', 'emoji')
+                .catch(() => [])) as Array<{ comment: string; user: string; emoji: string }>)
+            : []
+          const reactionsFor = (id: string) => {
+            const list: Array<{ emoji: string; count: number; mine: boolean }> = []
+            for (const rr of reactionRows) {
+              if (String(rr.comment).toUpperCase() !== id.toUpperCase()) continue
+              let agg = list.find((a) => a.emoji === rr.emoji)
+              if (!agg) {
+                agg = { emoji: rr.emoji, count: 0, mine: false }
+                list.push(agg)
+              }
+              agg.count++
+              if (String(rr.user).toUpperCase() === String(req.user!.id).toUpperCase()) agg.mine = true
+            }
+            return list
+          }
           for (const r of rows) {
             lineComments.push({
               ...r,
@@ -568,7 +592,8 @@ export async function commentsRoutes(app: FastifyInstance) {
               child_label:
                 cleanLabel(templateLabels[`${cc.collection}:${r.item}`]) ??
                 labelByChildId.get(String(r.item)) ??
-                null
+                null,
+              reactions: reactionsFor(String(r.id)) as Array<{ emoji: string; count: number; mine: boolean }>
             })
           }
         }
@@ -585,7 +610,9 @@ export async function commentsRoutes(app: FastifyInstance) {
           user: (r.user as string) ?? null,
           created_at: r.created_at as string,
           context: [titleCase(String(r.child)), r.child_label].filter(Boolean).join(' · ') || null,
-          link: { collection: String(r.child), item_id: String(r.item) }
+          link: { collection: String(r.child), item_id: String(r.item) },
+          comment_id: String(r.id),
+          reactions: r.reactions as Array<{ emoji: string; count: number; mine: boolean }> | undefined
         })),
         ...transitions.map((h) => ({
           id: `transition:${h.id}`,
@@ -667,6 +694,41 @@ export async function commentsRoutes(app: FastifyInstance) {
           )
       )
 
+      // Entry reactions: every recorded note is reactable, not just real
+      // comments — fetch this record's entry reactions and attach per entry.
+      try {
+        const entryReactions = (await db('nivaro_entry_reactions')
+          .where({ collection, item: String(item) })
+          .select('entry_key', 'user', 'emoji')) as Array<{
+          entry_key: string
+          user: string
+          emoji: string
+        }>
+        if (entryReactions.length > 0) {
+          const byKey = new Map<string, Array<{ emoji: string; count: number; mine: boolean }>>()
+          for (const er of entryReactions) {
+            const list = byKey.get(er.entry_key) ?? []
+            let agg = list.find((a) => a.emoji === er.emoji)
+            if (!agg) {
+              agg = { emoji: er.emoji, count: 0, mine: false }
+              list.push(agg)
+            }
+            agg.count++
+            if (String(er.user).toUpperCase() === String(req.user!.id).toUpperCase()) agg.mine = true
+            byKey.set(er.entry_key, list)
+          }
+          for (const e of deduped) {
+            // Line comments already carry comment-FK reactions — don't clobber.
+            if (!e.reactions || e.reactions.length === 0) {
+              const list = byKey.get(e.id)
+              if (list) e.reactions = list
+            }
+          }
+        }
+      } catch {
+        /* reactions must never take the thread down */
+      }
+
       const userIds = [...new Set(deduped.map((e) => e.user).filter((u): u is string => !!u))]
       const users = userIds.length
         ? ((await db('nivaro_users')
@@ -737,6 +799,42 @@ export async function commentsRoutes(app: FastifyInstance) {
       await db('nivaro_comment_reactions')
         .insert({ comment: comment.id, user: req.user!.id, emoji, created_at: new Date() })
         .catch(() => {}) // unique race — a double-click is one reaction
+      return { data: { reacted: true } }
+    }
+  )
+
+  /** Toggle a reaction on a RECORDED note (transition comment, change
+   *  reason, legacy note) — keyed by the thread entry id. */
+  app.post<{ Body: { collection?: string; item?: string; entry_key?: string; emoji?: string } }>(
+    '/entry-reactions',
+    async (req, reply) => {
+      const REACTION_EMOJI = new Set(['👍', '✅', '👀', '🎉', '❤️', '😂'])
+      const { collection, item, entry_key } = req.body ?? {}
+      const emoji = String(req.body?.emoji ?? '')
+      if (!collection || !item || !entry_key) {
+        return reply.code(400).send({ error: 'collection, item and entry_key are required' })
+      }
+      if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
+      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const existing = await db('nivaro_entry_reactions')
+        .where({ entry_key: String(entry_key).slice(0, 200), user: req.user!.id, emoji })
+        .first('id')
+      if (existing) {
+        await db('nivaro_entry_reactions').where('id', existing.id).del()
+        return { data: { reacted: false } }
+      }
+      await db('nivaro_entry_reactions')
+        .insert({
+          collection,
+          item: String(item),
+          entry_key: String(entry_key).slice(0, 200),
+          user: req.user!.id,
+          emoji,
+          created_at: new Date()
+        })
+        .catch(() => {})
       return { data: { reacted: true } }
     }
   )

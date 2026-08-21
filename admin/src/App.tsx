@@ -155,6 +155,7 @@ const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
 const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
+const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
 const AutomationTests = lazy(() => import('@/pages/AutomationTests'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -450,6 +451,7 @@ export default function App() {
                   <Route path='config-health' element={<ConfigHealth />} />
                   <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='find-replace' element={<FindReplace />} />
+                  <Route path='m2m-matrix' element={<M2MMatrix />} />
                   <Route path='automation-tests' element={<AutomationTests />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />

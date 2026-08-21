@@ -71,6 +71,47 @@ export async function rolesRoutes(app: FastifyInstance) {
     return reply.code(201).send({ data: role })
   })
 
+  /** Role cloning (#61): copy a role's policies + UI permissions as the
+   *  starting point for a new role. Users are NOT copied — membership is an
+   *  assignment, not part of the role's shape. */
+  app.post<{ Params: { id: string } }>('/:id/clone', { preHandler: requireAdmin }, async (req, reply) => {
+    const source = await db('nivaro_roles').where({ id: req.params.id }).first()
+    if (!source) return reply.code(404).send({ error: 'Role not found' })
+    const b = req.body as { name?: string }
+    const name = String(b?.name ?? '').trim() || `${source.name} (copy)`
+    const exists = await db('nivaro_roles').where({ name }).first('id')
+    if (exists) return reply.code(400).send({ error: `A role named "${name}" already exists` })
+    const id = randomUUID()
+    await db('nivaro_roles').insert({
+      id,
+      name,
+      description: source.description,
+      admin_access: source.admin_access,
+      app_access: source.app_access,
+      ui_permissions: source.ui_permissions,
+      workspace: source.workspace,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    const policies = (await db('nivaro_policies').where({ role: req.params.id })) as Array<
+      Record<string, unknown>
+    >
+    for (const pol of policies) {
+      const { id: _pid, ...rest } = pol
+      await db('nivaro_policies').insert({ ...rest, role: id })
+    }
+    await logActivity({
+      action: 'role-clone',
+      user: req.user?.id,
+      collection: 'nivaro_roles',
+      item: id,
+      comment: `Cloned from "${source.name}" (${policies.length} policies)`,
+      req
+    })
+    const role = await db('nivaro_roles').where({ id }).first()
+    return reply.code(201).send({ data: role })
+  })
+
   app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     await db('nivaro_roles')

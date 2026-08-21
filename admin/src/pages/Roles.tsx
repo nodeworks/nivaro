@@ -1,17 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronsUpDown,
-  Filter,
-  Plus,
-  Search,
-  Shield,
-  Trash2,
-  Users,
-  X
-} from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, ChevronsUpDown, Copy, Filter, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -781,6 +769,23 @@ function UiPermissionsTab({
 function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
   const [activeTab, setActiveTab] = usePersistedTab<ActiveTab>('nvr_tab_roles', 'permissions')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [cloning, setCloning] = useState(false)
+  const [cloneName, setCloneName] = useState('')
+  const qcClone = useQueryClient()
+
+  const cloneRole = useMutation({
+    mutationFn: () => api.post(`/roles/${role.id}/clone`, { name: cloneName.trim() || undefined }),
+    onSuccess: (r) => {
+      toast.success(`Role "${r.data.data.name}" created with this role's policies`)
+      setCloning(false)
+      setCloneName('')
+      void qcClone.invalidateQueries({ queryKey: ['roles'] })
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Failed to clone role')
+    }
+  })
 
   const deleteRole = useMutation({
     mutationFn: () => api.delete(`/roles/${role.id}`),
@@ -895,7 +900,41 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
       </div>
 
       {/* Delete zone */}
-      <div className='shrink-0 border-t border-slate-100 px-5 py-3 flex justify-end bg-slate-50/50 dark:border-border dark:bg-muted/20'>
+      <div className='shrink-0 border-t border-slate-100 px-5 py-3 flex items-center justify-end gap-2 bg-slate-50/50 dark:border-border dark:bg-muted/20'>
+        {cloning ? (
+          <form
+            className='flex items-center gap-2 text-[13px]'
+            onSubmit={(e) => {
+              e.preventDefault()
+              cloneRole.mutate()
+            }}
+          >
+            <input
+              // biome-ignore lint/a11y/noAutofocus: single-purpose inline form
+              autoFocus
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              placeholder={`${role.name} (copy)`}
+              className='h-8 w-56 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+            />
+            <Button size='sm' type='submit' disabled={cloneRole.isPending}>
+              {cloneRole.isPending ? 'Cloning…' : 'Create copy'}
+            </Button>
+            <Button size='sm' variant='outline' type='button' onClick={() => setCloning(false)}>
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => setCloning(true)}
+            data-clone-role
+          >
+            <Copy className='h-3.5 w-3.5 mr-1' /> Duplicate Role
+          </Button>
+        )}
+        <span className='flex-1' />
         {confirmDelete ? (
           <div className='flex items-center gap-2 text-[13px]'>
             <span className='text-slate-600 dark:text-slate-400'>Delete this role?</span>

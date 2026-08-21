@@ -58,6 +58,7 @@ import {
 } from './item-edit/ChangeReasonDialog'
 import { CloneDialog } from './item-edit/CloneDialog'
 import { FieldRow } from './item-edit/FieldRow'
+import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
 import {
   GroupSection,
   InlineDisplay,
@@ -114,6 +115,7 @@ import {
   CommentPanel,
   ExternalRequestsChip,
   ItemActionButtons,
+  CustomActionButtons,
   ItemLockBanner,
   OwnersSlot,
   PipelinePanel,
@@ -3074,6 +3076,11 @@ export function ItemEditForm({
       const allFilled = stepFields
         .filter((f) => f.required && !f.hidden)
         .every((f) => {
+          // Required M2M aliases live in junction state, not the draft.
+          if (m2mAliasFieldsForRules.has(f.field)) {
+            const st = m2mAliasFieldStates[f.field]
+            return !st || st.ids.length > 0
+          }
           const v = draft[f.field]
           return v !== null && v !== undefined && v !== ''
         })
@@ -3088,7 +3095,9 @@ export function ItemEditForm({
     draft,
     isNew,
     visitedSteps,
-    isStepsMode
+    isStepsMode,
+    m2mAliasFieldsForRules,
+    m2mAliasFieldStates
   ])
 
   function handleNext() {
@@ -4584,6 +4593,13 @@ export function ItemEditForm({
       const allFilled =
         requiredFields.length === 0 ||
         requiredFields.every((f) => {
+          // Required M2M aliases have no draft column — judge them by the
+          // committed junction state (same rule as validateAll; an unsettled
+          // alias never blocks). Without this the step stayed grey forever.
+          if (m2mAliasFieldsForRules.has(f.field)) {
+            const st = m2mAliasFieldStates[f.field]
+            return !st || st.ids.length > 0
+          }
           const v = draft[f.field]
           return v !== null && v !== undefined && v !== ''
         })
@@ -4875,6 +4891,7 @@ export function ItemEditForm({
     if (typeof item === 'string' && item !== '__ungrouped__') return renderSentinel(item)
     const g = item as FieldGroup
     if (g.type === 'container') return renderContainer(g)
+    if (g.type === 'content') return <LayoutContentBlock key={g.key} group={g} />
     if (g.type === 'metadata' && isNew) return null
     const swapCfg = (() => {
       try {
@@ -6169,6 +6186,15 @@ export function ItemEditForm({
                                       <ItemActionButtons
                                         collection={collection}
                                         itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {/* Admin-defined no-code actions (#39) — always
+                                        mounted; renders nothing when none exist. */}
+                                    {!isNew && itemId && (
+                                      <CustomActionButtons
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                        draft={draft}
                                       />
                                     )}
                                     {!isNew &&

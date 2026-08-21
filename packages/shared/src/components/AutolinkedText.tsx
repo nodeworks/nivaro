@@ -14,6 +14,10 @@ import { get } from '../lib/commands'
 
 // Same default shape chat uses for entity tokens.
 const ENTITY_RE = String.raw`\b([A-Za-z]{2,4}\d{2}(?:INV)?-\d+)\b`
+// Internal record paths ("workflows/283819") — record-link change reasons
+// store the canonical collection/id; the renderer upgrades it to the record's
+// display-template label + link.
+const PATH_RE = String.raw`\b([a-z][a-z0-9_]{2,})\/(\d{1,12})\b`
 
 type RoomType = { prefix: string; collection: string; match_field: string; is_active: boolean }
 
@@ -104,26 +108,100 @@ function RecordToken({ token }: { token: string }) {
   )
 }
 
+/** Dotted-path walk over an expanded row for display-template tokens. */
+function renderTemplateLabel(template: string | null, row: Record<string, unknown>): string {
+  if (!template) return ''
+  return template
+    .replace(/\{\{\s*([\w.[\]]+)\s*\}\}/g, (_m, path: string) => {
+      let cur: unknown = row
+      for (const seg of path.replace(/\[(\d+)\]/g, '.$1').split('.')) {
+        if (cur == null || typeof cur !== 'object') return ''
+        cur = (cur as Record<string, unknown>)[seg]
+      }
+      return cur == null ? '' : String(cur)
+    })
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** "collection/id" → the record's display-template label, linked. Falls back
+ *  to the raw text when the record can't be read or doesn't resolve. */
+function RecordPathToken({ collection, id, raw }: { collection: string; id: string; raw: string }) {
+  const client = useNivaroClient()
+  const nav = useNavigation()
+  const { data } = useQuery({
+    queryKey: ['nvr-record-path', collection, id],
+    queryFn: async () => {
+      try {
+        const meta = (await client.request(
+          get<{ data: { display_template?: string | null } }>(`/collections/${collection}`)
+        )) as { data: { display_template?: string | null } }
+        const template = meta.data?.display_template ?? null
+        const tokens = [...(template ?? '').matchAll(/\{\{\s*([\w.[\]]+)/g)].map((m) => m[1])
+        const fields = template ? ['id', ...tokens.map((t) => t.replace(/\[\d+\]/g, ''))].join(',') : undefined
+        const res = (await client.request(
+          get<{ data: Record<string, unknown> }>(`/items/${collection}/${id}`, fields ? { fields } : {})
+        )) as { data: Record<string, unknown> }
+        if (!res.data) return null
+        const label = renderTemplateLabel(template, res.data)
+        return { label: label || `#${id}` }
+      } catch {
+        return null
+      }
+    },
+    staleTime: 10 * 60_000
+  })
+  if (!data) return <>{raw}</>
+  const target = { collection, itemId: id }
+  const open = () => {
+    if (nav.openItem?.(target)) return
+    nav.navigate((nav.itemUrl ?? defaultItemUrl)(target))
+  }
+  return (
+    <button
+      type='button'
+      onClick={open}
+      className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+      data-record-path={raw}
+      data-tip={raw}
+    >
+      {data.label}
+    </button>
+  )
+}
+
 export function AutolinkedText({ text }: { text: string }) {
   const parts = useMemo(() => {
-    const re = new RegExp(ENTITY_RE, 'g')
-    const out: Array<{ text: string; entity: boolean }> = []
+    const re = new RegExp(`${ENTITY_RE}|${PATH_RE}`, 'g')
+    const out: Array<
+      | { kind: 'text'; text: string }
+      | { kind: 'entity'; text: string }
+      | { kind: 'path'; text: string; collection: string; id: string }
+    > = []
     let last = 0
     for (const m of text.matchAll(re)) {
       const i = m.index ?? 0
-      if (i > last) out.push({ text: text.slice(last, i), entity: false })
-      out.push({ text: m[0], entity: true })
+      if (i > last) out.push({ kind: 'text', text: text.slice(last, i) })
+      if (m[1] !== undefined) out.push({ kind: 'entity', text: m[0] })
+      else out.push({ kind: 'path', text: m[0], collection: m[2], id: m[3] })
       last = i + m[0].length
     }
-    if (last < text.length) out.push({ text: text.slice(last), entity: false })
+    if (last < text.length) out.push({ kind: 'text', text: text.slice(last) })
     return out
   }, [text])
 
-  if (parts.length === 1 && !parts[0]?.entity) return <>{text}</>
+  if (parts.length === 1 && parts[0]?.kind === 'text') return <>{text}</>
   return (
     <>
       {parts.map((p, i) =>
-        p.entity ? <RecordToken key={`${p.text}-${i}`} token={p.text} /> : <span key={i}>{p.text}</span>
+        p.kind === 'entity' ? (
+          <RecordToken key={`${p.text}-${i}`} token={p.text} />
+        ) : p.kind === 'path' ? (
+          <RecordPathToken key={`${p.text}-${i}`} collection={p.collection} id={p.id} raw={p.text} />
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
+          <span key={i}>{p.text}</span>
+        )
       )}
     </>
   )

@@ -142,30 +142,121 @@ function SideBySideView({
                 </span>
               )}
             </div>
-            <div className='grid grid-cols-[1fr_1fr]'>
-              <div className='px-2.5 py-1.5'>
-                {inBefore ? (
-                  <ValueCell value={before[field]} tone='before' />
-                ) : (
-                  <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
-                    not set
-                  </span>
-                )}
+            {status === 'changed' && (isRichText(before[field]) || isRichText(after[field])) ? (
+              <div className='px-2.5 py-1.5' data-richtext-diff>
+                <WordDiff before={before[field]} after={after[field]} />
               </div>
-              <div className='border-l border-slate-100 px-2.5 py-1.5 dark:border-border/60'>
-                {inAfter ? (
-                  <ValueCell value={after[field]} tone='after' />
-                ) : (
-                  <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
-                    removed
-                  </span>
-                )}
+            ) : (
+              <div className='grid grid-cols-[1fr_1fr]'>
+                <div className='px-2.5 py-1.5'>
+                  {inBefore ? (
+                    <ValueCell value={before[field]} tone='before' />
+                  ) : (
+                    <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
+                      not set
+                    </span>
+                  )}
+                </div>
+                <div className='border-l border-slate-100 px-2.5 py-1.5 dark:border-border/60'>
+                  {inAfter ? (
+                    <ValueCell value={after[field]} tone='after' />
+                  ) : (
+                    <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
+                      removed
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )
       })}
     </div>
+  )
+}
+
+// ─── Rich-text word diff (#45) ───────────────────────────────────────────────
+// A changed rich-text field renders as ONE word-level inline diff (green/red)
+// instead of two HTML blobs nobody can compare by eye.
+
+function isRichText(v: unknown): boolean {
+  return typeof v === 'string' && /<[a-z][^>]*>/i.test(v)
+}
+
+function stripToWords(v: unknown): string[] {
+  return String(v ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+type DiffSeg = { text: string; type: 'same' | 'del' | 'ins' }
+
+/** Word-level LCS diff, capped — past the cap the tail is compared blockwise
+ *  rather than blowing up the DP table. */
+function diffWords(aRaw: unknown, bRaw: unknown): DiffSeg[] {
+  const CAP = 600
+  const a = stripToWords(aRaw).slice(0, CAP)
+  const b = stripToWords(bRaw).slice(0, CAP)
+  const n = a.length
+  const m = b.length
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const segs: DiffSeg[] = []
+  const pushSeg = (type: DiffSeg['type'], word: string) => {
+    const last = segs[segs.length - 1]
+    if (last && last.type === type) last.text += ` ${word}`
+    else segs.push({ text: word, type })
+  }
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      pushSeg('same', a[i])
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      pushSeg('del', a[i])
+      i++
+    } else {
+      pushSeg('ins', b[j])
+      j++
+    }
+  }
+  while (i < n) pushSeg('del', a[i++])
+  while (j < m) pushSeg('ins', b[j++])
+  return segs
+}
+
+function WordDiff({ before, after }: { before: unknown; after: unknown }) {
+  const segs = diffWords(before, after)
+  return (
+    <p className='whitespace-pre-wrap break-words text-[11.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+      {segs.map((seg, i) =>
+        seg.type === 'same' ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
+          <span key={i}>{seg.text} </span>
+        ) : seg.type === 'del' ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
+          <del key={i} className='rounded bg-red-100 px-0.5 text-red-700 no-underline line-through dark:bg-red-900/40 dark:text-red-400'>
+            {seg.text}{' '}
+          </del>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
+          <ins key={i} className='rounded bg-emerald-100 px-0.5 text-emerald-700 no-underline dark:bg-emerald-900/40 dark:text-emerald-400'>
+            {seg.text}{' '}
+          </ins>
+        )
+      )}
+    </p>
   )
 }
 
@@ -190,6 +281,10 @@ function DeltaView({ delta }: { delta: Record<string, unknown> }) {
               ) : typeof value === 'object' ? (
                 <span className='font-mono text-[11px] text-slate-500'>
                   {JSON.stringify(value)}
+                </span>
+              ) : isRichText(value) ? (
+                <span className='whitespace-pre-wrap'>
+                  {stripToWords(value).join(' ').slice(0, 600)}
                 </span>
               ) : (
                 String(value)

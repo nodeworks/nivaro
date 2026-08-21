@@ -131,7 +131,7 @@ export function StepsBar({
                   isActive
                     ? 'bg-[#00ceff] text-[#172940]'
                     : isDone
-                      ? 'bg-[#00ceff] text-white'
+                      ? 'bg-[#00ceff] text-[#172940]'
                       : hasError
                         ? 'bg-red-500 text-white'
                         : 'bg-slate-300 text-slate-500 dark:bg-white/[0.12] dark:text-slate-400'

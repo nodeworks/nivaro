@@ -32,11 +32,17 @@ export function registerFieldWatchHooks() {
     if (watches.length === 0) return
 
     const item = String(ctx.keys[0])
+    // A record-scoped watch (item_id set, #58) only fires for its own record.
+    const applicable = watches.filter((w) => {
+      const scoped = (w as { item_id?: string | null }).item_id
+      return scoped == null || String(scoped) === item
+    })
+    if (applicable.length === 0) return
     const prev = ctx.previousData as Record<string, unknown>
     const next = ctx.result as Record<string, unknown>
     const now = new Date()
 
-    for (const watch of watches) {
+    for (const watch of applicable) {
       const field = watch.field
       const oldVal = prev[field]
       const newVal = next[field]

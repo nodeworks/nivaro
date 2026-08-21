@@ -1,9 +1,10 @@
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChartLine, History, Info, Loader2, Lock, Sigma, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, BellRing, ChartLine, History, Info, Loader2, Lock, Sigma, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get, post } from '../../lib/commands'
+import { del, get, post } from '../../lib/commands'
+import { toast } from 'sonner'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -471,6 +472,81 @@ function FieldHistoryButton({
   )
 }
 
+/**
+ * Field-level record watch (#58): a bell on the field label that subscribes
+ * the viewer to changes of THIS field on THIS record. Renders only when the
+ * instance feature flag (nivaro_settings.field_watch_enabled) is on — off by
+ * default. Queries are shared per record, so fifty fields cost two requests.
+ */
+function FieldWatchButton({
+  collection,
+  itemId,
+  field
+}: {
+  collection: string
+  itemId: string
+  field: string
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: cfg } = useQuery({
+    queryKey: ['field-watch-config'],
+    queryFn: () =>
+      client
+        .request<{ data: { enabled: boolean } }>(get('/field-watches/config'))
+        .then((r) => r.data)
+        .catch(() => ({ enabled: false })),
+    staleTime: 5 * 60_000
+  })
+  const watchedKey = ['field-watch-self', collection, itemId]
+  const { data: watched = [] } = useQuery({
+    queryKey: watchedKey,
+    queryFn: () =>
+      client
+        .request<{ data: string[] }>(
+          get('/field-watches/self', { collection, item_id: itemId })
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => [] as string[]),
+    enabled: !!cfg?.enabled,
+    staleTime: 60_000
+  })
+  const isWatching = watched.includes(field)
+  const toggle = useMutation({
+    mutationFn: () =>
+      isWatching
+        ? client.request(
+            del(
+              `/field-watches/self?collection=${encodeURIComponent(collection)}&field=${encodeURIComponent(field)}&item_id=${encodeURIComponent(itemId)}`
+            )
+          )
+        : client.request(post('/field-watches/self', { collection, field, item_id: itemId })),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: watchedKey })
+      toast.success(
+        isWatching ? 'No longer watching this field' : 'Watching — you will be notified when it changes'
+      )
+    },
+    onError: () => toast.error('Could not update the watch')
+  })
+  if (!cfg?.enabled) return null
+  return (
+    <button
+      type='button'
+      onClick={() => toggle.mutate()}
+      title={isWatching ? 'Stop watching this field on this record' : 'Watch this field on this record'}
+      data-field-watch={field}
+      className={`rounded p-0.5 transition-colors ${
+        isWatching
+          ? 'text-nvr-navy dark:text-nvr-cyan'
+          : 'text-slate-300 hover:text-slate-500'
+      }`}
+    >
+      {isWatching ? <BellRing className='h-3 w-3' /> : <Bell className='h-3 w-3' />}
+    </button>
+  )
+}
+
 export function FieldRow({
   field,
   draft,
@@ -750,6 +826,9 @@ export function FieldRow({
           )}
           {itemId && itemId !== 'new' && (
             <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
+          )}
+          {itemId && itemId !== 'new' && (
+            <FieldWatchButton collection={collection} itemId={itemId} field={field.field} />
           )}
           {itemId &&
             itemId !== 'new' &&

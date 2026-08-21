@@ -341,6 +341,7 @@ export function SettingsPage() {
   const [collectionPageSize, setCollectionPageSize] = useState(25)
   const [activityRetentionDays, setActivityRetentionDays] = useState<number | ''>('')
   const [revisionRetentionCount, setRevisionRetentionCount] = useState<number | ''>('')
+  const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState<number | ''>(587)
   const [smtpUser, setSmtpUser] = useState('')
@@ -396,6 +397,7 @@ export function SettingsPage() {
     setFileMaxMb(settings.file_max_size_mb ?? 50)
     setCollectionPageSize(settings.collection_page_size ?? 25)
     setActivityRetentionDays(settings.activity_retention_days ?? '')
+    setFieldWatchEnabled(!!(settings as { field_watch_enabled?: boolean }).field_watch_enabled)
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
     setSmsProvider((s.sms_provider as string) ?? '')
@@ -572,7 +574,8 @@ export function SettingsPage() {
       file_max_size_mb: fileMaxMb,
       collection_page_size: collectionPageSize,
       activity_retention_days: activityRetentionDays === '' ? null : activityRetentionDays,
-      revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount
+      revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount,
+      field_watch_enabled: fieldWatchEnabled
     })
   }
 
@@ -1189,6 +1192,18 @@ export function SettingsPage() {
                       className='h-8 text-[13px]'
                     />
                   </Field>
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'>
+                    <div>
+                      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                        Field-level record watches
+                      </p>
+                      <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                        Lets anyone watch one field on one record ("tell me when THIS PO's amount
+                        changes") from the field's bell icon. Off by default.
+                      </p>
+                    </div>
+                    <Switch checked={fieldWatchEnabled} onCheckedChange={setFieldWatchEnabled} />
+                  </div>
                 </SectionWrap>
               )}
 

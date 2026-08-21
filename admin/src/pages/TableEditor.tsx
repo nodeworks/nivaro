@@ -3882,6 +3882,7 @@ function SettingsTab({
           <DataProtectionSection tableName={tableName} />
       <FieldUsageSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
+      <CustomActionsSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
@@ -4009,6 +4010,183 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
           onCheckedChange={(v) => saveMut.mutate(v)}
           disabled={saveMut.isPending || meta === undefined}
         />
+      </div>
+    </div>
+  )
+}
+
+/** Custom action buttons (#39): admin-defined no-code record buttons for this
+ *  collection — run a flow, call an external API, or write fields. */
+function CustomActionsSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [label, setLabel] = useState('')
+  const [actionType, setActionType] = useState<'flow' | 'external_api' | 'update_fields'>('update_fields')
+  const [configText, setConfigText] = useState('{\n  "set": { "status": "done" }\n}')
+  const [guardText, setGuardText] = useState('')
+  const [confirmText, setConfirmText] = useState('')
+
+  const { data: actions = [] } = useQuery<
+    Array<{ id: number; label: string; action_type: string; is_active: boolean }>
+  >({
+    queryKey: ['custom-actions-admin', tableName],
+    queryFn: () =>
+      api.get('/custom-actions', { params: { collection: tableName } }).then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['custom-actions-admin', tableName] })
+    void qc.invalidateQueries({ queryKey: ['custom-actions', tableName] })
+  }
+  const createMutCA = useMutation({
+    mutationFn: () => {
+      let config: unknown
+      let guard: unknown = null
+      try {
+        config = JSON.parse(configText)
+      } catch {
+        throw new Error('Config must be valid JSON')
+      }
+      if (guardText.trim()) {
+        try {
+          guard = JSON.parse(guardText)
+        } catch {
+          throw new Error('Guard must be valid JSON')
+        }
+      }
+      return api.post('/custom-actions', {
+        collection: tableName,
+        label: label.trim(),
+        action_type: actionType,
+        config,
+        guard,
+        confirm_text: confirmText.trim() || null
+      })
+    },
+    onSuccess: () => {
+      toast.success('Action created')
+      setAdding(false)
+      setLabel('')
+      invalidate()
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message ?? 'Failed to create action')
+  })
+  const delMutCA = useMutation({
+    mutationFn: (id: number) => api.delete(`/custom-actions/${id}`),
+    onSuccess: invalidate
+  })
+
+  const CONFIG_HINTS: Record<string, string> = {
+    update_fields: '{"set": {"field": "value or {{other_field}}"}}',
+    flow: '{"flow_id": "<flow uuid>"}',
+    external_api: '{"api_id": 1, "endpoint_path": "/path/{{id}}", "method": "POST", "body_template": "{\\"id\\": \\"{{id}}\\"}"}'
+  }
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800'>Custom actions</p>
+          <p className='mt-0.5 text-[11.5px] text-slate-500'>
+            No-code record buttons — run a flow, call an external API endpoint, or write fields,
+            with optional guard conditions and confirm text. Shown in the record header.
+          </p>
+        </div>
+        <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding((v) => !v)}>
+          {adding ? 'Close' : '+ Add action'}
+        </Button>
+      </div>
+      {adding && (
+        <div className='space-y-2 border-b border-slate-100 bg-slate-50/60 px-4 py-3'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder='Button label'
+              className='h-7 w-52 text-[12px]'
+            />
+            <Sel
+              value={actionType}
+              onChange={(v) => {
+                setActionType(v as typeof actionType)
+                setConfigText(
+                  v === 'flow'
+                    ? '{\n  "flow_id": ""\n}'
+                    : v === 'external_api'
+                      ? '{\n  "api_id": 1,\n  "endpoint_path": "",\n  "method": "POST"\n}'
+                      : '{\n  "set": { "status": "done" }\n}'
+                )
+              }}
+              options={[
+                { value: 'update_fields', label: 'Write fields' },
+                { value: 'flow', label: 'Run a flow' },
+                { value: 'external_api', label: 'Call external API' }
+              ]}
+            />
+            <Input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder='Confirm text (optional)'
+              className='h-7 flex-1 min-w-[200px] text-[12px]'
+            />
+          </div>
+          <div>
+            <Label className='mb-1 block text-[11px]'>Config — {CONFIG_HINTS[actionType]}</Label>
+            <textarea
+              value={configText}
+              onChange={(e) => setConfigText(e.target.value)}
+              rows={4}
+              className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11.5px]'
+            />
+          </div>
+          <div>
+            <Label className='mb-1 block text-[11px]'>
+              Guard (optional JSON) — [{'{'}"field": "status", "op": "eq", "value": "open"{'}'}] hides
+              the button when unmet
+            </Label>
+            <textarea
+              value={guardText}
+              onChange={(e) => setGuardText(e.target.value)}
+              rows={2}
+              className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11.5px]'
+            />
+          </div>
+          <div className='flex justify-end'>
+            <Button
+              size='sm'
+              className='h-7 bg-nvr-cyan text-[12px] text-white'
+              disabled={!label.trim() || createMutCA.isPending}
+              onClick={() => createMutCA.mutate()}
+            >
+              Create action
+            </Button>
+          </div>
+        </div>
+      )}
+      <div className='divide-y divide-slate-100'>
+        {actions.length === 0 && (
+          <p className='px-4 py-3 text-[12px] text-slate-400'>No custom actions yet.</p>
+        )}
+        {actions.map((a) => (
+          <div key={a.id} className='flex items-center gap-2 px-4 py-2'>
+            <span className='text-[12.5px] font-medium text-slate-700'>{a.label}</span>
+            <span className='rounded bg-slate-100 px-1.5 py-px text-[10px] uppercase text-slate-500'>
+              {a.action_type.replace('_', ' ')}
+            </span>
+            <span className='flex-1' />
+            <button
+              type='button'
+              onClick={() => {
+                if (window.confirm(`Delete the action "${a.label}"?`)) delMutCA.mutate(a.id)
+              }}
+              className='rounded p-1 text-slate-300 hover:bg-red-50 hover:text-red-500'
+              aria-label={`Delete ${a.label}`}
+            >
+              <Trash2 className='h-3.5 w-3.5' />
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -5936,7 +6114,7 @@ interface FieldGroup {
   collection: string
   key: string
   label: string
-  type: 'section' | 'tab' | 'metadata' | 'container'
+  type: 'section' | 'tab' | 'metadata' | 'container' | 'content'
   icon: string | null
   sort: number
   is_collapsed: boolean
@@ -11653,6 +11831,41 @@ function FieldChip({
   )
 }
 
+/** Content-block text editor (#53): local draft + explicit Save — a PATCH per
+ *  keystroke would hammer the API, and popovers drop onBlur commits. */
+function ContentBlockTextEditor({
+  initial,
+  onSave
+}: {
+  initial: string
+  onSave: (text: string) => void
+}) {
+  const [text, setText] = useState(initial)
+  return (
+    <div>
+      <Label className='mb-1 block text-[11px]'>Text</Label>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={5}
+        placeholder={'Guidance shown on the form.\n\n**bold** and [links](https://…) work; blank line = new paragraph.'}
+        className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] dark:border-border dark:bg-card'
+      />
+      <div className='mt-1.5 flex justify-end'>
+        <Button
+          type='button'
+          size='sm'
+          className='h-6 text-[11px]'
+          disabled={text === initial}
+          onClick={() => onSave(text)}
+        >
+          Save text
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function SortableFieldChip({
   fieldName,
   displayName,
@@ -12541,6 +12754,43 @@ function SortableGroupCard({
               ))}
             </select>
           )}
+        {group.type === 'content' && onGroupSettings && (
+          <div onPointerDown={(e) => e.stopPropagation()}>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  title='Edit content'
+                  className='shrink-0 rounded p-1 text-slate-300 hover:text-slate-500'
+                >
+                  <Settings2 className='h-3.5 w-3.5' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[340px] p-3 space-y-3' align='end'>
+                <div>
+                  <Label className='mb-1 block text-[11px]'>Style</Label>
+                  <Sel
+                    value={(group as { content_tone?: string }).content_tone ?? 'info'}
+                    onChange={(v) =>
+                      onGroupSettings(group.id, { content_tone: v } as Record<string, unknown>)
+                    }
+                    options={[
+                      { value: 'info', label: 'Help note' },
+                      { value: 'warn', label: 'Warning' },
+                      { value: 'divider', label: 'Divider with label' }
+                    ]}
+                  />
+                </div>
+                <ContentBlockTextEditor
+                  initial={(group as { content?: string | null }).content ?? ''}
+                  onSave={(text) =>
+                    onGroupSettings(group.id, { content: text } as Record<string, unknown>)
+                  }
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+        )}
         {(group.type === 'section' || group.type === 'metadata' || group.type === 'tab') &&
           onGroupSettings && (
             <div onPointerDown={(e) => e.stopPropagation()}>
@@ -16276,7 +16526,7 @@ function FieldGroupsTab({
       collection: string
       key: string
       label: string
-      type: 'section' | 'tab' | 'metadata' | 'container'
+      type: 'section' | 'tab' | 'metadata' | 'container' | 'content'
     }) => api.post('/field-groups', { ...body, layout_id: layoutId }),
     onSuccess: () => {
       invalidateGroups()
@@ -16304,7 +16554,7 @@ function FieldGroupsTab({
       tab_mode
     }: {
       id: number
-      type: 'section' | 'tab' | 'metadata' | 'container'
+      type: 'section' | 'tab' | 'metadata' | 'container' | 'content'
       tab_mode?: 'tabs' | 'steps' | null
     }) => api.patch(`/field-groups/${id}`, { type, tab_mode }),
     onSuccess: () => invalidateGroups()
@@ -16513,7 +16763,7 @@ function FieldGroupsTab({
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newLabel, setNewLabel] = useState('')
-  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata' | 'container'>('section')
+  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata' | 'container' | 'content'>('section')
 
   // ── dnd ──
   const sensors = useSensors(
@@ -18228,12 +18478,13 @@ function FieldGroupsTab({
                   <Label className='mb-1 block text-[11px]'>Type</Label>
                   <Sel
                     value={newType}
-                    onChange={(v) => setNewType(v as 'section' | 'tab' | 'metadata' | 'container')}
+                    onChange={(v) => setNewType(v as 'section' | 'tab' | 'metadata' | 'container' | 'content')}
                     options={[
                       { value: 'section', label: 'Section' },
                       { value: 'tab', label: 'Tab' },
                       { value: 'metadata', label: 'Record Info (read-only)' },
-                      { value: 'container', label: 'Container (tabs/steps)' }
+                      { value: 'container', label: 'Container (tabs/steps)' },
+                      { value: 'content', label: 'Content block (text / warning / divider)' }
                     ]}
                   />
                 </div>

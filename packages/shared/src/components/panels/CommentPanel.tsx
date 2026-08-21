@@ -262,6 +262,9 @@ interface RelatedNote {
   created_at: string
   /** Line comments carry the child row they were written on. */
   link?: { collection: string; item_id: string } | null
+  /** Line comments are real comments — reactable from the thread too. */
+  comment_id?: string | null
+  reactions?: Array<{ emoji: string; count: number; mine: boolean }> | null
 }
 
 /**
@@ -272,6 +275,19 @@ interface RelatedNote {
  */
 function RecordedNote({ note }: { note: RelatedNote }) {
   const drill = useDrilldown()
+  const client = useNivaroClient()
+  const queryClient = useQueryClient()
+  const [reactOpen, setReactOpen] = useState(false)
+  const react = useMutation({
+    mutationFn: (emoji: string) =>
+      client.request(post(`/comments/${note.comment_id}/reactions`, { emoji })),
+    onSuccess: () => {
+      setReactOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['comments-related'] })
+      queryClient.invalidateQueries({ queryKey: ['row-comment-counts'] })
+    },
+    onError: () => toast.error('Failed to react')
+  })
   // "Bring me to the line": scroll + flash the grid row when it is on the
   // page; otherwise open the line record in the drill sheet (row on another
   // tab/step, or no grid mounted).
@@ -326,6 +342,49 @@ function RecordedNote({ note }: { note: RelatedNote }) {
         <p className='mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-600 dark:text-slate-300'>
           <AutolinkedText text={note.text} />
         </p>
+        {note.comment_id && (
+          <div className='mt-1 flex flex-wrap items-center gap-1'>
+            {(note.reactions ?? []).map((r) => (
+              <button
+                key={r.emoji}
+                type='button'
+                onClick={() => react.mutate(r.emoji)}
+                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[11px] transition-colors ${
+                  r.mine
+                    ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-border dark:bg-muted dark:text-slate-300'
+                }`}
+              >
+                {r.emoji}
+                <span className='tabular-nums text-[10px] font-semibold'>{r.count}</span>
+              </button>
+            ))}
+            <span className='relative'>
+              <button
+                type='button'
+                onClick={() => setReactOpen((v) => !v)}
+                className='rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-muted'
+                aria-label='Add reaction'
+              >
+                <SmilePlus className='h-3.5 w-3.5' />
+              </button>
+              {reactOpen && (
+                <span className='absolute bottom-6 left-0 z-20 flex gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-1 shadow-lg dark:border-border dark:bg-popover'>
+                  {REACTION_EMOJI.map((e) => (
+                    <button
+                      key={e}
+                      type='button'
+                      onClick={() => react.mutate(e)}
+                      className='rounded-full px-1 text-[14px] hover:bg-muted'
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )

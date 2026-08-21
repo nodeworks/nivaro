@@ -50,10 +50,13 @@ export interface NestedOps {
 }
 
 export interface FieldGroup {
+  /** Content block (#53): type 'content' renders this text instead of fields. */
+  content?: string | null
+  content_tone?: 'info' | 'warn' | 'divider' | null
   id: number
   key: string
   label: string
-  type: 'section' | 'tab' | 'metadata' | 'container'
+  type: 'section' | 'tab' | 'metadata' | 'container' | 'content'
   icon: string | null
   sort: number
   is_collapsed: boolean

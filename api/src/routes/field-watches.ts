@@ -145,12 +145,120 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
   })
 
   // POST / — create watch (admin only)
+  /** Feature flag for the self-serve record-watch button — OFF by default. */
+  app.get('/config', async () => {
+    const row = (await db('nivaro_settings').where({ id: 1 }).first('field_watch_enabled')) as
+      | { field_watch_enabled: boolean | number | null }
+      | undefined
+    return { data: { enabled: !!row?.field_watch_enabled } }
+  })
+
+  /**
+   * Record-level field watch (#58): "tell me when THIS record's THIS field
+   * changes". Self-serve — finds or creates the (collection, field, item)
+   * watch and subscribes the caller. Gated on the instance feature flag AND
+   * read permission for the collection.
+   */
+  app.post<{ Body: { collection?: string; field?: string; item_id?: string } }>(
+    '/self',
+    async (req, reply) => {
+      const { collection, field, item_id } = req.body ?? {}
+      if (!collection || !field || !item_id) {
+        return reply.code(400).send({ error: 'collection, field and item_id are required' })
+      }
+      const flag = (await db('nivaro_settings').where({ id: 1 }).first('field_watch_enabled')) as
+        | { field_watch_enabled: boolean | number | null }
+        | undefined
+      if (!flag?.field_watch_enabled) {
+        return reply.code(403).send({ error: 'Field watches are not enabled on this instance' })
+      }
+      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      let watch = (await db('nivaro_field_watches')
+        .where({ collection, field, item_id: String(item_id) })
+        .first()) as { id: number } | undefined
+      if (!watch) {
+        const now = new Date()
+        const [row] = (await db('nivaro_field_watches')
+          .insert({
+            name: `${collection}.${field} on #${item_id}`.slice(0, 255),
+            collection,
+            field,
+            item_id: String(item_id),
+            is_active: true,
+            created_by: req.user!.id,
+            created_at: now,
+            updated_at: now
+          })
+          .returning('id')) as Array<{ id: number } | number>
+        watch = { id: typeof row === 'object' ? row.id : row }
+      }
+      const existing = await db('nivaro_field_watch_subscribers')
+        .where({ watch: watch.id, user: req.user!.id })
+        .first('id')
+      if (!existing) {
+        await db('nivaro_field_watch_subscribers').insert({ watch: watch.id, user: req.user!.id })
+      }
+      await logActivity({
+        action: 'field-watch-subscribe',
+        user: req.user?.id,
+        collection,
+        item: String(item_id),
+        comment: field,
+        req
+      })
+      return { data: { watch_id: watch.id, watching: true } }
+    }
+  )
+
+  /** Unwatch: drop the caller's subscription; a record-scoped watch with no
+   *  subscribers left is deleted rather than lingering as config debris. */
+  app.delete<{ Querystring: { collection?: string; field?: string; item_id?: string } }>(
+    '/self',
+    async (req, reply) => {
+      const { collection, field, item_id } = req.query ?? {}
+      if (!collection || !field || !item_id) {
+        return reply.code(400).send({ error: 'collection, field and item_id are required' })
+      }
+      const watch = (await db('nivaro_field_watches')
+        .where({ collection, field, item_id: String(item_id) })
+        .first('id')) as { id: number } | undefined
+      if (!watch) return { data: { watching: false } }
+      await db('nivaro_field_watch_subscribers')
+        .where({ watch: watch.id, user: req.user!.id })
+        .del()
+      const remaining = await db('nivaro_field_watch_subscribers')
+        .where({ watch: watch.id })
+        .first('id')
+      if (!remaining) await db('nivaro_field_watches').where({ id: watch.id }).del()
+      return { data: { watching: false } }
+    }
+  )
+
+  /** Is the caller watching this record's field? Batched per record. */
+  app.get<{ Querystring: { collection?: string; item_id?: string } }>(
+    '/self',
+    async (req, reply) => {
+      const { collection, item_id } = req.query
+      if (!collection || !item_id) {
+        return reply.code(400).send({ error: 'collection and item_id are required' })
+      }
+      const rows = (await db('nivaro_field_watches as w')
+        .join('nivaro_field_watch_subscribers as s', 's.watch', 'w.id')
+        .where({ 'w.collection': collection, 'w.item_id': String(item_id), 's.user': req.user!.id })
+        .select('w.field')) as Array<{ field: string }>
+      return { data: rows.map((r) => r.field) }
+    }
+  )
+
   app.post<{ Body: { name: string; collection: string; field: string; is_active?: boolean } }>(
     '/',
     async (req, reply) => {
       if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
 
       const { name, collection, field, is_active = true } = req.body ?? {}
+      const itemId = (req.body as { item_id?: string | null })?.item_id ?? null
       if (!name || !collection || !field) {
         return reply.code(400).send({ error: 'name, collection, and field are required' })
       }
@@ -161,6 +269,7 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
           name,
           collection,
           field,
+          item_id: itemId,
           is_active,
           created_by: req.user!.id,
           created_at: now,

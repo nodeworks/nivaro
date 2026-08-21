@@ -151,6 +151,7 @@ export type CMSRelation = {
 }
 
 export type CMSSettings = {
+  field_watch_enabled?: boolean
   id: number
   project_name: string
   project_description: string | null

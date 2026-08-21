@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, SmilePlus } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -21,7 +21,10 @@ interface RowComment {
   text: string
   created_at: string
   user: { id: string; first_name: string | null; last_name: string | null; email: string } | null
+  reactions?: Array<{ emoji: string; count: number; mine: boolean }>
 }
+
+const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
 
 /** Batched per-row counts for the badge column — one call per grid. */
 export function useRowCommentCounts(
@@ -59,6 +62,7 @@ export function RowCommentButton({
   const btnRef = useRef<HTMLButtonElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const [draft, setDraft] = useState('')
+  const [reactMenuId, setReactMenuId] = useState<string | null>(null)
 
   const open = !!pos
   const { data: comments = [], isLoading } = useQuery({
@@ -66,7 +70,12 @@ export function RowCommentButton({
     queryFn: () =>
       client
         .request<{ data: RowComment[] }>(get('/comments', { collection, item: rowId }))
-        .then((r) => r.data ?? []),
+        // Newest first, same as the record's notes thread.
+        .then((r) =>
+          (r.data ?? []).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
+        ),
     enabled: open
   })
 
@@ -81,6 +90,16 @@ export function RowCommentButton({
       queryClient.invalidateQueries({ queryKey: ['comments-related'] })
     },
     onError: () => toast.error('Failed to post comment')
+  })
+
+  const react = useMutation({
+    mutationFn: ({ id, emoji }: { id: string; emoji: string }) =>
+      client.request(post(`/comments/${id}/reactions`, { emoji })),
+    onSuccess: () => {
+      setReactMenuId(null)
+      queryClient.invalidateQueries({ queryKey: ['comments', collection, rowId] })
+    },
+    onError: () => toast.error('Failed to react')
   })
 
   const toggle = (e: React.MouseEvent) => {
@@ -152,6 +171,47 @@ export function RowCommentButton({
                         <p className='whitespace-pre-wrap text-[12px] leading-snug text-slate-600 dark:text-slate-300'>
                           {c.text}
                         </p>
+                        <div className='mt-0.5 flex flex-wrap items-center gap-1'>
+                          {(c.reactions ?? []).map((r) => (
+                            <button
+                              key={r.emoji}
+                              type='button'
+                              onClick={() => react.mutate({ id: c.id, emoji: r.emoji })}
+                              className={`inline-flex items-center gap-0.5 rounded-full border px-1 py-px text-[10.5px] ${
+                                r.mine
+                                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                  : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-border dark:bg-muted dark:text-slate-300'
+                              }`}
+                            >
+                              {r.emoji}
+                              <span className='tabular-nums text-[9.5px] font-semibold'>{r.count}</span>
+                            </button>
+                          ))}
+                          <span className='relative'>
+                            <button
+                              type='button'
+                              onClick={() => setReactMenuId(reactMenuId === c.id ? null : c.id)}
+                              className='rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-muted'
+                              aria-label='Add reaction'
+                            >
+                              <SmilePlus className='h-3 w-3' />
+                            </button>
+                            {reactMenuId === c.id && (
+                              <span className='absolute bottom-5 left-0 z-20 flex gap-0.5 rounded-full border border-slate-200 bg-white px-1 py-0.5 shadow-lg dark:border-border dark:bg-popover'>
+                                {REACTION_EMOJI.map((e) => (
+                                  <button
+                                    key={e}
+                                    type='button'
+                                    onClick={() => react.mutate({ id: c.id, emoji: e })}
+                                    className='rounded-full px-0.5 text-[13px] hover:bg-muted'
+                                  >
+                                    {e}
+                                  </button>
+                                ))}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
