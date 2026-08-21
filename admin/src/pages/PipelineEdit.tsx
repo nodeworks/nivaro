@@ -42,7 +42,7 @@ import {
   GitFork
 } from 'lucide-react'
 import type React from 'react'
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, useMemo } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
@@ -3472,6 +3472,9 @@ export function PipelineEditPage() {
         {/* Simulator */}
         <PipelineSimulatorCard bindings={bindings} />
 
+        {/* Canvas */}
+        <PipelineCanvasCard templateId={id!} />
+
         {/* Flow map */}
         <PipelineFlowMapCard templateId={id!} />
 
@@ -4416,6 +4419,285 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
               </button>
             </span>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Visual canvas — an ADDITIONAL way to see and navigate the state machine
+ * (the list editor stays the editing surface). States lay out in BFS ranks
+ * from the initial state, transitions draw as edges (auto ⚡ and conditional
+ * ◆ badged); drag nodes to taste (positions persist per browser), click
+ * anything to inspect it and jump to its list-editor entry.
+ */
+function PipelineCanvasCard({ templateId }: { templateId: string }) {
+  const [selected, setSelected] = useState<{ kind: 'state' | 'transition'; id: string } | null>(null)
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`nvr_canvas_${templateId}`) ?? '{}')
+    } catch {
+      return {}
+    }
+  })
+  const dragRef = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number } | null>(null)
+
+  const { data } = useQuery({
+    queryKey: ['pipeline-canvas', templateId],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            states: Array<{ id: string; key: string; label: string; color: string | null; is_initial: boolean; is_terminal: boolean; sort: number }>
+            transitions: Array<{ id: string; label: string; from_state: string | null; to_state: string; auto_trigger?: boolean; condition_rules?: unknown; group_label?: string | null }>
+          }
+        }>(`/pipelines/${templateId}`)
+        .then((r) => r.data.data),
+    staleTime: 30_000
+  })
+  const states = data?.states ?? []
+  const transitions = data?.transitions ?? []
+
+  // BFS ranks from initial states along explicit forward edges; unreachable
+  // states append as trailing ranks. Sort within a rank keeps it stable.
+  const layout = useMemo(() => {
+    const byId = new Map(states.map((st) => [String(st.id).toUpperCase(), st]))
+    const rank = new Map<string, number>()
+    const queue: Array<{ id: string; r: number }> = states
+      .filter((st) => st.is_initial)
+      .map((st) => ({ id: String(st.id).toUpperCase(), r: 0 }))
+    const fwd = new Map<string, string[]>()
+    for (const t of transitions) {
+      if (!t.from_state) continue
+      const from = String(t.from_state).toUpperCase()
+      fwd.set(from, [...(fwd.get(from) ?? []), String(t.to_state).toUpperCase()])
+    }
+    while (queue.length > 0) {
+      const { id: sid, r } = queue.shift()!
+      if (rank.has(sid) && rank.get(sid)! <= r) continue
+      if (!rank.has(sid)) rank.set(sid, r)
+      for (const next of fwd.get(sid) ?? []) {
+        const target = byId.get(next)
+        // Backward (send-back) edges must not drag ranks around in circles.
+        if (!rank.has(next) && (byId.get(sid)?.sort ?? 0) <= (target?.sort ?? 0)) {
+          queue.push({ id: next, r: r + 1 })
+        }
+      }
+    }
+    let maxRank = Math.max(0, ...rank.values())
+    for (const st of states) {
+      const sid = String(st.id).toUpperCase()
+      if (!rank.has(sid)) rank.set(sid, ++maxRank)
+    }
+    const byRank = new Map<number, string[]>()
+    for (const st of [...states].sort((a, z) => a.sort - z.sort)) {
+      const sid = String(st.id).toUpperCase()
+      const r = rank.get(sid) ?? 0
+      byRank.set(r, [...(byRank.get(r) ?? []), sid])
+    }
+    const NODE_W = 168
+    const NODE_H = 44
+    const GAP_X = 70
+    const GAP_Y = 18
+    const pos = new Map<string, { x: number; y: number }>()
+    let maxRows = 1
+    for (const [r, ids] of byRank) {
+      maxRows = Math.max(maxRows, ids.length)
+      ids.forEach((sid, row) => {
+        pos.set(sid, { x: 20 + r * (NODE_W + GAP_X), y: 20 + row * (NODE_H + GAP_Y) })
+      })
+    }
+    const width = 60 + (Math.max(0, ...byRank.keys()) + 1) * (NODE_W + GAP_X)
+    const height = 60 + maxRows * (NODE_H + GAP_Y)
+    return { pos, width, height, NODE_W, NODE_H }
+  }, [states, transitions])
+
+  const posOf = (sid: string) => positions[sid] ?? layout.pos.get(sid) ?? { x: 20, y: 20 }
+
+  const onNodePointerDown = (sid: string, e: React.PointerEvent) => {
+    const p = posOf(sid)
+    dragRef.current = { id: sid, startX: e.clientX, startY: e.clientY, origX: p.x, origY: p.y }
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    setPositions((prev) => ({
+      ...prev,
+      [d.id]: { x: Math.max(0, d.origX + e.clientX - d.startX), y: Math.max(0, d.origY + e.clientY - d.startY) }
+    }))
+  }
+  const onPointerUp = () => {
+    if (dragRef.current) {
+      dragRef.current = null
+      setPositions((prev) => {
+        localStorage.setItem(`nvr_canvas_${templateId}`, JSON.stringify(prev))
+        return prev
+      })
+    }
+  }
+
+  const selState = selected?.kind === 'state' ? states.find((st) => String(st.id) === selected.id) : null
+  const selTransition =
+    selected?.kind === 'transition' ? transitions.find((t) => String(t.id) === selected.id) : null
+
+  const jumpTo = (elementText: string) => {
+    // Best-effort: scroll the list editor's matching entry into view.
+    const nodes = Array.from(document.querySelectorAll('h3, p, span, button'))
+    const hit = nodes.find((n) => n.textContent?.trim() === elementText)
+    hit?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <h3 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>Canvas</h3>
+      <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+        The state machine as a graph — another way to see it (editing stays in the lists above).
+        Drag states to arrange; click a state or an edge to inspect it. ⚡ automatic · ◆ conditional.
+      </p>
+      <div className='mt-3 overflow-x-auto rounded-md border border-slate-100 bg-slate-50/50 dark:border-border dark:bg-muted/20'>
+        <svg
+          width={Math.max(layout.width, 600)}
+          height={Math.max(layout.height, 200)}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          role='img'
+          aria-label='Workflow state machine'
+        >
+          <defs>
+            <marker id='cv-arrow' markerWidth='7' markerHeight='7' refX='6' refY='3.5' orient='auto'>
+              <path d='M0,0 L7,3.5 L0,7 z' className='fill-slate-400' />
+            </marker>
+          </defs>
+          {transitions.map((t) => {
+            if (!t.from_state) return null
+            const from = posOf(String(t.from_state).toUpperCase())
+            const to = posOf(String(t.to_state).toUpperCase())
+            const x1 = from.x + layout.NODE_W
+            const y1 = from.y + layout.NODE_H / 2
+            const x2 = to.x
+            const y2 = to.y + layout.NODE_H / 2
+            const back = x2 < x1
+            const midX = back ? Math.max(x1, x2 + layout.NODE_W) + 40 : (x1 + x2) / 2
+            const path = back
+              ? `M ${x1} ${y1} C ${x1 + 60} ${y1 - 40}, ${x2 - 60} ${y2 - 40}, ${x2} ${y2}`
+              : `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`
+            const isSel = selected?.kind === 'transition' && selected.id === String(t.id)
+            const hasCond = Array.isArray(t.condition_rules)
+              ? t.condition_rules.length > 0
+              : !!t.condition_rules
+            return (
+              // biome-ignore lint/a11y/useKeyWithClickEvents: canvas edge, inspect-only
+              <g key={t.id} onClick={() => setSelected({ kind: 'transition', id: String(t.id) })} className='cursor-pointer'>
+                <path d={path} fill='none' strokeWidth={10} className='stroke-transparent' />
+                <path
+                  d={path}
+                  fill='none'
+                  strokeWidth={isSel ? 2.5 : 1.5}
+                  markerEnd='url(#cv-arrow)'
+                  className={
+                    isSel
+                      ? 'stroke-nvr-cyan'
+                      : back
+                        ? 'stroke-amber-400'
+                        : 'stroke-slate-300 dark:stroke-slate-600'
+                  }
+                  strokeDasharray={t.auto_trigger ? '5 3' : undefined}
+                />
+                {(t.auto_trigger || hasCond) && (
+                  <text
+                    x={(x1 + x2) / 2}
+                    y={(y1 + y2) / 2 - 6}
+                    textAnchor='middle'
+                    className='fill-slate-500 text-[11px]'
+                  >
+                    {t.auto_trigger ? '⚡' : ''}
+                    {hasCond ? '◆' : ''}
+                  </text>
+                )}
+              </g>
+            )
+          })}
+          {states.map((st) => {
+            const sid = String(st.id).toUpperCase()
+            const p = posOf(sid)
+            const isSel = selected?.kind === 'state' && selected.id === String(st.id)
+            return (
+              // biome-ignore lint/a11y/useKeyWithClickEvents: draggable canvas node
+              <g
+                key={st.id}
+                transform={`translate(${p.x}, ${p.y})`}
+                onPointerDown={(e) => onNodePointerDown(sid, e)}
+                onClick={() => setSelected({ kind: 'state', id: String(st.id) })}
+                className='cursor-grab'
+              >
+                <rect
+                  width={layout.NODE_W}
+                  height={layout.NODE_H}
+                  rx={8}
+                  strokeWidth={isSel ? 2 : 1}
+                  className={
+                    isSel
+                      ? 'fill-white stroke-nvr-cyan dark:fill-card'
+                      : 'fill-white stroke-slate-300 dark:fill-card dark:stroke-slate-600'
+                  }
+                />
+                <circle cx={14} cy={layout.NODE_H / 2} r={4} fill={st.color ?? '#94a3b8'} />
+                <text x={26} y={layout.NODE_H / 2 + 4} className='fill-slate-700 text-[12px] font-medium dark:fill-slate-200'>
+                  {st.label.length > 20 ? `${st.label.slice(0, 19)}…` : st.label}
+                </text>
+                {st.is_initial && (
+                  <text x={layout.NODE_W - 8} y={13} textAnchor='end' className='fill-emerald-500 text-[9px] font-semibold'>
+                    START
+                  </text>
+                )}
+                {st.is_terminal && (
+                  <text x={layout.NODE_W - 8} y={13} textAnchor='end' className='fill-slate-400 text-[9px] font-semibold'>
+                    END
+                  </text>
+                )}
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+      {(selState || selTransition) && (
+        <div className='mt-2 flex flex-wrap items-center gap-3 rounded-md border border-slate-100 px-3 py-2 text-[12.5px] dark:border-border'>
+          {selState && (
+            <>
+              <span className='font-medium text-slate-800 dark:text-foreground'>{selState.label}</span>
+              <span className='text-slate-400'>key: {selState.key}</span>
+              <span className='text-slate-400'>
+                {transitions.filter((t) => String(t.from_state) === String(selState.id)).length} out ·{' '}
+                {transitions.filter((t) => String(t.to_state) === String(selState.id)).length} in
+              </span>
+              <button
+                type='button'
+                onClick={() => jumpTo(selState.label)}
+                className='text-nvr-cyan underline decoration-dotted underline-offset-2'
+              >
+                Edit in the States list ↑
+              </button>
+            </>
+          )}
+          {selTransition && (
+            <>
+              <span className='font-medium text-slate-800 dark:text-foreground'>{selTransition.label}</span>
+              {selTransition.auto_trigger && <span className='text-amber-600'>⚡ automatic</span>}
+              {selTransition.group_label && <span className='text-slate-400'>group: {selTransition.group_label}</span>}
+              <button
+                type='button'
+                onClick={() => jumpTo(selTransition.label)}
+                className='text-nvr-cyan underline decoration-dotted underline-offset-2'
+              >
+                Edit in the Transitions list ↑
+              </button>
+            </>
+          )}
+          <button type='button' onClick={() => setSelected(null)} className='ml-auto text-slate-300 hover:text-slate-500'>
+            ✕
+          </button>
         </div>
       )}
     </div>
