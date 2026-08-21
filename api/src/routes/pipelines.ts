@@ -299,6 +299,108 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // ─── Template CRUD (admin only) ───────────────────────────────────────────
 
   // List templates with state/transition counts
+  /** Instance distribution for a template — every current_state with counts,
+   *  including ORPHANS (states no longer in the template config: the debris a
+   *  workflow redesign leaves behind). Feeds the migration wizard. */
+  app.get('/:id/instance-distribution', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const states = (await db('nivaro_workflow_states')
+      .where({ template: id })
+      .select('id', 'key', 'label', 'color')) as Array<{ id: string; key: string; label: string; color: string | null }>
+    const stateById = new Map(states.map((st) => [String(st.id).toUpperCase(), st]))
+    const counts = (await db('nivaro_workflow_instances')
+      .where({ template: id })
+      .whereNull('completed_at')
+      .groupBy('current_state', 'collection')
+      .count({ c: '*' })
+      .select('current_state', 'collection')) as Array<{ current_state: string | null; collection: string; c: number }>
+    return reply.send({
+      data: counts.map((row) => {
+        const st = row.current_state ? stateById.get(String(row.current_state).toUpperCase()) : undefined
+        return {
+          state_id: row.current_state,
+          collection: row.collection,
+          count: Number(row.c),
+          key: st?.key ?? null,
+          label: st?.label ?? null,
+          color: st?.color ?? null,
+          orphaned: !!row.current_state && !st
+        }
+      }),
+      states
+    })
+  })
+
+  /** Migrate live instances from one state (possibly orphaned) to another —
+   *  the data-side companion of template versioning. Every move writes a
+   *  history row, mirrors the state_field, and syncs materialized queues, so
+   *  the record's timeline says what happened instead of silently jumping. */
+  app.post('/:id/migrate-instances', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const b = req.body as { from_state?: string; to_state?: string; collection?: string }
+    if (!b.from_state || !b.to_state) {
+      return reply.code(400).send({ error: 'from_state and to_state are required' })
+    }
+    const target = (await db('nivaro_workflow_states')
+      .where({ template: id, id: b.to_state })
+      .first('id', 'key', 'label')) as { id: string; key: string; label: string } | undefined
+    if (!target) return reply.code(400).send({ error: 'to_state must be a current state of this template' })
+    if (String(b.from_state).toUpperCase() === String(target.id).toUpperCase()) {
+      return reply.code(400).send({ error: 'from and to are the same state' })
+    }
+
+    let q = db('nivaro_workflow_instances')
+      .where({ template: id, current_state: b.from_state })
+      .whereNull('completed_at')
+    if (b.collection) q = q.where({ collection: b.collection })
+    const instances = (await q.select('id', 'collection', 'item')) as Array<{
+      id: string
+      collection: string
+      item: string
+    }>
+    if (instances.length === 0) return reply.send({ data: { migrated: 0 } })
+
+    const { startJobRun } = await import('../services/job-runs.js')
+    const run = await startJobRun('backfill', `instance-migration:${id}`, {
+      label: 'Instance migration',
+      triggeredBy: req.user?.id ?? null
+    })
+    let migrated = 0
+    try {
+      const { syncStateField } = await import('../services/workflow-transitions.js')
+      const { syncMaterializedQueueItem } = await import('../services/queue-materialization.js')
+      for (const inst of instances) {
+        await db('nivaro_workflow_instances').where({ id: inst.id }).update({ current_state: target.id })
+        await db('nivaro_workflow_history').insert({
+          instance: inst.id,
+          from_state: b.from_state,
+          to_state: target.id,
+          transition: null,
+          user: req.user?.id ?? null,
+          comment: `instance-migration → ${target.label}`,
+          timestamp: new Date()
+        })
+        await syncStateField(inst.collection, inst.item, target).catch(() => {})
+        await syncMaterializedQueueItem(inst.collection, inst.item).catch(() => {})
+        migrated++
+        if (migrated % 50 === 0) run.progress({ done: migrated, total: instances.length })
+      }
+      await run.complete(`${migrated} instance(s) moved to ${target.label}`)
+    } catch (err) {
+      await run.fail(err)
+      throw err
+    }
+    await logActivity({
+      action: 'instance-migration',
+      user: req.user?.id,
+      collection: 'nivaro_workflow_templates',
+      item: id,
+      comment: `${migrated} instance(s) ${b.from_state} → ${target.key}`,
+      req
+    })
+    return reply.send({ data: { migrated } })
+  })
+
   app.get('/', { preHandler: requireAdmin }, async (_req, reply) => {
     const templates = await db<WorkflowTemplate>('nivaro_workflow_templates').orderBy(
       'updated_at',

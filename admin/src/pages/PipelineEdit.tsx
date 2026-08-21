@@ -52,6 +52,13 @@ import { PipelineSkipCriteria } from '@/components/pipeline-skip-criteria'
 import { PipelineStateOwners } from '@/components/pipeline-state-owners'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -3471,6 +3478,9 @@ export function PipelineEditPage() {
         {/* Time-lapse replay */}
         <PipelineReplayCard templateId={id!} />
 
+        {/* Instance migration */}
+        <InstanceMigrationCard templateId={id!} />
+
         {/* Config versions */}
         <PipelineVersionsCard templateId={id!} />
       </div>
@@ -4155,6 +4165,151 @@ interface Flow {
 
 const FLOW_W = 900
 const FLOW_COL_W = 230
+
+/**
+ * Instance migration — the data-side companion of config versioning: when a
+ * redesign removes or renames states, live records don't orphan silently.
+ * Shows the instance distribution (orphaned states flagged red) and moves a
+ * state's instances to a current state with history rows on every record.
+ */
+function InstanceMigrationCard({ templateId }: { templateId: string }) {
+  const qc = useQueryClient()
+  const [fromState, setFromState] = useState('')
+  const [toState, setToState] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  const { data } = useQuery({
+    queryKey: ['instance-distribution', templateId],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            state_id: string | null
+            collection: string
+            count: number
+            key: string | null
+            label: string | null
+            color: string | null
+            orphaned: boolean
+          }>
+          states: Array<{ id: string; key: string; label: string }>
+        }>(`/pipelines/${templateId}/instance-distribution`)
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  const rows = data?.data ?? []
+  const states = data?.states ?? []
+  const orphans = rows.filter((r) => r.orphaned)
+  const fromCount = rows
+    .filter((r) => String(r.state_id) === fromState)
+    .reduce((sum, r) => sum + r.count, 0)
+
+  const migrate = useMutation({
+    mutationFn: () =>
+      api.post(`/pipelines/${templateId}/migrate-instances`, {
+        from_state: fromState,
+        to_state: toState
+      }),
+    onSuccess: (r) => {
+      toast.success(`${r.data.data.migrated} instance(s) migrated`)
+      setConfirming(false)
+      setFromState('')
+      setToState('')
+      void qc.invalidateQueries({ queryKey: ['instance-distribution', templateId] })
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Migration failed')
+  })
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <h3 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>
+        Instance migration
+      </h3>
+      <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Where live records sit right now — including states a redesign removed (orphans, in red).
+        Move a state's instances to a current state; every record gets a history entry saying so.
+      </p>
+      {orphans.length > 0 && (
+        <p className='mt-2 rounded-md bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-700 dark:text-red-400'>
+          {orphans.reduce((sum, o) => sum + o.count, 0)} instance(s) sit in{' '}
+          {new Set(orphans.map((o) => o.state_id)).size} orphaned state(s) — they can't transition
+          until migrated.
+        </p>
+      )}
+      <div className='mt-3 flex flex-wrap gap-1.5'>
+        {rows.map((r) => (
+          <button
+            key={`${r.state_id}-${r.collection}`}
+            type='button'
+            onClick={() => setFromState(String(r.state_id))}
+            className={cn(
+              'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+              fromState === String(r.state_id)
+                ? 'border-nvr-cyan/60 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                : r.orphaned
+                  ? 'border-red-300 text-red-700 dark:border-red-500/40 dark:text-red-400'
+                  : 'border-slate-200 text-slate-500 dark:border-border dark:text-muted-foreground'
+            )}
+          >
+            {r.label ?? `orphan ${String(r.state_id).slice(0, 8)}…`}
+            <span className='ml-1 font-medium'>{r.count}</span>
+            <span className='ml-1 text-[10px] text-slate-400'>{r.collection}</span>
+          </button>
+        ))}
+        {rows.length === 0 && <p className='text-[12px] text-slate-400'>No open instances.</p>}
+      </div>
+      {fromState && (
+        <div className='mt-3 flex flex-wrap items-center gap-2'>
+          <span className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+            Move {fromCount} instance(s) to
+          </span>
+          <Select value={toState || undefined} onValueChange={setToState}>
+            <SelectTrigger className='h-8 w-[220px] text-[12.5px]'>
+              <SelectValue placeholder='Pick a state…' />
+            </SelectTrigger>
+            <SelectContent>
+              {states
+                .filter((st) => String(st.id) !== fromState)
+                .map((st) => (
+                  <SelectItem key={st.id} value={st.id}>
+                    {st.label}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          {toState && !confirming && (
+            <Button size='sm' className='h-8 text-[12.5px]' onClick={() => setConfirming(true)}>
+              Migrate…
+            </Button>
+          )}
+          {toState && confirming && (
+            <span className='flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 dark:border-amber-500/40 dark:bg-amber-400/10'>
+              <span className='text-[12px] text-amber-800 dark:text-amber-300'>
+                {fromCount} record(s) will move, each with a history entry. Sure?
+              </span>
+              <Button
+                size='sm'
+                className='h-6 text-[11.5px]'
+                disabled={migrate.isPending}
+                onClick={() => migrate.mutate()}
+              >
+                {migrate.isPending ? 'Migrating…' : 'Yes, migrate'}
+              </Button>
+              <button
+                type='button'
+                className='text-[11.5px] text-slate-500 underline'
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PipelineFlowMapCard({ templateId }: { templateId: string }) {
   const [days, setDays] = useState(90)
