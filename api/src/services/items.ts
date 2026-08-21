@@ -18,6 +18,7 @@ import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { enforceContracts } from './integration-contracts.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
@@ -1972,6 +1973,9 @@ export async function createOne(
   assertNotRouteOnly(collection)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
+  // Contract check on the RAW caller payload, before rules/computed passes
+  // reshape it — the contract judges what the integration actually sent.
+  await enforceContracts(collection, user?.id, data, 'create')
   data = await coerceRelationObjects(collection, data)
   const aliasWrites = await extractAliasM2MWrites(collection, data)
   // The fields the CALLER explicitly sent, captured before any rule, autofill
@@ -2082,6 +2086,7 @@ export async function updateOne(
   workspaceId?: string
 ) {
   assertNotRouteOnly(collection)
+  await enforceContracts(collection, user?.id, data, 'update')
   data = await coerceRelationObjects(collection, data)
   const aliasWrites = await extractAliasM2MWrites(collection, data)
   const col = await getCollection(collection)

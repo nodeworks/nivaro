@@ -37,6 +37,7 @@ import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
 import { jobRunRoutes } from './job-runs.js'
 import { monitorRoutes } from './monitors.js'
+import { integrationContractRoutes } from './integration-contracts.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -180,6 +181,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })
   await app.register(monitorRoutes, { prefix: '/monitors' })
+  await app.register(integrationContractRoutes, { prefix: '/integration-contracts' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

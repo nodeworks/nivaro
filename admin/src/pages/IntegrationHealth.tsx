@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link2, Play, RotateCw } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router'
+import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -247,6 +249,201 @@ export function IntegrationHealthPage() {
             </div>
           </>
         )}
+        <ContractsCard />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Inbound payload contracts — the declared shape each integration's writes
+ * must match. Flag mode surfaces drift as issues; reject mode 422s the
+ * sender. Enforcement lives in the items service.
+ */
+function ContractsCard() {
+  const qc = useQueryClient()
+  const [showForm, setShowForm] = useState(false)
+  const [name, setName] = useState('')
+  const [collection, setCollection] = useState('')
+  const [mode, setMode] = useState<'flag' | 'reject'>('flag')
+  const [configText, setConfigText] = useState(
+    '{\n  "required": ["name"],\n  "types": {"name": "string"},\n  "forbid_unknown": false\n}'
+  )
+
+  const { data: contracts = [] } = useQuery<
+    Array<{
+      id: number
+      name: string
+      collection: string
+      user_email: string | null
+      mode: string
+      is_active: boolean
+      config: Record<string, unknown> | null
+    }>
+  >({
+    queryKey: ['integration-contracts'],
+    queryFn: () => api.get('/integration-contracts').then((r) => r.data.data)
+  })
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['integration-contracts'] })
+
+  const create = useMutation({
+    mutationFn: () => {
+      let config: unknown
+      try {
+        config = JSON.parse(configText)
+      } catch {
+        throw new Error('Config is not valid JSON')
+      }
+      return api.post('/integration-contracts', { name, collection, mode, config })
+    },
+    onSuccess: () => {
+      setShowForm(false)
+      setName('')
+      setCollection('')
+      invalidate()
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message)
+  })
+  const patchC = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      api.patch(`/integration-contracts/${id}`, body),
+    onSuccess: invalidate
+  })
+  const removeC = useMutation({
+    mutationFn: (id: number) => api.delete(`/integration-contracts/${id}`),
+    onSuccess: invalidate
+  })
+
+  return (
+    <div className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Payload contracts
+          </p>
+          <p className='mt-0.5 text-[11.5px] text-slate-400'>
+            The shape inbound integration writes must match. Drift is flagged as an issue — or
+            rejected with a 422 the sender sees — before it corrupts rows.
+          </p>
+        </div>
+        <button
+          type='button'
+          onClick={() => setShowForm((v) => !v)}
+          className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] text-slate-600 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
+        >
+          {showForm ? 'Close' : '＋ New contract'}
+        </button>
+      </div>
+      {showForm && (
+        <div className='mt-3 grid max-w-[720px] grid-cols-1 gap-2 sm:grid-cols-2'>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder='Contract name (e.g. MWF workflow feed)'
+            className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+          />
+          <input
+            value={collection}
+            onChange={(e) => setCollection(e.target.value)}
+            placeholder='Collection (e.g. mwf_queue)'
+            className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+          />
+          <textarea
+            value={configText}
+            onChange={(e) => setConfigText(e.target.value)}
+            rows={5}
+            className='col-span-full rounded-md border border-slate-200 bg-background px-2.5 py-2 font-mono text-[11.5px] dark:border-border'
+          />
+          <div className='col-span-full flex items-center gap-3'>
+            <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+              {(['flag', 'reject'] as const).map((m) => (
+                <button
+                  key={m}
+                  type='button'
+                  onClick={() => setMode(m)}
+                  className={
+                    mode === m
+                      ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                      : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400'
+                  }
+                >
+                  {m === 'flag' ? 'Flag drift' : 'Reject writes'}
+                </button>
+              ))}
+            </span>
+            <button
+              type='button'
+              disabled={!name.trim() || !collection.trim() || create.isPending}
+              onClick={() => create.mutate()}
+              className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white disabled:opacity-50'
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      )}
+      <div className='mt-3 space-y-1.5'>
+        {contracts.length === 0 && !showForm && (
+          <p className='text-[12px] text-slate-400'>
+            No contracts yet — declare the expected fields/types for an integration-fed collection.
+          </p>
+        )}
+        {contracts.map((c) => (
+          <div
+            key={c.id}
+            className='flex items-center gap-3 rounded-md border border-slate-100 px-3 py-2 dark:border-border'
+          >
+            <div className='min-w-0 flex-1'>
+              <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
+                {c.name}
+                <span className='ml-2 font-mono text-[11px] text-slate-400'>{c.collection}</span>
+                {c.user_email && (
+                  <span className='ml-2 text-[11px] text-slate-400'>writer: {c.user_email}</span>
+                )}
+              </p>
+              <p className='text-[11px] text-slate-400'>
+                {(c.config?.required as string[] | undefined)?.length ?? 0} required ·{' '}
+                {Object.keys((c.config?.types as Record<string, string>) ?? {}).length} typed
+                {c.config?.forbid_unknown ? ' · unknown fields forbidden' : ''}
+              </p>
+            </div>
+            <button
+              type='button'
+              onClick={() =>
+                patchC.mutate({ id: c.id, body: { mode: c.mode === 'flag' ? 'reject' : 'flag' } })
+              }
+              className={
+                c.mode === 'reject'
+                  ? 'rounded-full border border-red-300 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:border-red-500/40 dark:text-red-400'
+                  : 'rounded-full border border-amber-300 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/40 dark:text-amber-400'
+              }
+              title='Click to switch mode'
+            >
+              {c.mode === 'reject' ? 'Rejecting' : 'Flagging'}
+            </button>
+            <button
+              type='button'
+              onClick={() => patchC.mutate({ id: c.id, body: { is_active: !c.is_active } })}
+              className={
+                c.is_active
+                  ? 'rounded-full border border-emerald-300 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:border-emerald-500/40 dark:text-emerald-400'
+                  : 'rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-400 dark:border-border'
+              }
+            >
+              {c.is_active ? 'Active' : 'Paused'}
+            </button>
+            <button
+              type='button'
+              onClick={() => {
+                if (window.confirm(`Delete contract "${c.name}"?`)) removeC.mutate(c.id)
+              }}
+              className='text-[13px] text-slate-300 hover:text-red-500'
+            >
+              ✕
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   )
