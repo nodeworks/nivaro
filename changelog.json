@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T21:02:04.660Z",
+  "generated_at": "2026-08-21T21:35:41.101Z",
   "releases": [
+    {
+      "version": "0.1.98",
+      "tag": "v0.1.98",
+      "date": "2026-08-21T17:35:38-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "platform",
+              "text": "final backlog batch — calendar, mail editor, branding, timezone, setup, config search, SQL copilot, access requests, field interfaces",
+              "hash": "4b0089f1"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.97",
       "tag": "v0.1.97",
-      "date": "2026-08-21T17:02:01-04:00",
+      "date": "2026-08-21T17:02:04-04:00",
       "sections": [
         {
           "label": "Fixed",
