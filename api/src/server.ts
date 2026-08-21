@@ -355,6 +355,12 @@ export async function buildServer() {
       // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
       // Auto-transition sweep: date-based transition conditions (within_days etc.)
       // can become true purely by time passing — re-evaluate hourly.
+      // Ops monitors: freshness / deploy-regression / synthetic checks.
+      app.cron.schedule('ops-monitors', '*/5 * * * *', async () => {
+        const { evaluateAllMonitors } = await import('./services/ops-monitors.js')
+        await evaluateAllMonitors(app)
+      })
+
       app.cron.schedule('daily-action-digest', '45 7 * * *', async () => {
         const { runDailyActionDigest } = await import('./services/daily-digest.js')
         await runDailyActionDigest()
