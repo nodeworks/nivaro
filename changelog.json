@@ -1,10 +1,106 @@
 {
-  "generated_at": "2026-08-21T14:13:27.228Z",
+  "generated_at": "2026-08-21T16:00:20.684Z",
   "releases": [
+    {
+      "version": "0.1.92",
+      "tag": "v0.1.92",
+      "date": "2026-08-21T12:00:17-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "visual state-machine canvas on PipelineEdit",
+              "hash": "da6ee331"
+            },
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "owner-gap advisor",
+              "hash": "d9639ef2"
+            },
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "in-flight instance migration wizard",
+              "hash": "376b6942"
+            },
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "SLA escalation ladders - tiered, acknowledgment-aware",
+              "hash": "44f7e58a"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "mid-air collision detection with per-field merge",
+              "hash": "4d551f5b"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "automation regression suite",
+              "hash": "52833db4"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "import rollback",
+              "hash": "b41f1513"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "legal holds, read-access logging, export logging",
+              "hash": "95294461"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "impact previews - validation rules + permission blast radius",
+              "hash": "7d171d24"
+            },
+            {
+              "section": "Added",
+              "scope": "governance",
+              "text": "Config Health - usage hygiene + schema lint sweep",
+              "hash": "3741a748"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "SLA ack denies on readOne's NULL, not just its throw",
+              "hash": "a9853a84"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "SLA ack requires read access to the record",
+              "hash": "09d1af9f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "workflow",
+              "text": "owner-gap suggestions describe unnamed groups by their filters",
+              "hash": "6f808a9a"
+            }
+          ]
+        }
+      ],
+      "count": 13
+    },
     {
       "version": "0.1.91",
       "tag": "v0.1.91",
-      "date": "2026-08-21T10:13:24-04:00",
+      "date": "2026-08-21T10:13:27-04:00",
       "sections": [
         {
           "label": "Added",
