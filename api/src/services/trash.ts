@@ -126,8 +126,17 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
   return { item_id: row.item_id }
 }
 
-/** Purge trash rows older than the retention window. Returns purged count. */
+/** Purge trash rows older than the retention window. Returns purged count.
+ *  Records under an active legal hold are exempt — the hold's whole point. */
 export async function purgeExpiredTrash(): Promise<number> {
   const cutoff = new Date(Date.now() - TRASH_RETENTION_DAYS * 86_400_000)
-  return db('nivaro_trash').where('deleted_at', '<', cutoff).del()
+  return db('nivaro_trash')
+    .where('deleted_at', '<', cutoff)
+    .whereNotExists(
+      db('nivaro_legal_holds')
+        .whereRaw('nivaro_legal_holds.collection = nivaro_trash.collection')
+        .whereRaw('nivaro_legal_holds.item_id = CAST(nivaro_trash.item_id AS NVARCHAR(255))')
+        .whereNull('released_at')
+    )
+    .del()
 }

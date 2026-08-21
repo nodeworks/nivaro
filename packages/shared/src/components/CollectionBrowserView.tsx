@@ -3657,6 +3657,23 @@ export function CollectionBrowserView({
         ['id', ...cols.map((c) => columnLabel(c))].map(esc).join(','),
         ...all.map((r) => [r.id, ...cols.map((c) => cellFor(r, c))].map(esc).join(','))
       ]
+      // Opt-in watermark (collection setting): the file itself says who
+      // exported it and when — the audit row alone can't travel with the CSV.
+      if ((meta as { export_watermark?: boolean } | undefined)?.export_watermark) {
+        lines.push('')
+        lines.push(
+          esc(`Exported ${new Date().toISOString()} · ${all.length} rows · ${collection} · Nivaro`)
+        )
+      }
+      // Data-egress audit — fire-and-forget; the download must not wait on it.
+      void client
+        .request(post('/activity/export-log', {
+          collection,
+          row_count: all.length,
+          format: 'csv',
+          filters: conditionsParam ? JSON.parse(conditionsParam) : undefined
+        }))
+        .catch(() => {})
       const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

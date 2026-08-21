@@ -645,6 +645,8 @@ async function applyInheritedFields(
 // ─── Relation helpers ─────────────────────────────────────────────────────────
 
 /** Cache of relations per collection to avoid redundant DB calls within a request */
+/** Per-process read-log throttle: one 'read' row per user/record/hour. */
+const readLogThrottle = new Map<string, number>()
 const relCache = new Map<string, CMSRelation[]>()
 
 async function getRelsForCollection(collection: string): Promise<CMSRelation[]> {
@@ -1771,6 +1773,32 @@ export async function readOne(
   // act only on an explicit deny. Enforced on single reads only; list reads
   // skip this check to avoid one ancestor walk per row (known limitation).
   if (treeAllow === false) throw new ForbiddenError()
+
+  // Opt-in read-access logging: single-record reads only (list reads would
+  // drown the log), throttled to one row per user/record/hour, and strictly
+  // fire-and-forget — visibility must never slow the read it observes.
+  if ((col as { read_logging?: boolean | number }).read_logging) {
+    const throttleKey = `read:${collection}:${id}:${user?.id}`
+    const now = Date.now()
+    const seenUntil = readLogThrottle.get(throttleKey)
+    if (!seenUntil || seenUntil < now) {
+      readLogThrottle.set(throttleKey, now + 3_600_000)
+      // Bounded: prune when the map grows past a sane ceiling.
+      if (readLogThrottle.size > 20_000) {
+        for (const [k, until] of readLogThrottle) {
+          if (until < now) readLogThrottle.delete(k)
+        }
+      }
+      void (async () => {
+        try {
+          const { logActivity } = await import('./activity.js')
+          await logActivity({ action: 'read', user: user?.id, collection, item: String(id) })
+        } catch {
+          // never block or fail the read
+        }
+      })()
+    }
+  }
 
   const baseFields = allowedFields ?? ['*']
   const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields ?? baseFields)

@@ -56,6 +56,12 @@ export async function executeRetentionPolicy(
   let query = db('nivaro_users').select('id', 'email').where('is_redacted', false)
   if (exclusionEmails.length > 0) query = query.whereNotIn('email', exclusionEmails)
   if (exclusionRoles.length > 0) query = query.whereNotIn('role', exclusionRoles)
+  // Users under an active legal hold are exempt from every retention action.
+  query = query.whereNotExists(
+    db('nivaro_legal_holds')
+      .whereRaw('nivaro_legal_holds.[user] = nivaro_users.id')
+      .whereNull('released_at')
+  )
 
   const allUsers: Array<{ id: string; email: string }> = await query
   const candidates = allUsers.filter((u) => !activeIds.has(String(u.id).toUpperCase()))

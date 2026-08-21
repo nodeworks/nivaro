@@ -115,6 +115,15 @@ export async function trashRoutes(app: FastifyInstance) {
       if (!req.isAdmin && row.deleted_by !== req.user!.id) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      const hold = await db('nivaro_legal_holds')
+        .where({ collection: row.collection, item_id: String(row.item_id) })
+        .whereNull('released_at')
+        .first('id', 'reason')
+      if (hold) {
+        return reply.code(423).send({
+          error: `This record is under legal hold (${String(hold.reason).slice(0, 200)}) — release the hold before purging.`
+        })
+      }
       await db('nivaro_trash').where({ id: trashId }).del()
       // Permanent purge — the last chance to recover this row is gone, so the
       // audit entry records what was destroyed.

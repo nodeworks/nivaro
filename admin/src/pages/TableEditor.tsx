@@ -3879,6 +3879,7 @@ function SettingsTab({
       <BrowserSettingsSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
+          <DataProtectionSection tableName={tableName} />
       <FieldUsageSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
@@ -4006,6 +4007,61 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
         <Switch
           checked={meta?.integrity_badge !== false}
           onCheckedChange={(v) => saveMut.mutate(v)}
+          disabled={saveMut.isPending || meta === undefined}
+        />
+      </div>
+    </div>
+  )
+}
+
+function DataProtectionSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-protection', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { read_logging?: boolean; export_watermark?: boolean } }>(
+          `/collections/${tableName}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const saveMut = useMutation({
+    mutationFn: (patch: Record<string, boolean>) => api.patch(`/collections/${tableName}`, patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-protection', tableName] })
+      toast.success('Data protection setting saved')
+    },
+    onError: () => toast.error('Failed to update setting')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Read-access logging</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Log who opens each record (one entry per person per record per hour), shown in the
+            record&rsquo;s history. For sensitive collections — activity normally covers writes
+            only.
+          </p>
+        </div>
+        <Switch
+          checked={meta?.read_logging === true}
+          onCheckedChange={(v) => saveMut.mutate({ read_logging: v })}
+          disabled={saveMut.isPending || meta === undefined}
+        />
+      </div>
+      <div className='flex items-center justify-between px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Export watermark</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Stamp CSV exports of this collection with the export timestamp and row count, so the
+            file itself says where it came from. Every export is audit-logged either way.
+          </p>
+        </div>
+        <Switch
+          checked={meta?.export_watermark === true}
+          onCheckedChange={(v) => saveMut.mutate({ export_watermark: v })}
           disabled={saveMut.isPending || meta === undefined}
         />
       </div>

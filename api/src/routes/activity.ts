@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 export async function activityRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -48,6 +49,25 @@ export async function activityRoutes(app: FastifyInstance) {
     const [data, countRows] = await Promise.all([query, countQuery])
     const total = Number((countRows[0] as { count: string | number }).count)
     return reply.send({ data, total, limit, offset })
+  })
+
+  /** Data-egress audit: clients report each CSV/xlsx/PDF export here.
+   *  Client-driven (the export happens in the browser), so it's coverage,
+   *  not enforcement — but a row per export beats the nothing we had. */
+  app.post('/export-log', async (req, reply) => {
+    const b = req.body as { collection?: string; row_count?: number; format?: string; filters?: unknown }
+    const collection = String(b.collection ?? '').slice(0, 255)
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    await logActivity({
+      action: 'export',
+      user: req.user?.id,
+      collection,
+      comment: `${String(b.format ?? 'csv').slice(0, 10)} · ${Number(b.row_count) || 0} rows${
+        b.filters ? ` · filters: ${JSON.stringify(b.filters).slice(0, 300)}` : ''
+      }`,
+      req
+    })
+    return { data: { logged: true } }
   })
 
   app.get('/actions', async (_req, reply) => {

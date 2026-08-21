@@ -153,6 +153,7 @@ const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
+const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
 )
@@ -445,6 +446,7 @@ export default function App() {
                   <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />
+                  <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />
