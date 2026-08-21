@@ -36,6 +36,7 @@ import {
   useApiFetchConfig,
   useNivaroClient
 } from '../context'
+import { createPortal } from 'react-dom'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
@@ -952,7 +953,29 @@ export function ItemEditForm({
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [rawEditOpen, setRawEditOpen] = useState(false)
   const changeReasonRef = useRef<string | null>(null)
+  // Mid-air collision: a 409 pauses the save into a per-field merge dialog
+  // (their value vs yours); resolving retries against the newer revision.
+  const [collision, setCollision] = useState<{
+    conflicts: Array<{ field: string; current_value: unknown }>
+    latest: number
+    mine: Record<string, unknown>
+  } | null>(null)
+  const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+
+  // The revision this draft is BASED on — the collision check's baseline.
+  const { data: baseRevisionData } = useQuery<{ latest: number | null }>({
+    queryKey: ['collision-base', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: { latest: number | null } }>(
+          get('/revisions', { collection, item: itemId, latest_only: '1' })
+        )
+        .then((r) => r.data)
+        .catch(() => ({ latest: null })),
+    enabled: !isNew && !!itemId,
+    staleTime: 60_000
+  })
 
   // ── Save progress dialog ───────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
@@ -3799,6 +3822,10 @@ export function ItemEditForm({
         }
       }
       if (changeReasonRef.current) payload._change_reason = changeReasonRef.current
+      if (!isNew) {
+        const base = baseRevisionOverrideRef.current ?? baseRevisionData?.latest ?? null
+        if (base != null) payload._base_revision = base
+      }
       let savedId: string
       try {
         if (isNew) {
@@ -3819,6 +3846,28 @@ export function ItemEditForm({
         if (challenge) {
           updateStep('main', { status: 'error', error: 'Waiting for a change reason' })
           setCrChallenge(challenge)
+          throw err
+        }
+        const collResp = (
+          err as {
+            response?: {
+              data?: {
+                code?: string
+                conflicts?: Array<{ field: string; current_value: unknown }>
+                latest_revision?: number
+              }
+            }
+          }
+        )?.response?.data
+        if (collResp?.code === 'MIDAIR_COLLISION' && Array.isArray(collResp.conflicts)) {
+          updateStep('main', { status: 'error', error: 'Someone else changed this record' })
+          const mine: Record<string, unknown> = {}
+          for (const c of collResp.conflicts) mine[c.field] = payload[c.field]
+          setCollision({
+            conflicts: collResp.conflicts,
+            latest: Number(collResp.latest_revision) || 0,
+            mine
+          })
           throw err
         }
         const msg = errMsg(err)
@@ -4166,6 +4215,8 @@ export function ItemEditForm({
     },
     onSuccess: (id) => {
       changeReasonRef.current = null
+      baseRevisionOverrideRef.current = null
+      void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
       setIsDirty(false)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
@@ -5931,6 +5982,32 @@ export function ItemEditForm({
                                             }
                                           />
                                         )}
+                                        {collision && (
+                                          <MidairCollisionDialog
+                                            collision={collision}
+                                            fieldLabel={(f) => {
+                                              const fc = allFields.find((af) => af.field === f)
+                                              return fc?.label || titleCase(f)
+                                            }}
+                                            onCancel={() => setCollision(null)}
+                                            onResolve={(takeTheirs) => {
+                                              // 'theirs' fields adopt the newer value in the
+                                              // draft; the retry then writes only what the
+                                              // person explicitly kept, against the new base.
+                                              for (const c of collision.conflicts) {
+                                                if (takeTheirs.has(c.field)) {
+                                                  setDraft((prev) => ({
+                                                    ...prev,
+                                                    [c.field]: c.current_value
+                                                  }))
+                                                }
+                                              }
+                                              baseRevisionOverrideRef.current = collision.latest
+                                              setCollision(null)
+                                              setTimeout(() => saveMut.mutate(), 0)
+                                            }}
+                                          />
+                                        )}
                                         <ChangeReasonDialog
                                           challenge={crChallenge}
                                           fieldLabel={(f) => {
@@ -6666,5 +6743,116 @@ export function ItemEditForm({
         </AddendumO2MContext.Provider>
       </RelationPathDataContext.Provider>
     </ReimportHandlerContext.Provider>
+  )
+}
+
+/**
+ * Mid-air collision merge dialog: someone else saved the same fields since
+ * this draft loaded. Per field, keep THEIRS (adopt the newer value) or MINE
+ * (overwrite it) — the retry writes only what was explicitly kept, against
+ * the newer revision baseline. Defaults to theirs: overwriting a colleague's
+ * work should be the deliberate choice, not the path of least resistance.
+ */
+function MidairCollisionDialog({
+  collision,
+  fieldLabel,
+  onCancel,
+  onResolve
+}: {
+  collision: {
+    conflicts: Array<{ field: string; current_value: unknown }>
+    mine: Record<string, unknown>
+  }
+  fieldLabel: (field: string) => string
+  onCancel: () => void
+  onResolve: (takeTheirs: Set<string>) => void
+}) {
+  const [takeTheirs, setTakeTheirs] = useState<Set<string>>(
+    () => new Set(collision.conflicts.map((c) => c.field))
+  )
+  const fmt = (v: unknown) =>
+    v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : String(v).slice(0, 200)
+  return createPortal(
+    <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+      <div className='absolute inset-0 bg-black/40' onClick={onCancel} />
+      <div className='relative w-[560px] max-w-[94vw] rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'>
+        <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+          Someone else changed this record
+        </p>
+        <p className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          These fields were saved by someone else while you were editing. Pick which value wins for
+          each — everything else you changed saves normally.
+        </p>
+        <div className='mt-3 max-h-[320px] space-y-2 overflow-y-auto'>
+          {collision.conflicts.map((c) => {
+            const theirs = takeTheirs.has(c.field)
+            return (
+              <div key={c.field} className='rounded-md border border-slate-200 p-2.5 dark:border-border'>
+                <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                  {fieldLabel(c.field)}
+                </p>
+                <div className='mt-1.5 grid grid-cols-2 gap-2'>
+                  <button
+                    type='button'
+                    onClick={() => setTakeTheirs((prev) => new Set([...prev, c.field]))}
+                    className={
+                      theirs
+                        ? 'rounded-md border-2 border-nvr-cyan/60 bg-nvr-cyan/5 px-2.5 py-1.5 text-left'
+                        : 'rounded-md border border-slate-200 px-2.5 py-1.5 text-left hover:border-slate-300 dark:border-border'
+                    }
+                  >
+                    <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                      Theirs (current)
+                    </p>
+                    <p className='mt-0.5 break-words text-[12px] text-slate-700 dark:text-foreground'>
+                      {fmt(c.current_value)}
+                    </p>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setTakeTheirs((prev) => {
+                        const next = new Set(prev)
+                        next.delete(c.field)
+                        return next
+                      })
+                    }
+                    className={
+                      !theirs
+                        ? 'rounded-md border-2 border-amber-400/70 bg-amber-50 px-2.5 py-1.5 text-left dark:bg-amber-400/10'
+                        : 'rounded-md border border-slate-200 px-2.5 py-1.5 text-left hover:border-slate-300 dark:border-border'
+                    }
+                  >
+                    <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                      Mine (overwrite)
+                    </p>
+                    <p className='mt-0.5 break-words text-[12px] text-slate-700 dark:text-foreground'>
+                      {fmt(collision.mine[c.field])}
+                    </p>
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className='mt-4 flex items-center justify-end gap-2'>
+          <button
+            type='button'
+            onClick={onCancel}
+            className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] text-slate-600 dark:border-border dark:text-muted-foreground'
+          >
+            Cancel save
+          </button>
+          <button
+            type='button'
+            onClick={() => onResolve(takeTheirs)}
+            className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white'
+          >
+            Apply &amp; save
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }

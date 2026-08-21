@@ -32,9 +32,18 @@ export async function revisionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
   app.get('/', async (req, reply) => {
-    const q = req.query as { collection?: string; item?: string }
+    const q = req.query as { collection?: string; item?: string; latest_only?: string }
     if (!q.collection || !q.item) {
       return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    if (q.latest_only === '1') {
+      // Collision-detection baseline: just the newest revision id, one cheap
+      // MAX instead of hydrating the whole history.
+      const row = (await db('nivaro_revisions')
+        .where({ collection: q.collection, item: String(q.item) })
+        .max({ latest: 'id' })
+        .first()) as { latest?: number } | undefined
+      return reply.send({ data: { latest: row?.latest ?? null } })
     }
     const data = await listRevisions(q.collection, q.item)
     return reply.send({ data })

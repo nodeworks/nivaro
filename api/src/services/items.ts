@@ -2126,6 +2126,7 @@ export async function updateOne(
   // The fields the caller explicitly sent — validation only judges these.
   const callerFields = new Set(Object.keys(data))
   callerFields.delete('_change_reason')
+  callerFields.delete('_base_revision')
 
   // Change reason rides the payload as a virtual `_change_reason` key — strip
   // it before anything downstream sees it (it must never reach a column write)
@@ -2134,6 +2135,59 @@ export async function updateOne(
       ? String((data as Record<string, unknown>)._change_reason).trim()
       : ''
   delete (data as Record<string, unknown>)._change_reason
+
+  // Mid-air collision detection: the client says which revision its draft was
+  // BASED on (_base_revision, a capability opt-in — callers that never send it
+  // are unaffected). If someone else's save produced newer revisions touching
+  // any of the SAME fields this payload writes, 409 with the conflicts named —
+  // silent last-write-wins is data loss nobody notices. Per-collection
+  // toggleable; edits to disjoint fields merge without complaint.
+  const baseRevisionRaw = (data as Record<string, unknown>)._base_revision
+  delete (data as Record<string, unknown>)._base_revision
+  const baseRevision = Number(baseRevisionRaw)
+  if (
+    Number.isFinite(baseRevision) &&
+    baseRevision > 0 &&
+    (col as { collision_detection?: boolean | number }).collision_detection !== false &&
+    (col as { collision_detection?: boolean | number }).collision_detection !== 0
+  ) {
+    const newer = (await db('nivaro_revisions')
+      .where({ collection, item: String(id) })
+      .where('id', '>', baseRevision)
+      .orderBy('id', 'asc')
+      .limit(50)
+      .select('id', 'delta', 'data')) as Array<{ id: number; delta: string | null; data: string | null }>
+    if (newer.length > 0) {
+      const theirFields = new Set<string>()
+      for (const r of newer) {
+        try {
+          const delta = r.delta ? (JSON.parse(r.delta) as Record<string, unknown>) : null
+          for (const k of Object.keys(delta ?? {})) theirFields.add(k)
+        } catch {
+          // unparseable delta — treat conservatively as touching nothing
+        }
+      }
+      const overlap = [...callerFields].filter((f) => theirFields.has(f))
+      if (overlap.length > 0) {
+        const currentRow = (await db(collection)
+          .where({ id })
+          .first()) as Record<string, unknown> | undefined
+        const err = new Error(
+          `Someone else changed ${overlap.join(', ')} since you loaded this record`
+        ) as Error & {
+          statusCode: number
+          code: string
+          conflicts: Array<{ field: string; current_value: unknown }>
+          latest_revision: number
+        }
+        err.statusCode = 409
+        err.code = 'MIDAIR_COLLISION'
+        err.conflicts = overlap.map((f) => ({ field: f, current_value: currentRow?.[f] ?? null }))
+        err.latest_revision = newer[newer.length - 1].id
+        throw err
+      }
+    }
+  }
 
   // Tree permissions — restriction only: an explicit deny on the item or its
   // nearest matching ancestor blocks the update; null/true changes nothing.

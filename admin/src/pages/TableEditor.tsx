@@ -4020,7 +4020,7 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-protection', tableName],
     queryFn: () =>
       api
-        .get<{ data: { read_logging?: boolean; export_watermark?: boolean } }>(
+        .get<{ data: { read_logging?: boolean; export_watermark?: boolean; collision_detection?: boolean } }>(
           `/collections/${tableName}`
         )
         .then((r) => r.data.data),
@@ -4051,7 +4051,7 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
           disabled={saveMut.isPending || meta === undefined}
         />
       </div>
-      <div className='flex items-center justify-between px-4 py-3'>
+      <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Export watermark</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
@@ -4062,6 +4062,21 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
         <Switch
           checked={meta?.export_watermark === true}
           onCheckedChange={(v) => saveMut.mutate({ export_watermark: v })}
+          disabled={saveMut.isPending || meta === undefined}
+        />
+      </div>
+      <div className='flex items-center justify-between px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Mid-air collision detection</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            When two people edit the same record, a save touching fields someone else just changed
+            pauses into a merge dialog instead of silently overwriting. Turn off to restore
+            last-write-wins for this collection.
+          </p>
+        </div>
+        <Switch
+          checked={meta?.collision_detection !== false}
+          onCheckedChange={(v) => saveMut.mutate({ collision_detection: v })}
           disabled={saveMut.isPending || meta === undefined}
         />
       </div>

@@ -165,7 +165,17 @@ export async function buildServer() {
 
   // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
   app.setErrorHandler(
-    (err: Error & { statusCode?: number; code?: string; violations?: unknown }, req, reply) => {
+    (
+      err: Error & {
+        statusCode?: number
+        code?: string
+        violations?: unknown
+        conflicts?: unknown
+        latest_revision?: number
+      },
+      req,
+      reply
+    ) => {
       const status = err.statusCode ?? 500
       if (status >= 500 && req.url.startsWith('/api/')) {
         trackError({
@@ -181,7 +191,10 @@ export async function buildServer() {
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
         message: err.message,
-        ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {})
+        ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {}),
+        ...(err.code === 'MIDAIR_COLLISION'
+          ? { code: err.code, conflicts: err.conflicts, latest_revision: err.latest_revision }
+          : {})
       })
     }
   )
