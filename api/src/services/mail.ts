@@ -249,6 +249,20 @@ async function applyDigestDeferral(
         prefs = null
       }
       if (prefs && prefs['email_digest'] === 'daily') daily.set(u.email.toLowerCase(), u.id)
+      else {
+        // Quiet hours defer email the same way daily-digest prefs do — the
+        // 07:45 flush delivers everything held overnight.
+        try {
+          const { inQuietHours } = await import('./notification-channels.js')
+          const np = (prefs?.notification_prefs ?? null) as {
+            quiet_start?: string
+            quiet_end?: string
+          } | null
+          if (np && inQuietHours(np)) daily.set(u.email.toLowerCase(), u.id)
+        } catch {
+          // never let a prefs read break mail
+        }
+      }
     }
     if (daily.size === 0) return recipients
     const snippet = String(htmlOrText)

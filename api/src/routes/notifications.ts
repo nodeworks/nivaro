@@ -22,6 +22,7 @@ function serialize(row: Record<string, unknown>) {
     collection: row.collection,
     item: row.item,
     data: null,
+    snoozed_until: row.snoozed_until ?? null,
     created_at: row.timestamp
   }
 }
@@ -37,10 +38,28 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const page = Math.max(1, Number(q.page) || 1)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
 
+    const qf = req.query as { search?: string; collection?: string; sender?: string; snoozed?: string }
     const filtered = () => {
       let query = db('nivaro_notifications').where({ recipient: userId })
       if (q.status === 'inbox' || q.unread === 'true') query = query.andWhere({ status: 'inbox' })
       else if (q.status === 'read') query = query.andWhere({ status: 'read' })
+      // Snoozed rows hide from the normal views until they wake; ?snoozed=true
+      // lists exactly the sleeping ones instead.
+      if (qf.snoozed === 'true') {
+        query = query.where('snoozed_until', '>', new Date())
+      } else {
+        query = query.where((qb) =>
+          qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date())
+        )
+      }
+      if (qf.collection) query = query.andWhere({ collection: qf.collection })
+      if (qf.sender) query = query.andWhere({ sender: qf.sender })
+      if (qf.search) {
+        const like = `%${qf.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+        query = query.where((qb) =>
+          qb.where('subject', 'like', like).orWhere('message', 'like', like)
+        )
+      }
       return query
     }
 
@@ -60,6 +79,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const userId = req.user!.id
     const row = await db('nivaro_notifications')
       .where({ recipient: userId, status: 'inbox' })
+      .where((qb) => qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date()))
       .count<{ count: string | number }>({ count: '*' })
       .first()
     return reply.send({ unread: Number(row?.count ?? 0) })
@@ -170,6 +190,152 @@ export async function notificationsRoutes(app: FastifyInstance) {
       req
     })
     return reply.send({ data: { recipients: users.length, emails_sent: emailed } })
+  })
+
+  /**
+   * Message the stakeholders of a record selection (#51): resolves current
+   * pipeline owners and/or record creators for the picked ids, dedupes across
+   * records, and delivers in-app (+ optional email, mail-test-mode safe).
+   * Gated on read permission for the collection — you can only message about
+   * records you could open yourself. Sender is excluded from the audience.
+   */
+  app.post('/message-stakeholders', { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body as {
+      collection?: string
+      ids?: Array<string | number>
+      subject?: string
+      message?: string
+      include?: { owners?: boolean; creators?: boolean }
+      email?: boolean
+      preview?: boolean
+    }
+    const collection = String(b.collection ?? '')
+    const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).filter(Boolean).slice(0, 200)
+    const subject = String(b.subject ?? '').trim()
+    const message = String(b.message ?? '').trim()
+    if (!/^[A-Za-z0-9_]+$/.test(collection) || /^nivaro_/i.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids is required' })
+    if (!b.preview && (!subject || !message)) {
+      return reply.code(400).send({ error: 'subject and message are required' })
+    }
+    const { can } = await import('../services/permissions.js')
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+
+    const wantOwners = b.include?.owners !== false
+    const wantCreators = b.include?.creators !== false
+    const audience = new Set<string>()
+
+    if (wantOwners) {
+      const instances = (await db('nivaro_workflow_instances')
+        .where({ collection })
+        .whereIn('item', ids)
+        .whereNull('completed_at')
+        .select('id', 'item', 'current_state', 'collection')) as Array<Record<string, unknown>>
+      if (instances.length > 0) {
+        const { resolveStateOwnersBatch } = await import('../services/pipeline-engine.js')
+        const ownersByKey = await resolveStateOwnersBatch(
+          instances.map((i) => ({
+            key: String(i.item),
+            stateId: String(i.current_state),
+            instanceId: String(i.id),
+            collection,
+            itemId: String(i.item)
+          }))
+        )
+        for (const owners of ownersByKey.values()) {
+          for (const o of owners as Array<{ id: unknown }>) audience.add(String(o.id))
+        }
+      }
+    }
+    if (wantCreators) {
+      // Creator column varies by collection (workflows: creator; most others:
+      // user_created) — take whichever physically exists.
+      const cols = (await db('information_schema.columns' as never)
+        .where({ table_name: collection })
+        .whereIn('column_name', ['user_created', 'creator'])
+        .select('column_name')) as Array<{ column_name: string }>
+      for (const c of cols) {
+        const rows = (await db(collection)
+          .whereIn('id', ids)
+          .whereNotNull(c.column_name)
+          .distinct(c.column_name)) as Array<Record<string, unknown>>
+        for (const r of rows) audience.add(String(r[c.column_name]))
+      }
+    }
+    audience.delete(String(req.user!.id))
+
+    const users = audience.size
+      ? ((await db('nivaro_users')
+          .whereIn('id', [...audience])
+          .where('is_redacted', 0)
+          .where((qb) => qb.whereNull('status').orWhereNot('status', 'suspended'))
+          .select('id', 'first_name', 'last_name', 'email')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+        }>)
+      : []
+
+    if (b.preview) {
+      return {
+        data: {
+          count: users.length,
+          users: users
+            .map((u) => ({
+              id: u.id,
+              name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email
+            }))
+            .sort((a, z) => String(a.name).localeCompare(String(z.name)))
+        }
+      }
+    }
+
+    let sent = 0
+    for (const u of users) {
+      await notifyUser(app, u.id, {
+        subject,
+        message,
+        sender: req.user!.id,
+        collection,
+        item: ids.length === 1 ? ids[0] : null
+      }).catch(() => {})
+      if (b.email && u.email) {
+        await sendRawMail({
+          to: u.email,
+          subject,
+          html: `<p>${message.replace(/</g, '&lt;').replace(/\n/g, '<br/>')}</p><p style="color:#64748b;font-size:12px">Sent about ${ids.length} ${collection} record(s).</p>`
+        }).catch(() => {})
+      }
+      sent++
+    }
+    await logActivity({
+      action: 'message-stakeholders',
+      user: req.user?.id,
+      collection,
+      comment: `${sent} recipient(s) across ${ids.length} record(s): ${subject}`.slice(0, 300),
+      req
+    })
+    return { data: { sent, records: ids.length } }
+  })
+
+  /** Snooze: hide from the inbox until `until`, then resurface UNREAD. Own
+   *  rows only. `until: null` unsnoozes immediately. */
+  app.post('/:id/snooze', async (req, reply) => {
+    const b = req.body as { until?: string | null }
+    const until = b.until == null ? null : new Date(String(b.until))
+    if (until !== null && (Number.isNaN(until.getTime()) || until <= new Date())) {
+      return reply.code(400).send({ error: 'until must be a future timestamp (or null to wake)' })
+    }
+    const updated = await db('nivaro_notifications')
+      .where({ id: req.params && (req.params as { id: string }).id, recipient: req.user!.id })
+      .update({ snoozed_until: until, status: 'inbox' })
+    if (updated === 0) return reply.code(404).send({ error: 'Notification not found' })
+    return { data: { snoozed_until: until } }
   })
 
   app.post('/:id/read', async (req, reply) => {

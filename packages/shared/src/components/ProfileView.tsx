@@ -245,6 +245,132 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
+// ── Notification rules (quiet hours + per-category channel matrix) ──────────
+
+const NOTIFY_CATS: Array<{ key: string; label: string }> = [
+  { key: 'mentions', label: 'Mentions' },
+  { key: 'workflow', label: 'Workflow & approvals' },
+  { key: 'sla', label: 'SLA & escalations' },
+  { key: 'watch', label: 'Field watches' },
+  { key: 'system', label: 'System & digests' },
+  { key: 'other', label: 'Everything else' }
+]
+
+function NotificationRulesCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: prefs } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
+  })
+  const np = (prefs?.notification_prefs ?? {}) as {
+    quiet_start?: string
+    quiet_end?: string
+    matrix?: Record<string, { inapp?: boolean; push?: boolean }>
+  }
+  const [quietStart, setQuietStart] = useState<string | null>(null)
+  const [quietEnd, setQuietEnd] = useState<string | null>(null)
+  const effStart = quietStart ?? np.quiet_start ?? ''
+  const effEnd = quietEnd ?? np.quiet_end ?? ''
+
+  const save = useMutation({
+    mutationFn: (next: Record<string, unknown>) =>
+      client.request(patch('/users/me/preferences', { notification_prefs: next })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+  })
+  const commit = (overrides: Partial<typeof np>) => {
+    save.mutate({
+      quiet_start: overrides.quiet_start ?? (effStart || undefined),
+      quiet_end: overrides.quiet_end ?? (effEnd || undefined),
+      matrix: overrides.matrix ?? np.matrix ?? {}
+    })
+  }
+  const toggle = (cat: string, channel: 'inapp' | 'push') => {
+    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
+    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, [channel]: cur[channel] === false } } })
+  }
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+          Notification rules
+        </h3>
+        <p className='mt-0.5 text-[11px] text-slate-400'>
+          Quiet hours pause pushes and hold emails until morning (inbox rows still arrive; critical
+          alerts always get through). The grid picks channels per category.
+        </p>
+      </header>
+      <div className='space-y-3 p-4'>
+        <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          Quiet hours (ET):
+          <input
+            type='time'
+            value={effStart}
+            onChange={(e) => setQuietStart(e.target.value)}
+            onBlur={() => commit({ quiet_start: effStart || undefined })}
+            className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+          />
+          <span>to</span>
+          <input
+            type='time'
+            value={effEnd}
+            onChange={(e) => setQuietEnd(e.target.value)}
+            onBlur={() => commit({ quiet_end: effEnd || undefined })}
+            className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+          />
+          {(effStart || effEnd) && (
+            <button
+              type='button'
+              onClick={() => {
+                setQuietStart('')
+                setQuietEnd('')
+                save.mutate({ matrix: np.matrix ?? {} })
+              }}
+              className='text-[11.5px] text-slate-400 underline decoration-dotted underline-offset-2'
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <table className='w-full text-[12px]'>
+          <thead>
+            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+              <th className='py-1 font-semibold'>Category</th>
+              <th className='py-1 text-center font-semibold'>In-app</th>
+              <th className='py-1 text-center font-semibold'>Push</th>
+            </tr>
+          </thead>
+          <tbody>
+            {NOTIFY_CATS.map((c) => {
+              const row = np.matrix?.[c.key] ?? {}
+              return (
+                <tr key={c.key} className='border-t border-slate-100 dark:border-border'>
+                  <td className='py-1.5 text-slate-700 dark:text-foreground'>{c.label}</td>
+                  {(['inapp', 'push'] as const).map((ch) => (
+                    <td key={ch} className='py-1.5 text-center'>
+                      <input
+                        type='checkbox'
+                        checked={row[ch] !== false}
+                        onChange={() => toggle(c.key, ch)}
+                        disabled={save.isPending}
+                        className='h-3.5 w-3.5'
+                      />
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ── Email delivery (instant vs daily action digest) ─────────────────────────
 
 function EmailDeliveryCard() {
@@ -1388,6 +1514,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             />
             <ScopeDefaultsCard />
             <EmailDeliveryCard />
+        <NotificationRulesCard />
           </div>
           <div className='space-y-4'>
             {/* The full picture — every notification source in the app,

@@ -102,6 +102,76 @@ export interface NotifyUserOptions {
  * In-app (default on) inserts a nivaro_notifications row and emits to the
  * user's Socket.io room; email and SMS are opt-in via `channels`.
  */
+// ── Per-user notification preferences (quiet hours + channel matrix) ────────
+// prefs.notification_prefs: {quiet_start: 'HH:MM', quiet_end: 'HH:MM',
+// matrix: {category: {inapp: bool, push: bool}}}. Categories are classified
+// from the subject so every existing caller participates without changes.
+// Quiet hours suppress PUSH only (the inbox row still lands — it IS the
+// inbox); truly critical subjects bypass. All America/New_York — EFP's clock.
+
+export type NotifyCategory = 'mentions' | 'workflow' | 'sla' | 'watch' | 'system' | 'other'
+
+export function classifyNotification(subject: string): NotifyCategory {
+  const s = subject.toLowerCase()
+  if (s.includes('mention')) return 'mentions'
+  if (s.startsWith('sla') || s.includes('escalation') || s.includes('breach')) return 'sla'
+  if (s.includes('watch') || s.includes('field') && s.includes('changed')) return 'watch'
+  if (s.includes('workflow') || s.includes('transition') || s.includes('moved to') || s.includes('approval')) return 'workflow'
+  if (s.includes('maintenance') || s.includes('monitor') || s.includes('import') || s.includes('digest')) return 'system'
+  return 'other'
+}
+
+const CRITICAL_SUBJECTS = /sla escalation|maintenance|monitor failing/i
+
+interface NotifyPrefs {
+  quiet_start?: string
+  quiet_end?: string
+  matrix?: Partial<Record<NotifyCategory, { inapp?: boolean; push?: boolean }>>
+}
+
+const prefsCache = new Map<string, { at: number; prefs: NotifyPrefs | null }>()
+
+async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
+  const key = userId.toUpperCase()
+  const hit = prefsCache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.prefs
+  let prefs: NotifyPrefs | null = null
+  try {
+    const row = (await db('nivaro_users').where({ id: userId }).first('preferences')) as
+      | { preferences?: string | Record<string, unknown> | null }
+      | undefined
+    const parsed =
+      typeof row?.preferences === 'string' ? JSON.parse(row.preferences) : (row?.preferences ?? null)
+    prefs = (parsed?.notification_prefs as NotifyPrefs) ?? null
+  } catch {
+    prefs = null
+  }
+  prefsCache.set(key, { at: Date.now(), prefs })
+  return prefs
+}
+
+export function bustNotifyPrefsCache(userId?: string): void {
+  if (userId) prefsCache.delete(userId.toUpperCase())
+  else prefsCache.clear()
+}
+
+/** Is the wall clock inside the user's quiet window right now (ET)? */
+export function inQuietHours(prefs: NotifyPrefs | null, now = new Date()): boolean {
+  if (!prefs?.quiet_start || !prefs?.quiet_end) return false
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(now)
+  const cur = fmt.replace(':', '')
+  const start = prefs.quiet_start.replace(':', '')
+  const end = prefs.quiet_end.replace(':', '')
+  if (!/^\d{4}$/.test(start) || !/^\d{4}$/.test(end)) return false
+  // A window crossing midnight (22:00 → 07:00) is the normal case.
+  return start <= end ? cur >= start && cur < end : cur >= start || cur < end
+}
+
 export async function notifyUser(
   app: FastifyInstance,
   userId: string,
@@ -128,6 +198,16 @@ export async function notifyUser(
     // A lookup failure must not swallow a notification — deliver and move on.
   }
 
+  const category = classifyNotification(opts.subject)
+  const prefs = await getNotifyPrefs(userId)
+  const matrixRow = prefs?.matrix?.[category]
+  const critical = CRITICAL_SUBJECTS.test(opts.subject)
+  // Matrix: in-app off for this category kills the whole in-app channel
+  // (row, push, toast) — critical subjects always land.
+  if (matrixRow?.inapp === false && !critical) channels.inapp = false
+  const pushAllowed =
+    critical || (matrixRow?.push !== false && !inQuietHours(prefs, now))
+
   try {
     if (channels.inapp) {
       const [notif] = await db('nivaro_notifications')
@@ -144,7 +224,9 @@ export async function notifyUser(
         .returning('*')
 
       // Browser push rides the in-app channel: no-op for users with no
-      // registered subscription, never blocks the caller.
+      // registered subscription, never blocks the caller. Quiet hours and the
+      // per-category matrix suppress the interruption, never the inbox row.
+      if (pushAllowed)
       void sendWebPush(userId, {
         title: opts.subject.slice(0, 120),
         body: opts.message.slice(0, 300),

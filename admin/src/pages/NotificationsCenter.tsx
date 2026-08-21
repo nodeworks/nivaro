@@ -1,9 +1,10 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, CheckCheck, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { AlarmClock, Bell, CheckCheck, ChevronLeft, ChevronRight, Search, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '@nivaro/react'
@@ -22,7 +23,7 @@ const NOTIF_ROUTES: NotificationRouteMap = {
 
 const PAGE_SIZE = 25
 
-type StatusFilter = 'all' | 'inbox' | 'read'
+type StatusFilter = 'all' | 'inbox' | 'read' | 'snoozed'
 
 interface NotificationRow {
   id: number
@@ -38,6 +39,7 @@ interface NotificationRow {
   created_at?: string | null
   collection: string | null
   item: string | null
+  snoozed_until?: string | null
 }
 
 function isUnread(n: NotificationRow): boolean {
@@ -48,8 +50,26 @@ function isUnread(n: NotificationRow): boolean {
 const TABS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'inbox', label: 'Unread' },
-  { key: 'read', label: 'Read' }
+  { key: 'read', label: 'Read' },
+  { key: 'snoozed', label: 'Snoozed' }
 ]
+
+/** Preset snooze targets. Times are the user's local clock. */
+function snoozePresets(): Array<{ label: string; until: Date }> {
+  const now = new Date()
+  const hour = new Date(now.getTime() + 60 * 60 * 1000)
+  const tomorrow = new Date(now)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  tomorrow.setHours(8, 0, 0, 0)
+  const nextWeek = new Date(now)
+  nextWeek.setDate(nextWeek.getDate() + ((8 - nextWeek.getDay()) % 7 || 7))
+  nextWeek.setHours(8, 0, 0, 0)
+  return [
+    { label: 'For 1 hour', until: hour },
+    { label: 'Until tomorrow 8am', until: tomorrow },
+    { label: 'Until next week', until: nextWeek }
+  ]
+}
 
 export function NotificationsCenterPage() {
   const navigate = useNavigate()
@@ -57,16 +77,41 @@ export function NotificationsCenterPage() {
   const [status, setStatus] = useState<StatusFilter>('all')
   const [page, setPage] = useState(1)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [snoozeMenuId, setSnoozeMenuId] = useState<number | null>(null)
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+  const [collectionFilter, setCollectionFilter] = useState('')
+
+  // Debounced search — the server matches subject + message.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim())
+      setPage(1)
+    }, 350)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['notifications', 'center', status, page],
+    queryKey: ['notifications', 'center', status, page, search, collectionFilter],
     queryFn: () =>
       api
         .get<{ data: NotificationRow[]; total: number }>('/notifications', {
-          params: { page, limit: PAGE_SIZE, status }
+          params: {
+            page,
+            limit: PAGE_SIZE,
+            status: status === 'snoozed' ? 'all' : status,
+            snoozed: status === 'snoozed' ? 'true' : undefined,
+            search: search || undefined,
+            collection: collectionFilter || undefined
+          }
         })
         .then((r) => r.data),
     placeholderData: keepPreviousData
+  })
+
+  const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
+    queryKey: ['notifications', 'center', 'collections'],
+    queryFn: () => api.get('/collections').then((r) => r.data.data ?? r.data)
   })
 
   const notifications = data?.data ?? []
@@ -82,6 +127,17 @@ export function NotificationsCenterPage() {
       toast.success('All notifications marked as read')
     },
     onError: () => toast.error('Failed to mark all read')
+  })
+
+  const snoozeMut = useMutation({
+    mutationFn: ({ id, until }: { id: number; until: Date | null }) =>
+      api.post(`/notifications/${id}/snooze`, { until: until ? until.toISOString() : null }),
+    onSuccess: (_d, vars) => {
+      invalidate()
+      setSnoozeMenuId(null)
+      toast.success(vars.until ? 'Snoozed — it will return unread' : 'Snooze cleared')
+    },
+    onError: () => toast.error('Failed to snooze')
   })
 
   const deleteMut = useMutation({
@@ -128,26 +184,56 @@ export function NotificationsCenterPage() {
             {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
           </Button>
         </div>
-        {/* Filter tabs */}
-        <div className='mt-4 flex items-center gap-1'>
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type='button'
-              onClick={() => {
-                setStatus(t.key)
-                setPage(1)
-              }}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
-                status === t.key
-                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-800/50'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
+        {/* Filter tabs + search */}
+        <div className='mt-4 flex flex-wrap items-center gap-2'>
+          <div className='flex items-center gap-1'>
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                type='button'
+                onClick={() => {
+                  setStatus(t.key)
+                  setPage(1)
+                }}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+                  status === t.key
+                    ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                    : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-800/50'
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className='relative ml-auto'>
+            <Search className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder='Search notifications…'
+              className='h-8 w-[240px] rounded-md border border-slate-200 bg-background pl-8 pr-2.5 text-[12.5px] dark:border-border'
+            />
+          </div>
+          <Select
+            value={collectionFilter || '__all__'}
+            onValueChange={(v) => {
+              setCollectionFilter(v === '__all__' ? '' : v)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className='h-8 w-[180px] text-[12.5px]'>
+              <SelectValue placeholder='All collections' />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='__all__'>All collections</SelectItem>
+              {[...new Set(collections.map((c) => c.collection))].sort().map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </header>
 
@@ -236,6 +322,44 @@ export function NotificationsCenterPage() {
                         )
                       })()}
                     </div>
+                  </div>
+                  {/* Snooze */}
+                  <div className='relative shrink-0'>
+                    {n.snoozed_until && new Date(n.snoozed_until) > new Date() ? (
+                      <button
+                        type='button'
+                        onClick={() => snoozeMut.mutate({ id: n.id, until: null })}
+                        className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300'
+                        data-tip='Click to wake now'
+                      >
+                        <AlarmClock className='h-3 w-3' />
+                        Until {new Date(n.snoozed_until).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      </button>
+                    ) : (
+                      <button
+                        type='button'
+                        onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
+                        className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
+                        aria-label='Snooze notification'
+                      >
+                        <AlarmClock className='h-3.5 w-3.5' />
+                      </button>
+                    )}
+                    {snoozeMenuId === n.id && (
+                      <div className='absolute right-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
+                        {snoozePresets().map((pset) => (
+                          <button
+                            key={pset.label}
+                            type='button'
+                            disabled={snoozeMut.isPending}
+                            onClick={() => snoozeMut.mutate({ id: n.id, until: pset.until })}
+                            className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
+                          >
+                            {pset.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   {/* Delete with inline confirm */}
                   <div className='shrink-0'>

@@ -198,6 +198,39 @@ export async function usersRoutes(app: FastifyInstance) {
         .slice(0, 30)
       patch.nav_favorites = clean
     }
+    if ('notification_prefs' in body) {
+      // Quiet hours + per-category channel matrix (see notification-channels).
+      const raw = body.notification_prefs
+      if (raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+        return reply.code(400).send({ error: 'notification_prefs must be an object or null' })
+      }
+      if (raw === null) {
+        patch.notification_prefs = null
+      } else {
+        const np = raw as Record<string, unknown>
+        const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
+        const clean: Record<string, unknown> = {}
+        if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start)) clean.quiet_start = np.quiet_start
+        if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end)) clean.quiet_end = np.quiet_end
+        const CATS = ['mentions', 'workflow', 'sla', 'watch', 'system', 'other']
+        if (np.matrix && typeof np.matrix === 'object') {
+          const m: Record<string, { inapp?: boolean; push?: boolean }> = {}
+          for (const cat of CATS) {
+            const row = (np.matrix as Record<string, unknown>)[cat]
+            if (row && typeof row === 'object') {
+              m[cat] = {
+                inapp: (row as { inapp?: unknown }).inapp !== false,
+                push: (row as { push?: unknown }).push !== false
+              }
+            }
+          }
+          clean.matrix = m
+        }
+        patch.notification_prefs = clean
+      }
+      const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
+      bustNotifyPrefsCache(req.user!.id)
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }
