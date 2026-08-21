@@ -508,6 +508,16 @@ export async function slaRoutes(app: FastifyInstance) {
     const collection = String(b.collection ?? '')
     const item = String(b.item ?? '')
     if (!collection || !item) return reply.code(400).send({ error: 'collection and item are required' })
+    // Acking silences the escalation ladder — only someone who can actually
+    // SEE the record may do it. readOne is the full gate (RBAC, row filters,
+    // user scopes, tree permissions), so a record the caller can't open can't
+    // be quietly un-escalated either.
+    try {
+      const { readOne } = await import('../services/items.js')
+      await readOne(req.user!, collection, item, undefined, ['id'])
+    } catch {
+      return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
+    }
     const status = await computeStatus(collection, item)
     if (!status || status.status !== 'breached' || !status.sla_rule) {
       return reply.code(400).send({ error: 'No active breach to acknowledge' })
