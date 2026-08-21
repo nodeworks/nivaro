@@ -255,9 +255,7 @@ const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const HealthDashboardPage = lazy(() =>
   import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
 )
-const DataQualityPage = lazy(() =>
-  import('@/pages/DataQuality').then((m) => ({ default: m.DataQualityPage }))
-)
+
 const RetentionPoliciesPage = lazy(() =>
   import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
 )
@@ -497,7 +495,7 @@ export default function App() {
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
-                  <Route path='data-quality' element={<DataQualityPage />} />
+                  <Route path='data-quality' element={<Navigate to='/data-integrity?tab=quality' replace />} />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />
                   {/* The workflow template editor merged into /pipelines —

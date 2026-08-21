@@ -201,7 +201,6 @@ export const navCategories: NavCategory[] = [
       { icon: Globe, label: 'Submission Forms', to: '/submission-forms' },
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics' },
       { icon: HeartPulse, label: 'Health', to: '/health' },
-      { icon: ShieldCheck, label: 'Data Quality', to: '/data-quality' },
       { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity' },
       { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
       { icon: AlertOctagon, label: 'Issues', to: '/issues' },

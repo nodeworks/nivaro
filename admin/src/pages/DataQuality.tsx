@@ -604,7 +604,7 @@ function RunResultRow({
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-export function DataQualityPage() {
+export function DataQualityPage({ embedded = false }: { embedded?: boolean } = {}) {
   const qc = useQueryClient()
   const [collection, setCollection] = useState('')
   const [adding, setAdding] = useState(false)
@@ -693,12 +693,14 @@ export function DataQualityPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <ShieldCheck className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Data Quality</h1>
-        </div>
-      </header>
+      {!embedded && (
+        <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
+          <div className='flex items-center gap-2.5'>
+            <ShieldCheck className='h-5 w-5 text-muted-foreground' />
+            <h1 className='text-lg font-semibold'>Data Quality</h1>
+          </div>
+        </header>
+      )}
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left: collection + rules */}

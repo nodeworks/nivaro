@@ -52,6 +52,16 @@ function fmtDur(ms: number | null | undefined): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
 }
 
+function relFuture(ts: string | null | undefined): string {
+  if (!ts) return '—'
+  const diff = new Date(ts).getTime() - Date.now()
+  if (diff <= 0) return 'due now'
+  if (diff < 60_000) return 'in <1m'
+  if (diff < 3_600_000) return `in ${Math.round(diff / 60_000)}m`
+  if (diff < 86_400_000) return `in ${Math.floor(diff / 3_600_000)}h ${Math.round((diff % 3_600_000) / 60_000)}m`
+  return `in ${Math.floor(diff / 86_400_000)}d`
+}
+
 function rel(ts: string | null | undefined): string {
   if (!ts) return '—'
   const diff = Date.now() - new Date(ts).getTime()
@@ -177,9 +187,11 @@ export default function BackgroundJobs() {
             <td className="py-1.5 pr-3 text-slate-500 dark:text-muted-foreground">
               {fmtDur(c.last?.duration_ms)}
             </td>
-            <td className="py-1.5 pr-3 text-slate-500 dark:text-muted-foreground">
-              {c.next_run ? rel(c.next_run).replace(' ago', '') : '—'}
-              {c.next_run && Date.now() < new Date(c.next_run).getTime() && ' from now'}
+            <td
+              className="py-1.5 pr-3 text-slate-500 dark:text-muted-foreground"
+              title={c.next_run ? new Date(c.next_run).toLocaleString() : ''}
+            >
+              {relFuture(c.next_run)}
             </td>
             <td className="py-1.5 pr-3">
               {c.errors_7d > 0 ? (
