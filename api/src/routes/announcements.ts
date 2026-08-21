@@ -20,11 +20,33 @@ import { sendSms } from '../services/sms.js'
 const CHANNELS = ['banner', 'message', 'email', 'sms'] as const
 type Channel = (typeof CHANNELS)[number]
 
+/** One audience group: ANDed scope conditions ({division: [2], project_type: [35]}
+ *  = "Zone 2 AND Node Splits"). Multiple groups OR together. */
+type AudienceGroup = Record<string, Array<string | number>>
+
 interface Audience {
   roles?: string[]
+  groups?: AudienceGroup[]
+  /** Legacy single-dimension form — normalized into one group. */
   dimension?: string
   values?: Array<string | number>
   user_ids?: string[]
+}
+
+function normalizeGroups(aud: Audience): AudienceGroup[] {
+  const groups = (Array.isArray(aud.groups) ? aud.groups : [])
+    .map((g) => {
+      const out: AudienceGroup = {}
+      for (const [k, v] of Object.entries(g ?? {})) {
+        if (typeof k === 'string' && k && Array.isArray(v) && v.length > 0) out[k] = v
+      }
+      return out
+    })
+    .filter((g) => Object.keys(g).length > 0)
+  if (groups.length === 0 && aud.dimension && aud.values?.length) {
+    groups.push({ [aud.dimension]: aud.values })
+  }
+  return groups
 }
 
 function parseJsonSafe<T>(raw: unknown): T | null {
@@ -39,22 +61,53 @@ function parseJsonSafe<T>(raw: unknown): T | null {
 
 /** Resolve the concrete users an audience means, for send-time channels.
  *  Empty audience = every active user. */
-async function resolveAudienceUsers(
-  aud: Audience
-): Promise<Array<{ id: string; email: string | null; phone: string | null }>> {
+async function resolveAudienceUsers(aud: Audience): Promise<
+  Array<{
+    id: string
+    email: string | null
+    phone: string | null
+    first_name: string | null
+    last_name: string | null
+  }>
+> {
   const explicit = new Set<string>((aud.user_ids ?? []).map(String))
-  let scoped: Set<string> | null = null
-  if (aud.dimension && aud.values?.length) {
-    scoped = new Set<string>()
-    const wanted = new Set(aud.values.map(String))
+  const groups = normalizeGroups(aud)
+
+  // The referenced dimensions' restrict scopes, loaded once: user -> dim -> ids.
+  let scopeByUser: Map<string, Map<string, Set<string>>> | null = null
+  if (groups.length > 0) {
+    scopeByUser = new Map()
+    const dims = [...new Set(groups.flatMap((g) => Object.keys(g)))]
     const rows = (await db('nivaro_user_scopes')
-      .where({ dimension: aud.dimension, mode: 'restrict' })
-      .select('user', 'values')) as Array<{ user: string; values: string | null }>
+      .whereIn('dimension', dims)
+      .where('mode', 'restrict')
+      .select('user', 'dimension', 'values')) as Array<{
+      user: string
+      dimension: string
+      values: string | null
+    }>
     for (const row of rows) {
-      const vals = parseJsonSafe<Array<string | number>>(row.values) ?? []
-      if (vals.some((v) => wanted.has(String(v)))) scoped.add(String(row.user))
+      const uid = String(row.user)
+      const byDim = scopeByUser.get(uid) ?? new Map<string, Set<string>>()
+      byDim.set(
+        row.dimension,
+        new Set((parseJsonSafe<Array<string | number>>(row.values) ?? []).map(String))
+      )
+      scopeByUser.set(uid, byDim)
     }
   }
+  // A group matches when EVERY condition in it intersects the user's scope;
+  // groups OR. Send channels require actual scope membership on each named
+  // dimension (an unrestricted user is out -- same as the old single-dim form).
+  const matchesGroups = (id: string): boolean =>
+    groups.some((g) =>
+      Object.entries(g).every(([dim, vals]) => {
+        const mine = scopeByUser?.get(id)?.get(dim)
+        if (!mine) return false
+        return vals.some((v) => mine.has(String(v)))
+      })
+    )
+
   let roleUsers: Set<string> | null = null
   if (aud.roles?.length) {
     roleUsers = new Set(
@@ -66,17 +119,22 @@ async function resolveAudienceUsers(
     )
   }
 
-  const q = db('nivaro_users')
+  const all = (await db('nivaro_users')
     .where({ status: 'active', is_redacted: false })
-    .select('id', 'email', 'phone')
-  const all = (await q) as Array<{ id: string; email: string | null; phone: string | null }>
+    .select('id', 'email', 'phone', 'first_name', 'last_name')) as Array<{
+    id: string
+    email: string | null
+    phone: string | null
+    first_name: string | null
+    last_name: string | null
+  }>
+  // One pass over the unique user list: a user matching several groups still
+  // appears exactly once, so multi-group audiences never double-send.
   return all.filter((u) => {
     const id = String(u.id)
-    // Explicit users are always in; otherwise every configured constraint
-    // must admit them; no constraints at all = everyone.
     if (explicit.has(id)) return true
-    if (scoped === null && roleUsers === null && explicit.size > 0) return false
-    if (scoped !== null && !scoped.has(id)) return false
+    if (groups.length === 0 && roleUsers === null && explicit.size > 0) return false
+    if (groups.length > 0 && !matchesGroups(id)) return false
     if (roleUsers !== null && !roleUsers.has(id)) return false
     return true
   })
@@ -138,11 +196,19 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       const aud = parseJsonSafe<Audience>(r.audience) ?? {}
       if (aud.user_ids?.length && aud.user_ids.map(String).includes(userId)) return true
       if (roles && !roles.some((x) => x.toLowerCase() === userRole)) return false
-      if (aud.dimension && aud.values?.length) {
-        const mine = myScopeValues.get(aud.dimension)
-        // Unrestricted-on-that-dimension viewers see dimension-wide banners:
-        // they can see the data, so they should see the notice about it.
-        if (mine && !aud.values.some((v) => mine.has(String(v)))) return false
+      const groups = normalizeGroups(aud)
+      if (groups.length > 0) {
+        // A group admits the viewer when every condition passes; a viewer
+        // UNRESTRICTED on a dimension passes that condition (they can see the
+        // data, so they should see the notice about it).
+        const passes = groups.some((g) =>
+          Object.entries(g).every(([dim, vals]) => {
+            const mine = myScopeValues.get(dim)
+            if (!mine) return true
+            return vals.some((v) => mine.has(String(v)))
+          })
+        )
+        if (!passes) return false
       }
       return true
     })
@@ -218,6 +284,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     const subject = String(b.subject ?? '').trim() || message.slice(0, 120)
     const aud: Audience = {
       roles: Array.isArray(b.audience?.roles) ? b.audience?.roles : undefined,
+      groups: Array.isArray(b.audience?.groups) ? b.audience?.groups : undefined,
       dimension: b.audience?.dimension || undefined,
       values: Array.isArray(b.audience?.values) ? b.audience?.values : undefined,
       user_ids: Array.isArray(b.audience?.user_ids) ? b.audience?.user_ids : undefined
@@ -323,6 +390,25 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       req
     })
     return reply.code(201).send({ data: { id, delivered } })
+  })
+
+  /** Live audience resolution for the compose form: how many unique people a
+   *  (partial or full) audience reaches, and who they are. Same resolver as
+   *  the real send, so the number can't lie. */
+  app.post('/preview-audience', { preHandler: requireAdmin }, async (req) => {
+    const b = req.body as { audience?: Audience }
+    const users = await resolveAudienceUsers(b.audience ?? {})
+    return {
+      data: {
+        count: users.length,
+        users: users.slice(0, 500).map((u) => ({
+          id: u.id,
+          name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
+          email: u.email
+        })),
+        truncated: users.length > 500
+      }
+    }
   })
 
   /** Who saw / received what, and when: banner dismissals (acks) + every

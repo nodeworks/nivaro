@@ -21,6 +21,9 @@ interface ScopeDimension {
   display_field: string | null
 }
 
+/** One audience group: ANDed scope conditions; groups OR together. */
+type AudienceGroup = Record<string, Array<string | number>>
+
 interface Broadcast {
   id: number
   subject: string | null
@@ -60,8 +63,7 @@ export function BroadcastView({ className }: { className?: string }) {
   const [inAppKind, setInAppKind] = useState<'banner' | 'message'>('banner')
   const [endsAt, setEndsAt] = useState('')
   // Audience
-  const [dimension, setDimension] = useState('')
-  const [dimValues, setDimValues] = useState<Array<string | number>>([])
+  const [groups, setGroups] = useState<AudienceGroup[]>([])
   const [roleIds, setRoleIds] = useState<string[]>([])
   const [result, setResult] = useState<string | null>(null)
 
@@ -82,24 +84,6 @@ export function BroadcastView({ className }: { className?: string }) {
         .request<{ data: ScopeDimension[] }>(get('/scope-dimensions'))
         .then((r) => r.data ?? [])
         .catch(() => []),
-    staleTime: 5 * 60_000
-  })
-  const dim = dimensions.find((d) => d.name === dimension)
-
-  const { data: dimOptions = [] } = useQuery<Array<{ id: string | number; label: string }>>({
-    queryKey: ['broadcast-dim-options', dim?.target_collection ?? null],
-    queryFn: () =>
-      client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${dim?.target_collection}`, { limit: 200 })
-        )
-        .then((r) =>
-          (r.data ?? []).map((row) => ({
-            id: row.id as string | number,
-            label: String(row[dim?.display_field || 'name'] ?? row.id)
-          }))
-        ),
-    enabled: !!dim,
     staleTime: 5 * 60_000
   })
 
@@ -127,19 +111,24 @@ export function BroadcastView({ className }: { className?: string }) {
     return out
   }, [inApp, inAppKind, email, sms])
 
-  const audienceSummary = useMemo(() => {
-    const parts: string[] = []
-    if (dimension && dimValues.length > 0) {
-      const labels = dimValues.map(
-        (v) => dimOptions.find((o) => String(o.id) === String(v))?.label ?? String(v)
-      )
-      parts.push(`${dim?.label ?? dimension}: ${labels.join(', ')}`)
-    }
-    if (roleIds.length > 0) {
-      parts.push(`roles: ${roleIds.map((r) => roles.find((x) => x.id === r)?.name ?? r).join(', ')}`)
-    }
-    return parts.length > 0 ? parts.join(' · ') : 'Everyone'
-  }, [dimension, dimValues, roleIds, dim, dimOptions, roles])
+  const cleanGroups = useMemo(
+    () =>
+      groups
+        .map((g) => {
+          const out: AudienceGroup = {}
+          for (const [k, v] of Object.entries(g)) if (k && v.length > 0) out[k] = v
+          return out
+        })
+        .filter((g) => Object.keys(g).length > 0),
+    [groups]
+  )
+  const fullAudience = useMemo(
+    () => ({
+      ...(cleanGroups.length > 0 ? { groups: cleanGroups } : {}),
+      ...(roleIds.length > 0 ? { roles: roleIds } : {})
+    }),
+    [cleanGroups, roleIds]
+  )
 
   const send = useMutation({
     mutationFn: () =>
@@ -150,10 +139,7 @@ export function BroadcastView({ className }: { className?: string }) {
           severity,
           channels,
           ends_at: endsAt || undefined,
-          audience: {
-            ...(dimension && dimValues.length > 0 ? { dimension, values: dimValues } : {}),
-            ...(roleIds.length > 0 ? { roles: roleIds } : {})
-          }
+          audience: fullAudience
         })
       ),
     onSuccess: (r) => {
@@ -197,84 +183,59 @@ export function BroadcastView({ className }: { className?: string }) {
           No selection = everyone. Zone/role targeting narrows both send channels and who sees a
           banner.
         </p>
-        <div className='mt-3 flex flex-wrap items-start gap-4'>
-          <div className='w-[200px]'>
-            <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
-              By scope
-            </p>
-            <PickList
-              value={dimension}
-              onChange={(v) => {
-                setDimension(v)
-                setDimValues([])
-              }}
-              options={dimensions.map((d) => ({ value: d.name, label: d.label }))}
-              placeholder='Any scope…'
-              allowClear
+        <div className='mt-3 space-y-2'>
+          {groups.map((g, gi) => (
+            <AudienceGroupCard
+              key={gi}
+              index={gi}
+              group={g}
+              dimensions={dimensions}
+              onChange={(next) => setGroups((prev) => prev.map((x, i) => (i === gi ? next : x)))}
+              onRemove={() => setGroups((prev) => prev.filter((_, i) => i !== gi))}
             />
-          </div>
-          {dim && (
-            <div className='min-w-[240px] flex-1'>
-              <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
-                {dim.label} values
-              </p>
-              <div className='flex flex-wrap gap-1.5'>
-                {dimOptions.map((o) => {
-                  const on = dimValues.some((v) => String(v) === String(o.id))
-                  return (
-                    <button
-                      key={String(o.id)}
-                      type='button'
-                      onClick={() =>
-                        setDimValues((prev) =>
-                          on ? prev.filter((v) => String(v) !== String(o.id)) : [...prev, o.id]
-                        )
-                      }
-                      className={cn(
-                        'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
-                        on
-                          ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                          : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
-                      )}
-                    >
-                      {o.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-          <div className='min-w-[220px]'>
-            <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
-              By role
-            </p>
-            <div className='flex flex-wrap gap-1.5'>
-              {roles.map((r) => {
-                const on = roleIds.includes(r.id)
-                return (
-                  <button
-                    key={r.id}
-                    type='button'
-                    onClick={() =>
-                      setRoleIds((prev) => (on ? prev.filter((x) => x !== r.id) : [...prev, r.id]))
-                    }
-                    className={cn(
-                      'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
-                      on
-                        ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                        : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
-                    )}
-                  >
-                    {r.name}
-                  </button>
-                )
-              })}
-            </div>
+          ))}
+          <button
+            type='button'
+            onClick={() => setGroups((prev) => [...prev, {}])}
+            className='rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-[11.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
+          >
+            ＋ {groups.length === 0 ? 'Target by scope (e.g. Zone 2 + Node Splits)' : 'Add another group (OR)'}
+          </button>
+        </div>
+        <div className='mt-3'>
+          <p className='mb-1 text-[11.5px] font-medium text-slate-700 dark:text-foreground'>
+            Limit to roles
+          </p>
+          <div className='flex flex-wrap gap-1.5'>
+            {roles.map((r) => {
+              const on = roleIds.includes(r.id)
+              return (
+                <button
+                  key={r.id}
+                  type='button'
+                  onClick={() =>
+                    setRoleIds((prev) => (on ? prev.filter((x) => x !== r.id) : [...prev, r.id]))
+                  }
+                  className={cn(
+                    'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
+                    on
+                      ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                      : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
+                  )}
+                >
+                  {r.name}
+                </button>
+              )
+            })}
           </div>
         </div>
-        <p className='mt-3 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          Sending to: <span className='font-medium'>{audienceSummary}</span>
-        </p>
+        <div className='mt-3 border-t border-slate-100 pt-2.5 dark:border-border'>
+          <AudiencePreviewChip
+            audience={fullAudience}
+            everyone={cleanGroups.length === 0 && roleIds.length === 0}
+            label='Sending to'
+          />
+        </div>
       </div>
 
       {/* ── Message + channels ─────────────────────────────────────────── */}
@@ -379,6 +340,14 @@ export function BroadcastView({ className }: { className?: string }) {
             </>
           )}
         </div>
+        {inApp && inAppKind === 'banner' && (
+          <p className='mt-1.5 text-[11px] text-slate-400'>
+            Ends = when the banner auto-expires for everyone who hasn't dismissed it. Leave it empty
+            and the banner stays up until each person dismisses it (or you turn it Off in history).
+            Email, text, and inbox messages always send once, immediately — Ends doesn't affect
+            them.
+          </p>
+        )}
         <div className='mt-4 flex items-center gap-3'>
           <button
             type='button'
@@ -550,6 +519,227 @@ function HistoryRow({
               </p>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One audience group: ANDed scope conditions ("Zone 2 AND Node Splits"),
+ *  with a live headcount resolved by the same code the send uses. */
+function AudienceGroupCard({
+  index,
+  group,
+  dimensions,
+  onChange,
+  onRemove
+}: {
+  index: number
+  group: AudienceGroup
+  dimensions: ScopeDimension[]
+  onChange: (next: AudienceGroup) => void
+  onRemove: () => void
+}) {
+  const usedDims = Object.keys(group)
+  const unused = dimensions.filter((d) => !usedDims.includes(d.name))
+  const complete = usedDims.length > 0 && usedDims.every((k) => (group[k] ?? []).length > 0)
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/30'>
+      <div className='flex items-center justify-between'>
+        <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+          Group {index + 1}
+          {usedDims.length > 1 && ' · all conditions must match'}
+        </p>
+        <div className='flex items-center gap-2.5'>
+          {complete && (
+            <span className='relative'>
+              <AudiencePreviewChip
+              audience={{ groups: [group] }}
+              everyone={false}
+                label='Matches'
+                compact
+              />
+            </span>
+          )}
+          <button
+            type='button'
+            onClick={onRemove}
+            className='text-[12px] text-slate-300 transition-colors hover:text-red-500'
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <div className='mt-2 space-y-2'>
+        {usedDims.map((dimName) => {
+          const dim = dimensions.find((d) => d.name === dimName)
+          return (
+            <div key={dimName} className='flex flex-wrap items-start gap-2'>
+              <span className='mt-0.5 w-[110px] shrink-0 text-[11.5px] font-medium text-slate-600 dark:text-muted-foreground'>
+                {dim?.label ?? dimName}
+              </span>
+              <div className='min-w-0 flex-1'>
+                {dim ? (
+                  <DimValueChips
+                    dim={dim}
+                    selected={group[dimName] ?? []}
+                    onChange={(vals) => {
+                      const next = { ...group }
+                      if (vals.length === 0) delete next[dimName]
+                      else next[dimName] = vals
+                      onChange(next)
+                    }}
+                  />
+                ) : (
+                  <span className='text-[11.5px] text-slate-400'>Unknown scope</span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+        {unused.length > 0 && (
+          <div className='w-[200px]'>
+            <PickList
+              value=''
+              onChange={(v) => {
+                if (v) onChange({ ...group, [v]: [] })
+              }}
+              options={unused.map((d) => ({ value: d.name, label: d.label }))}
+              placeholder={usedDims.length === 0 ? 'Pick a scope…' : '＋ And also…'}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Value toggles for one scope dimension, options from its target collection. */
+function DimValueChips({
+  dim,
+  selected,
+  onChange
+}: {
+  dim: ScopeDimension
+  selected: Array<string | number>
+  onChange: (vals: Array<string | number>) => void
+}) {
+  const client = useNivaroClient()
+  const { data: options = [] } = useQuery<Array<{ id: string | number; label: string }>>({
+    queryKey: ['broadcast-dim-options', dim.target_collection],
+    queryFn: () =>
+      client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${dim.target_collection}`, { limit: 200 })
+        )
+        .then((r) =>
+          (r.data ?? []).map((row) => ({
+            id: row.id as string | number,
+            label: String(row[dim.display_field || 'name'] ?? row.id)
+          }))
+        ),
+    staleTime: 5 * 60_000
+  })
+  return (
+    <div className='flex flex-wrap gap-1.5'>
+      {options.length === 0 && <span className='text-[11.5px] text-slate-400'>Loading…</span>}
+      {options.map((o) => {
+        const on = selected.some((v) => String(v) === String(o.id))
+        return (
+          <button
+            key={String(o.id)}
+            type='button'
+            onClick={() =>
+              onChange(
+                on ? selected.filter((v) => String(v) !== String(o.id)) : [...selected, o.id]
+              )
+            }
+            className={cn(
+              'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
+              on
+                ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-border dark:bg-card dark:text-muted-foreground'
+            )}
+          >
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Live "how many people, and who" — resolved by POST /preview-audience, the
+ *  exact resolver the send uses (deduped across groups by construction). */
+function AudiencePreviewChip({
+  audience,
+  everyone,
+  label,
+  compact
+}: {
+  audience: Record<string, unknown>
+  everyone: boolean
+  label: string
+  compact?: boolean
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const key = JSON.stringify(audience)
+  const { data } = useQuery<{
+    count: number
+    users: Array<{ id: string; name: string; email: string | null }>
+    truncated: boolean
+  }>({
+    queryKey: ['broadcast-audience-preview', key],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(post('/announcements/preview-audience', { audience }))
+        .then((r) => r.data),
+    enabled: !everyone,
+    staleTime: 30_000
+  })
+
+  if (everyone) {
+    return (
+      <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+        {label}: <span className='font-medium'>Everyone</span>
+      </p>
+    )
+  }
+  return (
+    <div className={compact ? '' : 'space-y-1.5'}>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 dark:text-muted-foreground'
+        title='Click to see who'
+      >
+        {label}:{' '}
+        <span className='font-medium'>
+          {data ? `${data.count} user${data.count === 1 ? '' : 's'}` : '…'}
+        </span>
+        {!compact && data != null && data.count > 0 && ' (deduped across groups)'}
+      </button>
+      {open && data && (
+        <div
+          className={cn(
+            'max-h-[180px] overflow-y-auto rounded-md border border-slate-200 bg-white p-2 dark:border-border dark:bg-card',
+            compact && 'absolute z-10 mt-1 w-[260px] shadow-lg'
+          )}
+        >
+          {data.users.length === 0 && (
+            <p className='text-[11.5px] text-slate-400'>No one matches this yet.</p>
+          )}
+          {data.users.map((u) => (
+            <p key={u.id} className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+              {u.name}
+              {u.email && <span className='text-slate-400'> · {u.email}</span>}
+            </p>
+          ))}
+          {data.truncated && (
+            <p className='mt-1 text-[11px] text-slate-400'>Showing the first 500.</p>
+          )}
         </div>
       )}
     </div>
