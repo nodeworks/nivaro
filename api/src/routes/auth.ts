@@ -8,6 +8,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
+import { recordLogin } from '../services/security.js'
 import type { User } from '../types.js'
 
 // Validate returnTo against all configured allowed origins (admin + any APP_URLS).
@@ -169,6 +170,7 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       req.session.userId = user.id
+      void recordLogin(app, user.id, 'oidc', req)
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
       req.session.returnTo = undefined
@@ -212,6 +214,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     req.session.pendingTotpUserId = undefined
     req.session.userId = user.id
+    void recordLogin(app, user.id, 'oidc', req)
 
     const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
     req.session.returnTo = undefined
@@ -264,6 +267,7 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       req.session.userId = user.id
+      void recordLogin(app, user.id, 'saml', req)
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
       req.session.returnTo = undefined
@@ -308,6 +312,7 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     req.session.userId = user.id
+    void recordLogin(app, user.id, 'password', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })
@@ -337,6 +342,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     req.session.userId = user.id
+    void recordLogin(app, user.id, 'password', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })
@@ -431,6 +437,7 @@ export async function authRoutes(app: FastifyInstance) {
       4 * 3600,
       JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
     )
+    void recordLogin(app, String((req.body as { user_id?: string }).user_id ?? ''), 'masquerade', req)
     await logActivity({
       action: 'masquerade-start',
       user: req.user!.id,

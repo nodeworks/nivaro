@@ -50,17 +50,19 @@ export function AnnouncementBanner() {
           >
             {a.message}
           </span>
-          <button
-            type='button'
-            onClick={() =>
-              void client
-                ?.request(post(`/announcements/${a.id}/ack`, {}))
-                .then(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
-            }
-            className='shrink-0 text-[11.5px] font-medium text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 dark:text-muted-foreground'
-          >
-            Dismiss
-          </button>
+          {(a as { dismissable?: boolean }).dismissable !== false && (
+            <button
+              type='button'
+              onClick={() =>
+                void client
+                  ?.request(post(`/announcements/${a.id}/ack`, {}))
+                  .then(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
+              }
+              className='shrink-0 text-[11.5px] font-medium text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 dark:text-muted-foreground'
+            >
+              Dismiss
+            </button>
+          )}
         </div>
       ))}
     </div>

@@ -151,6 +151,7 @@ const IntegrationHealthPage = lazy(() =>
 )
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
+const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
 )
@@ -441,6 +442,7 @@ export default function App() {
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='monitors' element={<MonitorsPage />} />
+                  <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />

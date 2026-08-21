@@ -40,6 +40,7 @@ import { monitorRoutes } from './monitors.js'
 import { integrationContractRoutes } from './integration-contracts.js'
 import { rumRoutes } from './rum.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
+import { securityRoutes } from './security.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -142,6 +143,29 @@ import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
+  // Maintenance mode: instance-wide write freeze (admins exempt, reads fine).
+  // Auth stays open so admins can get in to turn it off.
+  app.addHook('preHandler', async (req, reply) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
+    const url = req.url
+    if (url.startsWith('/api/auth') || url.startsWith('/api/settings') || url.startsWith('/api/rum')) return
+    const { maintenanceState } = await import('../services/security.js')
+    const maint = await maintenanceState()
+    if (!maint.on) return
+    // This app-level hook runs BEFORE the routes' own authenticate
+    // preHandler, so identity isn't resolved yet — resolve it here (only
+    // while maintenance is actually on) so admins stay exempt.
+    if (!req.user) {
+      const { authenticate } = await import('../middleware/authenticate.js')
+      await authenticate(req, reply).catch(() => {})
+    }
+    if (req.isAdmin) return
+    return reply.code(503).send({
+      error: maint.message || 'Maintenance in progress — changes are temporarily disabled.',
+      code: 'MAINTENANCE'
+    })
+  })
+
   // Collection/field metadata is cached in-process (services/collections.ts) to
   // keep schema lookups off the hot path. Any successful write to a route that
   // can change that metadata drops the cache immediately, so edits are visible
@@ -186,6 +210,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationContractRoutes, { prefix: '/integration-contracts' })
   await app.register(rumRoutes, { prefix: '/rum' })
   await app.register(indexAdvisorRoutes, { prefix: '/index-advisor' })
+  await app.register(securityRoutes, { prefix: '/security' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

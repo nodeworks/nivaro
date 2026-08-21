@@ -24,6 +24,11 @@ export async function settingsRoutes(app: FastifyInstance) {
   })
 
   app.patch('/', { preHandler: requireAdmin }, async (req, reply) => {
+    // Maintenance flag edits must apply immediately, not after the 15s cache.
+    {
+      const { bustMaintenanceCache } = await import('../services/security.js')
+      reply.raw.once('finish', () => bustMaintenanceCache())
+    }
     const allowed = [
       'project_name',
       'project_description',
@@ -63,6 +68,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       'mail_test_recipient',
       'mail_test_allowlist',
       'environment_label',
+      'maintenance_mode',
+      'maintenance_message',
       'sms_test_mode',
       'sms_test_recipient',
       'sms_test_allowlist',

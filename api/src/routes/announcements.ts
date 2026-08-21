@@ -321,15 +321,30 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       }
       return true
     })
-    return {
-      data: visible.map((r) => ({
-        id: r.id,
-        message: r.message,
-        subject: r.subject,
-        severity: r.severity,
-        ends_at: r.ends_at
-      }))
+    const data = visible.map((r) => ({
+      id: r.id as number,
+      message: r.message,
+      subject: r.subject,
+      severity: r.severity,
+      ends_at: r.ends_at,
+      dismissable: true
+    }))
+    // Maintenance mode rides the same banner surface — synthetic row, not
+    // dismissable (acking it would make the freeze invisible while it holds).
+    const { maintenanceState } = await import('../services/security.js')
+    const maint = await maintenanceState()
+    if (maint.on) {
+      data.unshift({
+        id: -1,
+        message:
+          maint.message || 'Maintenance in progress — changes are temporarily disabled.',
+        subject: 'Maintenance',
+        severity: 'critical',
+        ends_at: null,
+        dismissable: false
+      })
     }
+    return { data }
   })
 
   app.post<{ Params: { id: string } }>(
