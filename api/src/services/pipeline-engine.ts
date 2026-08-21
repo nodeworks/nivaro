@@ -1350,7 +1350,12 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
             ) {
               bestSuggestion = {
                 group_id: String(group.id),
-                group_label: String((group as { name?: string }).name ?? group.id),
+                group_label:
+                  ((group as { name?: string | null }).name ?? '').trim() ||
+                  // Unnamed group (legacy sync left a few): describe it by its
+                  // own filter values rather than showing a uuid.
+                  filters.map((f) => String(f.value)).join(' · ') ||
+                  String(group.id),
                 matched_filters: matched,
                 mismatched_filters: mismatched
               }
