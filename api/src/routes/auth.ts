@@ -437,7 +437,7 @@ export async function authRoutes(app: FastifyInstance) {
       4 * 3600,
       JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
     )
-    void recordLogin(app, String((req.body as { user_id?: string }).user_id ?? ''), 'masquerade', req)
+    void recordLogin(app, String(target.id), 'masquerade', req)
     await logActivity({
       action: 'masquerade-start',
       user: req.user!.id,

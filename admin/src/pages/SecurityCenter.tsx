@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils'
  */
 
 interface SessionRow {
-  sid: string
   sid_prefix: string
   user_id: string
   user_name: string
@@ -124,7 +123,7 @@ export default function SecurityCenter() {
   })
 
   const revoke = useMutation({
-    mutationFn: (sid: string) => api.delete(`/security/sessions/${sid}`),
+    mutationFn: (prefix: string) => api.delete(`/security/sessions/${prefix}`),
     onSuccess: () => {
       toast.success('Session revoked — that browser is signed out')
       void qc.invalidateQueries({ queryKey: ['security-sessions'] })
@@ -184,7 +183,7 @@ export default function SecurityCenter() {
                   <div className='mt-1 flex flex-wrap gap-2'>
                     {list.map((s) => (
                       <span
-                        key={s.sid}
+                        key={s.sid_prefix}
                         className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'
                       >
                         <span className='font-mono'>{s.sid_prefix}…</span>
@@ -192,7 +191,7 @@ export default function SecurityCenter() {
                         <button
                           type='button'
                           onClick={() => {
-                            if (window.confirm(`Sign out this session of ${name}?`)) revoke.mutate(s.sid)
+                            if (window.confirm(`Sign out this session of ${name}?`)) revoke.mutate(s.sid_prefix)
                           }}
                           className='text-slate-300 transition-colors hover:text-red-500'
                           title='Revoke — signs that browser out immediately'

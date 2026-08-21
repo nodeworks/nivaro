@@ -49,9 +49,9 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     )
     return {
       data: sessions.map((s) => ({
-        // Only a prefix leaves the server — the full sid IS the credential.
-        sid_prefix: s.sid.slice(0, 8),
-        sid: s.sid,
+        // The full sid IS the credential — only a prefix ever leaves the
+        // server; revoke resolves it back to the real key by SCAN.
+        sid_prefix: s.sid.slice(0, 12),
         user_id: s.user_id,
         user_name: nameById.get(String(s.user_id).toUpperCase()) ?? s.user_id,
         ttl_seconds: s.ttl_seconds
@@ -59,12 +59,28 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
-  app.delete<{ Params: { sid: string } }>('/sessions/:sid', async (req, reply) => {
-    const sid = req.params.sid
-    if (!/^[A-Za-z0-9_-]{8,200}$/.test(sid)) return reply.code(400).send({ error: 'Bad session id' })
-    const deleted = await app.redis.del(`sess:${sid}`)
-    if (deleted === 0) return reply.code(404).send({ error: 'Session not found (already gone?)' })
-    await logActivity({ action: 'session-revoke', user: req.user?.id, comment: sid.slice(0, 8), req })
+  app.delete<{ Params: { prefix: string } }>('/sessions/:prefix', async (req, reply) => {
+    const prefix = req.params.prefix
+    if (!/^[A-Za-z0-9_-]{8,40}$/.test(prefix)) return reply.code(400).send({ error: 'Bad session prefix' })
+    // Resolve the prefix to the full key server-side — the client never held
+    // the credential, so it can't hand us one.
+    const matches: string[] = []
+    let cursor = '0'
+    let guard = 0
+    do {
+      const [next, keys] = await app.redis.scan(cursor, 'MATCH', `sess:${prefix}*`, 'COUNT', 200)
+      cursor = next
+      matches.push(...keys)
+      guard++
+    } while (cursor !== '0' && guard < 100 && matches.length < 3)
+    if (matches.length === 0) return reply.code(404).send({ error: 'Session not found (already gone?)' })
+    if (matches.length > 1) {
+      // 12 hex-ish chars colliding is astronomically unlikely, but a wrong
+      // revoke logs someone else out — refuse rather than guess.
+      return reply.code(409).send({ error: 'Prefix is ambiguous — refresh and retry' })
+    }
+    await app.redis.del(matches[0])
+    await logActivity({ action: 'session-revoke', user: req.user?.id, comment: prefix, req })
     return { data: { revoked: true } }
   })
 
