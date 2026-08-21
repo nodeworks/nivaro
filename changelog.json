@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T20:25:50.308Z",
+  "generated_at": "2026-08-21T20:54:23.668Z",
   "releases": [
+    {
+      "version": "0.1.96",
+      "tag": "v0.1.96",
+      "date": "2026-08-21T16:54:20-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "people",
+              "text": "offboarding wizard, account merge, custom status, map view, PDF designer",
+              "hash": "ba95a161"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.95",
       "tag": "v0.1.95",
-      "date": "2026-08-21T16:25:47-04:00",
+      "date": "2026-08-21T16:25:50-04:00",
       "sections": [
         {
           "label": "Added",
