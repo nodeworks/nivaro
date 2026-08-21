@@ -43,6 +43,7 @@ import { indexAdvisorRoutes } from './index-advisor.js'
 import { securityRoutes } from './security.js'
 import { configHealthRoutes } from './config-health.js'
 import { legalHoldRoutes } from './legal-holds.js'
+import { automationTestRoutes } from './automation-tests.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -215,6 +216,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(securityRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })
   await app.register(legalHoldRoutes, { prefix: '/legal-holds' })
+  await app.register(automationTestRoutes, { prefix: '/automation-tests' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

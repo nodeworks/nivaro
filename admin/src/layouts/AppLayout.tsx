@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Activity,
+  FlaskConical,
   Radar,
   AlertOctagon,
   AlertTriangle,
@@ -198,6 +199,7 @@ export const navCategories: NavCategory[] = [
       { icon: Activity, label: 'Background Jobs', to: '/background-jobs' },
       { icon: Radar, label: 'Monitors', to: '/monitors' },
       { icon: Sparkles, label: 'Config Health', to: '/config-health' },
+      { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests' },
       { icon: ShieldAlert, label: 'Security Center', to: '/security-center' },
       { icon: Scale, label: 'Legal Holds', to: '/legal-holds' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
