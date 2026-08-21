@@ -608,6 +608,96 @@ export async function aiRoutes(app: FastifyInstance) {
   })
 
   // POST /ai/generate — generate content for a specific field using Claude
+  /**
+   * SQL copilot (#54): generate MSSQL for the custom-query editor from a
+   * description, explain an existing query, or fix one that errored — with
+   * LIVE schema context injected (tables + columns most relevant to the
+   * prompt). Admin only; the result is a draft for the editor, never
+   * executed here.
+   */
+  app.post('/sql', { preHandler: requireAdmin }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const b = req.body as { prompt?: string; current_sql?: string; error?: string; mode?: string }
+    const mode = ['generate', 'explain', 'fix'].includes(String(b.mode)) ? String(b.mode) : 'generate'
+    if (mode === 'generate' && !b.prompt?.trim()) {
+      return reply.code(400).send({ error: 'prompt is required' })
+    }
+    if (mode !== 'generate' && !b.current_sql?.trim()) {
+      return reply.code(400).send({ error: 'current_sql is required for explain/fix' })
+    }
+
+    // Schema context: every business collection's name, plus full column
+    // lists for the ones the prompt/current SQL actually mentions (capped).
+    const collections = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection')) as Array<{ collection: string }>
+    const names = collections.map((c) => c.collection)
+    const referenced = new Set<string>()
+    const haystack = `${b.prompt ?? ''} ${b.current_sql ?? ''}`.toLowerCase()
+    for (const n of names) {
+      if (haystack.includes(n.toLowerCase()) || haystack.includes(n.toLowerCase().replace(/_/g, ' '))) {
+        referenced.add(n)
+      }
+    }
+    // Words in the prompt that fuzzy-match a table name pull it in too.
+    for (const word of haystack.split(/[^a-z_]+/)) {
+      if (word.length < 4) continue
+      for (const n of names) {
+        if (n.toLowerCase().includes(word)) referenced.add(n)
+      }
+    }
+    const detail = [...referenced].slice(0, 12)
+    const columnBlocks: string[] = []
+    for (const t of detail) {
+      try {
+        const cols = (await db('information_schema.columns')
+          .where({ table_name: t })
+          .orderBy('ordinal_position')
+          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+        columnBlocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
+      } catch {
+        /* skip */
+      }
+    }
+    const schemaCtx = `Tables available: ${names.join(', ')}\n\nDetailed schemas:\n${columnBlocks.join('\n')}`
+
+    const instructions =
+      mode === 'explain'
+        ? `Explain what this SQL query does, in plain language a business analyst understands. Note any correctness risks.\n\nSQL:\n${b.current_sql}`
+        : mode === 'fix'
+          ? `This SQL query failed. Fix it. Return the corrected SQL in a fenced sql code block followed by ONE sentence about what was wrong.\n\nSQL:\n${b.current_sql}\n\nError:\n${b.error ?? '(not provided)'}`
+          : `Write a Microsoft SQL Server (T-SQL) query for this request. Params use :name placeholders (e.g. :funding_year). Return the SQL in a fenced sql code block followed by ONE sentence describing it.\n\nRequest: ${b.prompt}${b.current_sql ? `\n\nCurrent query (revise it): ${b.current_sql}` : ''}`
+
+    const { model } = await getAiSettings()
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 1500,
+        system: `You are a T-SQL expert working against this Microsoft SQL Server schema. Only reference tables and columns that exist in it.\n\n${schemaCtx}`,
+        messages: [{ role: 'user', content: instructions }]
+      })
+      const text = msg.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('\n')
+      const sqlMatch = text.match(/```sql\n?([\s\S]*?)```/)
+      await logActivity({ action: 'ai-sql', user: req.user?.id, comment: mode, req })
+      return {
+        data: {
+          mode,
+          sql: sqlMatch ? sqlMatch[1].trim() : null,
+          text: text.replace(/```sql[\s\S]*?```/, '').trim()
+        }
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err)
+      return reply.code(502).send({ error: `AI call failed: ${m.slice(0, 300)}` })
+    }
+  })
+
   app.post('/generate', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {

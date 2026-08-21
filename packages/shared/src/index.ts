@@ -156,5 +156,6 @@ export {
   useMyScopes
 } from './lib/use-my-scopes'
 export * from './lib/utils'
+export * from './lib/field-interfaces'
 export { applyValidationRule } from './lib/validation-rules'
 export * from './types'

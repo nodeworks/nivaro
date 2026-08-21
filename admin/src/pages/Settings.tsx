@@ -319,6 +319,9 @@ export function SettingsPage() {
   const [projectDescription, setProjectDescription] = useState('')
   const [projectUrl, setProjectUrl] = useState('')
   const [projectColor, setProjectColor] = useState('#00ceff')
+  const [brandLogo, setBrandLogo] = useState<string | null>(null)
+  const [brandLoginTitle, setBrandLoginTitle] = useState('')
+  const [brandLoginMessage, setBrandLoginMessage] = useState('')
   const [defaultLanguage, setDefaultLanguage] = useState('en-US')
   const [availableLocales, setAvailableLocales] = useState<string[]>(['en'])
   const [newLocale, setNewLocale] = useState('')
@@ -372,6 +375,9 @@ export function SettingsPage() {
     setProjectDescription(settings.project_description ?? '')
     setProjectUrl(settings.project_url ?? '')
     setProjectColor(settings.project_color ?? '#00ceff')
+    setBrandLogo((settings as { brand_logo?: string | null }).brand_logo ?? null)
+    setBrandLoginTitle((settings as { brand_login_title?: string | null }).brand_login_title ?? '')
+    setBrandLoginMessage((settings as { brand_login_message?: string | null }).brand_login_message ?? '')
     setDefaultLanguage(settings.default_language ?? 'en-US')
     setAvailableLocales(toLocaleArray((settings as Record<string, unknown>).available_locales))
     setTeamsWebhook(settings.teams_webhook_url ?? '')
@@ -436,7 +442,10 @@ export function SettingsPage() {
       project_name: projectName,
       project_description: projectDescription || null,
       project_url: projectUrl || null,
-      project_color: projectColor
+      project_color: projectColor,
+      brand_logo: brandLogo,
+      brand_login_title: brandLoginTitle.trim() || null,
+      brand_login_message: brandLoginMessage.trim() || null
     })
   }
 
@@ -715,6 +724,77 @@ export function SettingsPage() {
                         />
                       </div>
                     </div>
+                  </Field>
+                  <Field
+                    label='Logo'
+                    hint='Shown on the login page and the sidebar. PNG/SVG with transparency works best.'
+                  >
+                    <div className='flex items-center gap-3'>
+                      {brandLogo && (
+                        <img
+                          src={`/api/files/${brandLogo}`}
+                          alt='Logo'
+                          className='max-h-12 max-w-[180px] rounded border border-slate-200 bg-white object-contain p-1 dark:border-border'
+                        />
+                      )}
+                      <label className='inline-flex h-8 cursor-pointer items-center rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'>
+                        {brandLogo ? 'Replace…' : 'Upload logo…'}
+                        <input
+                          type='file'
+                          accept='image/*'
+                          className='hidden'
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            const fd = new FormData()
+                            fd.append('file', file)
+                            try {
+                              const r = await api.post('/files/upload', fd, {
+                                headers: { 'Content-Type': 'multipart/form-data' }
+                              })
+                              const id = r.data?.data?.id ?? r.data?.id
+                              if (id) {
+                                setBrandLogo(String(id))
+                                toast.success('Logo uploaded — Save to apply')
+                              }
+                            } catch {
+                              toast.error('Upload failed')
+                            }
+                          }}
+                        />
+                      </label>
+                      {brandLogo && (
+                        <button
+                          type='button'
+                          onClick={() => setBrandLogo(null)}
+                          className='text-[12px] text-slate-400 hover:text-red-500'
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </Field>
+                  <Field
+                    label='Login page headline'
+                    hint='Replaces the big product name on the login screen. Blank = project name.'
+                  >
+                    <Input
+                      value={brandLoginTitle}
+                      onChange={(e) => setBrandLoginTitle(e.target.value)}
+                      placeholder='e.g. EFP Portal'
+                      className='h-8 text-[13px]'
+                    />
+                  </Field>
+                  <Field
+                    label='Login page message'
+                    hint='The line under the headline.'
+                  >
+                    <Input
+                      value={brandLoginMessage}
+                      onChange={(e) => setBrandLoginMessage(e.target.value)}
+                      placeholder='e.g. Engineering Facilities Planning'
+                      className='h-8 text-[13px]'
+                    />
                   </Field>
                 </SectionWrap>
               )}

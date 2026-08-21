@@ -214,6 +214,20 @@ export function LoginPage() {
       .then((d) => setProviders(d?.data ?? null))
       .catch(() => {})
   }, [])
+  // Instance branding (#21) — logo, headline, welcome copy. Nivaro defaults
+  // when nothing is configured.
+  const [branding, setBranding] = useState<{
+    name: string | null
+    logo_url: string | null
+    login_title: string | null
+    login_message: string | null
+  } | null>(null)
+  useEffect(() => {
+    fetch('/api/auth/branding')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setBranding(d?.data ?? null))
+      .catch(() => {})
+  }, [])
   const oidcLabel = providers?.oidc.label ?? 'Microsoft'
   const isMicrosoft = oidcLabel.toLowerCase() === 'microsoft'
 
@@ -292,27 +306,36 @@ export function LoginPage() {
         {/* Content */}
         <div className='relative z-10 flex flex-1 flex-col items-center justify-center px-12 py-16'>
           {/* Mark badge */}
-          <div
-            className='mb-10 flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg'
-            style={{
-              background: '#1e96d2',
-              animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both'
-            }}
-          >
-            <NivaroMark size={36} color='#172940' />
-          </div>
+          {branding?.logo_url ? (
+            <img
+              src={branding.logo_url}
+              alt={branding.name ?? 'Logo'}
+              className='mb-10 max-h-24 max-w-[260px] object-contain'
+              style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both' }}
+            />
+          ) : (
+            <div
+              className='mb-10 flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg'
+              style={{
+                background: '#1e96d2',
+                animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both'
+              }}
+            >
+              <NivaroMark size={36} color='#172940' />
+            </div>
+          )}
 
           <h1
             className='text-center text-[64px] font-black leading-none tracking-[-0.04em] text-white'
             style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both' }}
           >
-            Nivaro
+            {branding?.login_title || branding?.name || 'Nivaro'}
           </h1>
           <p
             className='mt-4 text-center text-[13px] font-light tracking-[0.08em] text-white/50'
             style={{ animation: 'login-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both' }}
           >
-            Headless CMS
+            {branding?.login_message || 'Headless CMS'}
           </p>
 
           <div

@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Activity, AlertOctagon, AlertTriangle, ArrowRightLeft, BarChart2, BarChart3, Bell, BellDot, BookOpen, Braces, Building2, CalendarClock, CalendarOff, Check, CheckSquare, Clapperboard, Clock, Code2, Database, DatabaseZap, Eye, FileBarChart, FileImage, FileText, FlaskConical, GitBranch, GitCompare, Globe, Grid3x3, HeartPulse, House, Inbox, KeyRound, LayoutGrid, Link2, ListFilter, LogOut, Megaphone, MessagesSquare, Network, Package, PanelLeftClose, PanelLeftOpen, PuzzleIcon, Radar, Radio, RefreshCw, Replace, Rocket, RotateCcw, Scale, ScanSearch, ScrollText, ServerCog, Settings, Shield, ShieldAlert, ShieldCheck, ShieldOff, Siren, SlidersHorizontal, Sparkles, Star, Terminal, ThumbsUp, Trash2, TrendingUp, Upload, UserRound, UserX, Users, Webhook, Wifi, Workflow, X as XIcon } from 'lucide-react'
+import { Activity, AlertOctagon, AlertTriangle, ArrowRightLeft, BarChart2, BarChart3, Bell, BellDot, BookOpen, Braces, Building2, CalendarClock, CalendarOff, Check, CheckSquare, Clapperboard, Clock, Code2, Database, DatabaseZap, Eye, FileBarChart, FileImage, FileText, FlaskConical, GitBranch, GitCompare, Globe, Grid3x3, HeartPulse, House, Inbox, KeyRound, LayoutGrid, Link2, ListFilter, LogOut, Mail, Megaphone, MessagesSquare, Network, Package, PanelLeftClose, PanelLeftOpen, PuzzleIcon, Radar, Radio, RefreshCw, Replace, Rocket, RotateCcw, Scale, ScanSearch, ScrollText, SearchCode, ServerCog, Settings, Shield, ShieldAlert, ShieldCheck, ShieldOff, Siren, SlidersHorizontal, Sparkles, Star, Terminal, ThumbsUp, Trash2, TrendingUp, Upload, UserRound, UserX, Users, Webhook, Wifi, Workflow, X as XIcon } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
-import { rumRouteChange, startRum } from '@nivaro/shared'
+import { rumRouteChange, setDisplayTimezone, startRum } from '@nivaro/shared'
 
 /** '/collections/workflows/312100' → '/collections/:c/:id' — RUM aggregates
  *  per page, not per record. */
@@ -124,12 +124,17 @@ export const navCategories: NavCategory[] = [
       { icon: Link2, label: 'Integrations', to: '/integration-health' },
       { icon: Activity, label: 'Background Jobs', to: '/background-jobs' },
       { icon: Radar, label: 'Monitors', to: '/monitors' },
+      { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar' },
       { icon: Sparkles, label: 'Config Health', to: '/config-health' },
       { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests' },
       { icon: ShieldAlert, label: 'Security Center', to: '/security-center' },
       { icon: Scale, label: 'Legal Holds', to: '/legal-holds' },
       { icon: Replace, label: 'Find & Replace', to: '/find-replace' },
       { icon: Grid3x3, label: 'M2M Matrix', to: '/m2m-matrix' },
+      { icon: Mail, label: 'Mail Templates', to: '/mail-templates' },
+      { icon: SearchCode, label: 'Config Search', to: '/config-search' },
+      { icon: KeyRound, label: 'Access Requests', to: '/access-requests' },
+      { icon: Rocket, label: 'Setup Checklist', to: '/setup' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },
@@ -443,6 +448,14 @@ export function AppLayout() {
 
   const projectName = settings?.project_name ?? 'Nivaro'
 
+  // Timezone preference (#31): the shared formatters render in the user's
+  // chosen zone once set; browser default otherwise.
+  const { user: authUser } = useAuth()
+  useEffect(() => {
+    const tz = (authUser?.preferences as { timezone?: string } | null | undefined)?.timezone
+    setDisplayTimezone(typeof tz === 'string' ? tz : null)
+  }, [authUser])
+
   const location = useLocation()
   // Real-user monitoring: one 'load' event per page load, one 'route' event
   // per SPA navigation, aggregated per ROUTE PATTERN so ids don't explode
@@ -642,9 +655,17 @@ export function AppLayout() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className='flex h-14 w-full shrink-0 cursor-default items-center justify-center border-b border-white/[0.07]'>
-                  <div className='flex h-7 w-7 items-center justify-center rounded-md bg-nvr-cyan'>
-                    <NivaroMark size={16} color='#172940' />
-                  </div>
+                  {settings?.brand_logo ? (
+                    <img
+                      src={`/api/files/${settings.brand_logo}`}
+                      alt={projectName}
+                      className='max-h-8 max-w-[40px] object-contain'
+                    />
+                  ) : (
+                    <div className='flex h-7 w-7 items-center justify-center rounded-md bg-nvr-cyan'>
+                      <NivaroMark size={16} color='#172940' />
+                    </div>
+                  )}
                 </div>
               </TooltipTrigger>
               <TooltipContent side='right' sideOffset={8}>

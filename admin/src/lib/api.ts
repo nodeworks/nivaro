@@ -71,6 +71,7 @@ export interface ApiItem<T> {
 }
 
 export type User = {
+  preferences?: Record<string, unknown> | null
   id: string
   first_name: string | null
   last_name: string | null
@@ -152,6 +153,9 @@ export type CMSRelation = {
 
 export type CMSSettings = {
   field_watch_enabled?: boolean
+  brand_logo?: string | null
+  brand_login_title?: string | null
+  brand_login_message?: string | null
   id: number
   project_name: string
   project_description: string | null

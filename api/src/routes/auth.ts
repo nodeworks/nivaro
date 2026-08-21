@@ -105,6 +105,29 @@ export async function authRoutes(app: FastifyInstance) {
   // Public provider discovery — drives the login page buttons. The OIDC flow
   // works with any compliant issuer; OIDC_PROVIDER_LABEL rebrands the button
   // (default 'Microsoft' for backwards compatibility).
+  /** Public branding (#21): what the login page needs before anyone is
+   *  authenticated. Only display values — never configuration. */
+  app.get('/branding', async () => {
+    try {
+      const row = (await db('nivaro_settings')
+        .where({ id: 1 })
+        .first('project_name', 'project_color', 'brand_logo', 'brand_login_title', 'brand_login_message')) as
+        | Record<string, unknown>
+        | undefined
+      return {
+        data: {
+          name: (row?.project_name as string | null) ?? null,
+          color: (row?.project_color as string | null) ?? null,
+          logo_url: row?.brand_logo ? `/api/files/${row.brand_logo}` : null,
+          login_title: (row?.brand_login_title as string | null) ?? null,
+          login_message: (row?.brand_login_message as string | null) ?? null
+        }
+      }
+    } catch {
+      return { data: { name: null, color: null, logo_url: null, login_title: null, login_message: null } }
+    }
+  })
+
   app.get('/providers', async (_req, reply) => {
     return reply.send({
       data: {

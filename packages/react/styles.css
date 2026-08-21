@@ -132,3 +132,21 @@ table {
 tr.nvr-row-flash > td {
   animation: nvr-row-flash-kf 2.4s ease-out;
 }
+
+/* Native form controls in dark mode: color-scheme makes the BROWSER-rendered
+   parts (the <option> popup, date pickers, scrollbars) dark — utility classes
+   cannot reach those. The select rule catches controls whose classes never
+   grew a dark: variant (light-on-light closed control); selects that declare
+   their own dark/arbitrary background are left alone. */
+.dark {
+  color-scheme: dark;
+}
+.dark select:not([class*='dark:bg']):not([class*='bg-[']) {
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+.dark select option {
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+}

@@ -31,12 +31,79 @@ export function registerMailTemplateRoot(dir: string): void {
   engine = buildEngine()
 }
 
-/** Render a mail template by name through the pluggable roots. */
+// DB override layer (#18): a nivaro_mail_templates row shadows the file
+// template of the same name — rebranding an email no longer needs a deploy.
+// 60s cache; busted by the mail-templates routes on save/revert.
+let overrideCache: { at: number; map: Map<string, string> } | null = null
+export function bustMailTemplateOverrides(): void {
+  overrideCache = null
+}
+async function getTemplateOverride(name: string): Promise<string | null> {
+  if (!overrideCache || Date.now() - overrideCache.at > 60_000) {
+    try {
+      const rows = (await db('nivaro_mail_templates').select('name', 'body')) as Array<{
+        name: string
+        body: string
+      }>
+      overrideCache = { at: Date.now(), map: new Map(rows.map((r) => [r.name, r.body])) }
+    } catch {
+      // Table may not exist yet mid-migration — file templates carry on.
+      overrideCache = { at: Date.now(), map: new Map() }
+    }
+  }
+  return overrideCache.map.get(name) ?? null
+}
+
+/** Render a mail template by name — DB override first, then the pluggable
+ *  file roots. Overrides still resolve `{% layout 'base' %}` against the
+ *  roots, so an override keeps the branded chrome unless it replaces it. */
 export async function renderMailTemplate(
   template: string,
   data?: Record<string, unknown>
 ): Promise<string> {
+  const override = await getTemplateOverride(template)
+  if (override !== null) {
+    return engine.parseAndRender(override, data ?? {})
+  }
   return engine.renderFile(template, data ?? {})
+}
+
+/** Render an UNSAVED draft body (editor preview) through the engine — layout
+ *  tags resolve against the file roots exactly like a stored override. */
+export async function previewMailBody(
+  body: string,
+  data?: Record<string, unknown>
+): Promise<string> {
+  return engine.parseAndRender(body, data ?? {})
+}
+
+/** The file template's source (for the editor's baseline + revert preview). */
+export async function readFileTemplate(name: string): Promise<string | null> {
+  const { readFile } = await import('node:fs/promises')
+  for (const root of templateRoots) {
+    try {
+      return await readFile(join(root, `${name}.liquid`), 'utf8')
+    } catch {
+      /* next root */
+    }
+  }
+  return null
+}
+
+/** Template names available across every registered root. */
+export async function listFileTemplates(): Promise<string[]> {
+  const { readdir } = await import('node:fs/promises')
+  const names = new Set<string>()
+  for (const root of templateRoots) {
+    try {
+      for (const f of await readdir(root)) {
+        if (f.endsWith('.liquid')) names.add(f.replace(/\.liquid$/, ''))
+      }
+    } catch {
+      /* extension root may be absent in this deployment */
+    }
+  }
+  return [...names].sort()
 }
 
 interface SmtpConfig {

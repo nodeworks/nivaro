@@ -1,5 +1,5 @@
 import { ExternalLink } from 'lucide-react'
-import { useContext } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown , useParentDraft } from '../../context'
 import { precisionOf } from '../../lib/format-value'
 import { Badge } from '../ui/badge'
@@ -11,6 +11,12 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { CatalogPickerField, type CatalogModeConfig } from './CatalogPickerField'
 import { FilePickerField, FileM2MField } from './FilePickerField'
+import {
+  type FieldInterfaceHandle,
+  type FieldInterfacePlugin,
+  type FieldInterfaceProps,
+  getFieldInterface
+} from '../../lib/field-interfaces'
 import { choiceLabel } from '../../lib/utils'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
@@ -72,6 +78,36 @@ export function resolveOptionFilterTokens(
   return r.ok ? (r.v as Record<string, unknown>) : undefined
 }
 
+/** Extension-registered custom field interface (#17): a framework-free DOM
+ *  mount. Re-renders on value change via handle.update; late-loading bundles
+ *  upgrade already-mounted fields through the registry listener. */
+function CustomFieldInterface({
+  plugin,
+  props
+}: {
+  plugin: FieldInterfacePlugin
+  props: FieldInterfaceProps
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const handleRef = useRef<FieldInterfaceHandle | void>(undefined)
+  const propsRef = useRef(props)
+  propsRef.current = props
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount once per plugin
+  useEffect(() => {
+    if (!hostRef.current) return
+    hostRef.current.innerHTML = ''
+    handleRef.current = plugin.mount(hostRef.current, propsRef.current)
+    return () => {
+      handleRef.current?.destroy?.()
+      handleRef.current = undefined
+    }
+  }, [plugin])
+  useEffect(() => {
+    handleRef.current?.update?.(props)
+  }, [props])
+  return <div ref={hostRef} data-custom-interface={plugin.interface} />
+}
+
 export function FieldRenderer({
   field,
   value,
@@ -101,6 +137,26 @@ export function FieldRenderer({
   const parentDraftForFilters = useParentDraft()
   const relationPathData = useContext(RelationPathDataContext)
   const iface = field.interface ?? ''
+  // Extension-registered interfaces win over the built-in dispatch. Resolved
+  // ONCE at mount: flipping to a plugin on a later render would early-return
+  // past the hooks below (React hooks-order crash), and bundles register
+  // during app bootstrap anyway — before any record page mounts.
+  const customPlugin = useRef(getFieldInterface(iface)).current
+  if (customPlugin) {
+    return (
+      <CustomFieldInterface
+        plugin={customPlugin}
+        props={{
+          value,
+          onChange,
+          field: { field: field.field, label: field.label, options: field.options },
+          readOnly: !!field.readonly || !!displayOnly,
+          collection,
+          itemId: itemId || null
+        }}
+      />
+    )
+  }
   const isRelIface =
     !iface ||
     iface.startsWith('relation-') ||

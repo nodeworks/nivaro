@@ -82,7 +82,11 @@ export async function settingsRoutes(app: FastifyInstance) {
       // Chat
       'chat_bot_name',
       // Field-level record watches (#58) — instance feature flag, off by default
-      'field_watch_enabled'
+      'field_watch_enabled',
+      // Branding (#21)
+      'brand_logo',
+      'brand_login_title',
+      'brand_login_message'
     ]
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))

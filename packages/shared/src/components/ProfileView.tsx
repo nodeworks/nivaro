@@ -33,7 +33,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { get, patch } from '../lib/commands'
-import { cn } from '../lib/utils'
+import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
 
@@ -372,6 +372,92 @@ function NotificationRulesCard() {
 }
 
 // ── Email delivery (instant vs daily action digest) ─────────────────────────
+
+/** Timezone preference (#31): applied to every datetime the shared
+ *  formatters render. Defaults to the browser's zone. */
+function TimezoneCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [search, setSearch] = useState('')
+  const browserTz = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone
+    } catch {
+      return 'UTC'
+    }
+  })()
+  const zones: string[] = (() => {
+    try {
+      return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
+    } catch {
+      return []
+    }
+  })()
+  const { data: prefs } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
+  })
+  const current = typeof prefs?.timezone === 'string' ? prefs.timezone : null
+  const save = useMutation({
+    mutationFn: (timezone: string | null) =>
+      client.request(patch('/users/me/preferences', { timezone })),
+    onSuccess: (_d, tz) => {
+      setDisplayTimezone(tz)
+      setSearch('')
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+    }
+  })
+  const matches = search.length > 1 ? zones.filter((z) => z.toLowerCase().includes(search.toLowerCase())).slice(0, 8) : []
+
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+      <p className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>Timezone</p>
+      <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Dates and times render in this zone. Your browser reports{' '}
+        <span className='font-medium'>{browserTz}</span>.
+      </p>
+      <div className='mt-3 flex flex-wrap items-center gap-2'>
+        <span className='inline-flex items-center gap-1.5 rounded-full bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-nvr-navy dark:text-nvr-cyan'>
+          {current ?? `${browserTz} (browser default)`}
+        </span>
+        {current && (
+          <button
+            type='button'
+            onClick={() => save.mutate(null)}
+            className='text-[12px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+          >
+            Use browser default
+          </button>
+        )}
+      </div>
+      <div className='relative mt-2'>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder='Change zone… (e.g. America/Denver)'
+          className='h-8 w-[280px] rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+        />
+        {matches.length > 0 && (
+          <div className='absolute z-10 mt-1 w-[280px] rounded-md border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'>
+            {matches.map((z) => (
+              <button
+                key={z}
+                type='button'
+                onClick={() => save.mutate(z)}
+                className='block w-full px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-foreground'
+              >
+                {z}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function EmailDeliveryCard() {
   const client = useNivaroClient()
@@ -1513,6 +1599,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
               }}
             />
             <ScopeDefaultsCard />
+            <TimezoneCard />
             <EmailDeliveryCard />
         <NotificationRulesCard />
           </div>

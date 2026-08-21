@@ -156,6 +156,11 @@ const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
 const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
 const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
+const MailTemplates = lazy(() => import('@/pages/MailTemplates'))
+const OpsCalendar = lazy(() => import('@/pages/OpsCalendar'))
+const SetupChecklist = lazy(() => import('@/pages/SetupChecklist'))
+const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
+const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
 const AutomationTests = lazy(() => import('@/pages/AutomationTests'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -452,6 +457,11 @@ export default function App() {
                   <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='find-replace' element={<FindReplace />} />
                   <Route path='m2m-matrix' element={<M2MMatrix />} />
+                  <Route path='mail-templates' element={<MailTemplates />} />
+                  <Route path='ops-calendar' element={<OpsCalendar />} />
+                  <Route path='setup' element={<SetupChecklist />} />
+                  <Route path='config-search' element={<ConfigSearch />} />
+                  <Route path='access-requests' element={<AccessRequests />} />
                   <Route path='automation-tests' element={<AutomationTests />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />

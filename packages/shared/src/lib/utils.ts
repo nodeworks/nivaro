@@ -6,6 +6,34 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// ── User timezone preference (#31) ──────────────────────────────────────────
+// Hosts call setDisplayTimezone from the user's preferences at startup; the
+// shared date formatters then render wall-clock times in that zone. Null =
+// the browser's own zone (historic behavior). getDisplayTimezone drives the
+// "times shown in <zone>" badge when it differs from the browser.
+let displayTimezone: string | null = null
+export function setDisplayTimezone(tz: string | null): void {
+  if (tz) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz })
+    } catch {
+      return // invalid zone — keep the browser default rather than throwing
+    }
+  }
+  displayTimezone = tz
+}
+export function getDisplayTimezone(): string | null {
+  return displayTimezone
+}
+export function displayTimezoneDiffers(): boolean {
+  if (!displayTimezone) return false
+  try {
+    return displayTimezone !== Intl.DateTimeFormat().resolvedOptions().timeZone
+  } catch {
+    return false
+  }
+}
+
 export function formatDate(date: string | Date, opts?: Intl.DateTimeFormatOptions) {
   // Date-only strings (bare yyyy-mm-dd or ISO at UTC midnight) anchor to
   // their stored calendar day — converting UTC midnight to local time shifts
@@ -19,12 +47,16 @@ export function formatDate(date: string | Date, opts?: Intl.DateTimeFormatOption
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    // Calendar-day values never shift zones; real timestamps follow the
+    // user's preferred zone when one is set.
+    ...(dm || !displayTimezone ? {} : { timeZone: displayTimezone }),
     ...opts
   }).format(d)
 }
 
 export function formatDateTime(date: string | Date) {
   return new Intl.DateTimeFormat('en-US', {
+    ...(displayTimezone ? { timeZone: displayTimezone } : {}),
     month: 'short',
     day: 'numeric',
     year: 'numeric',

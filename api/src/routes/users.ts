@@ -231,6 +231,23 @@ export async function usersRoutes(app: FastifyInstance) {
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)
     }
+    if ('timezone' in body) {
+      // Per-user display timezone (#31). null = browser default.
+      const tz = body.timezone
+      if (tz !== null && typeof tz !== 'string') {
+        return reply.code(400).send({ error: 'timezone must be an IANA zone string or null' })
+      }
+      if (typeof tz === 'string') {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: tz })
+        } catch {
+          return reply.code(400).send({ error: `Unknown timezone "${tz}"` })
+        }
+        patch.timezone = tz
+      } else {
+        patch.timezone = null
+      }
+    }
     if ('custom_status' in body) {
       // Presence status (#33): free text + emoji beside the idle state,
       // self-clearing at expires_at. null clears immediately.

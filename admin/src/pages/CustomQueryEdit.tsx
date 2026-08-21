@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Plus, Trash2, Zap } from 'lucide-react'
+import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
@@ -83,6 +83,30 @@ export function CustomQueryEditPage() {
     params: [],
     scope_params: ''
   })
+
+  // SQL copilot (#54)
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [lastRunError, setLastRunError] = useState<string | null>(null)
+  const [aiText, setAiText] = useState<string | null>(null)
+  const aiSql = useMutation({
+    mutationFn: ({ mode }: { mode: 'generate' | 'explain' | 'fix' }) =>
+      api
+        .post('/ai/sql', {
+          mode,
+          prompt: aiPrompt.trim() || undefined,
+          current_sql: form.sql_text.trim() || undefined,
+          error: lastRunError ?? undefined
+        })
+        .then((r) => r.data.data as { sql: string | null; text: string }),
+    onSuccess: (d, vars) => {
+      if (d.sql && vars.mode !== 'explain') {
+        setForm((p) => ({ ...p, sql_text: d.sql ?? p.sql_text }))
+      }
+      setAiText(d.text || null)
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'AI call failed')
+  })
   const [slugTouched, setSlugTouched] = useState(false)
   const [testValues, setTestValues] = useState<Record<string, string>>({})
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -158,10 +182,12 @@ export function CustomQueryEditPage() {
       return api.post(`/custom-queries/${form.slug}/execute`, { params }).then((r) => r.data)
     },
     onSuccess: (res) => {
+      setLastRunError(null)
       setTestResult(JSON.stringify(res, null, 2))
       toast.success('Query executed')
     },
     onError: (err: unknown) => {
+      setLastRunError(((err as { response?: { data?: { error?: string } } })?.response?.data?.error) ?? String(err))
       const e = err as { response?: { data?: unknown } }
       setTestResult(JSON.stringify(e.response?.data ?? String(err), null, 2))
       toast.error('Execution failed')
@@ -281,6 +307,57 @@ export function CustomQueryEditPage() {
                   <Label htmlFor='cq-sql'>
                     SQL <span className='text-red-500'>*</span>
                   </Label>
+                  {/* SQL copilot (#54): describe → generate with live schema
+                      context; explain what's there; fix on error. Always a
+                      DRAFT into the editor — nothing executes here. */}
+                  <div className='flex flex-wrap items-center gap-1.5 rounded-md border border-[#00ceff33] bg-[#00ceff0a] p-1.5'>
+                    <Sparkles className='ml-1 h-3.5 w-3.5 shrink-0 text-[#00a5cc]' />
+                    <input
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && aiPrompt.trim() && !aiSql.isPending) {
+                          aiSql.mutate({ mode: 'generate' })
+                        }
+                      }}
+                      placeholder='Describe the query… (e.g. total requisition amount per zone for a funding year)'
+                      className='h-7 min-w-[240px] flex-1 rounded border-0 bg-transparent px-1.5 text-[12.5px] outline-none placeholder:text-slate-400'
+                    />
+                    <Button
+                      type='button'
+                      size='sm'
+                      className='h-7 text-[12px]'
+                      disabled={!aiPrompt.trim() || aiSql.isPending}
+                      onClick={() => aiSql.mutate({ mode: 'generate' })}
+                    >
+                      {aiSql.isPending ? 'Thinking…' : 'Generate'}
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='outline'
+                      className='h-7 text-[12px]'
+                      disabled={!form.sql_text.trim() || aiSql.isPending}
+                      onClick={() => aiSql.mutate({ mode: 'explain' })}
+                    >
+                      Explain
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='outline'
+                      className='h-7 text-[12px]'
+                      disabled={!form.sql_text.trim() || aiSql.isPending}
+                      onClick={() => aiSql.mutate({ mode: 'fix' })}
+                    >
+                      Fix
+                    </Button>
+                  </div>
+                  {aiText && (
+                    <p className='whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] leading-relaxed text-slate-600 dark:border-border dark:bg-muted/40 dark:text-muted-foreground'>
+                      {aiText}
+                    </p>
+                  )}
                   <Textarea
                     id='cq-sql'
                     value={form.sql_text}

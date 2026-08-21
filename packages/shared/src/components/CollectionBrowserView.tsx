@@ -3376,6 +3376,7 @@ export function CollectionBrowserView({
     return { latField, lngField, labelField }
   }, [meta])
   const [mapMode, setMapMode] = useState(false)
+  const [accessRequested, setAccessRequested] = useState(false)
 
   const prevCondRef = useRef(conditionsParam)
   useEffect(() => {
@@ -5022,10 +5023,28 @@ export function CollectionBrowserView({
         )}
       </div>
 
-      {/* Error */}
+      {/* Error — a permission wall offers the access-request path (#55). */}
       {error != null && (
-        <div className='mx-4 mt-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700'>
-          {error instanceof Error ? error.message : 'Failed to load records'}
+        <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>
+          <span className='min-w-0 flex-1'>
+            {error instanceof Error ? error.message : 'Failed to load records'}
+          </span>
+          {(error as { status?: number })?.status === 403 && (
+            <button
+              type='button'
+              disabled={accessRequested}
+              onClick={() =>
+                void client
+                  .request(post('/access-requests', { collection }))
+                  .then(() => setAccessRequested(true))
+                  .catch(() => {})
+              }
+              className='h-7 shrink-0 rounded-md border border-red-300 px-2.5 text-[12px] font-medium hover:bg-red-100 disabled:opacity-60 dark:border-red-500/40 dark:hover:bg-red-900/20'
+              data-request-access
+            >
+              {accessRequested ? 'Requested — an admin was notified' : 'Request access'}
+            </button>
+          )}
         </div>
       )}
 
