@@ -109,6 +109,7 @@ export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView } from './components/ReportView'
 export { TipLayer } from './components/TipLayer'
 export { UserAvatar } from './components/UserAvatar'
+export { AutolinkedText } from './components/AutolinkedText'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
 export type {

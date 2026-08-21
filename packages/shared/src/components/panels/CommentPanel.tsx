@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, ClipboardPlus, MessageSquare, Pencil, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, ClipboardPlus, MessageSquare, Pencil, SmilePlus, Trash2, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -8,6 +8,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
 import { formatRelative } from '../../lib/utils'
+import { AutolinkedText } from '../AutolinkedText'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -23,7 +24,10 @@ interface Comment {
   created_at: string
   updated_at: string
   mentions: Array<{ user: string }>
+  reactions?: Array<{ emoji: string; count: number; mine: boolean }>
 }
+
+const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
 
 function initials(u: Comment['user']): string {
   const i = [u.first_name?.[0], u.last_name?.[0]].filter(Boolean).join('').toUpperCase()
@@ -290,7 +294,7 @@ function RecordedNote({ note }: { note: RelatedNote }) {
           <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
         </div>
         <p className='mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-600 dark:text-slate-300'>
-          {note.text}
+          <AutolinkedText text={note.text} />
         </p>
       </div>
     </div>
@@ -391,6 +395,14 @@ export function CommentPanel({
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
     onError: () => toast.error('Failed to delete comment')
   })
+
+  const react = useMutation({
+    mutationFn: ({ id, emoji }: { id: string; emoji: string }) =>
+      client.request(post(`/comments/${id}/reactions`, { emoji })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onError: () => toast.error('Failed to react')
+  })
+  const [reactMenuId, setReactMenuId] = useState<string | null>(null)
 
   // "Make this a task" — the comment text becomes a task on this record,
   // assigned to whoever clicked (they're the one who decided it's actionable).
@@ -654,8 +666,57 @@ export function CommentPanel({
                             </div>
                           ) : (
                             <p className='mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600'>
-                              {c.text}
+                              <AutolinkedText text={c.text} />
                             </p>
+                          )}
+                          {/* Reactions: aggregated chips + hover palette */}
+                          {!isEditing && (
+                            <div className='mt-1 flex flex-wrap items-center gap-1'>
+                              {(c.reactions ?? []).map((r) => (
+                                <button
+                                  key={r.emoji}
+                                  type='button'
+                                  onClick={() => react.mutate({ id: c.id, emoji: r.emoji })}
+                                  className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[11px] transition-colors ${
+                                    r.mine
+                                      ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 dark:border-border dark:bg-muted dark:text-slate-300'
+                                  }`}
+                                >
+                                  {r.emoji}
+                                  <span className='tabular-nums text-[10px] font-semibold'>{r.count}</span>
+                                </button>
+                              ))}
+                              <span className='relative'>
+                                <button
+                                  type='button'
+                                  onClick={() => setReactMenuId(reactMenuId === c.id ? null : c.id)}
+                                  className={`rounded p-0.5 text-slate-300 transition-all hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-muted ${
+                                    (c.reactions ?? []).length > 0 ? '' : 'opacity-0 group-hover:opacity-100'
+                                  }`}
+                                  aria-label='Add reaction'
+                                >
+                                  <SmilePlus className='h-3.5 w-3.5' />
+                                </button>
+                                {reactMenuId === c.id && (
+                                  <span className='absolute bottom-6 left-0 z-20 flex gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-1 shadow-lg dark:border-border dark:bg-popover'>
+                                    {REACTION_EMOJI.map((e) => (
+                                      <button
+                                        key={e}
+                                        type='button'
+                                        onClick={() => {
+                                          react.mutate({ id: c.id, emoji: e })
+                                          setReactMenuId(null)
+                                        }}
+                                        className='rounded-full px-1 text-[14px] hover:bg-muted'
+                                      >
+                                        {e}
+                                      </button>
+                                    ))}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
                           )}
                         </div>
                       </div>

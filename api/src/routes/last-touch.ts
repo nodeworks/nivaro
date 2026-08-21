@@ -55,4 +55,82 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       })
     }
   )
+
+  /**
+   * Provenance (#29): where this record CAME FROM, mined from the earliest
+   * activity on it. Honest about the gaps — a row with no creation activity
+   * (raw importer writes, pre-audit history) says so rather than guessing.
+   */
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/provenance/:collection/:id',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const first = (await db('nivaro_activity as a')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .where({ 'a.collection': collection, 'a.item': String(id) })
+        .orderBy('a.id', 'asc')
+        .first(
+          'a.id',
+          'a.action',
+          'a.timestamp',
+          'a.comment',
+          'a.legacy_id',
+          'a.user',
+          'u.first_name',
+          'u.last_name',
+          'u.email',
+          'u.status'
+        )) as
+        | {
+            id: number
+            action: string
+            timestamp: Date
+            comment: string | null
+            legacy_id: number | null
+            user: string | null
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+            status: string | null
+          }
+        | undefined
+      if (!first) return reply.send({ data: null })
+
+      const name = [first.first_name, first.last_name].filter(Boolean).join(' ') || first.email
+      let origin = 'Manual'
+      if (first.legacy_id != null) origin = 'Legacy import'
+      else if (first.action !== 'create') origin = 'No creation record — likely imported'
+      else if (!first.user) origin = 'Public form'
+      else if (first.status === 'suspended' && /@(nivaro|invalid)\.local$/i.test(String(first.email ?? ''))) {
+        origin = 'Integration'
+      } else if (/import/i.test(String(first.comment ?? ''))) origin = 'Import'
+      else {
+        // An extension breadcrumb (namespaced "<ext>:<action>") stamped on
+        // this record around creation names the pipeline that made it.
+        const ext = (await db('nivaro_activity')
+          .where({ collection, item: String(id) })
+          .where('action', 'like', '%:%')
+          .whereRaw('ABS(DATEDIFF(second, timestamp, ?)) < 120', [new Date(first.timestamp)])
+          .orderBy('id', 'asc')
+          .first('action')
+          .catch(() => null)) as { action: string } | null | undefined
+        if (ext) origin = `Integration (${String(ext.action).split(':')[0]})`
+      }
+      return reply.send({
+        data: {
+          origin,
+          created: first.action === 'create' || first.legacy_id != null,
+          timestamp: new Date(first.timestamp).toISOString(),
+          user_name: name ?? null
+        }
+      })
+    }
+  )
 }

@@ -870,6 +870,25 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     return { trend: series, delta: (stats?.[metric] ?? 0) - last[metric] }
   }
 
+  // Burn-down forecast (#7): inflow vs completion from the daily snapshot
+  // series — "at current pace this backlog clears in N days". Pace = average
+  // net change per day over the window; a first/last-only slope would let one
+  // spike day speak for the whole fortnight.
+  const burnDown = useMemo(() => {
+    const source = scope === 'all' ? trends?.data : scope === 'mine' ? mineTrends?.data : undefined
+    const rows = source ?? []
+    if (rows.length < 3 || !stats) return null
+    const series = rows.map((r) => (scope === 'mine' ? ((r as unknown as { owned?: number }).owned ?? r.total) : r.total))
+    const deltas = series.slice(1).map((v, i) => v - series[i])
+    const pace = deltas.reduce((a, b) => a + b, 0) / deltas.length
+    const current = stats.total
+    if (Math.abs(pace) < 0.05) return { dir: 'flat' as const, pace, days: null }
+    if (pace < 0) {
+      return { dir: 'down' as const, pace, days: Math.max(1, Math.ceil(current / -pace)) }
+    }
+    return { dir: 'up' as const, pace, days: null }
+  }, [trends?.data, mineTrends?.data, scope, stats])
+
   // ── Friendly labels: workflow state keys → state labels, collection names →
   // registry display names. Fallback: title-cased key.
   const sourceCollections = useMemo(
@@ -1892,6 +1911,30 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               }}
             />
           </div>
+          {burnDown && (
+            <span
+              data-queue-burndown
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium ${
+                burnDown.dir === 'down'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+                  : burnDown.dir === 'up'
+                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400'
+                    : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+              }`}
+              data-tip='Average net change per day over the last 14 days of snapshots'
+            >
+              {burnDown.dir === 'down' ? (
+                <>
+                  ▼ {Math.abs(burnDown.pace).toFixed(1)}/day — clears in ~{burnDown.days} day
+                  {burnDown.days === 1 ? '' : 's'} at this pace
+                </>
+              ) : burnDown.dir === 'up' ? (
+                <>▲ Growing {burnDown.pace.toFixed(1)}/day</>
+              ) : (
+                <>→ Holding steady</>
+              )}
+            </span>
+          )}
 
           {stateEntries.length > 0 && (
             <div className='flex min-w-0 flex-wrap items-center gap-1.5'>

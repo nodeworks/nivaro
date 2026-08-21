@@ -73,7 +73,7 @@ import {
   Star,
   Workflow,
   X as XIcon
-} from 'lucide-react'
+, Replace } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
@@ -202,6 +202,7 @@ export const navCategories: NavCategory[] = [
       { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests' },
       { icon: ShieldAlert, label: 'Security Center', to: '/security-center' },
       { icon: Scale, label: 'Legal Holds', to: '/legal-holds' },
+      { icon: Replace, label: 'Find & Replace', to: '/find-replace' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },

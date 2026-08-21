@@ -421,6 +421,55 @@ function RevisionsList({
   // snapshot at or before that moment. Every revision already carries the
   // FULL post-change snapshot, so this is a lookup, not a reconstruction.
   const [asOf, setAsOf] = useState('')
+  // Between-dates diff (#60): two dates → field-level diff of what changed in
+  // the window, each field attributed to whoever changed it LAST inside the
+  // window (walked from the revision deltas — attribution is exact, not
+  // inferred from the endpoint snapshots).
+  const [diffFrom, setDiffFrom] = useState('')
+  const [diffTo, setDiffTo] = useState('')
+  const betweenDiff = useMemo<
+    | { error: string; fields?: undefined }
+    | {
+        error?: undefined
+        fields: Array<{
+          field: string
+          from: unknown
+          to: unknown
+          by: { name: string; when: string | null } | null
+        }>
+      }
+    | null
+  >(() => {
+    if (!diffFrom || !diffTo || !data) return null
+    const fromCut = new Date(`${diffFrom}T23:59:59`).getTime()
+    const toCut = new Date(`${diffTo}T23:59:59`).getTime()
+    if (toCut <= fromCut) return { error: 'The second date must be after the first' }
+    const at = (cut: number) =>
+      data.find((r) => r.timestamp && new Date(r.timestamp).getTime() <= cut) ?? null
+    const base = at(fromCut)
+    const end = at(toCut)
+    if (!end) return { error: 'No snapshot exists at or before the second date' }
+    const baseData = base?.data ?? {}
+    const endData = end.data ?? {}
+    // Who touched each field in the window — newest revision wins per field.
+    const who = new Map<string, { name: string; when: string | null }>()
+    for (const r of [...data].reverse()) {
+      const t = r.timestamp ? new Date(r.timestamp).getTime() : 0
+      if (t <= fromCut || t > toCut || !r.delta) continue
+      for (const f of Object.keys(r.delta)) {
+        who.set(f, { name: revisionUserName(r), when: r.timestamp })
+      }
+    }
+    const fields = [...new Set([...Object.keys(baseData), ...Object.keys(endData)])]
+      .filter((f) => String(baseData[f] ?? '') !== String(endData[f] ?? ''))
+      .map((f) => ({
+        field: f,
+        from: baseData[f],
+        to: endData[f],
+        by: who.get(f) ?? null
+      }))
+    return { fields }
+  }, [diffFrom, diffTo, data])
   const asOfRevision = useMemo(() => {
     if (!asOf || !data) return null
     const cutoff = new Date(`${asOf}T23:59:59`).getTime()
@@ -493,6 +542,87 @@ function RevisionsList({
                 </div>
               ))}
           </div>
+        </div>
+      )}
+      <div className='mb-2 flex flex-wrap items-center gap-2'>
+        <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+          Compare between
+        </span>
+        <input
+          type='date'
+          value={diffFrom}
+          onChange={(e) => setDiffFrom(e.target.value)}
+          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+          aria-label='Compare from date'
+          data-diff-from
+        />
+        <span className='text-[11px] text-slate-400'>and</span>
+        <input
+          type='date'
+          value={diffTo}
+          onChange={(e) => setDiffTo(e.target.value)}
+          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+          aria-label='Compare to date'
+          data-diff-to
+        />
+        {(diffFrom || diffTo) && (
+          <button
+            type='button'
+            onClick={() => {
+              setDiffFrom('')
+              setDiffTo('')
+            }}
+            className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {betweenDiff?.error != null && (
+        <p className='mb-2 text-[12px] text-amber-600 dark:text-amber-400'>{betweenDiff?.error}</p>
+      )}
+      {betweenDiff?.fields != null && (
+        <div className='mb-3 overflow-hidden rounded-lg border border-nvr-cyan/40' data-between-diff>
+          <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
+            <span className='text-[11px] font-semibold text-slate-700 dark:text-slate-200'>
+              {betweenDiff.fields.length} field{betweenDiff.fields.length === 1 ? '' : 's'} changed
+              between {diffFrom} and {diffTo}
+            </span>
+          </div>
+          {betweenDiff.fields.length === 0 ? (
+            <p className='px-2.5 py-3 text-[12px] text-slate-400'>
+              Nothing changed in that window.
+            </p>
+          ) : (
+            <div className='max-h-80 overflow-y-auto'>
+              {betweenDiff.fields.map((f) => (
+                <div
+                  key={f.field}
+                  className='border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
+                >
+                  <div className='flex items-baseline justify-between gap-2'>
+                    <span className='break-all font-mono text-[10.5px] text-slate-500'>
+                      {f.field}
+                    </span>
+                    {f.by && (
+                      <span className='shrink-0 text-[10px] text-slate-400'>
+                        {f.by.name}
+                        {f.by.when ? ` · ${new Date(f.by.when).toLocaleDateString()}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <p className='mt-0.5 break-all text-[11px]'>
+                    <span className='text-red-500 line-through dark:text-red-400'>
+                      {f.from == null || f.from === '' ? '—' : String(f.from).slice(0, 120)}
+                    </span>{' '}
+                    <span className='text-emerald-600 dark:text-emerald-400'>
+                      {f.to == null || f.to === '' ? '—' : String(f.to).slice(0, 120)}
+                    </span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {(data ?? []).map((rev, i) => (

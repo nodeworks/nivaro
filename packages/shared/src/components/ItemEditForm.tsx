@@ -3362,6 +3362,50 @@ export function ItemEditForm({
     // paused while the tab is hidden (react-query default).
     refetchInterval: 60_000
   })
+
+  // Completeness meter (#59): filled ÷ visible-editable fields on this layout,
+  // with required gaps called out. Display only — nothing blocks on it.
+  const completeness = useMemo(() => {
+    const fields = (fieldConfig ?? []).filter((fc) => {
+      if (fc.hidden || (fc as { readonly?: boolean }).readonly) return false
+      if ((fc as { computed_type?: string | null }).computed_type) return false
+      if ((fc as { layout_assigned?: boolean }).layout_assigned === false) return false
+      if (fc.field.startsWith('__') || fc.field.includes('.')) return false
+      const opts = fc.options as Record<string, unknown> | null
+      if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) return false
+      return true
+    })
+    if (fields.length === 0) return null
+    const isFilled = (f: (typeof fields)[number]): boolean => {
+      const alias = m2mAliasFieldsForRules.get(f.field)
+      if (alias) return (m2mAliasFieldStates[f.field]?.ids ?? []).length > 0
+      const v = draft[f.field]
+      return v !== undefined && v !== null && v !== '' && v !== false
+    }
+    const filled = fields.filter(isFilled)
+    const requiredMissing = fields.filter((f) => f.required && !isFilled(f))
+    return {
+      pct: Math.round((filled.length / fields.length) * 100),
+      filled: filled.length,
+      total: fields.length,
+      requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
+    }
+  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates])
+
+  // Provenance (#29): where the record came from — shown as a chip beside the
+  // last-touched line.
+  const { data: provenance } = useQuery({
+    queryKey: ['provenance', collection, String(itemId)],
+    queryFn: () =>
+      client
+        .request<{ data: { origin: string; timestamp: string; user_name: string | null } | null }>(
+          get(`/provenance/${collection}/${encodeURIComponent(String(itemId))}`)
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: !isNew && !!itemId,
+    staleTime: 5 * 60_000
+  })
   // Someone else saved while this record was open. Baseline = the last touch
   // this viewer has ACKNOWLEDGED (loaded with, saved themselves, or refreshed
   // past) — comparing touch-to-touch keeps clock skew out of the decision.
@@ -5644,6 +5688,34 @@ export function ItemEditForm({
                                         data-last-touch
                                       >
                                         {lastTouchText}
+                                        {completeness && (
+                                          <span
+                                            data-completeness-chip
+                                            className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums ${
+                                              completeness.requiredMissing.length > 0
+                                                ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
+                                                : completeness.pct >= 100
+                                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                                  : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                            }`}
+                                            data-tip={`${completeness.filled} of ${completeness.total} fields filled${
+                                              completeness.requiredMissing.length > 0
+                                                ? ` · required missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
+                                                : ''
+                                            }`}
+                                          >
+                                            {completeness.pct}% complete
+                                          </span>
+                                        )}
+                                        {provenance && (
+                                          <span
+                                            data-provenance-chip
+                                            className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                            data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
+                                          >
+                                            {provenance.origin}
+                                          </span>
+                                        )}
                                         {/* Admin-only: the route 403s everyone else anyway. */}
                                         {isAdmin && !isNew && itemId && (
                                           <RecordViewersChip
@@ -5771,6 +5843,72 @@ export function ItemEditForm({
                                         collection={collection}
                                         itemDraft={draft}
                                       />
+                                    )}
+                                    {!isNew && itemId && (
+                                      <button
+                                        type='button'
+                                        title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
+                                        data-save-as-template
+                                        onClick={async () => {
+                                          const name = window.prompt('Template name:')
+                                          if (!name?.trim()) return
+                                          // Same harvest rules as Duplicate: visible, editable,
+                                          // non-computed, non-auto-id scalars + M2O FKs only.
+                                          const AUDIT = new Set([
+                                            'id', 'user_created', 'date_created', 'user_updated',
+                                            'date_updated', 'created_at', 'updated_at', 'created',
+                                            'changed', 'creator', 'last_state_change'
+                                          ])
+                                          const values: Record<string, unknown> = {}
+                                          for (const fc of fieldConfig ?? []) {
+                                            const opts = fc.options as Record<string, unknown> | null
+                                            if (AUDIT.has(fc.field)) continue
+                                            if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) continue
+                                            if ((fc as { computed_type?: string | null }).computed_type) continue
+                                            if (fc.hidden || (fc as { readonly?: boolean }).readonly) continue
+                                            if ((fc as { layout_assigned?: boolean }).layout_assigned === false) continue
+                                            const v = draft[fc.field]
+                                            if (v === undefined || v === null || v === '') continue
+                                            if (typeof v === 'object') continue
+                                            values[fc.field] = v
+                                          }
+                                          if (Object.keys(values).length === 0) {
+                                            toast.error('Nothing to save — no plain field values on this record')
+                                            return
+                                          }
+                                          try {
+                                            await client.request(
+                                              post('/record-templates', {
+                                                collection,
+                                                name: name.trim(),
+                                                data: values,
+                                                is_shared: false
+                                              })
+                                            )
+                                            toast.success(`Template "${name.trim()}" saved — find it under record templates`)
+                                          } catch {
+                                            toast.error('Failed to save template')
+                                          }
+                                        }}
+                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                      >
+                                        <svg
+                                          width='13'
+                                          height='13'
+                                          viewBox='0 0 24 24'
+                                          fill='none'
+                                          stroke='currentColor'
+                                          strokeWidth='2'
+                                          strokeLinecap='round'
+                                          strokeLinejoin='round'
+                                          aria-hidden='true'
+                                        >
+                                          <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
+                                          <polyline points='17 21 17 13 7 13 7 21' />
+                                          <polyline points='7 3 7 8 15 8' />
+                                        </svg>
+                                        Save as template
+                                      </button>
                                     )}
                                     {!isNew && itemId && onDuplicate && (
                                       <button

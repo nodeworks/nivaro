@@ -233,6 +233,26 @@ export async function commentsRoutes(app: FastifyInstance) {
       mentionsByComment.set(m.comment, arr)
     }
 
+    // Reactions, aggregated per comment: [{emoji, count, mine}].
+    const reactionRows = ids.length
+      ? ((await db('nivaro_comment_reactions')
+          .whereIn('comment', ids)
+          .select('comment', 'user', 'emoji')
+          .catch(() => [])) as Array<{ comment: string; user: string; emoji: string }>)
+      : []
+    const reactionsByComment = new Map<string, Array<{ emoji: string; count: number; mine: boolean }>>()
+    for (const r of reactionRows) {
+      const list = reactionsByComment.get(r.comment) ?? []
+      let agg = list.find((a) => a.emoji === r.emoji)
+      if (!agg) {
+        agg = { emoji: r.emoji, count: 0, mine: false }
+        list.push(agg)
+      }
+      agg.count++
+      if (String(r.user).toUpperCase() === String(req.user!.id).toUpperCase()) agg.mine = true
+      reactionsByComment.set(r.comment, list)
+    }
+
     const data = comments.map((c) => ({
       id: c.id,
       collection: c.collection,
@@ -253,7 +273,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         first_name: m.first_name,
         last_name: m.last_name,
         email: m.email
-      }))
+      })),
+      reactions: reactionsByComment.get(c.id) ?? []
     }))
 
     return { data }
@@ -478,7 +499,63 @@ export async function commentsRoutes(app: FastifyInstance) {
         // must never take the whole thread down.
       }
 
+      // Comments posted ON CHILD ROWS of this record (line-item comments):
+      // "line 7: wrong CIFA" belongs in the record's thread too, with the
+      // line named. Only child collections that actually hold comments are
+      // walked — one probe query keeps this cheap.
+      const lineComments: Array<Record<string, unknown>> = []
+      try {
+        const childRels = (await db('nivaro_relations')
+          .where({ one_collection: collection })
+          .whereNotNull('many_collection')
+          .select('many_collection', 'many_field')) as Array<{
+          many_collection: string
+          many_field: string
+        }>
+        const childCollections = [...new Set(childRels.map((r) => r.many_collection))]
+        const commented = childCollections.length
+          ? ((await db('nivaro_comments')
+              .whereIn('collection', childCollections)
+              .distinct('collection')) as Array<{ collection: string }>)
+          : []
+        for (const cc of commented) {
+          const rels = childRels.filter((r) => r.many_collection === cc.collection)
+          const childRows = (await db(cc.collection)
+            .where((qb) => {
+              for (const r of rels) void qb.orWhere(r.many_field, item)
+            })
+            .limit(1000)
+            .select('*')) as Array<Record<string, unknown>>
+          if (childRows.length === 0) continue
+          const labelByChildId = new Map(childRows.map((r) => [String(r.id), childRowLabel(r)]))
+          const rows = (await db('nivaro_comments')
+            .where({ collection: cc.collection })
+            .whereIn('item', [...labelByChildId.keys()])
+            .orderBy('created_at', 'desc')
+            .limit(CAP)
+            .select('id', 'user', 'text', 'item', 'created_at')) as Array<Record<string, unknown>>
+          for (const r of rows) {
+            lineComments.push({
+              ...r,
+              child: cc.collection,
+              child_label: labelByChildId.get(String(r.item)) ?? null
+            })
+          }
+        }
+      } catch {
+        // Same posture: a broken child table never takes the thread down.
+      }
+
       const entries: Entry[] = [
+        ...lineComments.map((r) => ({
+          id: `linecomment:${r.id}`,
+          source: 'note' as const,
+          label: 'Line comment',
+          text: String(r.text ?? ''),
+          user: (r.user as string) ?? null,
+          created_at: r.created_at as string,
+          context: [titleCase(String(r.child)), r.child_label].filter(Boolean).join(' · ') || null
+        })),
         ...transitions.map((h) => ({
           id: `transition:${h.id}`,
           source: 'transition' as const,
@@ -580,6 +657,56 @@ export async function commentsRoutes(app: FastifyInstance) {
           }
         })
       })
+    }
+  )
+
+  /** Per-row comment counts for a grid's badge column — one call per grid. */
+  app.get<{ Querystring: { collection?: string; ids?: string } }>('/counts', async (req, reply) => {
+    const { collection } = req.query
+    const ids = String(req.query.ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+    if (!collection || ids.length === 0) {
+      return reply.code(400).send({ error: 'collection and ids are required' })
+    }
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const rows = (await db('nivaro_comments')
+      .where({ collection })
+      .whereIn('item', ids)
+      .groupBy('item')
+      .select('item')
+      .count({ c: '*' })) as Array<{ item: string; c: number }>
+    const data: Record<string, number> = {}
+    for (const r of rows) data[String(r.item)] = Number(r.c)
+    return { data }
+  })
+
+  /** Toggle a reaction (chat's fixed palette). Any reader of the collection. */
+  app.post<{ Params: { id: string }; Body: { emoji?: string } }>(
+    '/:id/reactions',
+    async (req, reply) => {
+      const REACTION_EMOJI = new Set(['👍', '✅', '👀', '🎉', '❤️', '😂'])
+      const emoji = String(req.body?.emoji ?? '')
+      if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
+      const comment = (await db('nivaro_comments').where('id', req.params.id).first(
+        'id',
+        'collection'
+      )) as { id: string; collection: string } | undefined
+      if (!comment) return reply.code(404).send({ error: 'Comment not found' })
+      if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const existing = await db('nivaro_comment_reactions')
+        .where({ comment: comment.id, user: req.user!.id, emoji })
+        .first('id')
+      if (existing) {
+        await db('nivaro_comment_reactions').where('id', existing.id).del()
+        return { data: { reacted: false } }
+      }
+      await db('nivaro_comment_reactions')
+        .insert({ comment: comment.id, user: req.user!.id, emoji, created_at: new Date() })
+        .catch(() => {}) // unique race — a double-click is one reaction
+      return { data: { reacted: true } }
     }
   )
 

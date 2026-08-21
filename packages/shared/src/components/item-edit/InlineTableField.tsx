@@ -71,6 +71,7 @@ import { type LiveRowsCtx, type StagedRelOps, useLiveRows, useO2MStaging, useSta
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
@@ -1105,6 +1106,7 @@ export function InlineTableField({
   parentCollection,
   layoutId,
   showRowRevisions,
+  rowComments,
   allowRevisionRestore = true,
   saveMode = 'immediate',
   showLineNumbers = false,
@@ -1139,6 +1141,8 @@ export function InlineTableField({
   parentCollection?: string
   layoutId?: number | null
   showRowRevisions?: boolean
+  /** Layout-local `row_comments` option — per-row comment threads (#11). */
+  rowComments?: boolean
   allowRevisionRestore?: boolean
   saveMode?: 'immediate' | 'pending'
   showLineNumbers?: boolean
@@ -1969,6 +1973,7 @@ export function InlineTableField({
   // refreshes it for free — staleness matches the grid's own o2m-rows refetch behavior.
   const visibleRowIds = useMemo(() => rows.map(r => String(r.id)), [rows])
   const rowIdsHash = visibleRowIds.join(',')
+  const rowCommentCounts = useRowCommentCounts(relatedCollection, visibleRowIds, !!rowComments && !isNew)
   const summaryMembersQueries = useQueries({
     queries: summaryRelationFields.map(relationField => {
       const grandInfo = summaryGrandRels.get(relationField)
@@ -3806,6 +3811,13 @@ export function InlineTableField({
                               className='rounded p-0.5 text-amber-400 hover:text-amber-600 text-[10px]'>
                               ↩
                             </button>
+                          )}
+                          {rowComments && id != null && (
+                            <RowCommentButton
+                              collection={relatedCollection}
+                              rowId={String(id)}
+                              count={rowCommentCounts[String(id)] ?? 0}
+                            />
                           )}
                           {showRowRevisions && (
                             <button type='button' title='Row history'

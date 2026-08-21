@@ -2495,7 +2495,65 @@ function BulkBar({
   onSuccess: () => void
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const [mode, setMode] = useState<'actions' | 'update' | 'transition' | 'message' | 'confirm-delete'>('actions')
+
+  // Saved bulk-action recipes (#26) — shared + own, run through the same
+  // bulk endpoints as a hand-configured action.
+  type Recipe = {
+    id: number
+    name: string
+    action_type: 'update' | 'transition'
+    config: { field?: string; value?: string; transition_label?: string } | null
+    mine: boolean
+  }
+  const { data: recipes = [] } = useQuery<Recipe[]>({
+    queryKey: ['bulk-recipes', collection],
+    queryFn: () =>
+      client
+        .request<{ data: Recipe[] }>(get('/bulk-recipes', { collection }))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  const saveRecipe = async (action_type: 'update' | 'transition', config: Record<string, unknown>) => {
+    const name = window.prompt('Recipe name (shown as a button on the bulk bar):')
+    if (!name?.trim()) return
+    try {
+      await client.request(post('/bulk-recipes', { collection, name: name.trim(), action_type, config }))
+      void qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] })
+    } catch {
+      setNote('Failed to save recipe')
+    }
+  }
+  const runRecipe = (r: Recipe) => {
+    if (r.action_type === 'update' && r.config?.field) {
+      const cfg = r.config
+      void run(async () => {
+        const res = await client.request<{ updated: number }>(
+          post(`/items/${collection}/bulk-update`, {
+            ids: selectedIds,
+            data: { [String(cfg.field)]: cfg.value ?? '' }
+          })
+        )
+        return `${r.name}: updated ${res.updated} items`
+      })
+    } else if (r.action_type === 'transition' && r.config?.transition_label) {
+      const t = transitions.find((x) => x.label === r.config?.transition_label)
+      if (!t) {
+        setNote(`"${r.config.transition_label}" is not an available transition here`)
+        return
+      }
+      void run(async () => {
+        const res = await client.request<{ succeeded: number; failed: number }>(
+          post(`/items/${collection}/bulk-transition`, { ids: selectedIds, transition_id: t.id })
+        )
+        return res.failed > 0
+          ? `${r.name}: ${res.succeeded} done, ${res.failed} failed`
+          : `${r.name}: transitioned ${res.succeeded} items`
+      })
+    }
+  }
   const [comparing, setComparing] = useState(false)
   const [field, setField] = useState('')
   const [value, setValue] = useState('')
@@ -2542,7 +2600,39 @@ function BulkBar({
       {note && <span className='text-[12px] text-slate-300'>{note}</span>}
       <span className='flex-1' />
       {mode === 'actions' && (
-        <span className='flex items-center gap-1.5'>
+        <span className='flex flex-wrap items-center gap-1.5'>
+          {recipes.map((r) => (
+            <span key={r.id} className='group/recipe relative inline-flex'>
+              <button
+                type='button'
+                disabled={busy || (r.action_type === 'transition' && !transitions.some((t) => t.label === r.config?.transition_label))}
+                onClick={() => runRecipe(r)}
+                title={
+                  r.action_type === 'update'
+                    ? `Set ${r.config?.field} = ${r.config?.value}`
+                    : `Transition: ${r.config?.transition_label}`
+                }
+                className='h-8 rounded-md border border-[#00ceff55] bg-[#00ceff14] px-3 text-[12.5px] font-medium text-[#7fe7ff] hover:bg-[#00ceff22] disabled:opacity-40'
+              >
+                {r.name}
+              </button>
+              {r.mine && (
+                <button
+                  type='button'
+                  aria-label={`Delete recipe ${r.name}`}
+                  onClick={() => {
+                    if (!window.confirm(`Delete the recipe "${r.name}"?`)) return
+                    void client
+                      .request(del(`/bulk-recipes/${r.id}`))
+                      .then(() => qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] }))
+                  }}
+                  className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white hover:bg-red-600 group-hover/recipe:flex'
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))}
           {selectedIds.length >= 2 && selectedIds.length <= 3 && (
             <button
               type='button'
@@ -2628,6 +2718,15 @@ function BulkBar({
           <button type='submit' disabled={busy} className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'>
             Apply
           </button>
+          <button
+            type='button'
+            disabled={!field.trim()}
+            onClick={() => void saveRecipe('update', { field: field.trim(), value })}
+            title='Save this update as a reusable recipe'
+            className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
+          >
+            ☆ Save recipe
+          </button>
           <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
             Cancel
           </button>
@@ -2664,6 +2763,18 @@ function BulkBar({
           />
           <button type='submit' disabled={busy || !transitionId} className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'>
             Run
+          </button>
+          <button
+            type='button'
+            disabled={!transitionId}
+            onClick={() => {
+              const t = transitions.find((x) => x.id === transitionId)
+              if (t) void saveRecipe('transition', { transition_label: t.label })
+            }}
+            title='Save this transition as a reusable recipe'
+            className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
+          >
+            ☆ Save recipe
           </button>
           <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
             Cancel
@@ -4089,7 +4200,7 @@ export function CollectionBrowserView({
           style={{
             position: 'fixed',
             left: Math.min(cellMenu.x, window.innerWidth - 236),
-            top: Math.min(cellMenu.y, window.innerHeight - 132),
+            top: Math.min(cellMenu.y, window.innerHeight - 380),
             zIndex: 125
           }}
           className='w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
@@ -4132,6 +4243,71 @@ export function CollectionBrowserView({
                 Group by {cellMenu.key === '__state__' ? 'State' : columnLabel(cellMenu.key)}
               </button>
             )}
+          {/* Row actions (#43): the ⋯ menu's core actions, reachable by
+              right-click anywhere on the row. */}
+          {cellMenu.row.id != null && (
+            <>
+              <div className='my-1 border-t border-slate-100 dark:border-slate-700' />
+              {[
+                {
+                  label: 'Open',
+                  run: () => openRow(cellMenu.row.id as string | number)
+                },
+                {
+                  label: 'Open in new tab',
+                  run: () =>
+                    window.open(
+                      urlFor({ collection, itemId: String(cellMenu.row.id) }),
+                      '_blank'
+                    )
+                },
+                {
+                  label: 'Peek',
+                  run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
+                },
+                {
+                  label: 'Copy ID',
+                  run: () => {
+                    void navigator.clipboard?.writeText(String(cellMenu.row.id))
+                    toast.success('ID copied')
+                  }
+                },
+                {
+                  label: 'Copy link',
+                  run: () => {
+                    void navigator.clipboard?.writeText(
+                      `${window.location.origin}${urlFor({ collection, itemId: String(cellMenu.row.id) })}`
+                    )
+                    toast.success('Link copied')
+                  }
+                }
+              ].map((a) => (
+                <button
+                  key={a.label}
+                  type='button'
+                  onClick={() => {
+                    a.run()
+                    setCellMenu(null)
+                  }}
+                  className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                >
+                  {a.label}
+                </button>
+              ))}
+              <button
+                type='button'
+                onClick={() => {
+                  if (window.confirm('Delete this record? It moves to Trash for 30 days.')) {
+                    deleteRow.mutate(cellMenu.row.id as string | number)
+                  }
+                  setCellMenu(null)
+                }}
+                className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20'
+              >
+                Delete
+              </button>
+            </>
+          )}
         </div>,
         document.body
       )}

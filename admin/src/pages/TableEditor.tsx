@@ -9511,6 +9511,7 @@ function FieldSettingsPopover({
   const [numAggregate, setNumAggregate] = useState<'sum' | 'count' | 'avg' | 'min' | 'max' | ''>('')
   const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
   const [showLineNumbers, setShowLineNumbers] = useState(false)
+  const [gridRowComments, setGridRowComments] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<
     Array<{ parent_field: string; child_field: string }>
@@ -9892,6 +9893,7 @@ function FieldSettingsPopover({
         setNumAggregate((opts.aggregate as 'sum' | 'count' | 'avg' | 'min' | 'max' | '') ?? '')
         setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
         setShowLineNumbers(!!opts.show_line_numbers)
+        setGridRowComments(!!opts.row_comments)
         setEnableReorder(opts.enable_reorder !== false)
         setParentCascades(
           Array.isArray(opts.parent_cascades)
@@ -10040,6 +10042,7 @@ function FieldSettingsPopover({
                   : {
                       save_mode: saveMode,
                       show_line_numbers: showLineNumbers,
+                      row_comments: gridRowComments,
                       enable_reorder: enableReorder,
                       ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}),
                       ...(rowRulesLocal.length > 0
@@ -10725,6 +10728,19 @@ function FieldSettingsPopover({
                         <Switch
                           checked={enableReorder}
                           onCheckedChange={setEnableReorder}
+                          className='scale-90'
+                        />
+                      </div>
+                      <div className='flex items-center justify-between px-3 py-2'>
+                        <div>
+                          <p className='text-[12px] text-slate-700'>Line comments</p>
+                          <p className='text-[10px] text-slate-400'>
+                            Comment threads on individual rows, rolled into the record's notes
+                          </p>
+                        </div>
+                        <Switch
+                          checked={gridRowComments}
+                          onCheckedChange={setGridRowComments}
                           className='scale-90'
                         />
                       </div>
@@ -16382,7 +16398,8 @@ function FieldGroupsTab({
     'drawer_relations',
     'auto_allocate',
     'upload_template',
-    'quick_create'
+    'quick_create',
+    'row_comments'
   ]
 
   const patchField = useCallback(
