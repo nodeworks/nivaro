@@ -299,6 +299,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // ─── Template CRUD (admin only) ───────────────────────────────────────────
 
   // List templates with state/transition counts
+  /** Owner-gap advisor: why records resolve no owners, clustered by their
+   *  dimension values, with the closest owner-group repair suggested. */
+  app.get('/:id/owner-gaps', { preHandler: requireAdmin }, async (req, reply) => {
+    const { analyzeOwnerGaps } = await import('../services/pipeline-engine.js')
+    const data = await analyzeOwnerGaps((req.params as { id: string }).id)
+    return reply.send({ data })
+  })
+
   /** Instance distribution for a template — every current_state with counts,
    *  including ORPHANS (states no longer in the template config: the debris a
    *  workflow redesign leaves behind). Feeds the migration wizard. */

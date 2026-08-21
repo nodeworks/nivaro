@@ -3481,6 +3481,9 @@ export function PipelineEditPage() {
         {/* Instance migration */}
         <InstanceMigrationCard templateId={id!} />
 
+        {/* Owner gaps */}
+        <OwnerGapsCard templateId={id!} />
+
         {/* Config versions */}
         <PipelineVersionsCard templateId={id!} />
       </div>
@@ -4172,6 +4175,114 @@ const FLOW_COL_W = 230
  * Shows the instance distribution (orphaned states flagged red) and moves a
  * state's instances to a current state with history rows on every record.
  */
+/**
+ * Owner-gap advisor — why records resolve no owners, clustered by their
+ * dimension values, with the closest owner-group repair suggested.
+ */
+function OwnerGapsCard({ templateId }: { templateId: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ['owner-gaps', templateId],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            state_key: string | null
+            collection: string
+            count: number
+            sample_items: string[]
+            dims: Record<string, string>
+            suggestion: {
+              group_id: string | null
+              group_label: string | null
+              matched_filters: string[]
+              mismatched_filters: string[]
+            } | null
+          }>
+        }>(`/pipelines/${templateId}/owner-gaps`)
+        .then((r) => r.data.data),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
+  const gaps = data ?? []
+  const total = gaps.reduce((sum, g) => sum + g.count, 0)
+
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <h3 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>
+            Owner gaps
+          </h3>
+          <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Records resolving no owners at all, clustered by their dimension values, with the
+            closest owner-group fix suggested — coverage gaps name the problem, this proposes the
+            repair.
+          </p>
+        </div>
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-8 text-[12.5px]'
+          disabled={isFetching}
+          onClick={() => {
+            if (!open) setOpen(true)
+            else void refetch()
+          }}
+        >
+          {isFetching ? 'Analyzing…' : open ? 'Re-analyze' : 'Analyze'}
+        </Button>
+      </div>
+      {open && !isFetching && gaps.length === 0 && (
+        <p className='mt-3 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400'>
+          Every open record resolves at least one owner.
+        </p>
+      )}
+      {open && gaps.length > 0 && (
+        <div className='mt-3 space-y-2'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            {total} unowned record(s) in {gaps.length} cluster(s):
+          </p>
+          {gaps.map((g, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: server-ordered clusters
+            <div key={i} className='rounded-md border border-amber-200 bg-amber-50/40 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-400/5'>
+              <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                {g.count} record(s) in {g.state_key ?? 'unknown state'} ({g.collection})
+              </p>
+              <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                {Object.entries(g.dims)
+                  .filter(([, v]) => v)
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(' · ') || 'no dimension values resolved'}
+              </p>
+              {g.suggestion ? (
+                <p className='mt-1 text-[12px] text-slate-700 dark:text-foreground'>
+                  Closest group: <span className='font-medium'>{g.suggestion.group_label}</span> —
+                  matches {g.suggestion.matched_filters.join(', ')}
+                  {g.suggestion.mismatched_filters.length > 0 && (
+                    <span className='text-amber-700 dark:text-amber-400'>
+                      {' '}
+                      but not {g.suggestion.mismatched_filters.join(', ')} — extend its filters or
+                      add a member group for this combination.
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <p className='mt-1 text-[12px] text-amber-700 dark:text-amber-400'>
+                  No group comes close — create one for this combination in the Owner Matrix.
+                </p>
+              )}
+              <p className='mt-0.5 text-[10.5px] text-slate-400'>
+                e.g. {g.sample_items.slice(0, 3).join(', ')}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function InstanceMigrationCard({ templateId }: { templateId: string }) {
   const qc = useQueryClient()
   const [fromState, setFromState] = useState('')
