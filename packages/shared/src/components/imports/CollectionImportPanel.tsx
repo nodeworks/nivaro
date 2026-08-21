@@ -281,6 +281,15 @@ export function CollectionImportPanel({
     onError: (err: Error) => setError(err.message)
   })
 
+  const rollbackJob = useMutation({
+    mutationFn: (id: string) => client.request(post(`/imports/${id}/rollback`, {})),
+    onSuccess: () => {
+      setError(null)
+      void qc.invalidateQueries({ queryKey: ['collection-import-jobs'] })
+    },
+    onError: (err: Error) => setError(err.message)
+  })
+
   function openJob(id: string | null) {
     setOpenJobId(id)
     onJobOpen?.(id)
@@ -394,6 +403,20 @@ export function CollectionImportPanel({
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end' className='text-[12.5px]'>
               <DropdownMenuItem onSelect={() => openJob(j.id)}>View details</DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={j.status !== 'complete' || !!j.rolled_back_at}
+                onSelect={() => {
+                  if (
+                    window.confirm(
+                      'Roll back this import? Created rows are deleted (to trash) and overwritten rows restored to their prior values. One-shot.'
+                    )
+                  ) {
+                    rollbackJob.mutate(j.id)
+                  }
+                }}
+              >
+                {j.rolled_back_at ? 'Rolled back' : 'Roll back this import'}
+              </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={j.status !== 'complete' && j.status !== 'failed'}
                 onSelect={() => removeJob.mutate(j.id)}

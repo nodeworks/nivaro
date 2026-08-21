@@ -131,6 +131,23 @@ async function fetchRemoteCsv(rawUrl: string): Promise<{ csv: string; fileName: 
 
 // ─── Background processor ─────────────────────────────────────────────────────
 
+/** Insert and get the new id back. OUTPUT fails on tables with triggers —
+ *  fall back to a plain insert with an unknown id (rollback skips it and
+ *  says so, rather than guessing which row was ours). */
+async function insertReturningId(collection: string, rowData: Record<string, unknown>): Promise<unknown> {
+  try {
+    const [row] = await db(collection).insert(rowData).returning('id')
+    return typeof row === 'object' ? (row as { id: unknown }).id : row
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/OUTPUT|trigger/i.test(msg)) {
+      await db(collection).insert(rowData)
+      return null
+    }
+    throw err
+  }
+}
+
 async function processImportJob(jobId: string, app: FastifyInstance) {
   try {
     await db('nivaro_import_jobs').where({ id: jobId }).update({
@@ -180,6 +197,10 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     let skipped = 0
     let errorRows = 0
     const errors: { row: number; error: string }[] = []
+    // Rollback capture: created row ids, and for overwrites the PRIOR values
+    // of exactly the fields the import touched — enough to undo, no more.
+    const rbCreated: Array<{ id: unknown }> = []
+    const rbUpdated: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }> = []
 
     for (let i = 0; i < dataLines.length; i++) {
       try {
@@ -209,19 +230,22 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
             if (strategy === 'skip') {
               skipped++
             } else if (strategy === 'overwrite' || strategy === 'merge') {
+              const prior: Record<string, unknown> = {}
+              for (const k of Object.keys(rowData)) prior[k] = (existing as Record<string, unknown>)[k]
               await db(collection)
                 .where({ [idField]: rowData[idField] })
                 .update(rowData)
+              rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
               updated++
             } else {
               skipped++
             }
           } else {
-            await db(collection).insert(rowData)
+            rbCreated.push({ id: await insertReturningId(collection, rowData) })
             created++
           }
         } else {
-          await db(collection).insert(rowData)
+          rbCreated.push({ id: await insertReturningId(collection, rowData) })
           created++
         }
       } catch (err) {
@@ -257,6 +281,7 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       .update({
         status: 'complete',
         completed_at: new Date(),
+        rollback_data: JSON.stringify({ created: rbCreated, updated: rbUpdated }),
         errors: JSON.stringify(errors),
         processed_rows: dataLines.length,
         created_rows: created,
@@ -737,6 +762,90 @@ export async function importsRoutes(app: FastifyInstance) {
   })
 
   // DELETE /:id — delete completed or failed job
+  /** Roll back a COMPLETED import: created rows deleted through the items
+   *  service (revisions + trash apply, so even the rollback is recoverable),
+   *  overwritten rows restored to their captured prior values via the same
+   *  raw path the import wrote with. One-shot per job. */
+  app.post('/:id/rollback', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const job = await db('nivaro_import_jobs').where({ id }).first()
+    if (!job) return reply.code(404).send({ error: 'Import not found' })
+    if (job.status !== 'complete') return reply.code(400).send({ error: 'Only completed imports can roll back' })
+    if (job.rolled_back_at) return reply.code(400).send({ error: 'Already rolled back' })
+    const rb = parseJson<{
+      created?: Array<{ id: unknown }>
+      updated?: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }>
+    }>(job.rollback_data)
+    if (!rb) {
+      return reply.code(400).send({ error: 'This import predates rollback capture — nothing recorded to undo' })
+    }
+    const collection = String(job.collection)
+    const { startJobRun } = await import('../services/job-runs.js')
+    const run = await startJobRun('backfill', `import-rollback:${id}`, {
+      label: 'Import rollback',
+      triggeredBy: req.user?.id ?? null
+    })
+    // Mark first so a concurrent second click can't double-run.
+    await db('nivaro_import_jobs')
+      .where({ id })
+      .update({ rolled_back_at: new Date(), rolled_back_by: req.user?.id ?? null })
+
+    const user = req.user!
+    void (async () => {
+      let deleted = 0
+      let restored = 0
+      let skippedRows = 0
+      const failures: string[] = []
+      const createdList = rb.created ?? []
+      const updatedList = rb.updated ?? []
+      const total = createdList.length + updatedList.length
+      let done = 0
+      for (const c of createdList) {
+        if (c.id == null) {
+          skippedRows++
+        } else {
+          try {
+            const { deleteOne } = await import('../services/items.js')
+            await deleteOne(user, collection, String(c.id))
+            deleted++
+          } catch (err) {
+            failures.push(`delete ${c.id}: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+        done++
+        if (done % 25 === 0) run.progress({ done, total })
+      }
+      for (const u of updatedList) {
+        try {
+          await db(collection)
+            .where({ [u.key_field]: u.key })
+            .update(u.prior)
+          restored++
+        } catch (err) {
+          failures.push(`restore ${u.key}: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        done++
+        if (done % 25 === 0) run.progress({ done, total })
+      }
+      const summary = `${deleted} deleted (to trash), ${restored} restored${skippedRows ? `, ${skippedRows} unknown-id skipped` : ''}${failures.length ? `, ${failures.length} FAILED — ${failures.slice(0, 3).join('; ').slice(0, 300)}` : ''}`
+      if (failures.length > 0 && deleted + restored === 0) await run.fail(summary)
+      else await run.complete(summary)
+      await logActivity({
+        action: 'import-rollback',
+        user: user.id,
+        collection,
+        item: String(id),
+        comment: summary.slice(0, 300)
+      })
+    })()
+    return reply.code(202).send({
+      data: {
+        job_run_id: run.id,
+        total: (rb.created?.length ?? 0) + (rb.updated?.length ?? 0)
+      }
+    })
+  })
+
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const job = await db('nivaro_import_jobs').where({ id }).first()
