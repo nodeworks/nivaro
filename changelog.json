@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T19:44:07.896Z",
+  "generated_at": "2026-08-21T20:25:50.308Z",
   "releases": [
+    {
+      "version": "0.1.95",
+      "tag": "v0.1.95",
+      "date": "2026-08-21T16:25:47-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "record & form polish batch + reaction/steps/theme fixes",
+              "hash": "e065d8c0"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.94",
       "tag": "v0.1.94",
-      "date": "2026-08-21T15:44:05-04:00",
+      "date": "2026-08-21T15:44:07-04:00",
       "sections": [
         {
           "label": "Fixed",
