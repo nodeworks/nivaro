@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T00:40:58.432Z",
+  "generated_at": "2026-08-21T00:49:43.122Z",
   "releases": [
+    {
+      "version": "0.1.89",
+      "tag": "v0.1.89",
+      "date": "2026-08-20T20:49:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "broadcasts",
+              "text": "optional Starts field for the banner window",
+              "hash": "e34737a3"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.88",
       "tag": "v0.1.88",
-      "date": "2026-08-20T20:40:55-04:00",
+      "date": "2026-08-20T20:40:58-04:00",
       "sections": [
         {
           "label": "Added",
