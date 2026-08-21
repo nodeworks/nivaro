@@ -196,6 +196,7 @@ export const navCategories: NavCategory[] = [
       { icon: Link2, label: 'Integrations', to: '/integration-health' },
       { icon: Activity, label: 'Background Jobs', to: '/background-jobs' },
       { icon: Radar, label: 'Monitors', to: '/monitors' },
+      { icon: Sparkles, label: 'Config Health', to: '/config-health' },
       { icon: ShieldAlert, label: 'Security Center', to: '/security-center' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
