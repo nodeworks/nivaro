@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T00:21:05.704Z",
+  "generated_at": "2026-08-21T00:40:58.432Z",
   "releases": [
+    {
+      "version": "0.1.88",
+      "tag": "v0.1.88",
+      "date": "2026-08-20T20:40:55-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "broadcasts",
+              "text": "history shows who each message targeted; fix idle flapping",
+              "hash": "a6e9bbea"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.87",
       "tag": "v0.1.87",
-      "date": "2026-08-20T20:21:03-04:00",
+      "date": "2026-08-20T20:21:05-04:00",
       "sections": [
         {
           "label": "Added",
