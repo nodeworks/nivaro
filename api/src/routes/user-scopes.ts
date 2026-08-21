@@ -227,6 +227,87 @@ export async function userScopesRoutes(app: FastifyInstance) {
     }
   )
 
+  /** Blast radius for a proposed restrict-scope change: row counts on the
+   *  biggest routed collections, current allowance vs proposed. The number an
+   *  admin needs BEFORE saving — a wrong scope is a quiet total denial. */
+  app.post<{
+    Params: { userId: string }
+    Body: { dimension?: string; values?: unknown }
+  }>('/user-scopes/:userId/impact', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body ?? {}
+    const dims = await listScopeDimensions(false)
+    const dim = dims.find((d) => d.name === b.dimension)
+    if (!dim) return reply.code(404).send({ error: 'Unknown dimension' })
+    const proposed = sanitizeValues(b.values)
+
+    const { scopeHopsFor, applyScopeHops, getUserScopes } = await import('../services/user-scopes.js')
+    // Current restrict allowance for this dimension (if any).
+    const currentRow = (await getUserScopes(req.params.userId)).find(
+      (r) => r.dimension === dim.name && r.mode === 'restrict'
+    )
+    const current: Array<string | number> = currentRow?.values ?? []
+
+    // Candidate collections: the biggest business tables that actually route
+    // to this dimension — where the change will be FELT.
+    const counts = (await db.raw(`
+      SELECT t.name AS table_name, SUM(p.row_count) AS rows
+      FROM sys.tables t
+      JOIN sys.dm_db_partition_stats p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+      WHERE t.name NOT LIKE 'nivaro[_]%' AND t.name NOT LIKE 'directus[_]%' AND t.name NOT LIKE 'staging[_]%'
+      GROUP BY t.name
+      ORDER BY SUM(p.row_count) DESC
+    `)) as Array<{ table_name: string; rows: number }>
+    const registered = new Set(
+      ((await db('nivaro_collections').select('collection')) as Array<{ collection: string }>).map(
+        (c) => c.collection.toLowerCase()
+      )
+    )
+    // Workflow-bound collections lead — they're the units admins think in —
+    // then the biggest remaining tables fill out the picture.
+    const bound = (await db('nivaro_workflow_bindings').distinct('collection')) as Array<{
+      collection: string
+    }>
+    const countByName = new Map(counts.map((c) => [c.table_name.toLowerCase(), Number(c.rows)]))
+    const ordered: Array<{ table_name: string; rows: number }> = []
+    const seenTables = new Set<string>()
+    for (const bc of bound) {
+      const key = bc.collection.toLowerCase()
+      if (seenTables.has(key) || !countByName.has(key)) continue
+      seenTables.add(key)
+      ordered.push({ table_name: bc.collection, rows: countByName.get(key) ?? 0 })
+    }
+    for (const c of counts) {
+      if (seenTables.has(c.table_name.toLowerCase())) continue
+      seenTables.add(c.table_name.toLowerCase())
+      ordered.push(c)
+    }
+    const impact: Array<{ collection: string; total: number; current: number; proposed: number }> = []
+    for (const c of ordered) {
+      if (impact.length >= 5) break
+      if (!registered.has(c.table_name.toLowerCase())) continue
+      const hops = await scopeHopsFor(dim, c.table_name)
+      if (hops === null) continue
+      const countWith = async (allowed: Array<string | number>): Promise<number> => {
+        if (allowed.length === 0) return Number(c.rows) // no restriction = everything
+        const q = db(c.table_name).count({ n: '*' })
+        applyScopeHops(q, c.table_name, hops, allowed)
+        const row = (await q.first()) as { n?: number } | undefined
+        return Number(row?.n ?? 0)
+      }
+      try {
+        impact.push({
+          collection: c.table_name,
+          total: Number(c.rows),
+          current: await countWith(current),
+          proposed: await countWith(proposed)
+        })
+      } catch {
+        // a collection whose hops fail to compile is skipped, not fatal
+      }
+    }
+    return { data: { dimension: dim.name, current_values: current, proposed_values: proposed, impact } }
+  })
+
   app.put<{
     Params: { userId: string }
     Body: { dimension?: string; mode?: string; values?: unknown }

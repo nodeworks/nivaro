@@ -230,6 +230,28 @@ function RowFilterEditor({ roleId, policy }: { roleId: string; policy: Policy })
 
   const isValid = conditions.every((c) => c.field.trim().length > 0 && c.op.length > 0)
 
+  const [impact, setImpact] = useState<{
+    total: number
+    members: Array<{ user: string; current: number; proposed: number }>
+    member_count: number
+  } | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const previewImpact = async () => {
+    setPreviewing(true)
+    setImpact(null)
+    try {
+      const r = await api.post(`/roles/${roleId}/row-filter-impact`, {
+        collection: policy.collection,
+        row_filter: conditions.length ? conditions : null
+      })
+      setImpact(r.data.data)
+    } catch {
+      toast.error('Impact preview failed')
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   return (
     <div className='space-y-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       {conditions.length === 0 ? (
@@ -292,6 +314,15 @@ function RowFilterEditor({ roleId, policy }: { roleId: string; policy: Policy })
         <div className='flex-1' />
         <Button
           size='sm'
+          variant='outline'
+          className='h-7 text-[12px]'
+          disabled={!isValid || previewing}
+          onClick={() => void previewImpact()}
+        >
+          {previewing ? 'Checking…' : 'Preview impact'}
+        </Button>
+        <Button
+          size='sm'
           className='h-7 text-[12px]'
           disabled={!isValid || save.isPending}
           onClick={() => save.mutate(conditions.length ? conditions : null)}
@@ -299,6 +330,24 @@ function RowFilterEditor({ roleId, policy }: { roleId: string; policy: Policy })
           {save.isPending ? 'Saving…' : 'Save filter'}
         </Button>
       </div>
+      {impact && (
+        <div className='rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200'>
+          <p className='font-medium'>
+            {policy.collection}: {impact.total.toLocaleString()} rows total
+            {impact.member_count === 0 && ' — no active members in this role to sample'}
+          </p>
+          {impact.members.map((m) => (
+            <p key={m.user} className='mt-0.5'>
+              {m.user}: {m.current.toLocaleString()} → {m.proposed.toLocaleString()} visible
+              {m.proposed === 0 && m.current > 0 && (
+                <span className='ml-1 font-medium text-red-600 dark:text-red-400'>
+                  (loses everything)
+                </span>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

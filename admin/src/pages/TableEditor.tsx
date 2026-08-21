@@ -19018,14 +19018,45 @@ function FieldLockingSection({ tableName }: { tableName: string }) {
 
 function ValidationRulesEditor({
   current,
-  onSave
+  onSave,
+  collection,
+  field
 }: {
   current: Array<{ type: string; value?: string; message?: string }>
   onSave: (rules: Array<{ type: string; value?: string; message?: string }>) => void
+  collection?: string
+  field?: string
 }) {
   const [rules, setRules] = useState(
     current.length ? current : [{ type: 'min_length', value: '', message: '' }]
   )
+  const [impact, setImpact] = useState<{
+    scanned: number
+    newly_failing: number
+    newly_passing: number
+    samples: Array<{ id: string | number; label: string; message: string }>
+  } | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const previewImpact = async () => {
+    if (!collection || !field) return
+    setPreviewing(true)
+    setImpact(null)
+    try {
+      const r = await api.post('/config-conformance/impact', {
+        collection,
+        field,
+        proposed_rules: rules.filter((x) => x.type)
+      })
+      setImpact(r.data.data)
+    } catch (err: unknown) {
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Preview failed'
+      )
+    } finally {
+      setPreviewing(false)
+    }
+  }
 
   const RULE_TYPES = [
     { value: 'min_length', label: 'Min length' },
@@ -19083,15 +19114,53 @@ function ValidationRulesEditor({
           <Plus className='h-3.5 w-3.5' />
           Add rule
         </button>
-        <Button
-          type='button'
-          size='sm'
-          className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-          onClick={() => onSave(rules)}
-        >
-          Save rules
-        </Button>
+        <div className='flex items-center gap-2'>
+          {collection && field && (
+            <button
+              type='button'
+              disabled={previewing}
+              onClick={() => void previewImpact()}
+              className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] text-slate-600 hover:border-slate-300 disabled:opacity-50'
+            >
+              {previewing ? 'Checking…' : 'Preview impact'}
+            </button>
+          )}
+          <Button
+            type='button'
+            size='sm'
+            className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
+            onClick={() => onSave(rules)}
+          >
+            Save rules
+          </Button>
+        </div>
       </div>
+      {impact && (
+        <div
+          className={cn(
+            'rounded-md border px-3 py-2 text-[12px]',
+            impact.newly_failing > 0
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          )}
+        >
+          <p className='font-medium'>
+            {impact.newly_failing > 0
+              ? `${impact.newly_failing} of ${impact.scanned} existing records would NEWLY fail these rules`
+              : `No existing records newly fail (${impact.scanned} checked)`}
+            {impact.newly_passing > 0 && ` · ${impact.newly_passing} would newly pass`}
+          </p>
+          {impact.samples.length > 0 && (
+            <ul className='mt-1 space-y-0.5'>
+              {impact.samples.slice(0, 5).map((sm) => (
+                <li key={String(sm.id)} className='text-[11.5px]'>
+                  <span className='font-mono'>{sm.label}</span> — {sm.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -19158,6 +19227,8 @@ function ValidationSection({ tableName }: { tableName: string }) {
               {isEdit && (
                 <ValidationRulesEditor
                   current={vRules}
+                  collection={tableName}
+                  field={f.field}
                   onSave={(r) => {
                     patchField(f.field, { validation_rules: r.length ? JSON.stringify(r) : null })
                     setEditing(null)

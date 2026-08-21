@@ -204,6 +204,27 @@ export function UserScopesCard({ userId }: { userId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['user-scopes', userId] })
   })
 
+  // Restriction edits are the scariest change in the system — a wrong value
+  // is a quiet total denial. They stage through a blast-radius preview
+  // (record counts current vs proposed on the biggest routed collections)
+  // instead of saving on click. Defaults stay instant — they enforce nothing.
+  const [pending, setPending] = useState<{
+    dimension: string
+    values: Array<string | number>
+    loading: boolean
+    impact: Array<{ collection: string; total: number; current: number; proposed: number }> | null
+  } | null>(null)
+  const stageRestrict = async (dimension: string, values: Array<string | number>) => {
+    setPending({ dimension, values, loading: true, impact: null })
+    try {
+      const r = await api.post(`/user-scopes/${userId}/impact`, { dimension, values })
+      setPending({ dimension, values, loading: false, impact: r.data.data.impact })
+    } catch {
+      // preview failed — allow applying anyway, just without numbers
+      setPending({ dimension, values, loading: false, impact: null })
+    }
+  }
+
   if (!scopes || scopes.dimensions.length === 0) return null
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -241,10 +262,56 @@ export function UserScopesCard({ userId }: { userId: string }) {
                 </p>
                 <ValuePills
                   dimension={d}
-                  selected={scopes.restricted[d.name] ?? []}
+                  selected={
+                    pending?.dimension === d.name ? pending.values : (scopes.restricted[d.name] ?? [])
+                  }
                   accent='amber'
-                  onToggle={(values) => save.mutate({ dimension: d.name, mode: 'restrict', values })}
+                  onToggle={(values) => void stageRestrict(d.name, values)}
                 />
+                {pending?.dimension === d.name && (
+                  <div className='mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-400/10 dark:text-amber-200'>
+                    {pending.loading ? (
+                      <p>Computing impact…</p>
+                    ) : (
+                      <>
+                        {(pending.impact ?? []).map((i) => (
+                          <p key={i.collection}>
+                            <span className='font-mono'>{i.collection}</span>:{' '}
+                            {i.current.toLocaleString()} → {i.proposed.toLocaleString()} of{' '}
+                            {i.total.toLocaleString()} visible
+                            {i.proposed === 0 && (
+                              <span className='ml-1 font-semibold text-red-600 dark:text-red-400'>
+                                (sees nothing)
+                              </span>
+                            )}
+                          </p>
+                        ))}
+                        {(pending.impact?.length ?? 0) === 0 && (
+                          <p>Impact preview unavailable — apply with care.</p>
+                        )}
+                        <div className='mt-1.5 flex gap-2'>
+                          <button
+                            type='button'
+                            className='rounded bg-amber-600 px-2 py-0.5 text-[11px] font-medium text-white'
+                            onClick={() => {
+                              save.mutate({ dimension: d.name, mode: 'restrict', values: pending.values })
+                              setPending(null)
+                            }}
+                          >
+                            Apply restriction
+                          </button>
+                          <button
+                            type='button'
+                            className='text-[11px] text-slate-500 underline decoration-dotted underline-offset-2'
+                            onClick={() => setPending(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

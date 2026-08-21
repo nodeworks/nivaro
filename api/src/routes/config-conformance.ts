@@ -56,6 +56,37 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
   app.addHook('preHandler', requireAdmin)
 
   // ── Nightly schedules ─────────────────────────────────────────────────────
+  /** Validation-rule change impact: how many existing records would NEWLY
+   *  fail if this field's rules became the proposed set. Same evaluator the
+   *  save path uses (a preview that disagrees with enforcement is worse than
+   *  none). Date-offset rules are judged against the record's creation date,
+   *  exactly like the conformance sweep. */
+  app.post('/impact', async (req, reply) => {
+    const b = req.body as {
+      collection?: string
+      field?: string
+      proposed_rules?: unknown
+      required?: boolean
+      limit?: number
+    }
+    const collection = String(b.collection ?? '')
+    const field = String(b.field ?? '')
+    if (!/^[A-Za-z0-9_]+$/.test(collection) || !/^[A-Za-z0-9_]+$/.test(field)) {
+      return reply.code(400).send({ error: 'collection and field are required' })
+    }
+    const { previewValidationImpact } = await import('../services/config-conformance.js')
+    try {
+      const result = await previewValidationImpact(collection, field, {
+        proposedRules: Array.isArray(b.proposed_rules) ? (b.proposed_rules as never) : [],
+        proposedRequired: b.required === true,
+        limit: Math.min(20_000, Math.max(100, Number(b.limit) || 5000))
+      })
+      return { data: result }
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
   app.get('/schedules', async () => {
     return { data: await db('nivaro_conformance_schedules').orderBy('collection') }
   })

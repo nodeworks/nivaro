@@ -891,3 +891,112 @@ async function evaluate(
     fieldCounts: Object.fromEntries(fieldCounts)
   }
 }
+
+/**
+ * Validation-rule change impact: evaluate CURRENT vs PROPOSED rules for one
+ * field over the newest rows and report the flips. Same evaluator the save
+ * path uses; date-offset rules judged against the creation date exactly like
+ * the sweep (records age past "N days from today" naturally — entry-time is
+ * the honest historical reading).
+ */
+export async function previewValidationImpact(
+  collection: string,
+  field: string,
+  opts: { proposedRules: ValidationRule[]; proposedRequired: boolean; limit: number }
+): Promise<{
+  scanned: number
+  current_failing: number
+  proposed_failing: number
+  newly_failing: number
+  newly_passing: number
+  samples: Array<{ id: string | number; label: string; message: string }>
+}> {
+  if (!(await hasPhysicalColumn(collection, field))) {
+    throw new Error('Impact preview supports physical columns only (not M2M aliases)')
+  }
+  const creationBaseline = (await hasPhysicalColumn(collection, 'date_created'))
+    ? 'date_created'
+    : (await hasPhysicalColumn(collection, 'created_at'))
+      ? 'created_at'
+      : null
+
+  const fieldRow = (await db('nivaro_fields').where({ collection, field }).first(
+    'validation_rules',
+    'required'
+  )) as { validation_rules: string | null; required: boolean | number | null } | undefined
+  const currentRules = parseJson<ValidationRule[]>(fieldRow?.validation_rules) ?? []
+  const currentRequired = fieldRow?.required === true || fieldRow?.required === 1
+
+  const evalRules = (
+    rules: ValidationRule[],
+    required: boolean,
+    value: unknown,
+    createdAt: unknown
+  ): string | null => {
+    if (required) {
+      const msg = applyValidationRule({ type: 'required' }, value, field)
+      if (msg) return msg
+    }
+    for (const r of Array.isArray(rules) ? rules : []) {
+      if (r.type === 'min_days_from_today' || r.type === 'max_days_from_today') {
+        const days = Number(r.value)
+        if (!creationBaseline || !Number.isFinite(days)) continue
+        if (value == null || value === '' || createdAt == null) continue
+        const v = new Date(String(value)).getTime()
+        const base = new Date(String(createdAt)).getTime() + days * 86_400_000
+        if (Number.isNaN(v) || Number.isNaN(base)) continue
+        const fails = r.type === 'min_days_from_today' ? v < base : v > base
+        if (fails) {
+          return (
+            r.message ||
+            `${field} must be at ${r.type === 'min_days_from_today' ? 'least' : 'most'} ${days} day(s) out (judged at entry)`
+          )
+        }
+        continue
+      }
+      const msg = applyValidationRule(r, value, field)
+      if (msg) return msg
+    }
+    return null
+  }
+
+  const cols = creationBaseline ? ['id', field, creationBaseline] : ['id', field]
+  const rows = (await db(collection)
+    .select(cols)
+    .orderBy('id', 'desc')
+    .limit(opts.limit)) as Array<Record<string, unknown>>
+
+  let currentFailing = 0
+  let proposedFailing = 0
+  const newly: Array<{ id: string | number; message: string }> = []
+  let newlyPassing = 0
+  for (const row of rows) {
+    const created = creationBaseline ? row[creationBaseline] : null
+    const cur = evalRules(currentRules, currentRequired, row[field], created)
+    const prop = evalRules(opts.proposedRules, opts.proposedRequired, row[field], created)
+    if (cur) currentFailing++
+    if (prop) proposedFailing++
+    if (!cur && prop) newly.push({ id: row.id as string | number, message: prop })
+    if (cur && !prop) newlyPassing++
+  }
+
+  const sampleIds = newly.slice(0, 10).map((n) => String(n.id))
+  let labels: Record<string, string> = {}
+  try {
+    labels = await getLabels(new Map([[collection, new Set(sampleIds)]]))
+  } catch {
+    // labels are garnish
+  }
+  return {
+    scanned: rows.length,
+    current_failing: currentFailing,
+    proposed_failing: proposedFailing,
+    newly_failing: newly.length,
+    newly_passing: newlyPassing,
+    samples: newly.slice(0, 10).map((n) => ({
+      id: n.id,
+      label: labels[`${collection}:${n.id}`] ?? String(n.id),
+      message: n.message
+    }))
+  }
+}

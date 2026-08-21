@@ -279,6 +279,54 @@ export async function rolesRoutes(app: FastifyInstance) {
   })
 
   // Update a policy — currently supports fields + row_filter (row-level security)
+  /** Blast radius for a proposed row filter: visible-row counts for up to 3
+   *  role members, current filter vs proposed — BEFORE saving. */
+  app.post<{ Params: { id: string } }>('/:id/row-filter-impact', async (req, reply) => {
+    const b = req.body as { collection?: string; row_filter?: unknown }
+    const collection = String(b.collection ?? '')
+    if (!/^[A-Za-z0-9_]+$/.test(collection) || /^nivaro_/i.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    const parse = (raw: unknown) => {
+      const r = parseRowFilter(typeof raw === 'string' ? raw : JSON.stringify(raw ?? null))
+      return r && 'error' in (r as object) ? null : (r as Array<{ field: string; op: string; value: unknown }> | null)
+    }
+    const proposed = parse(b.row_filter)
+    const currentPolicy = (await db('nivaro_policies')
+      .where({ role: req.params.id, collection, action: 'read' })
+      .first('row_filter')) as { row_filter: string | null } | undefined
+    const current = currentPolicy ? parse(currentPolicy.row_filter) : null
+
+    const members = (await db('nivaro_users')
+      .where({ role: req.params.id, status: 'active' })
+      .limit(3)
+      .select('id', 'first_name', 'last_name', 'email', 'role')) as Array<Record<string, unknown>>
+    const totalRow = (await db(collection).count({ n: '*' }).first()) as { n?: number } | undefined
+    const total = Number(totalRow?.n ?? 0)
+
+    const { applyRowFilter } = await import('../services/permissions.js')
+    const countFor = async (
+      filter: Array<{ field: string; op: string; value: unknown }> | null,
+      member: Record<string, unknown>
+    ): Promise<number> => {
+      if (!filter || filter.length === 0) return total
+      const q = db(collection).count({ n: '*' })
+      // biome-ignore lint/suspicious/noExplicitAny: member row satisfies the User shape applyRowFilter reads
+      applyRowFilter(q, filter as any, member as any)
+      const row = (await q.first()) as { n?: number } | undefined
+      return Number(row?.n ?? 0)
+    }
+    const perMember = []
+    for (const m of members) {
+      perMember.push({
+        user: `${m.first_name ?? ''} ${m.last_name ?? ''}`.trim() || String(m.email ?? m.id),
+        current: await countFor(current, m),
+        proposed: await countFor(proposed, m)
+      })
+    }
+    return { data: { collection, total, members: perMember, member_count: members.length } }
+  })
+
   app.patch('/policies/:policyId', async (req, reply) => {
     const { policyId } = req.params as { policyId: string }
     const body = req.body as { fields?: string[] | null; row_filter?: unknown }
