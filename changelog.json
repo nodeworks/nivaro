@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T20:54:23.668Z",
+  "generated_at": "2026-08-21T21:02:04.660Z",
   "releases": [
+    {
+      "version": "0.1.97",
+      "tag": "v0.1.97",
+      "date": "2026-08-21T17:02:01-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "guard workflow-template delete with clear 409s; readable dark-mode segmented pills",
+              "hash": "4705b6a7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.96",
       "tag": "v0.1.96",
-      "date": "2026-08-21T16:54:20-04:00",
+      "date": "2026-08-21T16:54:23-04:00",
       "sections": [
         {
           "label": "Added",
