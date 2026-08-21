@@ -162,6 +162,7 @@ export {
   QueryStatStrip,
   QueryTable,
   QueryWidgetBody,
+  QualityRulesView,
   QueueBulkBar,
   QueueItemSheet,
   QueueKanbanBoard,

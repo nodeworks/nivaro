@@ -1,8 +1,7 @@
-import { ConformanceView, NavigationContext, NivaroProvider } from '@nivaro/shared'
+import { ConformanceView, NavigationContext, NivaroProvider, QualityRulesView } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 import { useNavigate, useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
-import { DataQualityPage } from './DataQuality'
 
 // Data Integrity — one home for "which rows are bad", two lenses:
 // Form conformance (would this record fail its own form today — the shared
@@ -54,20 +53,16 @@ export default function DataIntegrity() {
           </span>
         </div>
       </header>
-      {tab === 'conformance' ? (
-        <NivaroProvider client={client}>
-          <NavigationContext.Provider
-            value={{
-              navigate: (path) => navigate(path),
-              itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
-            }}
-          >
-            <ConformanceView />
-          </NavigationContext.Provider>
-        </NivaroProvider>
-      ) : (
-        <DataQualityPage embedded />
-      )}
+      <NivaroProvider client={client}>
+        <NavigationContext.Provider
+          value={{
+            navigate: (path) => navigate(path),
+            itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
+          }}
+        >
+          {tab === 'conformance' ? <ConformanceView /> : <QualityRulesView />}
+        </NavigationContext.Provider>
+      </NivaroProvider>
     </div>
   )
 }

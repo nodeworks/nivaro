@@ -134,6 +134,7 @@ export {
 export * from './components/AnnouncementBanner'
 export * from './components/BroadcastView'
 export * from './components/ConformanceView'
+export { QualityRulesView } from './components/QualityRulesView'
 export * from './lib/commands'
 export * from './lib/expression'
 export * from './lib/format-value'
