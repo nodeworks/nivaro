@@ -135,18 +135,13 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     if (!IDENT.test(table) || !IDENT.test(column)) {
       return reply.code(400).send({ error: 'Invalid identifier' })
     }
-    const name = `idx_${table}_${column}`.slice(0, 120)
     const { startJobRun } = await import('../services/job-runs.js')
     const run = await startJobRun('recalc', `index:${table}.${column}`, {
       label: 'Index creation',
       triggeredBy: req.user?.id ?? null
     })
     try {
-      await execCustomQuerySql(
-        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${name}')
-         CREATE NONCLUSTERED INDEX [${name}] ON [${table}] ([${column}])`,
-        {}
-      )
+      const name = await createIndex(table, column)
       await run.complete(`created ${name}`)
       await logActivity({ action: 'index-create', user: req.user?.id, comment: `${table}.${column}`, req })
       return { data: { created: name } }
@@ -155,4 +150,56 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) })
     }
   })
+
+  /** Bulk apply: runs in the BACKGROUND (dozens of index builds on
+   *  multi-million-row tables outlive any sane request timeout), strictly
+   *  SEQUENTIAL so concurrent builds can't contend for the same tables, one
+   *  job-run with live progress for the console/panel to poll. */
+  app.post('/apply-bulk', async (req, reply) => {
+    const b = req.body as { items?: Array<{ table?: string; column?: string }> }
+    const items = (Array.isArray(b.items) ? b.items : [])
+      .map((i) => ({ table: String(i.table ?? ''), column: String(i.column ?? '') }))
+      .filter((i) => IDENT.test(i.table) && IDENT.test(i.column))
+      .slice(0, 100)
+    if (items.length === 0) return reply.code(400).send({ error: 'No valid items' })
+
+    const { startJobRun } = await import('../services/job-runs.js')
+    const run = await startJobRun('recalc', 'index-bulk', {
+      label: `Bulk index creation (${items.length})`,
+      triggeredBy: req.user?.id ?? null
+    })
+    await logActivity({
+      action: 'index-create',
+      user: req.user?.id,
+      comment: `bulk: ${items.length} index(es)`,
+      req
+    })
+    void (async () => {
+      let done = 0
+      const failures: string[] = []
+      for (const item of items) {
+        try {
+          await createIndex(item.table, item.column)
+        } catch (err) {
+          failures.push(`${item.table}.${item.column}: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        done++
+        run.progress({ done, total: items.length, current: `${item.table}.${item.column}`, failed: failures.length })
+      }
+      const summary = `${done - failures.length} created, ${failures.length} failed${failures.length ? ` — ${failures.slice(0, 3).join('; ').slice(0, 300)}` : ''}`
+      if (failures.length === items.length) await run.fail(summary)
+      else await run.complete(summary)
+    })()
+    return reply.code(202).send({ data: { job_run_id: run.id, total: items.length } })
+  })
+}
+
+async function createIndex(table: string, column: string): Promise<string> {
+  const name = `idx_${table}_${column}`.slice(0, 120)
+  await execCustomQuerySql(
+    `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${name}')
+     CREATE NONCLUSTERED INDEX [${name}] ON [${table}] ([${column}])`,
+    {}
+  )
+  return name
 }

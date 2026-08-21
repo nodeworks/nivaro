@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '@/components/ui/button'
 import {
@@ -376,6 +376,8 @@ function RumPanel() {
  *  RLS, state mirrors) on big tables with no leading-column index. */
 function IndexAdvisorPanel() {
   const [applying, setApplying] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkRunId, setBulkRunId] = useState<number | null>(null)
   const { data, refetch } = useQuery({
     queryKey: ['index-advisor'],
     queryFn: () => api.get('/index-advisor').then((r) => r.data.data)
@@ -387,6 +389,33 @@ function IndexAdvisorPanel() {
     reasons: string[]
     create_sql: string
   }> = data?.suggestions ?? []
+
+  // Bulk runs in the background — poll its job run for live progress.
+  const bulkRun = useQuery({
+    queryKey: ['index-bulk-run', bulkRunId],
+    queryFn: () =>
+      api
+        .get('/job-runs', { params: { kind: 'recalc', job_id: 'index-bulk', limit: 5 } })
+        .then(
+          (r) =>
+            (r.data.data as Array<{ id: number; status: string; progress: string | null; outcome: string | null; error: string | null }>).find(
+              (x) => x.id === bulkRunId
+            ) ?? null
+        ),
+    enabled: bulkRunId != null,
+    refetchInterval: 2500
+  })
+  const bulkDone = !!bulkRun.data && bulkRun.data.status !== 'running'
+  useEffect(() => {
+    if (bulkDone && bulkRunId != null) {
+      // One-shot: clear the poll and refresh the suggestion list.
+      setBulkRunId(null)
+      void refetch()
+    }
+  }, [bulkDone, bulkRunId, refetch])
+  const bulkProgress = bulkRun.data?.progress
+    ? (JSON.parse(bulkRun.data.progress) as { done: number; total: number; current: string; failed: number })
+    : null
 
   const apply = async (s: { table: string; column: string }) => {
     const key = `${s.table}.${s.column}`
@@ -404,14 +433,66 @@ function IndexAdvisorPanel() {
     }
   }
 
+  const applyBulk = async () => {
+    const items = suggestions.filter((s) => selected.has(`${s.table}.${s.column}`))
+    if (items.length === 0) return
+    if (
+      !window.confirm(
+        `Create ${items.length} index(es)? They build one at a time in the background — large tables take a minute each.`
+      )
+    )
+      return
+    const r = await api.post('/index-advisor/apply-bulk', {
+      items: items.map((s) => ({ table: s.table, column: s.column }))
+    })
+    setBulkRunId(r.data.data.job_run_id)
+    setSelected(new Set())
+  }
+
+  const allKeys = suggestions.map((s) => `${s.table}.${s.column}`)
+  const allSelected = allKeys.length > 0 && allKeys.every((k) => selected.has(k))
+
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-      <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Index advisor</p>
-      <p className='mt-0.5 text-[11.5px] text-slate-400'>
-        Columns your config filters on (foreign keys, queue filters, row-level security, workflow
-        state mirrors) that have no index on tables over {((data?.min_rows ?? 50000) / 1000).toFixed(0)}k
-        rows.
-      </p>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Index advisor</p>
+          <p className='mt-0.5 text-[11.5px] text-slate-400'>
+            Columns your config filters on (foreign keys, queue filters, row-level security,
+            workflow state mirrors) that have no index on tables over{' '}
+            {((data?.min_rows ?? 50000) / 1000).toFixed(0)}k rows.
+          </p>
+        </div>
+        {suggestions.length > 0 && (
+          <div className='flex items-center gap-2.5'>
+            <label className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              <input
+                type='checkbox'
+                checked={allSelected}
+                onChange={() => setSelected(allSelected ? new Set() : new Set(allKeys))}
+                className='h-3.5 w-3.5'
+              />
+              Select all
+            </label>
+            <button
+              type='button'
+              disabled={selected.size === 0 || bulkRunId != null}
+              onClick={() => void applyBulk()}
+              className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white disabled:opacity-50'
+            >
+              Create {selected.size > 0 ? `${selected.size} ` : ''}selected
+            </button>
+          </div>
+        )}
+      </div>
+      {bulkRunId != null && (
+        <p className='mt-2 rounded-md bg-sky-500/10 px-3 py-1.5 text-[12px] text-sky-800 dark:text-sky-300'>
+          Building indexes in the background —{' '}
+          {bulkProgress
+            ? `${bulkProgress.done}/${bulkProgress.total} done${bulkProgress.failed ? ` (${bulkProgress.failed} failed)` : ''} · now: ${bulkProgress.current}`
+            : 'starting…'}
+        </p>
+      )}
       {suggestions.length === 0 ? (
         <p className='mt-3 text-[12px] text-emerald-600 dark:text-emerald-400'>
           No gaps — every hot filter column on a large table is indexed.
@@ -425,6 +506,19 @@ function IndexAdvisorPanel() {
                 key={key}
                 className='flex items-center gap-3 rounded-md border border-slate-100 px-3 py-2 dark:border-border'
               >
+                <input
+                  type='checkbox'
+                  checked={selected.has(key)}
+                  onChange={() =>
+                    setSelected((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(key)) next.delete(key)
+                      else next.add(key)
+                      return next
+                    })
+                  }
+                  className='h-3.5 w-3.5 shrink-0'
+                />
                 <div className='min-w-0 flex-1'>
                   <p className='font-mono text-[12px] text-slate-700 dark:text-foreground'>
                     {key}
