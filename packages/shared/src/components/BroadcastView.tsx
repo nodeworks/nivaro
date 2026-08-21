@@ -63,6 +63,7 @@ export function BroadcastView({ className }: { className?: string }) {
   const [sms, setSms] = useState(false)
   const [inApp, setInApp] = useState(true)
   const [inAppKind, setInAppKind] = useState<'banner' | 'message'>('banner')
+  const [startsAt, setStartsAt] = useState('')
   const [endsAt, setEndsAt] = useState('')
   // Audience
   const [groups, setGroups] = useState<AudienceGroup[]>([])
@@ -140,6 +141,7 @@ export function BroadcastView({ className }: { className?: string }) {
           message: message.trim(),
           severity,
           channels,
+          starts_at: startsAt || undefined,
           ends_at: endsAt || undefined,
           audience: fullAudience
         })
@@ -331,6 +333,15 @@ export function BroadcastView({ className }: { className?: string }) {
                 ))}
               </span>
               <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                Starts
+                <input
+                  type='datetime-local'
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                  className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+                />
+              </label>
+              <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                 Ends
                 <input
                   type='datetime-local'
@@ -344,10 +355,10 @@ export function BroadcastView({ className }: { className?: string }) {
         </div>
         {inApp && inAppKind === 'banner' && (
           <p className='mt-1.5 text-[11px] text-slate-400'>
-            Ends = when the banner auto-expires for everyone who hasn't dismissed it. Leave it empty
-            and the banner stays up until each person dismisses it (or you turn it Off in history).
-            Email, text, and inbox messages always send once, immediately — Ends doesn't affect
-            them.
+            Starts/Ends control only the banner's visibility window: it appears at Starts (empty =
+            right away) and auto-expires at Ends for everyone who hasn't dismissed it (empty = stays
+            up until each person dismisses it, or you turn it Off in history). Email, text, and
+            inbox messages always send once, immediately — the window doesn't delay them.
           </p>
         )}
         <div className='mt-4 flex items-center gap-3'>
