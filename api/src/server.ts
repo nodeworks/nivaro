@@ -368,6 +368,12 @@ export async function buildServer() {
       // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
       // Auto-transition sweep: date-based transition conditions (within_days etc.)
       // can become true purely by time passing — re-evaluate hourly.
+      // SLA escalation ladders: tiered, ack-aware breach escalation.
+      app.cron.schedule('sla-escalations', '*/30 * * * *', async () => {
+        const { runSlaEscalations } = await import('./services/sla-escalations.js')
+        await runSlaEscalations(app)
+      })
+
       // Config health: nightly usage-hygiene + schema-lint sweep.
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {
         const { runConfigHealthSweep } = await import('./services/config-health.js')

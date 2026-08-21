@@ -23,13 +23,21 @@ interface SlaRule {
   template_name?: string
 }
 
-function formatRule(row: SlaRule): SlaRule {
+function formatRule(row: SlaRule): SlaRule & { escalation_ladder?: unknown } {
+  let ladder: unknown = null
+  try {
+    const raw = (row as SlaRule & { escalation_ladder?: string | null }).escalation_ladder
+    ladder = raw ? JSON.parse(String(raw)) : null
+  } catch {
+    ladder = null
+  }
   return {
     ...row,
     business_hours_only: !!row.business_hours_only,
     notify_on_warning: !!row.notify_on_warning,
     notify_on_breach: !!row.notify_on_breach,
-    is_active: !!row.is_active
+    is_active: !!row.is_active,
+    escalation_ladder: ladder
   }
 }
 
@@ -368,6 +376,7 @@ export async function slaRoutes(app: FastifyInstance) {
       notify_on_warning?: boolean
       notify_on_breach?: boolean
       escalation_user?: string | null
+      escalation_ladder?: unknown
       is_active?: boolean
     }
 
@@ -389,6 +398,9 @@ export async function slaRoutes(app: FastifyInstance) {
         notify_on_warning: body.notify_on_warning !== false ? 1 : 0,
         notify_on_breach: body.notify_on_breach !== false ? 1 : 0,
         escalation_user: body.escalation_user ?? null,
+        escalation_ladder: Array.isArray(body.escalation_ladder)
+          ? JSON.stringify(body.escalation_ladder)
+          : null,
         is_active: body.is_active !== false ? 1 : 0,
         created_at: now,
         updated_at: now
@@ -426,6 +438,7 @@ export async function slaRoutes(app: FastifyInstance) {
       notify_on_warning: boolean
       notify_on_breach: boolean
       escalation_user: string | null
+      escalation_ladder: unknown
       is_active: boolean
     }>
 
@@ -442,6 +455,11 @@ export async function slaRoutes(app: FastifyInstance) {
       patch.notify_on_warning = body.notify_on_warning ? 1 : 0
     if (body.notify_on_breach !== undefined) patch.notify_on_breach = body.notify_on_breach ? 1 : 0
     if ('escalation_user' in body) patch.escalation_user = body.escalation_user ?? null
+    if ('escalation_ladder' in body) {
+      patch.escalation_ladder = Array.isArray(body.escalation_ladder)
+        ? JSON.stringify(body.escalation_ladder)
+        : null
+    }
     if (body.is_active !== undefined) patch.is_active = body.is_active ? 1 : 0
 
     await db('nivaro_sla_rules').where({ id }).update(patch)
@@ -482,9 +500,65 @@ export async function slaRoutes(app: FastifyInstance) {
   // ─── Status endpoints (requireAuth — non-admin can see SLA status) ───────────
 
   // GET /sla/status/:collection/:item — compute SLA status for a specific record
+  /** Acknowledge the current breach episode — stops the escalation ladder for
+   *  this state entry. Any authenticated user who can see the record (they
+   *  got here from it) may acknowledge; the ack is attributed. */
+  app.post('/ack', { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body as { collection?: string; item?: string; note?: string }
+    const collection = String(b.collection ?? '')
+    const item = String(b.item ?? '')
+    if (!collection || !item) return reply.code(400).send({ error: 'collection and item are required' })
+    const status = await computeStatus(collection, item)
+    if (!status || status.status !== 'breached' || !status.sla_rule) {
+      return reply.code(400).send({ error: 'No active breach to acknowledge' })
+    }
+    await db('nivaro_sla_acks')
+      .insert({
+        rule: status.sla_rule.id,
+        collection,
+        item,
+        entered_state_at: status.entered_at,
+        acked_by: req.user!.id,
+        acked_at: new Date(),
+        note: String(b.note ?? '').slice(0, 500) || null
+      })
+      .catch(() => {}) // already acked — fine
+    await logActivity({
+      action: 'sla-ack',
+      user: req.user?.id,
+      collection,
+      item,
+      comment: String(b.note ?? '').slice(0, 200) || undefined,
+      req
+    })
+    return { data: { acked: true } }
+  })
+
   app.get('/status/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
     const result = await computeStatus(collection, item)
+    if (result?.status === 'breached' && result.sla_rule) {
+      // Escalation context for the record banner: is this episode acked, and
+      // does the rule ladder at all.
+      const ack = (await db('nivaro_sla_acks as a')
+        .leftJoin('nivaro_users as u', 'u.id', 'a.acked_by')
+        .where({ rule: result.sla_rule.id, collection, item })
+        // datetime rounding: episode identity is a 1s tolerance, never equality
+        .whereRaw('ABS(DATEDIFF(ms, a.entered_state_at, ?)) < 1000', [result.entered_at])
+        .first(
+          'a.acked_at',
+          db.raw(
+            "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as acked_by_name"
+          )
+        )) as { acked_at: Date; acked_by_name: string } | undefined
+      return reply.send({
+        ...result,
+        acknowledged: ack ? { at: ack.acked_at, by: ack.acked_by_name } : null,
+        has_ladder: Array.isArray(
+          (result.sla_rule as { escalation_ladder?: unknown }).escalation_ladder
+        )
+      })
+    }
     return reply.send(result)
   })
 

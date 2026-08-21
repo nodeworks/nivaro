@@ -88,6 +88,7 @@ interface SlaRuleFormValues {
   notify_on_warning: boolean
   notify_on_breach: boolean
   escalation_user: string | null
+  escalation_ladder: Array<{ after_hours: number; notify: string }>
   is_active: boolean
 }
 
@@ -101,6 +102,7 @@ const FORM_DEFAULTS: SlaRuleFormValues = {
   notify_on_warning: true,
   notify_on_breach: true,
   escalation_user: null,
+  escalation_ladder: [],
   is_active: true
 }
 
@@ -300,6 +302,82 @@ function SlaRuleForm({
         </Select>
       </div>
 
+      <div className='space-y-2 rounded-lg border border-border p-4'>
+        <div>
+          <p className='text-sm font-medium'>Escalation ladder</p>
+          <p className='text-[11px] text-muted-foreground'>
+            After a breach: notify the owner immediately (the breach notice above), then climb
+            these tiers until someone acknowledges on the record. Hours count PAST the breach.
+          </p>
+        </div>
+        {form.escalation_ladder.map((tier, idx) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: positional editor rows
+          <div key={idx} className='flex items-center gap-2'>
+            <span className='text-[12px] text-muted-foreground'>after</span>
+            <Input
+              type='number'
+              value={tier.after_hours}
+              onChange={(e) =>
+                set(
+                  'escalation_ladder',
+                  form.escalation_ladder.map((t, i) =>
+                    i === idx ? { ...t, after_hours: Number(e.target.value) } : t
+                  )
+                )
+              }
+              className='h-8 w-[80px] text-[12px]'
+            />
+            <span className='text-[12px] text-muted-foreground'>h →</span>
+            <Select
+              value={tier.notify.startsWith('user:') ? tier.notify : tier.notify}
+              onValueChange={(v) =>
+                set(
+                  'escalation_ladder',
+                  form.escalation_ladder.map((t, i) => (i === idx ? { ...t, notify: v } : t))
+                )
+              }
+            >
+              <SelectTrigger className='h-8 flex-1 text-[12px]'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='owner'>Record owners (again)</SelectItem>
+                <SelectItem value='manager'>Owners' managers</SelectItem>
+                {users.map((u) => (
+                  <SelectItem key={u.id} value={`user:${u.id}`}>
+                    {userLabel(u)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type='button'
+              onClick={() =>
+                set(
+                  'escalation_ladder',
+                  form.escalation_ladder.filter((_, i) => i !== idx)
+                )
+              }
+              className='text-[13px] text-slate-300 hover:text-red-500'
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          type='button'
+          onClick={() =>
+            set('escalation_ladder', [
+              ...form.escalation_ladder,
+              { after_hours: (form.escalation_ladder.at(-1)?.after_hours ?? 0) + 4, notify: 'manager' }
+            ])
+          }
+          className='text-[12px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground'
+        >
+          ＋ Add tier
+        </button>
+      </div>
+
       <div className='space-y-3 rounded-lg border border-border p-4'>
         <div className='flex items-center justify-between'>
           <div>
@@ -434,6 +512,12 @@ export function SlaRulesPage() {
       notify_on_warning: rule.notify_on_warning,
       notify_on_breach: rule.notify_on_breach,
       escalation_user: rule.escalation_user,
+      escalation_ladder: Array.isArray(
+        (rule as SlaRule & { escalation_ladder?: unknown }).escalation_ladder
+      )
+        ? ((rule as SlaRule & { escalation_ladder?: Array<{ after_hours: number; notify: string }> })
+            .escalation_ladder as Array<{ after_hours: number; notify: string }>)
+        : [],
       is_active: rule.is_active
     }
   }

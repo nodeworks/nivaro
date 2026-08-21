@@ -91,6 +91,7 @@ import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
+import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -6555,6 +6556,12 @@ export function ItemEditForm({
                                       collection={collection}
                                       itemId={String(itemId)}
                                       onJumpToField={flashField}
+                                    />
+                                  )}
+                                  {!isNew && itemId && (
+                                    <SlaBreachBanner
+                                      collection={collection}
+                                      itemId={String(itemId)}
                                     />
                                   )}
                                   {importIssues.length > 0 && (
