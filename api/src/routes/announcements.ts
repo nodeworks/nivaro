@@ -327,7 +327,8 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       subject: r.subject,
       severity: r.severity,
       ends_at: r.ends_at,
-      dismissable: true
+      dismissable: true,
+      require_ack: !!r.require_ack
     }))
     // Maintenance mode rides the same banner surface — synthetic row, not
     // dismissable (acking it would make the freeze invisible while it holds).
@@ -341,7 +342,8 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         subject: 'Maintenance',
         severity: 'critical',
         ends_at: null,
-        dismissable: false
+        dismissable: false,
+        require_ack: false
       })
     }
     return { data }
@@ -395,6 +397,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       audience?: Audience
       starts_at?: string
       ends_at?: string
+      require_ack?: boolean
     }
     const message = String(b.message ?? '').trim()
     if (!message) return reply.code(400).send({ error: 'message is required' })
@@ -426,6 +429,9 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         audience: JSON.stringify(aud),
         starts_at: b.starts_at ? new Date(String(b.starts_at)) : null,
         ends_at: b.ends_at ? new Date(String(b.ends_at)) : null,
+        // Must-acknowledge (#90): only meaningful on banner rows — the ack IS
+        // the dismissal, it just can't be ignored.
+        require_ack: !!b.require_ack && channels.includes('banner'),
         // Only banner rows stay "active" — send-only broadcasts are history.
         is_active: channels.includes('banner'),
         created_by: req.user?.id ?? null,

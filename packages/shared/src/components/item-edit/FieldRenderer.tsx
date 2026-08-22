@@ -678,6 +678,12 @@ export function FieldRenderer({
     )
   }
 
+  // Tags (#92): free-entry chips stored as a JSON string array. Optional
+  // suggested values via options.tag_options (string list).
+  if (iface === 'tags') {
+    return <TagsField field={field} value={value} onChange={onChange} />
+  }
+
   // Select / dropdown
   if (iface === 'select-dropdown' || iface === 'radio-buttons') {
     const opts = (() => {
@@ -706,5 +712,98 @@ export function FieldRenderer({
       onChange={(e) => onChange(e.target.value || null)}
       placeholder={field.placeholder ?? undefined}
     />
+  )
+}
+
+
+/** Tags interface (#92): chips + free-entry input; Enter/comma adds, ✕
+ *  removes. Value is a JSON string array (stored in a text column). */
+function TagsField({
+  field,
+  value,
+  onChange
+}: {
+  field: CMSField
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
+  const [input, setInput] = useState('')
+  const tags: string[] = (() => {
+    if (Array.isArray(value)) return value.map(String)
+    if (typeof value === 'string' && value.trim().startsWith('[')) {
+      try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed.map(String) : []
+      } catch {
+        return []
+      }
+    }
+    if (typeof value === 'string' && value.trim() !== '') return [value]
+    return []
+  })()
+  const suggestions: string[] = (() => {
+    const parsed = parseJson<{ tag_options?: string[] }>(field.options)
+    return Array.isArray(parsed?.tag_options) ? parsed.tag_options.map(String) : []
+  })()
+  const commit = (next: string[]) => onChange(next.length > 0 ? JSON.stringify(next) : null)
+  const add = (raw: string) => {
+    const t = raw.trim()
+    if (!t || tags.includes(t)) return
+    commit([...tags, t])
+    setInput('')
+  }
+  return (
+    <div className='rounded-md border border-input bg-background px-2 py-1.5'>
+      <div className='flex flex-wrap items-center gap-1'>
+        {tags.map((t) => (
+          <span
+            key={t}
+            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11.5px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+          >
+            {t}
+            <button
+              type='button'
+              aria-label={`Remove ${t}`}
+              onClick={() => commit(tags.filter((x) => x !== t))}
+              className='text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+              e.preventDefault()
+              add(input)
+            }
+            if (e.key === 'Backspace' && input === '' && tags.length > 0) {
+              commit(tags.slice(0, -1))
+            }
+          }}
+          onBlur={() => add(input)}
+          placeholder={tags.length === 0 ? 'Type and press Enter…' : ''}
+          className='h-6 min-w-[120px] flex-1 bg-transparent text-[13px] outline-none'
+        />
+      </div>
+      {suggestions.length > 0 && (
+        <div className='mt-1 flex flex-wrap gap-1 border-t border-slate-100 pt-1 dark:border-border/60'>
+          {suggestions
+            .filter((sg) => !tags.includes(sg))
+            .map((sg) => (
+              <button
+                key={sg}
+                type='button'
+                onClick={() => add(sg)}
+                className='rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:border-nvr-cyan/50 hover:text-slate-700 dark:border-border dark:text-slate-400'
+              >
+                + {sg}
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
   )
 }

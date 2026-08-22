@@ -133,10 +133,23 @@ function StateTrack({
 
   if (relevant.length < 2) return null
 
-  function edgeEntries(fromId: string, toId: string) {
+  // Position-based, not exact-pair: a skip-jump transition (manager approval
+  // straight to VP) has no adjacent-pair edge — exact matching dropped the
+  // approver's initials. Forward hops annotate the segment leaving their
+  // origin; send-backs the segment beside their destination. Mirrors the
+  // shared PipelinePanel — the two must not drift.
+  const trackIndex = new Map(relevant.map((st, idx2) => [st.id, idx2]))
+  function edgeEntries(fromId: string, _toId: string) {
+    const i = trackIndex.get(fromId)
+    if (i == null) return []
     return [...history]
-      .filter((h) => (h.from_state === fromId && h.to_state === toId) ||
-                     (h.from_state === toId   && h.to_state === fromId))
+      .filter((h) => {
+        if (!h.from_state) return false
+        const f = trackIndex.get(h.from_state)
+        const t = trackIndex.get(h.to_state)
+        if (f == null || t == null) return false
+        return (f === i && t > i) || (t === i && f > i)
+      })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
   }
 

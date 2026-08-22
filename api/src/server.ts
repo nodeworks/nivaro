@@ -444,13 +444,68 @@ export async function buildServer() {
             .update({ is_out_of_office: true })
           // Their open tasks move to the delegate (#70) — best-effort.
           const { delegateOpenTasks } = await import('./services/task-delegation.js')
-          for (const u of entering) await delegateOpenTasks(u.id)
+          for (const u of entering) await delegateOpenTasks(u.id, app)
         }
         await db('nivaro_users')
           .where('is_out_of_office', true)
           .whereNotNull('ooo_end')
           .where('ooo_end', '<=', now)
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+      })
+
+      // Blocking-session monitor (#88): DB sessions blocked >15s form chains
+      // that read as "everything is slow" with no visible cause. Every 5 min,
+      // chains land as ONE deduped issue naming the head blocker + statement.
+      // Needs VIEW SERVER STATE — absent permission degrades to silence.
+      app.cron.schedule('blocking-sessions', '*/5 * * * *', async () => {
+        const { db } = await import('./db/index.js')
+        let rows: Array<{
+          session_id: number
+          blocking_session_id: number
+          wait_time: number
+          wait_type: string | null
+          sql_text: string | null
+        }> = []
+        try {
+          rows = (await db.raw(`
+            SELECT r.session_id, r.blocking_session_id, r.wait_time, r.wait_type,
+                   LEFT(t.text, 300) AS sql_text
+            FROM sys.dm_exec_requests r
+            OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
+            WHERE r.blocking_session_id <> 0 AND r.wait_time > 15000
+          `)) as typeof rows
+        } catch {
+          return // no VIEW SERVER STATE — nothing to report
+        }
+        if (rows.length === 0) return
+        const heads = [...new Set(rows.map((r) => r.blocking_session_id))]
+        // The head blocker's own statement, when visible.
+        let headText = ''
+        try {
+          const headRows = (await db.raw(
+            `SELECT s.session_id, LEFT(t.text, 300) AS sql_text
+             FROM sys.dm_exec_requests r
+             JOIN sys.dm_exec_sessions s ON s.session_id = r.session_id
+             OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
+             WHERE s.session_id IN (${heads.map(() => '?').join(',')})`,
+            heads
+          )) as Array<{ session_id: number; sql_text: string | null }>
+          headText = headRows.map((h) => `#${h.session_id}: ${h.sql_text ?? '(idle)'}`).join(' · ')
+        } catch {
+          headText = heads.map((h) => `#${h}`).join(', ')
+        }
+        const worst = Math.max(...rows.map((r) => r.wait_time))
+        const { trackError } = await import('./services/error-tracking.js')
+        await trackError({
+          source: 'server',
+          route: 'db/blocking-sessions',
+          message: `${rows.length} session(s) blocked (worst ${Math.round(worst / 1000)}s) behind ${heads.length} head blocker(s)`,
+          stack: `Head blocker statement(s): ${headText}\nBlocked: ${rows
+            .slice(0, 10)
+            .map((r) => `#${r.session_id} waits ${Math.round(r.wait_time / 1000)}s (${r.wait_type ?? '?'}) on #${r.blocking_session_id}`)
+            .join('\n')}`,
+          severity: worst > 120_000 ? 'critical' : 'high'
+        })
       })
 
       // Chat-bot reminders — "@efp remind me Friday about X". Due rows deliver

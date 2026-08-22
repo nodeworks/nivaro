@@ -15360,6 +15360,7 @@ function LayoutsTab({
                         }
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
+                      <PreviewAsRoleSection tableName={tableName} />
                     </div>
                   </>
                 )}
@@ -15392,6 +15393,101 @@ function LayoutsTab({
  * snapshot, and restore is id-preserving and itself reversible (it snapshots
  * 'before restore' first).
  */
+/** Preview-as-role (#86): which layout a role's member resolves and which
+ *  fields their permissions hide — via the live pickBestLayout + policy code. */
+function PreviewAsRoleSection({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const [roleId, setRoleId] = useState('')
+  const { data: roles = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles-list-preview'],
+    queryFn: () => api.get('/roles').then((r) => r.data.data),
+    enabled: open
+  })
+  const { data: preview } = useQuery<{
+    role: { name: string; admin_access: boolean }
+    can_read: boolean
+    can_update: boolean
+    layout: { name: string; is_active: boolean } | null
+    hidden_fields: string[]
+    readonly_fields: string[]
+    record_conditional_layouts: string[]
+    note: string | null
+  }>({
+    queryKey: ['layout-preview-role', tableName, roleId],
+    queryFn: () =>
+      api
+        .get('/collection-layouts/preview-as-role', {
+          params: { collection: tableName, role_id: roleId }
+        })
+        .then((r) => r.data.data),
+    enabled: open && !!roleId
+  })
+  return (
+    <div className='border-t border-slate-200 pt-2 dark:border-border'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between text-[11px] font-medium text-slate-600 dark:text-slate-300'
+      >
+        Preview as role
+        <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className='mt-2 space-y-2'>
+          <Combobox
+            value={roleId}
+            onChange={setRoleId}
+            options={roles.map((r) => ({ value: r.id, label: r.name }))}
+            placeholder='Pick a role…'
+          />
+          {preview && (
+            <div className='space-y-1.5 rounded-md border border-slate-100 bg-slate-50 p-2 text-[11.5px] dark:border-border dark:bg-muted/30'>
+              {preview.role.admin_access ? (
+                <p className='text-slate-600 dark:text-slate-300'>
+                  Admin role — sees the default layout and every field.
+                </p>
+              ) : !preview.can_read ? (
+                <p className='text-red-600 dark:text-red-400'>
+                  This role cannot read {tableName} at all.
+                </p>
+              ) : (
+                <>
+                  <p className='text-slate-600 dark:text-slate-300'>
+                    Resolves layout:{' '}
+                    <span className='font-semibold'>{preview.layout?.name ?? '(none)'}</span>
+                    {!preview.can_update && ' · read-only (no update permission)'}
+                  </p>
+                  {preview.hidden_fields.length > 0 && (
+                    <p className='text-slate-500 dark:text-muted-foreground'>
+                      Hidden by permissions:{' '}
+                      <span className='font-mono text-[10.5px]'>
+                        {preview.hidden_fields.slice(0, 15).join(', ')}
+                        {preview.hidden_fields.length > 15 &&
+                          ` +${preview.hidden_fields.length - 15} more`}
+                      </span>
+                    </p>
+                  )}
+                  {preview.readonly_fields.length > 0 && (
+                    <p className='text-slate-500 dark:text-muted-foreground'>
+                      Read-only:{' '}
+                      <span className='font-mono text-[10.5px]'>
+                        {preview.readonly_fields.slice(0, 15).join(', ')}
+                        {preview.readonly_fields.length > 15 &&
+                          ` +${preview.readonly_fields.length - 15} more`}
+                      </span>
+                    </p>
+                  )}
+                  {preview.note && <p className='text-slate-400'>{preview.note}</p>}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LayoutVersionsSection({ layoutId }: { layoutId: number }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)

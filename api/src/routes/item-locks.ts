@@ -139,6 +139,29 @@ export async function itemLocksRoutes(app: FastifyInstance) {
   })
 
   // POST /:collection/:item/lock — acquire/refresh lock for the current user
+  // All live locks (#89) — the admin console behind force-unlock: who is
+  // holding what, for how long. Expired rows are excluded, not deleted (the
+  // holder's heartbeat may still refresh them).
+  app.get('/', { preHandler: [requireAuth] }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const rows = (await db('nivaro_item_locks as l')
+      .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+      .where('l.expires_at', '>', new Date())
+      .orderBy('l.locked_at', 'desc')
+      .limit(200)
+      .select(
+        'l.id',
+        'l.collection',
+        'l.item',
+        'l.user',
+        'l.locked_at',
+        'l.expires_at',
+        db.raw("CONCAT(u.first_name, ' ', u.last_name) as holder_name"),
+        'u.email as holder_email'
+      )) as Array<Record<string, unknown>>
+    return reply.send({ data: rows })
+  })
+
   app.post<{ Params: { collection: string; item: string } }>(
     '/:collection/:item/lock',
     { preHandler: [requireAuth] },

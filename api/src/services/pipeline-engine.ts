@@ -1261,6 +1261,85 @@ export interface OwnerGapCluster {
  * the problem; this proposes the fix. Uses the exact evaluation the live
  * resolver uses, so a suggestion that says "would match" actually would.
  */
+/**
+ * Owner-matrix impact preview (#87): how many LIVE records a proposed cell
+ * (state + filter set) would govern, before saving it. Matching runs through
+ * the same prepare/pick machinery real resolution uses — a synthetic group
+ * carrying the proposed filters is offered alongside no competitors, so
+ * "matches" means exactly what it will mean at runtime.
+ */
+export interface OwnerImpactPreview {
+  state_key: string
+  matched: number
+  total_in_state: number
+  sample: Array<{ item: string; label: string }>
+}
+export async function previewOwnerGroupImpact(
+  templateId: string,
+  stateId: string,
+  filters: unknown
+): Promise<OwnerImpactPreview> {
+  const state = (await db('nivaro_workflow_states')
+    .where({ id: stateId, template: templateId })
+    .first('id', 'key')) as { id: string; key: string } | undefined
+  if (!state) throw Object.assign(new Error('State not found'), { statusCode: 404 })
+
+  const synthetic: OwnerGroup = {
+    id: 'synthetic',
+    template: templateId,
+    state: stateId,
+    name: 'preview',
+    filters: JSON.stringify(filters ?? []),
+    sort: 0,
+    is_default: false,
+    priority: 0,
+    max_wip: null
+  }
+  const prepared = prepareOwnerGroups([synthetic])
+
+  const instances = (await db('nivaro_workflow_instances')
+    .where({ template: templateId, current_state: stateId })
+    .whereNull('completed_at')
+    .select('collection', 'item')
+    .limit(2000)) as Array<{ collection: string; item: string }>
+  if (instances.length === 0)
+    return { state_key: state.key, matched: 0, total_in_state: 0, sample: [] }
+
+  const byCollection = new Map<string, string[]>()
+  for (const i of instances) {
+    byCollection.set(i.collection, [...(byCollection.get(i.collection) ?? []), String(i.item)])
+  }
+
+  let matched = 0
+  const sample: Array<{ item: string; label: string }> = []
+  for (const [collection, items] of byCollection) {
+    const rows = (await db(collection).whereIn('id', items.slice(0, 1000)).select('*')) as Array<
+      Record<string, unknown>
+    >
+    const records = new Map(rows.map((r) => [String(r.id), r]))
+    const relations = (await db('nivaro_relations')
+      .where({ many_collection: collection })
+      .select('many_collection', 'many_field', 'one_collection')
+      .catch(() => [])) as RelationInfo[]
+    const resolved = await resolveFilterValues(collection, records, prepared.filterFields, db)
+    for (const [id, record] of records) {
+      const winners = pickWinningGroupsPrepared(prepared, record, relations, resolved.get(id))
+      if (winners.some((g) => g.id === 'synthetic')) {
+        matched++
+        if (sample.length < 10) {
+          sample.push({
+            item: id,
+            label: String(
+              record.workflow_id ?? record.name ?? record.title ?? record.label ?? id
+            )
+          })
+        }
+      }
+    }
+  }
+  return { state_key: state.key, matched, total_in_state: instances.length, sample }
+}
+
 export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapCluster[]> {
   const bindings = (await db('nivaro_workflow_bindings')
     .where({ template: templateId })

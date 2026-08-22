@@ -588,6 +588,28 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     onError: () => toast.error('Failed to add owner')
   })
 
+  // The exact filter set a cell save would store — shared by the impact hint.
+  const buildCellFilters = (_stateId: string, rowValue: string): RecordFilter[] => {
+    const colFilterItems = colFilterItemQueries.flatMap(
+      (q) => (q.data as Record<string, unknown>[] | undefined) ?? []
+    )
+    const rowFilter: RecordFilter = {
+      field: rowDim?.field ?? '',
+      op: 'eq',
+      value: rowValue,
+      id_value: rowDim ? getIdValue(rowDim, rowValue, rowItems, undefined) : undefined
+    }
+    const colFilters: RecordFilter[] = colFilterDims
+      .filter((d) => filterValues[d.id])
+      .map((d) => ({
+        field: d.field,
+        op: 'eq',
+        value: filterValues[d.id],
+        id_value: getIdValue(d, filterValues[d.id], undefined, colFilterItems)
+      }))
+    return [rowFilter, ...colFilters]
+  }
+
   const createOverride = useMutation({
     mutationFn: async ({ stateId, rowValue }: { stateId: string; rowValue: string }) => {
       const colFilterItems = colFilterItemQueries.flatMap(
@@ -876,6 +898,11 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                   </button>
                                 </div>
                               ))}
+                              <CellImpactHint
+                                templateId={templateId}
+                                stateId={s.id}
+                                buildFilters={() => buildCellFilters(s.id, row.value)}
+                              />
                               <AddUserToCell
                                 stateId={s.id}
                                 rowValue={row.value}
@@ -1030,6 +1057,60 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           <Plus className='h-3.5 w-3.5' />
           Add Row
         </Button>
+      )}
+    </div>
+  )
+}
+
+/** Owner-matrix impact hint (#87): "this cell governs N live records" —
+ *  fetched on demand so the matrix itself stays light. */
+function CellImpactHint({
+  templateId,
+  stateId,
+  buildFilters
+}: {
+  templateId: string
+  stateId: string
+  buildFilters: () => RecordFilter[]
+}) {
+  const [result, setResult] = useState<{
+    matched: number
+    total_in_state: number
+    sample: Array<{ item: string; label: string }>
+  } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const check = async () => {
+    setLoading(true)
+    try {
+      const r = await api.post<{
+        data: { matched: number; total_in_state: number; sample: Array<{ item: string; label: string }> }
+      }>(`/pipelines/${templateId}/owner-impact`, { state_id: stateId, filters: buildFilters() })
+      setResult(r.data.data)
+    } catch {
+      setResult(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <div className='mt-1 text-[10.5px]'>
+      {result ? (
+        <span
+          className='text-slate-500 dark:text-muted-foreground'
+          title={result.sample.map((x) => x.label).join(', ')}
+        >
+          Governs {result.matched.toLocaleString()} of {result.total_in_state.toLocaleString()} live
+          record(s) in this state
+        </span>
+      ) : (
+        <button
+          type='button'
+          disabled={loading}
+          onClick={() => void check()}
+          className='text-slate-400 underline decoration-dotted hover:text-slate-600 disabled:opacity-50'
+        >
+          {loading ? 'Checking…' : 'Preview impact'}
+        </button>
       )}
     </div>
   )

@@ -1,3 +1,4 @@
+import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { notifyUser } from './notification-channels.js'
@@ -9,7 +10,10 @@ import { notifyUser } from './notification-channels.js'
  * (the delegate may be mid-way through them); reassignment is visible on each
  * task and in the activity log.
  */
-export async function delegateOpenTasks(userId: string): Promise<number> {
+export async function delegateOpenTasks(
+  userId: string,
+  app?: FastifyInstance
+): Promise<number> {
   try {
     const user = (await db('nivaro_users')
       .where({ id: userId })
@@ -54,14 +58,15 @@ export async function delegateOpenTasks(userId: string): Promise<number> {
       .update({ assignee: user.delegate_id })
 
     const fromName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'a colleague'
-    await notifyUser({
-      recipient: user.delegate_id,
-      subject: `${open.length} task${open.length === 1 ? '' : 's'} delegated to you`,
-      message: `${fromName} is out of office — their open tasks were reassigned to you: ${open
-        .slice(0, 5)
-        .map((t) => t.title)
-        .join(', ')}${open.length > 5 ? '…' : ''}`
-    }).catch(() => {})
+    if (app) {
+      await notifyUser(app, user.delegate_id, {
+        subject: `${open.length} task${open.length === 1 ? '' : 's'} delegated to you`,
+        message: `${fromName} is out of office — their open tasks were reassigned to you: ${open
+          .slice(0, 5)
+          .map((t) => t.title)
+          .join(', ')}${open.length > 5 ? '…' : ''}`
+      }).catch(() => {})
+    }
     await logActivity({
       action: 'task-delegation',
       user: userId,

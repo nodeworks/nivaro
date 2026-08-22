@@ -2416,6 +2416,108 @@ function RelatedColumnRoot({
   )
 }
 
+/** Bulk-bar merge form (#63): two selected duplicates — pick the survivor,
+ *  preview reference counts (dry run), confirm. Every FK repoints, the
+ *  duplicate deletes through trash. Admin-only (the server enforces too). */
+function RecordMergeForm({
+  collection,
+  ids,
+  onDone,
+  onCancel
+}: {
+  collection: string
+  ids: Array<string | number>
+  onDone: (msg: string) => void
+  onCancel: () => void
+}) {
+  const client = useNivaroClient()
+  const [survivor, setSurvivor] = useState<string | number>(ids[0])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ references: Record<string, number> } | null>(null)
+  const merged = ids.find((x) => String(x) !== String(survivor))!
+
+  useEffect(() => {
+    setPreview(null)
+    let alive = true
+    void client
+      .request<{ data: { references: Record<string, number> } }>(
+        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged, dry_run: true })
+      )
+      .then((r) => {
+        if (alive) setPreview(r.data)
+      })
+      .catch(() => {
+        if (alive) setPreview({ references: {} })
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [survivor])
+
+  const refTotal = preview ? Object.values(preview.references).reduce((a, b) => a + b, 0) : null
+  const run = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await client.request<{ data: { delete_error: string | null } }>(
+        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged })
+      )
+      onDone(
+        r.data.delete_error
+          ? `Merged — references repointed, but the duplicate was not deleted: ${r.data.delete_error}`
+          : `Merged ${merged} into ${survivor}`
+      )
+    } catch (e) {
+      setErr(
+        (e as { response?: { error?: string } })?.response?.error ??
+          (e instanceof Error ? e.message : 'Merge failed')
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <span className='flex flex-wrap items-center gap-2'>
+      <span className='text-[12px] text-slate-300'>Keep</span>
+      {ids.map((id) => (
+        <button
+          key={String(id)}
+          type='button'
+          onClick={() => setSurvivor(id)}
+          className={cn(
+            'h-8 rounded-md border px-3 font-mono text-[12px]',
+            String(survivor) === String(id)
+              ? 'border-[#00ceff] bg-[#00ceff22] text-[#7fe7ff]'
+              : 'border-white/20 text-slate-300 hover:bg-white/10'
+          )}
+        >
+          {String(id)}
+        </button>
+      ))}
+      <span className='text-[11.5px] text-slate-300'>
+        {refTotal == null
+          ? 'Scanning references…'
+          : `${refTotal.toLocaleString()} reference(s) will repoint · ${merged} goes to trash`}
+      </span>
+      {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
+      <button
+        type='button'
+        disabled={busy || refTotal == null}
+        onClick={() => void run()}
+        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white disabled:opacity-50'
+      >
+        {busy ? 'Merging…' : 'Merge'}
+      </button>
+      <button type='button' onClick={onCancel} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+        Cancel
+      </button>
+    </span>
+  )
+}
+
 /** Bulk-bar "Message…" form: notifies the selection's current pipeline owners
  *  and/or creators, deduped server-side, with an optional email copy. */
 function MessageStakeholdersForm({
@@ -2548,9 +2650,12 @@ function BulkBar({
   onClear: () => void
   onSuccess: () => void
 }) {
+  const auth = useItemEditAuth()
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [mode, setMode] = useState<'actions' | 'update' | 'transition' | 'message' | 'confirm-delete'>('actions')
+  const [mode, setMode] = useState<
+    'actions' | 'update' | 'transition' | 'message' | 'confirm-delete' | 'merge'
+  >('actions')
 
   // Saved bulk-action recipes (#26) — shared + own, run through the same
   // bulk endpoints as a hand-configured action.
@@ -2713,6 +2818,16 @@ function BulkBar({
               Compare
             </button>
           )}
+          {selectedIds.length === 2 && auth.isAdmin && (
+            <button
+              type='button'
+              onClick={() => setMode('merge')}
+              title='Merge these two duplicates into one — every reference repoints to the survivor'
+              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+            >
+              Merge…
+            </button>
+          )}
           <button
             type='button'
             onClick={() => setMode('update')}
@@ -2744,6 +2859,19 @@ function BulkBar({
             Delete
           </button>
         </span>
+      )}
+      {mode === 'merge' && (
+        <RecordMergeForm
+          collection={collection}
+          ids={selectedIds.slice(0, 2)}
+          onDone={(msg) => {
+            setNote(msg)
+            onSuccess()
+            onClear()
+            setMode('actions')
+          }}
+          onCancel={() => setMode('actions')}
+        />
       )}
       {mode === 'message' && (
         <MessageStakeholdersForm

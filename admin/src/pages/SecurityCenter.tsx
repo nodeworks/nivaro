@@ -38,6 +38,75 @@ function rel(ts: string): string {
   return `${Math.floor(diff / 86_400_000)}d ago`
 }
 
+/** Active edit locks (#89): who is holding which record, with force-release —
+ *  the "someone left for lunch mid-edit" fix without hunting them down. */
+function EditLocksCard() {
+  const qc = useQueryClient()
+  const { data: locks = [] } = useQuery<
+    Array<{
+      id: number
+      collection: string
+      item: string
+      user: string
+      locked_at: string
+      holder_name: string | null
+      holder_email: string | null
+    }>
+  >({
+    queryKey: ['security-edit-locks'],
+    queryFn: () => api.get('/item-locks').then((r) => r.data.data),
+    refetchInterval: 30_000
+  })
+  const release = useMutation({
+    mutationFn: (l: { collection: string; item: string }) =>
+      api.delete(`/item-locks/${l.collection}/${l.item}/lock?force=1`),
+    onSuccess: () => {
+      toast.success('Lock released')
+      void qc.invalidateQueries({ queryKey: ['security-edit-locks'] })
+    },
+    onError: () => toast.error('Release failed')
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+          Active edit locks
+        </p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          Records someone is currently editing. Force-releasing kicks their lock — their unsaved
+          changes stop saving, so use it for abandoned sessions, not active colleagues.
+        </p>
+      </div>
+      <div className='divide-y divide-slate-50 dark:divide-border/40'>
+        {locks.length === 0 && (
+          <p className='px-4 py-4 text-[12.5px] text-slate-400'>No records are locked right now.</p>
+        )}
+        {locks.map((l) => (
+          <div key={l.id} className='flex items-center gap-3 px-4 py-2 text-[12.5px]'>
+            <span className='min-w-0 flex-1 truncate'>
+              <span className='font-mono font-medium text-slate-700 dark:text-foreground'>
+                {l.collection}/{l.item}
+              </span>{' '}
+              <span className='text-slate-500 dark:text-muted-foreground'>
+                — {l.holder_name?.trim() || l.holder_email || l.user} since{' '}
+                {new Date(l.locked_at).toLocaleTimeString()}
+              </span>
+            </span>
+            <button
+              type='button'
+              disabled={release.isPending}
+              onClick={() => release.mutate(l)}
+              className='shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400'
+            >
+              Force release
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function MaintenanceCard() {
   const qc = useQueryClient()
   const { data: settings } = useQuery({
@@ -306,6 +375,7 @@ export default function SecurityCenter() {
             </div>
           )}
         </div>
+        <EditLocksCard />
       </div>
     </div>
   )

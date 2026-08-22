@@ -315,13 +315,26 @@ function StateTrack({
   })()
   if (relevant.length < 2) return null
 
-  function edgeEntries(fromId: string, toId: string) {
+  // Who moved the record across this gap. Position-based, not exact-pair:
+  // a transition that SKIPS steps (manager approval jumping straight to VP)
+  // has no adjacent-pair edge, so exact matching silently dropped the
+  // approver's initials from the track (Rob's transition.png report). A
+  // forward hop annotates the segment leaving its ORIGIN; a send-back the
+  // segment beside its destination — one attribution per hop, never one per
+  // crossed segment (that would read as three approvals).
+  const trackIndex = new Map(relevant.map((st, i) => [st.id, i]))
+  const labelOf = new Map(states.map((st) => [st.id, st.label]))
+  function edgeEntries(fromId: string, _toId: string) {
+    const i = trackIndex.get(fromId)
+    if (i == null) return []
     return [...history]
-      .filter(
-        (h) =>
-          (h.from_state === fromId && h.to_state === toId) ||
-          (h.from_state === toId && h.to_state === fromId)
-      )
+      .filter((h) => {
+        if (!h.from_state) return false
+        const f = trackIndex.get(h.from_state)
+        const t = trackIndex.get(h.to_state)
+        if (f == null || t == null) return false
+        return (f === i && t > i) || (t === i && f > i)
+      })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
   }
   function entryInitials(h: PipelineHistoryEntry) {
@@ -445,6 +458,13 @@ function StateTrack({
                   })()}
                   {edge.map((h) => {
                     const isSendback = h.from_state !== s.id
+                    const hopSpan =
+                      Math.abs(
+                        (trackIndex.get(h.to_state) ?? 0) -
+                          (trackIndex.get(h.from_state ?? '') ?? 0)
+                      ) > 1
+                        ? (labelOf.get(h.to_state) ?? '')
+                        : null
                     return (
                       <Tooltip key={h.id}>
                         <TooltipTrigger asChild>
@@ -465,6 +485,9 @@ function StateTrack({
                           <p className='font-medium'>
                             {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
                           </p>
+                          {hopSpan && (
+                            <p className='text-muted-foreground'>→ straight to {hopSpan}</p>
+                          )}
                           <p className='text-muted-foreground'>
                             {new Date(h.timestamp).toLocaleString()}
                           </p>

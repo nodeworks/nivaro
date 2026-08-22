@@ -2741,6 +2741,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
+  // Owner-matrix impact preview (#87): how many live records a proposed cell
+  // (state + filters) would govern, before saving it.
+  app.post('/:id/owner-impact', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { state_id?: string; filters?: unknown }
+    if (!body?.state_id) return reply.code(400).send({ error: 'state_id is required' })
+    try {
+      const { previewOwnerGroupImpact } = await import('../services/pipeline-engine.js')
+      const data = await previewOwnerGroupImpact(id, body.state_id, body.filters ?? [])
+      return reply.send({ data })
+    } catch (err) {
+      const e = err as Error & { statusCode?: number }
+      return reply.code(e.statusCode ?? 500).send({ error: e.message })
+    }
+  })
+
   // Diff a version against the CURRENT config (default) or another version
   // (#72) — "what would restoring change", answered before the restore.
   app.get('/:id/versions/:versionId/diff', { preHandler: requireAdmin }, async (req, reply) => {

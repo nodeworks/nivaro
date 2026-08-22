@@ -178,6 +178,66 @@ function pickBestLayout(
 }
 
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
+  // Preview-as-role (#86): which layout a member of a role would resolve, and
+  // which fields their permissions hide — answered with the SAME pickBestLayout
+  // + getAllowedFields the live path uses (a parallel evaluator would drift).
+  // Admin-only; record conditions can't be judged without a record and are
+  // reported as such rather than guessed.
+  app.get('/preview-as-role', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection, role_id } = req.query as { collection?: string; role_id?: string }
+    if (!collection || !role_id) {
+      return reply.code(400).send({ error: 'collection and role_id are required' })
+    }
+    const role = await db('nivaro_roles').where({ id: role_id }).first('id', 'name', 'admin_access')
+    if (!role) return reply.code(404).send({ error: 'Role not found' })
+
+    const layouts = (await db('nivaro_collection_layouts')
+      .where({ collection, layout_type: 'grouped' })
+      .orderBy('sort')) as Record<string, unknown>[]
+    const picked = pickBestLayout(layouts, String(role_id), null)
+    const recordConditional = layouts.filter((l) => parseRecordConditions(l.record_conditions))
+
+    // Field permissions via a synthetic user — the permission-simulator
+    // precedent: real policy code, fabricated identity.
+    const { getAllowedFields, can } = await import('../services/permissions.js')
+    const syntheticUser = {
+      id: '00000000-0000-0000-0000-000000000000',
+      role: String(role_id)
+    } as unknown as import('../types.js').User
+    const [canRead, canUpdate, readFields, updateFields] = await Promise.all([
+      can(syntheticUser, 'read', collection),
+      can(syntheticUser, 'update', collection),
+      getAllowedFields(syntheticUser, 'read', collection),
+      getAllowedFields(syntheticUser, 'update', collection)
+    ])
+
+    const allFields = (await db('nivaro_fields')
+      .where({ collection })
+      .pluck('field')) as string[]
+    const readSet = readFields ? new Set(readFields) : null
+    const updateSet = updateFields ? new Set(updateFields) : null
+    return reply.send({
+      data: {
+        role: { id: role.id, name: role.name, admin_access: !!role.admin_access },
+        can_read: !!canRead,
+        can_update: !!canUpdate,
+        layout: picked
+          ? { id: picked.id, name: picked.name, is_active: !!picked.is_active }
+          : null,
+        // null field list = policy grants all fields
+        hidden_fields: readSet ? allFields.filter((f) => !readSet.has(f)) : [],
+        readonly_fields:
+          canUpdate && updateSet
+            ? allFields.filter((f) => !updateSet.has(f) && (!readSet || readSet.has(f)))
+            : [],
+        record_conditional_layouts: recordConditional.map((l) => String(l.name)),
+        note: recordConditional.length > 0
+          ? 'Record-conditional layouts depend on the record being opened and are not judged here.'
+          : null
+      }
+    })
+  })
+
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
     const { collection, slug, item } = req.query as { collection?: string; slug?: string; item?: string }

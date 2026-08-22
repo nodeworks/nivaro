@@ -63,6 +63,7 @@ export function BroadcastView({ className }: { className?: string }) {
   const [sms, setSms] = useState(false)
   const [inApp, setInApp] = useState(true)
   const [inAppKind, setInAppKind] = useState<'banner' | 'message'>('banner')
+  const [requireAck, setRequireAck] = useState(false)
   const [startsAt, setStartsAt] = useState('')
   const [endsAt, setEndsAt] = useState('')
   // Audience
@@ -143,6 +144,7 @@ export function BroadcastView({ className }: { className?: string }) {
           channels,
           starts_at: startsAt || undefined,
           ends_at: endsAt || undefined,
+          require_ack: inApp && inAppKind === 'banner' ? requireAck : false,
           audience: fullAudience
         })
       ),
@@ -314,6 +316,17 @@ export function BroadcastView({ className }: { className?: string }) {
           )}
           {inApp && inAppKind === 'banner' && (
             <>
+              <label className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
+                <input
+                  type='checkbox'
+                  checked={requireAck}
+                  onChange={(e) => setRequireAck(e.target.checked)}
+                  className='h-3.5 w-3.5'
+                />
+                <span data-tip='Blocks the app with a full-screen notice until each person clicks "I acknowledge" — for policy changes and cutover notices, not routine updates'>
+                  Require acknowledgement
+                </span>
+              </label>
               <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
                 {(['info', 'warn', 'critical'] as const).map((sv) => (
                   <button

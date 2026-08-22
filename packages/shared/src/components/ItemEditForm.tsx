@@ -38,7 +38,7 @@ import {
 } from '../context'
 import { createPortal } from 'react-dom'
 import { del, get, patch, post } from '../lib/commands'
-import { cn, formatRelative, titleCase } from '../lib/utils'
+import { cn, formatRelative, choiceLabel, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
@@ -2956,6 +2956,90 @@ export function ItemEditForm({
     if (!el) return false
     flashField(key)
     return true
+  }
+
+  /** Copy summary (#83): FRIENDLY values only — M2O ids resolve to their
+   *  display labels, select values to their choice text, booleans to Yes/No;
+   *  bare internal ids never appear. */
+  const copyRecordSummary = async () => {
+    const m2oByField = new Map(
+      relations
+        .filter(
+          (r) => r.many_collection === collection && !r.junction_field && r.many_field
+        )
+        .map((r) => [r.many_field as string, r.one_collection as string])
+    )
+    const labelCache = new Map<string, string>()
+    const resolveM2O = async (target: string, id: unknown): Promise<string> => {
+      const key = `${target}:${String(id)}`
+      const hit = labelCache.get(key)
+      if (hit) return hit
+      try {
+        const [metaRes, rowRes] = await Promise.all([
+          client.request<{ data: { display_template?: string | null } }>(
+            get(`/collections/${target}`)
+          ),
+          client.request<{ data: Record<string, unknown> }>(get(`/items/${target}/${String(id)}`))
+        ])
+        const row = rowRes.data
+        const tmpl =
+          metaRes.data?.display_template ??
+          (target === 'nivaro_users' ? '{{first_name}} {{last_name}}' : null)
+        const label =
+          (tmpl ? applyDisplayTemplate(tmpl, row) : '') ||
+          String(row?.name ?? row?.title ?? row?.label ?? row?.subject ?? '')
+        const out = label.trim()
+        if (out) labelCache.set(key, out)
+        return out
+      } catch {
+        return ''
+      }
+    }
+    const lines: string[] = []
+    for (const f of allFields) {
+      if (f.hidden || f.field.startsWith('__')) continue
+      if (f.field === 'id') continue
+      const v = draft[f.field]
+      if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) continue
+      const label = f.label ?? titleCase(f.field)
+      const target = m2oByField.get(f.field)
+      if (target) {
+        const friendly = await resolveM2O(target, v)
+        if (friendly) lines.push(`${label}: ${friendly}`)
+        continue // no label = don't print the raw id at all
+      }
+      if (typeof v === 'object') continue // alias/JSON blobs aren't summary material
+      if (typeof v === 'boolean' || f.type === 'boolean') {
+        lines.push(`${label}: ${v === true || v === 1 || v === '1' || v === 'true' ? 'Yes' : 'No'}`)
+        continue
+      }
+      // Machine-shaped values (uuids, *_id columns with no relation) stay out.
+      if (/(^|_)(id|uuid)$/i.test(f.field)) continue
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v)))
+        continue
+      // Select choices print their human text.
+      const choices = parseJson<{ choices?: Array<{ text: string; value: string }> }>(
+        f.options
+      )?.choices
+      const choice = choices?.find((c) => String(c.value) === String(v))
+      if (choice) {
+        lines.push(`${label}: ${choiceLabel(choice.text)}`)
+        continue
+      }
+      // Dates read as dates; everything else as trimmed plain text.
+      const str = String(v)
+      if (/^\d{4}-\d{2}-\d{2}/.test(str) && !Number.isNaN(new Date(str).getTime())) {
+        lines.push(`${label}: ${new Date(str).toLocaleDateString()}`)
+        continue
+      }
+      lines.push(`${label}: ${str.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}`)
+    }
+    const heading = itemTitle && itemTitle !== (colMeta?.display_name ?? '') ? itemTitle : `${singularTitle} ${String(itemId ?? '')}`
+    const text = `${heading}\n${window.location.href}\n\n${lines.join('\n')}`
+    await navigator.clipboard.writeText(text).then(
+      () => toast.success('Summary copied'),
+      () => toast.error('Could not copy')
+    )
   }
 
   const focusedOnceRef = useRef(false)
@@ -5889,19 +5973,7 @@ export function ItemEditForm({
                                       <button
                                         type='button'
                                         title='Copy a plain-text summary of this record (fields + link) for chat or email'
-                                        onClick={() => {
-                                          // Copy summary (#83): label: value lines + the record URL —
-                                          // paste-ready for chat/email.
-                                          const lines = findableFields
-                                            .filter((f) => f.value !== '')
-                                            .slice(0, 40)
-                                            .map((f) => `${f.label}: ${f.value}`)
-                                          const text = `${collection} ${String(itemId)}\n${window.location.href}\n\n${lines.join('\n')}`
-                                          void navigator.clipboard.writeText(text).then(
-                                            () => toast.success('Summary copied'),
-                                            () => toast.error('Could not copy')
-                                          )
-                                        }}
+                                        onClick={() => void copyRecordSummary()}
                                         className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                       >
                                         <Clipboard className='h-3.5 w-3.5' />

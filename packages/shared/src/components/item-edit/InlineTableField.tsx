@@ -1270,6 +1270,53 @@ export function InlineTableField({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Copy lines from another record (#91): pick a sibling parent record, its
+  // rows on THIS relation queue in as pending rows (land on parent save).
+  // Audit stamps, ids and the FK are stripped; everything else copies.
+  const [copyFromOpen, setCopyFromOpen] = useState(false)
+  const COPY_STRIP = useMemo(
+    () =>
+      new Set([
+        'id',
+        manyField,
+        'user_created',
+        'user_updated',
+        'date_created',
+        'date_updated',
+        'created',
+        'changed',
+        'creator'
+      ]),
+    [manyField]
+  )
+  const copyLinesFrom = async (sourceParentId: string) => {
+    if (!staging) return
+    try {
+      const r = await client.request<{ data: Record<string, unknown>[] }>(
+        get(`/items/${relatedCollection}`, {
+          filter: JSON.stringify({ [manyField]: { _eq: sourceParentId } }),
+          limit: O2M_ROW_LIMIT
+        })
+      )
+      const rows = r.data ?? []
+      for (const row of rows) {
+        const clean: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(row)) {
+          if (!COPY_STRIP.has(k) && v != null && typeof v !== 'object') clean[k] = v
+        }
+        staging.queueRow(relatedCollection, manyField, clean)
+      }
+      toast.success(
+        rows.length > 0
+          ? `${rows.length} line(s) copied in — they save with this record`
+          : 'That record has no lines on this table'
+      )
+      setCopyFromOpen(false)
+    } catch {
+      toast.error('Could not copy lines')
+    }
+  }
+
   // appended to mutation URLs so the API can log activity on the parent record
   const pCtx = parentCollection && !isNew
     ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
@@ -3494,6 +3541,30 @@ export function InlineTableField({
             onParsed={(result, template) => reimportHandler(result, template)}
             compact
           />
+        )}
+        {parentCollection && staging && !readOnly && (
+          <span className='relative inline-flex'>
+            <button
+              type='button'
+              onClick={() => setCopyFromOpen((v) => !v)}
+              title='Copy this table’s lines from another record'
+              className='h-6 rounded border border-slate-200 px-2.5 text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
+            >
+              Copy from…
+            </button>
+            {copyFromOpen && (
+              <span className='absolute left-0 top-full z-[70] mt-1 w-[300px] rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'>
+                <RelationCombobox
+                  collection={parentCollection}
+                  value={null}
+                  onChange={(id) => {
+                    if (id != null) void copyLinesFrom(String(id))
+                  }}
+                  placeholder='Pick the record to copy from…'
+                />
+              </span>
+            )}
+          </span>
         )}
         {defaultsCols.length > 0 && (
           <button
