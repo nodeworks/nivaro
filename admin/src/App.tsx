@@ -459,7 +459,7 @@ export default function App() {
                   <Route path='m2m-matrix' element={<M2MMatrix />} />
                   <Route path='mail-templates' element={<MailTemplates />} />
                   <Route path='ops-calendar' element={<OpsCalendar />} />
-                  <Route path='setup' element={<SetupChecklist />} />
+                  <Route path='setup-checklist' element={<SetupChecklist />} />
                   <Route path='config-search' element={<ConfigSearch />} />
                   <Route path='access-requests' element={<AccessRequests />} />
                   <Route path='automation-tests' element={<AutomationTests />} />

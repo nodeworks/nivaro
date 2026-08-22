@@ -134,7 +134,7 @@ export const navCategories: NavCategory[] = [
       { icon: Mail, label: 'Mail Templates', to: '/mail-templates' },
       { icon: SearchCode, label: 'Config Search', to: '/config-search' },
       { icon: KeyRound, label: 'Access Requests', to: '/access-requests' },
-      { icon: Rocket, label: 'Setup Checklist', to: '/setup' },
+      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches' },
       { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
       { icon: Upload, label: 'Imports', to: '/imports' },
