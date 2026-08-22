@@ -2999,9 +2999,34 @@ export function ItemEditForm({
     for (const f of allFields) {
       if (f.hidden || f.field.startsWith('__')) continue
       if (f.field === 'id') continue
+      const label = f.label ?? titleCase(f.field)
+      // M2M aliases never live in draft — their committed junction ids do.
+      // Each id resolves to its display label, joined into one line.
+      const aliasInfo = m2mAliasFieldsForRules.get(f.field)
+      if (aliasInfo) {
+        const st = m2mAliasFieldStates[f.field]
+        if (st?.known && st.ids.length > 0) {
+          const companion = relations.find(
+            (r) =>
+              r.many_collection === aliasInfo.manyCollection &&
+              r.many_field === aliasInfo.junctionField
+          )
+          const target = companion?.one_collection as string | undefined
+          if (target) {
+            const labels = (
+              await Promise.all(st.ids.slice(0, 15).map((id) => resolveM2O(target, id)))
+            ).filter(Boolean)
+            if (labels.length > 0) {
+              lines.push(
+                `${label}: ${labels.join(', ')}${st.ids.length > 15 ? ` +${st.ids.length - 15} more` : ''}`
+              )
+            }
+          }
+        }
+        continue
+      }
       const v = draft[f.field]
       if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) continue
-      const label = f.label ?? titleCase(f.field)
       const target = m2oByField.get(f.field)
       if (target) {
         const friendly = await resolveM2O(target, v)
