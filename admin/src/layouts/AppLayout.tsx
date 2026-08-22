@@ -443,7 +443,7 @@ export function AppLayout() {
   const t = useT()
   usePagePresence()
   useSessionRecorder()
-  const { user } = useAuth()
+  const { user, refetch: refetchAuth } = useAuth()
   const { data: settings } = useSettings()
   useQuery({
     queryKey: ['health'],
@@ -586,6 +586,13 @@ export function AppLayout() {
       }
     }
     return best?.icon ?? Star
+  }
+
+  const removeFavorite = async (path: string) => {
+    await api.patch('/users/me/preferences', {
+      nav_favorites: navFavorites.filter((f) => f.path !== path)
+    })
+    await refetchAuth()
   }
 
   const favoritesCategory: NavCategory = {
@@ -848,9 +855,31 @@ export function AppLayout() {
                   </p>
                 )}
                 <div className='space-y-0.5'>
-                  {panelItems.map((item) => (
-                    <PanelNavItem key={item.to} {...item} />
-                  ))}
+                  {panelItems.map((item) =>
+                    activeCategory === 'favorites' ? (
+                      // Favourites are removable HERE — the star toggle lives on
+                      // the page itself, which may no longer exist (a deleted
+                      // page-builder page left an unremovable favourite).
+                      <div key={item.to} className='group/fav relative'>
+                        <PanelNavItem {...item} />
+                        <button
+                          type='button'
+                          aria-label={`Remove ${item.label} from favourites`}
+                          title='Remove from favourites'
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            void removeFavorite(item.to)
+                          }}
+                          className='absolute right-1.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-red-500 group-hover/fav:flex dark:hover:bg-muted'
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <PanelNavItem key={item.to} {...item} />
+                    )
+                  )}
                 </div>
               </nav>
             </div>

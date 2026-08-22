@@ -194,6 +194,7 @@
 .dark .hover\:bg-slate-50:hover { background-color: hsl(220 12% 17%) !important; }
 .dark .hover\:bg-slate-50\/70:hover { background-color: hsl(220 12% 17% / 0.7) !important; }
 .dark .hover\:bg-slate-100:hover { background-color: hsl(220 10% 22%) !important; }
+.dark .focus\:bg-slate-100:focus { background-color: hsl(220 10% 22%) !important; }
 .dark .border-slate-100 { border-color: hsl(222 9% 24%) !important; }
 .dark .border-slate-200 { border-color: hsl(var(--border)) !important; }
 .dark .divide-slate-100 > * + * { border-color: hsl(222 9% 24%) !important; }
@@ -205,6 +206,14 @@
 .dark .text-muted-foreground { color: hsl(var(--muted-foreground)) !important; }
 .dark .bg-slate-900 { background-color: hsl(210 12% 91%) !important; }
 .dark .text-white { color: hsl(0 0% 95%) !important; }
+/* bg-slate-900 re-points LIGHT above, so text-white ON that surface must flip
+   to dark ink — otherwise every "bg-slate-900 text-white" active pill renders
+   white-on-white (Files scope/view toggles, 30d/90d/365d windows, Rob's
+   1.png/2.png report). Descendant selector covers icon-only children too. */
+.dark .bg-slate-900.text-white,
+.dark .bg-slate-900 .text-white { color: hsl(222 15% 16%) !important; }
+.dark .bg-slate-900.text-slate-100,
+.dark .bg-slate-900.text-white\/90 { color: hsl(222 15% 16%) !important; }
 .dark .skeleton {
   background: linear-gradient(90deg, hsl(220 10% 16%) 25%, hsl(220 8% 21%) 50%, hsl(220 10% 16%) 75%);
   background-size: 200% 100%;
