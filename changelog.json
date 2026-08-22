@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-21T21:35:41.101Z",
+  "generated_at": "2026-08-22T19:34:37.769Z",
   "releases": [
+    {
+      "version": "0.1.99",
+      "tag": "v0.1.99",
+      "date": "2026-08-22T15:34:34-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "setup checklist route collided with the invite-token /setup page",
+              "hash": "418d2fa8"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.98",
       "tag": "v0.1.98",
-      "date": "2026-08-21T17:35:38-04:00",
+      "date": "2026-08-21T17:35:41-04:00",
       "sections": [
         {
           "label": "Added",
