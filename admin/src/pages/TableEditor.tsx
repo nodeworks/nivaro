@@ -3883,6 +3883,7 @@ function SettingsTab({
       <FieldUsageSection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <CustomActionsSection tableName={tableName} />
+      <DeleteGuardSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
@@ -4187,6 +4188,81 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/** Deletion protection rules (#64): guards that BLOCK deletes with their own
+ *  message. JSON config — same admin-textarea posture as picker_filter. */
+function DeleteGuardSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const [text, setText] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-delguard', tableName],
+    queryFn: () =>
+      api.get<{ data: { delete_guard?: unknown } }>(`/collections/${tableName}`).then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  useEffect(() => {
+    if (meta && !loaded) {
+      setText(meta.delete_guard ? JSON.stringify(meta.delete_guard, null, 2) : '')
+      setLoaded(true)
+    }
+  }, [meta, loaded])
+  const saveMut = useMutation({
+    mutationFn: () => {
+      let parsed: unknown = null
+      if (text.trim()) {
+        parsed = JSON.parse(text)
+        if (!Array.isArray(parsed)) throw new Error('Guard must be a JSON array of rules')
+      }
+      return api.patch(`/collections/${tableName}`, { delete_guard: parsed })
+    },
+    onSuccess: () => {
+      toast.success('Deletion guards saved')
+      qc.invalidateQueries({ queryKey: ['collection-meta-delguard', tableName] })
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message ?? 'Save failed')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='border-b border-slate-100 px-4 py-3'>
+        <p className='text-[13px] font-semibold text-slate-800'>Deletion protection</p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500'>
+          Rules that BLOCK deleting a record, with their own message. Applies to everyone —
+          admins included. Rule shapes:{' '}
+          <code className='text-[10.5px]'>
+            {'{'}"type":"children","collection":"purchase_orders","fk_field":"workflow","message":"…"{'}'}
+          </code>{' '}
+          (blocks when linked rows exist) and{' '}
+          <code className='text-[10.5px]'>
+            {'{'}"type":"condition","field":"status","op":"eq","value":"posted","message":"…"{'}'}
+          </code>
+          . Empty = no guards.
+        </p>
+      </div>
+      <div className='space-y-2 px-4 py-3'>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={5}
+          placeholder='[]'
+          spellCheck={false}
+          className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11.5px]'
+        />
+        <div className='flex justify-end'>
+          <Button
+            size='sm'
+            className='h-7 bg-nvr-cyan text-[12px] text-white'
+            disabled={saveMut.isPending}
+            onClick={() => saveMut.mutate()}
+          >
+            Save guards
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -19401,7 +19477,7 @@ function ValidationRulesEditor({
     { value: 'min_length', label: 'Min length' },
     { value: 'max_length', label: 'Max length' },
     { value: 'regex', label: 'Regex pattern' },
-    { value: 'required_if', label: 'Required if not empty' },
+    { value: 'required_if', label: 'Required if…' },
     { value: 'unique', label: 'Unique in collection' }
   ]
 
@@ -19426,6 +19502,35 @@ function ValidationRulesEditor({
               placeholder={rule.type === 'regex' ? '^[A-Z].*' : '10'}
               className='h-7 text-[12px] w-28'
             />
+          )}
+          {rule.type === 'required_if' && (
+            <>
+              <Input
+                value={(rule as { field?: string }).field ?? ''}
+                onChange={(e) => updateRule(idx, { field: e.target.value } as never)}
+                placeholder='other field'
+                className='h-7 w-32 font-mono text-[12px]'
+              />
+              <Combobox
+                value={(rule as { op?: string }).op ?? 'eq'}
+                onChange={(v) => updateRule(idx, { op: v } as never)}
+                options={[
+                  { value: 'eq', label: 'equals' },
+                  { value: 'neq', label: 'not equals' },
+                  { value: 'in', label: 'in list' },
+                  { value: 'nnull', label: 'is set' },
+                  { value: 'null', label: 'is empty' }
+                ]}
+              />
+              {['eq', 'neq', 'in'].includes((rule as { op?: string }).op ?? 'eq') && (
+                <Input
+                  value={rule.value ?? ''}
+                  onChange={(e) => updateRule(idx, { value: e.target.value })}
+                  placeholder='value'
+                  className='h-7 w-24 text-[12px]'
+                />
+              )}
+            </>
           )}
           <Input
             value={rule.message ?? ''}

@@ -173,8 +173,38 @@ export async function tasksRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    const assigneeUser = await db('nivaro_users').where({ id: assignee }).first('id')
+    const assigneeUser = (await db('nivaro_users')
+      .where({ id: assignee })
+      .first('id', 'is_out_of_office', 'delegate_id', 'delegate_expires_at')) as
+      | {
+          id: string
+          is_out_of_office: boolean | number
+          delegate_id: string | null
+          delegate_expires_at: Date | string | null
+        }
+      | undefined
     if (!assigneeUser) return reply.code(400).send({ error: 'Unknown assignee' })
+
+    // Assigning to someone OOO with a working delegate routes to the delegate
+    // (#70) — same substitution pipeline ownership already applies.
+    let effectiveAssignee = assignee
+    let delegatedFrom: string | null = null
+    if (
+      assigneeUser.is_out_of_office &&
+      assigneeUser.delegate_id &&
+      assigneeUser.delegate_id !== assignee &&
+      (!assigneeUser.delegate_expires_at ||
+        new Date(assigneeUser.delegate_expires_at).getTime() > Date.now())
+    ) {
+      const delegate = await db('nivaro_users')
+        .where({ id: assigneeUser.delegate_id })
+        .whereNot('status', 'suspended')
+        .first('id', 'is_out_of_office')
+      if (delegate && !(delegate as { is_out_of_office?: boolean | number }).is_out_of_office) {
+        effectiveAssignee = assigneeUser.delegate_id
+        delegatedFrom = assignee
+      }
+    }
 
     const now = new Date()
     const [task] = (await db('nivaro_tasks')
@@ -183,7 +213,7 @@ export async function tasksRoutes(app: FastifyInstance) {
         item: String(item),
         title: title.slice(0, 500),
         description: description ?? null,
-        assignee,
+        assignee: effectiveAssignee,
         due_date: due_date ? new Date(due_date) : null,
         status: 'open',
         created_by: req.user!.id,
@@ -203,7 +233,8 @@ export async function tasksRoutes(app: FastifyInstance) {
 
     await notifyAssignee(app, task, req.user!.id)
 
-    return reply.code(201).send({ data: task })
+    // Tell the caller the redirect happened so the UI can say so.
+    return reply.code(201).send({ data: { ...task, delegated_from: delegatedFrom } })
   })
 
   // PATCH /:id — update (assignee, creator, or admin)

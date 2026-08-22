@@ -3644,7 +3644,7 @@ export function ItemEditForm({
         if (Array.isArray(rules)) {
           for (const rule of rules) {
             if (!rule || rule.soft) continue
-            const err = applyValidationRule(rule, draft[f.field], f.label ?? titleCase(f.field))
+            const err = applyValidationRule(rule, draft[f.field], f.label ?? titleCase(f.field), draft)
             if (err) {
               errs[f.field] = err
               break

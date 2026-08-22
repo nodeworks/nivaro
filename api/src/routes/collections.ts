@@ -174,6 +174,15 @@ export async function collectionsRoutes(app: FastifyInstance) {
         relations,
         browser_config: browserConfig,
         change_reason_config: changeReasonConfig,
+        delete_guard: (() => {
+          const rawDg = (col as { delete_guard?: string | null }).delete_guard
+          if (!rawDg) return null
+          try {
+            return JSON.parse(rawDg)
+          } catch {
+            return null
+          }
+        })(),
         url_alias_fields: parseJsonList((col as { url_alias_fields?: string | null }).url_alias_fields)
       }
     })
@@ -212,12 +221,14 @@ export async function collectionsRoutes(app: FastifyInstance) {
       browser_config?: unknown
       change_reason_config?: unknown
       url_alias_fields?: unknown
+      delete_guard?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
       browser_config: rawBrowserConfig,
       change_reason_config: rawChangeReason,
       url_alias_fields: rawUrlAlias,
+      delete_guard: rawDeleteGuard,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
@@ -229,6 +240,10 @@ export async function collectionsRoutes(app: FastifyInstance) {
     }
     if ('change_reason_config' in body) {
       patch.change_reason_config = rawChangeReason != null ? JSON.stringify(rawChangeReason) : null
+    }
+    if ('delete_guard' in body) {
+      patch.delete_guard = rawDeleteGuard != null ? JSON.stringify(rawDeleteGuard) : null
+      svc.clearMetadataCache()
     }
     if ('url_alias_fields' in body) {
       // An empty list means "no alias" — store null so resolution can skip the

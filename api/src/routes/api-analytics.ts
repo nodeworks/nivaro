@@ -119,6 +119,48 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     })
   })
 
+  // GET /api-analytics/by-key?hours=24 — per-API-key traffic (#67). Rows with
+  // api_key_id NULL are session/static-token traffic and are excluded; a key
+  // deleted since logging shows as its raw id rather than vanishing.
+  app.get('/by-key', { preHandler: requireAdmin }, async (req, reply) => {
+    const { hours: hoursRaw } = req.query as { hours?: string }
+    const from = since(parseHours(hoursRaw))
+
+    const rows = (await db('nivaro_api_logs as l')
+      .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
+      .where('l.created_at', '>=', from)
+      .whereNotNull('l.api_key_id')
+      .select(
+        'l.api_key_id',
+        'k.name',
+        db.raw('COUNT(*) as count'),
+        db.raw('AVG(CAST(l.latency_ms AS FLOAT)) as avg_latency'),
+        db.raw('SUM(CASE WHEN l.status >= 400 THEN 1 ELSE 0 END) as errors'),
+        db.raw('MAX(l.created_at) as last_seen')
+      )
+      .groupBy('l.api_key_id', 'k.name')
+      .orderBy('count', 'desc')
+      .limit(50)) as unknown as {
+      api_key_id: number
+      name: string | null
+      count: number
+      avg_latency: number | null
+      errors: number | null
+      last_seen: string | Date | null
+    }[]
+
+    return reply.send({
+      data: rows.map((r) => ({
+        api_key_id: r.api_key_id,
+        name: r.name ?? `key #${r.api_key_id} (deleted)`,
+        count: Number(r.count),
+        avg_latency: r.avg_latency != null ? Math.round(Number(r.avg_latency) * 10) / 10 : 0,
+        errors: Number(r.errors ?? 0),
+        last_seen: r.last_seen
+      }))
+    })
+  })
+
   // GET /api-analytics/top-collections?hours=24
   app.get('/top-collections', { preHandler: requireAdmin }, async (req, reply) => {
     const { hours: hoursRaw } = req.query as { hours?: string }

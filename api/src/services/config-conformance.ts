@@ -631,7 +631,7 @@ async function evaluate(
       for (const v of checks.validation) {
         if (!physical.has(v.field)) continue
         for (const rule of v.rules) {
-          const msg = applyValidationRule(rule, row[v.field], v.label)
+          const msg = applyValidationRule(rule, row[v.field], v.label, row)
           if (msg) {
             findings.push({ item_id: String(row.id), field: v.field, rule: 'validation', message: msg })
             break

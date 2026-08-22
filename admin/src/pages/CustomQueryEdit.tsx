@@ -179,7 +179,16 @@ export function CustomQueryEditPage() {
         else if (p.type === 'boolean') params[p.name] = raw === 'true'
         else params[p.name] = raw // string and date both sent as string; server handles date cast
       }
-      return api.post(`/custom-queries/${form.slug}/execute`, { params }).then((r) => r.data)
+      // Draft execution: runs the SQL AS TYPED (unsaved edits, new queries),
+      // bypassing the saved row and the Redis result cache — testing by slug
+      // used to run the OLD saved SQL until the cache TTL expired.
+      return api
+        .post('/custom-queries/test-execute', {
+          sql_text: form.sql_text,
+          params: form.params,
+          values: params
+        })
+        .then((r) => r.data)
     },
     onSuccess: (res) => {
       setLastRunError(null)
@@ -192,6 +201,35 @@ export function CustomQueryEditPage() {
       setTestResult(JSON.stringify(e.response?.data ?? String(err), null, 2))
       toast.error('Execution failed')
     }
+  })
+
+  interface PlanData {
+    operators: Array<{ op: string; object: string | null; est_rows: number; cost: number }>
+    missing_indexes: string[]
+    plan_xml: string
+  }
+  const [plan, setPlan] = useState<PlanData | null>(null)
+  const explain = useMutation({
+    mutationFn: () => {
+      const params: Record<string, unknown> = {}
+      for (const p of form.params) {
+        const raw = testValues[p.name] ?? ''
+        if (raw === '' && !p.required) continue
+        if (p.type === 'number') params[p.name] = Number(raw)
+        else if (p.type === 'boolean') params[p.name] = raw === 'true'
+        else params[p.name] = raw
+      }
+      return api
+        .post<{ data: PlanData }>('/custom-queries/explain', {
+          sql_text: form.sql_text,
+          params: form.params,
+          values: params
+        })
+        .then((r) => r.data.data)
+    },
+    onSuccess: (d) => setPlan(d),
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Explain failed')
   })
 
   function setName(name: string) {
@@ -513,24 +551,35 @@ export function CustomQueryEditPage() {
               </button>
             </div>
 
-            {/* Test execute */}
-            {!isNew && (
+            {/* Test execute — runs the CURRENT editor SQL (draft execution),
+                so it works before saving and on brand-new queries. */}
+            {(
               <div className='rounded-xl border border-slate-200 bg-white p-6'>
                 <div className='mb-4 flex items-center justify-between'>
                   <div>
                     <h2 className='text-[13px] font-semibold text-slate-900'>Test Execute</h2>
                     <p className='mt-0.5 text-[11px] text-slate-400'>
-                      Run the query with sample parameter values.
+                      Runs the SQL as typed above — unsaved edits included, cache bypassed.
                     </p>
                   </div>
-                  <Button
-                    onClick={() => testExecute.mutate()}
-                    disabled={testExecute.isPending}
-                    className='gap-2'
-                  >
-                    <Zap className='h-3.5 w-3.5' />
-                    {testExecute.isPending ? 'Running…' : 'Execute'}
-                  </Button>
+                  <div className='flex items-center gap-2'>
+                    <Button
+                      variant='outline'
+                      onClick={() => explain.mutate()}
+                      disabled={explain.isPending}
+                      className='gap-2'
+                    >
+                      {explain.isPending ? 'Planning…' : 'Explain plan'}
+                    </Button>
+                    <Button
+                      onClick={() => testExecute.mutate()}
+                      disabled={testExecute.isPending}
+                      className='gap-2'
+                    >
+                      <Zap className='h-3.5 w-3.5' />
+                      {testExecute.isPending ? 'Running…' : 'Execute'}
+                    </Button>
+                  </div>
                 </div>
                 {form.params.length > 0 && (
                   <div className='mb-4 space-y-2'>
@@ -572,6 +621,54 @@ export function CustomQueryEditPage() {
                   <pre className='max-h-72 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100'>
                     {testResult}
                   </pre>
+                )}
+                {plan && (
+                  <div className='mt-3 rounded-lg border border-slate-200 dark:border-border'>
+                    <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-border/60'>
+                      <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+                        Estimated plan · {plan.operators.length} operator
+                        {plan.operators.length === 1 ? '' : 's'}
+                      </p>
+                      <button
+                        type='button'
+                        className='text-[11px] text-slate-400 hover:text-slate-600'
+                        onClick={() => setPlan(null)}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    {plan.missing_indexes.length > 0 && (
+                      <div className='border-b border-amber-100 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
+                        <span className='font-semibold'>Missing index suggestion:</span>{' '}
+                        {plan.missing_indexes.join(' · ')}
+                      </div>
+                    )}
+                    <table className='w-full text-[11.5px] tabular-nums'>
+                      <thead>
+                        <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+                          <th className='px-3 py-1.5 font-semibold'>Operator</th>
+                          <th className='px-3 py-1.5 font-semibold'>Object</th>
+                          <th className='px-3 py-1.5 text-right font-semibold'>Est. rows</th>
+                          <th className='px-3 py-1.5 text-right font-semibold'>Subtree cost</th>
+                        </tr>
+                      </thead>
+                      <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
+                        {plan.operators.map((o, i) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: plan rows are positional
+                          <tr key={i} className={o.op.includes('Scan') ? 'bg-amber-50/50 dark:bg-amber-500/5' : ''}>
+                            <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-foreground'>
+                              {o.op}
+                            </td>
+                            <td className='px-3 py-1.5 font-mono text-[11px] text-slate-500'>
+                              {o.object ?? '—'}
+                            </td>
+                            <td className='px-3 py-1.5 text-right'>{o.est_rows.toLocaleString()}</td>
+                            <td className='px-3 py-1.5 text-right'>{o.cost.toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             )}

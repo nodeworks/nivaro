@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { buildFinalParams, execCustomQuerySql, type ParamDef, type ParamType } from '../services/custom-query-exec.js'
+import { buildFinalParams, execCustomQuerySql, explainSqlPlan, type ParamDef, type ParamType } from '../services/custom-query-exec.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
@@ -317,6 +317,116 @@ export async function customQueriesRoutes(app: FastifyInstance) {
 
   // ── Execute ────────────────────────────────────────────────────────────
   // Auth is enforced inside the handler based on the query's access level.
+
+  /**
+   * Draft execution for the editor: runs the SQL AS TYPED — not the saved
+   * row, not through the Redis result cache — so "Run" on the edit page
+   * tests exactly what's in the textarea, including unsaved and brand-new
+   * queries. Admin only (the editor itself is), never cached, always logged.
+   */
+  app.post<{
+    Body: { sql_text?: string; params?: ParamDef[]; values?: Record<string, unknown> }
+  }>('/test-execute', { preHandler: requireAdmin }, async (req, reply) => {
+    const sqlText = String(req.body?.sql_text ?? '').trim()
+    if (!sqlText) return reply.code(400).send({ error: 'sql_text is required' })
+    const defs = Array.isArray(req.body?.params) ? (req.body?.params as ParamDef[]) : []
+    let finalParams: Record<string, unknown>
+    try {
+      finalParams = buildFinalParams(defs, req.body?.values ?? {})
+    } catch (err) {
+      const e = err as Error & { statusCode?: number }
+      return reply.code(e.statusCode ?? 400).send({ error: e.message })
+    }
+    const startedAt = Date.now()
+    try {
+      const rows = await execCustomQuerySql(sqlText, finalParams)
+      await logActivity({
+        action: 'custom-query-test',
+        user: req.user?.id,
+        comment: `${rows.length} row(s) in ${Date.now() - startedAt}ms`,
+        req
+      })
+      return {
+        data: rows.slice(0, 500),
+        total: rows.length,
+        truncated: rows.length > 500,
+        duration_ms: Date.now() - startedAt
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(400).send({ error: msg.slice(0, 1000) })
+    }
+  })
+
+  /**
+   * Estimated execution plan (#74) — SHOWPLAN_XML for the SQL as typed. The
+   * statement is NOT executed; SQL Server returns the plan it WOULD use. The
+   * response carries a flat operator summary plus the raw plan XML.
+   */
+  app.post<{
+    Body: { sql_text?: string; params?: ParamDef[]; values?: Record<string, unknown> }
+  }>('/explain', { preHandler: requireAdmin }, async (req, reply) => {
+    const sqlText = String(req.body?.sql_text ?? '').trim()
+    if (!sqlText) return reply.code(400).send({ error: 'sql_text is required' })
+    const defs = Array.isArray(req.body?.params) ? (req.body?.params as ParamDef[]) : []
+    let finalParams: Record<string, unknown>
+    try {
+      finalParams = buildFinalParams(defs, req.body?.values ?? {})
+    } catch (err) {
+      const e = err as Error & { statusCode?: number }
+      return reply.code(e.statusCode ?? 400).send({ error: e.message })
+    }
+    try {
+      const xml = await explainSqlPlan(sqlText, finalParams)
+      if (!xml) return reply.code(400).send({ error: 'SQL Server returned no plan' })
+      // Flatten RelOp nodes into an operator table — full XML rides along for
+      // anyone who wants to paste it into SSMS/Plan Explorer.
+      const ops: Array<{
+        op: string
+        object: string | null
+        est_rows: number
+        cost: number
+      }> = []
+      const relOpRe = /<RelOp\b([^>]*)>/g
+      let m: RegExpExecArray | null = relOpRe.exec(xml)
+      const attr = (attrs: string, name: string) =>
+        attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null
+      while (m) {
+        const attrs = m[1]
+        // The nearest following <Object …> names the table/index this operator touches.
+        const rest = xml.slice(m.index, m.index + 2000)
+        const obj = rest.match(/<Object\b([^>]*)\/>/)
+        const table = obj ? attr(obj[1], 'Table') : null
+        const index = obj ? attr(obj[1], 'Index') : null
+        ops.push({
+          op: attr(attrs, 'PhysicalOp') ?? 'Unknown',
+          object: table ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}` : null,
+          est_rows: Math.round(Number(attr(attrs, 'EstimateRows') ?? 0)),
+          cost: Number(attr(attrs, 'EstimatedTotalSubtreeCost') ?? 0)
+        })
+        m = relOpRe.exec(xml)
+      }
+      const missing: string[] = []
+      const miRe = /<MissingIndex\b([^>]*)>([\s\S]*?)<\/MissingIndex>/g
+      let mi: RegExpExecArray | null = miRe.exec(xml)
+      while (mi) {
+        const tbl = attr(mi[1], 'Table')?.replace(/[\[\]]/g, '')
+        const cols = Array.from(mi[2].matchAll(/Name="\[([^\]]+)\]"/g)).map((c) => c[1])
+        if (tbl) missing.push(`${tbl}: ${cols.join(', ')}`)
+        mi = miRe.exec(xml)
+      }
+      await logActivity({
+        action: 'custom-query-explain',
+        user: req.user?.id,
+        comment: sqlText.slice(0, 300),
+        req
+      })
+      return { data: { operators: ops, missing_indexes: missing, plan_xml: xml } }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.code(400).send({ error: msg.slice(0, 800) })
+    }
+  })
 
   app.post<{ Params: { slug: string }; Body: { params?: Record<string, unknown> } }>(
     '/:slug/execute',

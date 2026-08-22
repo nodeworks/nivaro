@@ -3507,6 +3507,27 @@ interface TemplateVersionRow {
 function PipelineVersionsCard({ templateId }: { templateId: string }) {
   const queryClient = useQueryClient()
   const [confirmId, setConfirmId] = useState<number | null>(null)
+  const [diffId, setDiffId] = useState<number | null>(null)
+
+  const { data: diff, isFetching: diffLoading } = useQuery({
+    queryKey: ['pipeline-version-diff', templateId, diffId],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            from_version: number
+            to: string
+            diff: {
+              template: Array<{ field: string; from: unknown; to: unknown }>
+              states: VersionEntityDiff
+              transitions: VersionEntityDiff
+              bindings: VersionEntityDiff
+            }
+          }
+        }>(`/pipelines/${templateId}/versions/${diffId}/diff`)
+        .then((r) => r.data.data),
+    enabled: diffId != null
+  })
 
   const { data: versions, isLoading } = useQuery({
     queryKey: ['pipeline-versions', templateId],
@@ -3591,16 +3612,36 @@ function PipelineVersionsCard({ templateId }: { templateId: string }) {
                   </Button>
                 </span>
               ) : (
-                <button
-                  type='button'
-                  onClick={() => setConfirmId(v.id)}
-                  className='shrink-0 rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
-                >
-                  Restore
-                </button>
+                <span className='flex shrink-0 items-center gap-0.5'>
+                  <button
+                    type='button'
+                    onClick={() => setDiffId((d) => (d === v.id ? null : v.id))}
+                    className='rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
+                  >
+                    {diffId === v.id ? 'Hide diff' : 'Diff'}
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setConfirmId(v.id)}
+                    className='rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
+                  >
+                    Restore
+                  </button>
+                </span>
               )}
             </div>
           ))}
+        </div>
+      )}
+      {diffId != null && (
+        <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/30'>
+          {diffLoading ? (
+            <p className='text-[11.5px] text-slate-400'>Comparing…</p>
+          ) : diff ? (
+            <VersionDiffView fromVersion={diff.from_version} to={diff.to} diff={diff.diff} />
+          ) : (
+            <p className='text-[11.5px] text-slate-400'>Could not load the diff.</p>
+          )}
         </div>
       )}
       <p className='text-[10.5px] text-slate-400'>
@@ -3611,6 +3652,101 @@ function PipelineVersionsCard({ templateId }: { templateId: string }) {
   )
 }
 
+
+interface VersionEntityDiff {
+  added: Array<Record<string, unknown>>
+  removed: Array<Record<string, unknown>>
+  changed: Array<{
+    id: unknown
+    label: string
+    fields: Array<{ field: string; from: unknown; to: unknown }>
+  }>
+}
+
+function fmtDiffVal(v: unknown): string {
+  if (v == null || v === '') return '(empty)'
+  const s = typeof v === 'string' ? v : JSON.stringify(v)
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s
+}
+
+/** Field-level diff between a stored version and the live config (#72) —
+ *  "what would restoring change", answered before the restore button. */
+function VersionDiffView({
+  fromVersion,
+  to,
+  diff
+}: {
+  fromVersion: number
+  to: string
+  diff: {
+    template: Array<{ field: string; from: unknown; to: unknown }>
+    states: VersionEntityDiff
+    transitions: VersionEntityDiff
+    bindings: VersionEntityDiff
+  }
+}) {
+  const sections: Array<{ label: string; d: VersionEntityDiff }> = [
+    { label: 'States', d: diff.states },
+    { label: 'Transitions', d: diff.transitions },
+    { label: 'Bindings', d: diff.bindings }
+  ]
+  const empty =
+    diff.template.length === 0 &&
+    sections.every((s) => s.d.added.length + s.d.removed.length + s.d.changed.length === 0)
+  return (
+    <div className='space-y-2.5'>
+      <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+        v{fromVersion} → {to}
+      </p>
+      {empty && <p className='text-[11.5px] text-slate-400'>No differences — identical config.</p>}
+      {diff.template.length > 0 && (
+        <div>
+          <p className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>Template</p>
+          {diff.template.map((f) => (
+            <p key={f.field} className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+              <span className='font-mono'>{f.field}</span>:{' '}
+              <span className='text-red-600 line-through dark:text-red-400'>{fmtDiffVal(f.from)}</span>{' '}
+              → <span className='text-emerald-700 dark:text-emerald-400'>{fmtDiffVal(f.to)}</span>
+            </p>
+          ))}
+        </div>
+      )}
+      {sections.map(({ label, d }) =>
+        d.added.length + d.removed.length + d.changed.length === 0 ? null : (
+          <div key={label}>
+            <p className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>{label}</p>
+            {/* "added" = present in the DIFF TARGET (usually current) but not the version */}
+            {d.added.map((r) => (
+              <p key={String(r.id)} className='mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400'>
+                + {String(r.label ?? r.key ?? r.collection ?? r.id)} (only in {to})
+              </p>
+            ))}
+            {d.removed.map((r) => (
+              <p key={String(r.id)} className='mt-0.5 text-[11px] text-red-600 dark:text-red-400'>
+                − {String(r.label ?? r.key ?? r.collection ?? r.id)} (only in v{fromVersion})
+              </p>
+            ))}
+            {d.changed.map((c) => (
+              <div key={String(c.id)} className='mt-0.5'>
+                <p className='text-[11px] font-medium text-slate-600 dark:text-foreground'>{c.label}</p>
+                {c.fields.map((f) => (
+                  <p key={f.field} className='pl-3 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    <span className='font-mono'>{f.field}</span>:{' '}
+                    <span className='text-red-600 line-through dark:text-red-400'>
+                      {fmtDiffVal(f.from)}
+                    </span>{' '}
+                    →{' '}
+                    <span className='text-emerald-700 dark:text-emerald-400'>{fmtDiffVal(f.to)}</span>
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  )
+}
 
 // ─── Parallel branches (split/join) — merged from the old /workflows editor ───
 // A split fans one record into several states at once; each branch runs with

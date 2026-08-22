@@ -156,6 +156,12 @@ export class ForbiddenError extends Error {
   }
 }
 
+/** Deletion protection rule fired (#64) — 409 with the rule's own message. */
+export class DeleteGuardError extends Error {
+  statusCode = 409
+  code = 'DELETE_GUARDED'
+}
+
 export class ItemNotFoundError extends Error {
   /** Picked up by Fastify's default error handler so re-thrown errors return 404. */
   statusCode = 404
@@ -2364,6 +2370,62 @@ export async function deleteOne(
     if (workspaceId && (await workspaceColumnExists(collection))) {
       throw new ItemNotFoundError()
     }
+  }
+
+  // Deletion protection rules (#64): per-collection guards from
+  // nivaro_collections.delete_guard. A matching rule BLOCKS with its own
+  // message ("never delete a workflow with linked POs"). Enforcement, not
+  // advice — admins are NOT exempt (the rule exists because the delete is
+  // wrong, not because the caller lacks rank). Broken guard config fails
+  // OPEN with a warning: a typo must not make every record undeletable.
+  try {
+    const guardRaw = (col as { delete_guard?: string | null }).delete_guard
+    const guards = guardRaw
+      ? (JSON.parse(String(guardRaw)) as Array<Record<string, unknown>>)
+      : []
+    for (const g of Array.isArray(guards) ? guards : []) {
+      if (g.type === 'children') {
+        const child = String(g.collection ?? '')
+        const fk = String(g.fk_field ?? '')
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk)) continue
+        const row = await db(child).where(fk, id).first('id').catch(() => undefined)
+        if (row) {
+          throw new DeleteGuardError(
+            String(g.message ?? `This record has linked ${child.replace(/_/g, ' ')} and cannot be deleted`)
+          )
+        }
+      } else if (g.type === 'condition' && previousData) {
+        const v = previousData[String(g.field ?? '')]
+        const want = g.value
+        const hit = (() => {
+          switch (String(g.op ?? 'eq')) {
+            case 'eq':
+              return String(v ?? '') === String(want ?? '')
+            case 'neq':
+              return String(v ?? '') !== String(want ?? '')
+            case 'null':
+              return v === null || v === undefined || v === ''
+            case 'nnull':
+              return !(v === null || v === undefined || v === '')
+            case 'in':
+              return String(want ?? '')
+                .split(',')
+                .map((x) => x.trim())
+                .includes(String(v ?? ''))
+            default:
+              return false
+          }
+        })()
+        if (hit) {
+          throw new DeleteGuardError(
+            String(g.message ?? 'A deletion protection rule blocks deleting this record')
+          )
+        }
+      }
+    }
+  } catch (err) {
+    if (err instanceof DeleteGuardError) throw err
+    console.warn(`[delete-guard] broken guard config on ${collection} — failing open:`, err)
   }
 
   const ctx = { collection, action: 'delete' as const, keys: [id], user, database: db, req }

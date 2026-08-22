@@ -14,6 +14,7 @@ declare module 'fastify' {
     apiKeyScopes?: ApiKeyScope[]
     /** Numeric per-minute rate limit configured on the API key, if any. */
     apiKeyRateLimit?: number | null
+    apiKeyId?: number | null
     /** Set when the request authenticated via a masquerade token (nvm_*) — the admin who issued it. */
     masqueradeAdminId?: string
   }
@@ -128,6 +129,7 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
   if (restrictions.length > 0) user.api_key_scope_restrictions = restrictions
   req.apiKeyScopes = parseJsonArray<ApiKeyScope>(key.scopes)
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
+  req.apiKeyId = Number(key.id)
 
   // Update last_used_at, throttled to once per 60s to avoid write amplification
   const lastUsed = key.last_used_at ? new Date(key.last_used_at).getTime() : 0

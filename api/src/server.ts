@@ -418,13 +418,24 @@ export async function buildServer() {
       app.cron.schedule('ooo-schedule', '*/15 * * * *', async () => {
         const { db } = await import('./db/index.js')
         const now = new Date()
-        await db('nivaro_users')
+        const entering = (await db('nivaro_users')
           .where('is_out_of_office', false)
           .whereNotNull('ooo_start')
           .whereNotNull('ooo_end')
           .where('ooo_start', '<=', now)
           .where('ooo_end', '>', now)
-          .update({ is_out_of_office: true })
+          .select('id')) as Array<{ id: string }>
+        if (entering.length > 0) {
+          await db('nivaro_users')
+            .whereIn(
+              'id',
+              entering.map((u) => u.id)
+            )
+            .update({ is_out_of_office: true })
+          // Their open tasks move to the delegate (#70) — best-effort.
+          const { delegateOpenTasks } = await import('./services/task-delegation.js')
+          for (const u of entering) await delegateOpenTasks(u.id)
+        }
         await db('nivaro_users')
           .where('is_out_of_office', true)
           .whereNotNull('ooo_end')

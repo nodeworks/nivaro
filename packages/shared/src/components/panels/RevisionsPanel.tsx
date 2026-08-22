@@ -78,6 +78,64 @@ function ValueCell({ value, tone }: { value: unknown; tone: 'before' | 'after' }
   )
 }
 
+// ─── Structured JSON diffs (#73) ─────────────────────────────────────────────
+// A changed JSON column (filters, config blobs) renders as a per-key diff
+// instead of two unreadable blobs. Only plain objects qualify — arrays and
+// scalars keep the raw cells.
+function parseJsonObject(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+  if (typeof v === 'string' && v.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(v)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function JsonKeyDiff({
+  before,
+  after
+}: {
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}) {
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort()
+  const rows = keys
+    .map((k) => {
+      const b = k in before ? JSON.stringify(before[k]) : undefined
+      const a = k in after ? JSON.stringify(after[k]) : undefined
+      if (b === a) return null
+      return { k, b, a }
+    })
+    .filter(Boolean) as Array<{ k: string; b?: string; a?: string }>
+  if (rows.length === 0)
+    return <span className='text-[11px] italic text-slate-400'>keys reordered only</span>
+  const clip = (x?: string) => (x == null ? undefined : x.length > 60 ? `${x.slice(0, 60)}…` : x)
+  return (
+    <div className='space-y-0.5' data-json-diff>
+      {rows.map(({ k, b, a }) => (
+        <p key={k} className='text-[11px]'>
+          <span className='font-mono text-[10.5px] text-slate-500'>{k}</span>:{' '}
+          {b !== undefined && (
+            <span className='text-rose-600 line-through dark:text-rose-400'>{clip(b)}</span>
+          )}
+          {b !== undefined && a !== undefined && ' → '}
+          {a !== undefined ? (
+            <span className='text-emerald-700 dark:text-emerald-400'>{clip(a)}</span>
+          ) : (
+            <span className='italic text-slate-400'> (removed)</span>
+          )}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 type FieldStatus = 'added' | 'removed' | 'changed' | 'unchanged'
 const STATUS_ROW_CLS: Record<FieldStatus, string> = {
   added: 'bg-emerald-50/70 dark:bg-emerald-950/20',
@@ -145,6 +203,15 @@ function SideBySideView({
             {status === 'changed' && (isRichText(before[field]) || isRichText(after[field])) ? (
               <div className='px-2.5 py-1.5' data-richtext-diff>
                 <WordDiff before={before[field]} after={after[field]} />
+              </div>
+            ) : status === 'changed' &&
+              parseJsonObject(before[field]) &&
+              parseJsonObject(after[field]) ? (
+              <div className='px-2.5 py-1.5'>
+                <JsonKeyDiff
+                  before={parseJsonObject(before[field]) as Record<string, unknown>}
+                  after={parseJsonObject(after[field]) as Record<string, unknown>}
+                />
               </div>
             ) : (
               <div className='grid grid-cols-[1fr_1fr]'>

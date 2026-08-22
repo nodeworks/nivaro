@@ -161,6 +161,9 @@ const OpsCalendar = lazy(() => import('@/pages/OpsCalendar'))
 const SetupChecklist = lazy(() => import('@/pages/SetupChecklist'))
 const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
 const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
+const MailLog = lazy(() => import('@/pages/MailLog'))
+const Sequences = lazy(() => import('@/pages/Sequences'))
+const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const AutomationTests = lazy(() => import('@/pages/AutomationTests'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -462,6 +465,9 @@ export default function App() {
                   <Route path='setup-checklist' element={<SetupChecklist />} />
                   <Route path='config-search' element={<ConfigSearch />} />
                   <Route path='access-requests' element={<AccessRequests />} />
+                  <Route path='mail-log' element={<MailLog />} />
+                  <Route path='sequences' element={<Sequences />} />
+                  <Route path='sql-scratchpad' element={<SqlScratchpad />} />
                   <Route path='automation-tests' element={<AutomationTests />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
                   <Route path='trash' element={<TrashPage />} />

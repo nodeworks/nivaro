@@ -26,6 +26,9 @@ export type FormValidationRule = {
   value?: unknown
   message?: string
   soft?: boolean
+  // required_if only: the sibling field + condition that makes this required
+  field?: string
+  op?: string
 }
 
 export type FormVisibilityRule = {

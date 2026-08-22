@@ -337,6 +337,11 @@ export async function usersRoutes(app: FastifyInstance) {
 
     const previousUser = await getUser(userId)
     const user = await updateUser(userId, updates)
+    // Going OOO right now with a delegate → open tasks move immediately (#70).
+    if (updates.is_out_of_office && updates.delegate_id) {
+      const { delegateOpenTasks } = await import('../services/task-delegation.js')
+      void delegateOpenTasks(userId)
+    }
     const activityId = await logActivity({
       action: 'update',
       user: userId,

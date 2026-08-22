@@ -16,11 +16,41 @@ function calendarDaysFromToday(raw: unknown): number | null {
 
 /** Evaluate one field validation rule against a value. Returns an error message
  *  or null. Shared by useNivaroForm (headless) and ItemEditForm (admin). */
+function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {
+  switch (op) {
+    case 'null':
+      return isEmptyVal(other)
+    case 'nnull':
+      return !isEmptyVal(other)
+    case 'neq':
+      return String(other ?? '') !== String(cmp ?? '')
+    case 'in': {
+      const list = Array.isArray(cmp) ? cmp : String(cmp ?? '').split(',')
+      return list.some((v) => String(v).trim() === String(other ?? ''))
+    }
+    default:
+      return String(other ?? '') === String(cmp ?? '')
+  }
+}
+
 export function applyValidationRule(
   rule: FormValidationRule,
   value: unknown,
-  label: string
+  label: string,
+  record?: Record<string, unknown>
 ): string | null {
+  // required_if (#65): required only when a SIBLING field matches a condition.
+  // Judged before the empty-guard — an empty value is exactly what it catches.
+  // A rule without a `field` is the legacy no-op shape; no record = can't judge.
+  if (rule.type === 'required_if') {
+    const dep = (rule as { field?: string }).field
+    if (!dep || !record) return null
+    if (!conditionMatches(record[dep], String((rule as { op?: string }).op ?? 'eq'), rule.value))
+      return null
+    return isEmptyVal(value)
+      ? (rule.message ?? `${label} is required when ${dep} matches this condition`)
+      : null
+  }
   if (isEmptyVal(value) && rule.type !== 'required') return null
   switch (rule.type) {
     case 'required':

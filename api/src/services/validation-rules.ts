@@ -29,6 +29,9 @@ export interface ValidationRule {
   type: string
   value?: unknown
   message?: string
+  // required_if only: sibling field + condition making this field required
+  field?: string
+  op?: string
 }
 
 export class FieldValidationError extends Error {
@@ -62,11 +65,39 @@ function calendarDaysFromToday(raw: unknown): number | null {
 }
 
 /** One rule against one value. Returns the error message, or null. */
+function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {
+  switch (op) {
+    case 'null':
+      return isEmptyVal(other)
+    case 'nnull':
+      return !isEmptyVal(other)
+    case 'neq':
+      return String(other ?? '') !== String(cmp ?? '')
+    case 'in': {
+      const list = Array.isArray(cmp) ? cmp : String(cmp ?? '').split(',')
+      return list.some((v) => String(v).trim() === String(other ?? ''))
+    }
+    default:
+      return String(other ?? '') === String(cmp ?? '')
+  }
+}
+
 export function applyValidationRule(
   rule: ValidationRule,
   value: unknown,
-  label: string
+  label: string,
+  record?: Record<string, unknown>
 ): string | null {
+  // required_if (#65): required only when a SIBLING field matches a condition.
+  // Mirrors the shared client evaluator exactly — the two must not drift. No
+  // record (or a rule without `field`, the legacy shape) = can't judge = pass.
+  if (rule.type === 'required_if') {
+    if (!rule.field || !record || !(rule.field in record)) return null
+    if (!conditionMatches(record[rule.field], String(rule.op ?? 'eq'), rule.value)) return null
+    return isEmptyVal(value)
+      ? (rule.message ?? `${label} is required when ${rule.field} matches this condition`)
+      : null
+  }
   if (isEmptyVal(value) && rule.type !== 'required') return null
   switch (rule.type) {
     case 'required':
@@ -170,7 +201,7 @@ export async function enforceValidationRules(
     const label = f.field
     const value = payload[f.field]
     for (const rule of rules) {
-      const error = applyValidationRule(rule, value, label)
+      const error = applyValidationRule(rule, value, label, payload)
       if (error) throw new FieldValidationError(error, f.field, rule.type)
     }
   }

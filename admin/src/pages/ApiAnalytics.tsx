@@ -279,6 +279,9 @@ export function ApiAnalyticsPage() {
         </div>
 
         <div className='mt-6'>
+          <ByKeyPanel hours={hours} />
+        </div>
+        <div className='mt-6'>
           <SlowTracesPanel />
         </div>
         <div className='mt-6'>
@@ -295,6 +298,66 @@ export function ApiAnalyticsPage() {
 /** What users actually feel: client-measured load vitals + SPA route-change
  *  p75s per route pattern. Server latency (above) says the API is fast; this
  *  says whether the pages are. */
+
+/** Per-API-key traffic (#67) — which integration is hammering the API, and
+ *  whether its calls are erroring. Session/cookie traffic is excluded; only
+ *  requests authenticated by a named nivaro_api_keys key appear. */
+function ByKeyPanel({ hours }: { hours: number }) {
+  const { data: rows = [] } = useQuery<
+    Array<{
+      api_key_id: number
+      name: string
+      count: number
+      avg_latency: number
+      errors: number
+      last_seen: string | null
+    }>
+  >({
+    queryKey: ['api-analytics-by-key', hours],
+    queryFn: () =>
+      api.get(`/api-analytics/by-key?hours=${hours}`).then((r) => r.data.data)
+  })
+  if (rows.length === 0) return null
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <p className='border-b border-slate-200 px-4 py-3 text-[13px] font-medium dark:border-border'>
+        Traffic by API key
+      </p>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className='text-[11px]'>Key</TableHead>
+            <TableHead className='w-24 text-right text-[11px]'>Requests</TableHead>
+            <TableHead className='w-24 text-right text-[11px]'>Avg ms</TableHead>
+            <TableHead className='w-20 text-right text-[11px]'>Errors</TableHead>
+            <TableHead className='w-40 text-right text-[11px]'>Last seen</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((k) => (
+            <TableRow key={k.api_key_id}>
+              <TableCell className='text-[12px] font-medium'>{k.name}</TableCell>
+              <TableCell className='text-right text-[12px]'>{formatNumber(k.count)}</TableCell>
+              <TableCell className='text-right text-[12px]'>{k.avg_latency}</TableCell>
+              <TableCell
+                className={cn(
+                  'text-right text-[12px]',
+                  k.errors > 0 && 'text-red-600 dark:text-red-400'
+                )}
+              >
+                {k.errors}
+              </TableCell>
+              <TableCell className='text-right text-[12px] text-muted-foreground'>
+                {k.last_seen ? new Date(k.last_seen).toLocaleString() : '—'}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
 function RumPanel() {
   const [days, setDays] = useState(1)
   const { data } = useQuery({

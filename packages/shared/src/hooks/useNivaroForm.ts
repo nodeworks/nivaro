@@ -322,7 +322,7 @@ export function useNivaroForm(
       }
       for (const rule of f.validationRules ?? []) {
         if (rule.soft) continue
-        const err = applyValidationRule(rule, value, f.label)
+        const err = applyValidationRule(rule, value, f.label, values)
         if (err) {
           if (next[f.field] == null) next[f.field] = []
           next[f.field].push(err)

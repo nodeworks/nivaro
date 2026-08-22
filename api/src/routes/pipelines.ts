@@ -6,8 +6,10 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   restoreTemplateVersion,
-  snapshotTemplateVersion
-} from '../services/workflow-template-versions.js'
+  snapshotTemplateVersion,
+  diffSnapshots,
+  readCurrentSnapshot,
+  type TemplateSnapshot} from '../services/workflow-template-versions.js'
 import { can } from '../services/permissions.js'
 import {
   bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
@@ -2727,6 +2729,38 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return reply.send({
       data: { ...row, snapshot: JSON.parse((row as { snapshot: string }).snapshot) }
+    })
+  })
+
+  // Diff a version against the CURRENT config (default) or another version
+  // (#72) — "what would restoring change", answered before the restore.
+  app.get('/:id/versions/:versionId/diff', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    const { against } = req.query as { against?: string }
+    const row = await db('nivaro_workflow_template_versions')
+      .where({ template: id, id: Number(versionId) })
+      .first('snapshot', 'version')
+    if (!row) return reply.code(404).send({ error: 'Version not found' })
+    const from = JSON.parse((row as { snapshot: string }).snapshot) as TemplateSnapshot
+    let to: TemplateSnapshot | null = null
+    let toLabel = 'current config'
+    if (against && against !== 'current') {
+      const other = await db('nivaro_workflow_template_versions')
+        .where({ template: id, id: Number(against) })
+        .first('snapshot', 'version')
+      if (!other) return reply.code(404).send({ error: 'Comparison version not found' })
+      to = JSON.parse((other as { snapshot: string }).snapshot) as TemplateSnapshot
+      toLabel = `version ${(other as { version: number }).version}`
+    } else {
+      to = await readCurrentSnapshot(id)
+    }
+    if (!to) return reply.code(404).send({ error: 'Template not found' })
+    return reply.send({
+      data: {
+        from_version: (row as { version: number }).version,
+        to: toLabel,
+        diff: diffSnapshots(from, to)
+      }
     })
   })
 

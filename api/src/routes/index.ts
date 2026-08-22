@@ -52,6 +52,9 @@ import { mailTemplateRoutes } from './mail-templates.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { setupRoutes } from './setup.js'
 import { configSearchRoutes } from './config-search.js'
+import { mailLogRoutes } from './mail-log.js'
+import { sequenceRoutes } from './sequences.js'
+import { sqlScratchpadRoutes } from './sql-scratchpad.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -233,6 +236,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsCalendarRoutes, { prefix: '/ops-calendar' })
   await app.register(setupRoutes, { prefix: '/setup' })
   await app.register(configSearchRoutes, { prefix: '/config-search' })
+  await app.register(mailLogRoutes, { prefix: '/mail-log' })
+  await app.register(sequenceRoutes, { prefix: '/sequences' })
+  await app.register(sqlScratchpadRoutes, { prefix: '/sql-scratchpad' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

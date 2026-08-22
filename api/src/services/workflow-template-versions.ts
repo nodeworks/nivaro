@@ -89,6 +89,73 @@ export async function snapshotTemplateVersion(
   }
 }
 
+export interface SnapshotDiff {
+  template: Array<{ field: string; from: unknown; to: unknown }>
+  states: EntityDiff
+  transitions: EntityDiff
+  bindings: EntityDiff
+}
+interface EntityDiff {
+  added: Array<Record<string, unknown>>
+  removed: Array<Record<string, unknown>>
+  changed: Array<{
+    id: unknown
+    label: string
+    fields: Array<{ field: string; from: unknown; to: unknown }>
+  }>
+}
+
+const DIFF_IGNORE = new Set(['created_at', 'updated_at'])
+
+function rowLabel(row: Record<string, unknown>): string {
+  return String(row.label ?? row.key ?? row.collection ?? row.name ?? row.id ?? '?')
+}
+
+function diffEntities(
+  from: Array<Record<string, unknown>>,
+  to: Array<Record<string, unknown>>
+): EntityDiff {
+  const fromMap = new Map(from.map((r) => [String(r.id), r]))
+  const toMap = new Map(to.map((r) => [String(r.id), r]))
+  const added = to.filter((r) => !fromMap.has(String(r.id)))
+  const removed = from.filter((r) => !toMap.has(String(r.id)))
+  const changed: EntityDiff['changed'] = []
+  for (const [id, a] of fromMap) {
+    const b = toMap.get(id)
+    if (!b) continue
+    const fields: Array<{ field: string; from: unknown; to: unknown }> = []
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (DIFF_IGNORE.has(k)) continue
+      if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null))
+        fields.push({ field: k, from: a[k] ?? null, to: b[k] ?? null })
+    }
+    if (fields.length > 0) changed.push({ id: b.id, label: rowLabel(b), fields })
+  }
+  return { added, removed, changed }
+}
+
+/** Structured diff between two snapshots (#72) — "what changed between
+ *  version 12 and now", per entity, per field. */
+export function diffSnapshots(from: TemplateSnapshot, to: TemplateSnapshot): SnapshotDiff {
+  const tplFields: SnapshotDiff['template'] = []
+  for (const k of new Set([...Object.keys(from.template), ...Object.keys(to.template)])) {
+    if (DIFF_IGNORE.has(k)) continue
+    if (JSON.stringify(from.template[k] ?? null) !== JSON.stringify(to.template[k] ?? null))
+      tplFields.push({ field: k, from: from.template[k] ?? null, to: to.template[k] ?? null })
+  }
+  return {
+    template: tplFields,
+    states: diffEntities(from.states, to.states),
+    transitions: diffEntities(from.transitions, to.transitions),
+    bindings: diffEntities(from.bindings, to.bindings)
+  }
+}
+
+/** Current live config as a snapshot — the diff's "now" side. */
+export async function readCurrentSnapshot(templateId: string): Promise<TemplateSnapshot | null> {
+  return readSnapshot(templateId)
+}
+
 export interface RestoreResult {
   states: { updated: number; inserted: number; extra_kept: number }
   transitions: { updated: number; inserted: number; deleted: number; kept_in_history: number }

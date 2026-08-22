@@ -379,6 +379,31 @@ export interface MailOptions {
   skipDigest?: boolean
 }
 
+/** Outbound mail log (#71): every send ATTEMPT gets a row — sent, failed
+ *  (with the SMTP error), dropped (test mode / no recipients), deferred
+ *  (digest). Fire-and-forget: logging must never break sending. */
+function logMail(
+  to: string | string[],
+  subject: string,
+  status: 'sent' | 'failed' | 'dropped' | 'deferred',
+  opts?: { template?: string | null; error?: unknown; body?: string }
+): void {
+  const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
+  void db('nivaro_mail_log')
+    .insert({
+      to: addr,
+      subject: String(subject ?? '').slice(0, 500),
+      template: opts?.template ? String(opts.template).slice(0, 120) : null,
+      status,
+      error: opts?.error
+        ? String(opts.error instanceof Error ? opts.error.message : opts.error).slice(0, 2000)
+        : null,
+      body: opts?.body ? String(opts.body).slice(0, 200_000) : null,
+      created_at: new Date()
+    })
+    .catch(() => {})
+}
+
 export async function sendMail(opts: MailOptions): Promise<void> {
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {
@@ -415,19 +440,31 @@ export async function sendMail(opts: MailOptions): Promise<void> {
   const active = await dropInactiveRecipients(original)
   if (active.length === 0) return
   const afterDigest = await applyDigestDeferral(active, opts.subject, html, opts.skipDigest)
+  if (afterDigest.length < active.length) {
+    logMail(active.filter((a) => !afterDigest.includes(a)), opts.subject, 'deferred', {
+      template: opts.template
+    })
+  }
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
+    logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
     return
   }
-  await buildTransporter(smtp).sendMail({
-    from: smtp.from,
-    to: routed.to,
-    subject: withEnvLabel(smtp, routed.subject),
-    html,
-    text: opts.text
-  })
+  try {
+    await buildTransporter(smtp).sendMail({
+      from: smtp.from,
+      to: routed.to,
+      subject: withEnvLabel(smtp, routed.subject),
+      html,
+      text: opts.text
+    })
+    logMail(routed.to, opts.subject, 'sent', { template: opts.template, body: html })
+  } catch (err) {
+    logMail(routed.to, opts.subject, 'failed', { template: opts.template, error: err, body: html })
+    throw err
+  }
 }
 
 export async function sendRawMail(opts: {
@@ -468,18 +505,28 @@ export async function sendRawMail(opts: {
   const active2 = await dropInactiveRecipients(original)
   if (active2.length === 0) return
   const afterDigest = await applyDigestDeferral(active2, opts.subject, opts.html, opts.skipDigest)
+  if (afterDigest.length < active2.length) {
+    logMail(active2.filter((a) => !afterDigest.includes(a)), opts.subject, 'deferred')
+  }
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
+    logMail(afterDigest, opts.subject, 'dropped')
     return
   }
   const { title: _title, wrap: _wrap, skipDigest: _sd, ...mailOpts } = opts
-  await buildTransporter(smtp).sendMail({
-    from: smtp.from,
-    ...mailOpts,
-    html,
-    to: routed.to,
-    subject: withEnvLabel(smtp, routed.subject)
-  })
+  try {
+    await buildTransporter(smtp).sendMail({
+      from: smtp.from,
+      ...mailOpts,
+      html,
+      to: routed.to,
+      subject: withEnvLabel(smtp, routed.subject)
+    })
+    logMail(routed.to, opts.subject, 'sent', { body: html })
+  } catch (err) {
+    logMail(routed.to, opts.subject, 'failed', { error: err, body: html })
+    throw err
+  }
 }

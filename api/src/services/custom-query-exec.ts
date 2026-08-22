@@ -128,6 +128,78 @@ export async function execCustomQuerySql(
 }
 
 /**
+ * Estimated execution plan for a statement (#74) — SET SHOWPLAN_XML needs its
+ * own batch on the SAME connection, so this runs three batches: plan mode on,
+ * the statement (NOT executed — SQL Server returns the plan instead), plan
+ * mode off. Params substituted the same way execCustomQuerySql does.
+ */
+export async function explainSqlPlan(
+  sqlText: string,
+  finalParams: Record<string, unknown>
+): Promise<string | null> {
+  const resolvedSql = sqlText.replace(/:(\w+)/g, (_, k: string) => {
+    const v = finalParams[k]
+    if (v == null || v === '') return 'NULL'
+    if (typeof v === 'boolean') return v ? '1' : '0'
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
+    return `'${String(v).replace(/'/g, "''")}'`
+  })
+
+  // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
+  const knexClient = (db as any).client
+  const Driver = knexClient._driver() as {
+    Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
+  }
+  const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
+
+  const runBatch = (sql: string): Promise<Array<Record<string, unknown>>> =>
+    new Promise((resolve, reject) => {
+      let settled = false
+      const done = (fn: () => void) => {
+        if (!settled) {
+          settled = true
+          fn()
+        }
+      }
+      const req = new Driver.Request(sql, (err: Error | null) => {
+        if (err) done(() => reject(err))
+      }) as {
+        on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
+        on(ev: 'error', h: (e: Error) => void): unknown
+        once(ev: 'requestCompleted', h: () => void): unknown
+        setTimeout?: (ms: number) => void
+      }
+      req.setTimeout?.(60_000)
+      const collected: Array<Record<string, unknown>> = []
+      req.on('row', (cols) => {
+        const row: Record<string, unknown> = {}
+        for (const col of cols) row[col.metadata.colName] = col.value
+        collected.push(row)
+      })
+      req.once('requestCompleted', () => done(() => resolve(collected)))
+      req.on('error', (e) => done(() => reject(e)))
+      conn.execSqlBatch(req)
+    })
+
+  try {
+    await runBatch('SET SHOWPLAN_XML ON')
+    try {
+      const rows = await runBatch(resolvedSql)
+      const first = rows[0]
+      if (!first) return null
+      const xml = Object.values(first)[0]
+      return typeof xml === 'string' ? xml : null
+    } finally {
+      // ALWAYS turn plan mode off — a pooled connection left in SHOWPLAN mode
+      // would return plans instead of data to the next unrelated query.
+      await runBatch('SET SHOWPLAN_XML OFF').catch(() => {})
+    }
+  } finally {
+    await knexClient.releaseConnection(conn)
+  }
+}
+
+/**
  * Server-side execution by slug (no auth/access check — trusted callers only;
  * disabled queries refuse). Used by report-studio 'query' widget resolution.
  */
