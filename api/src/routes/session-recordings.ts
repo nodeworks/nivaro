@@ -287,6 +287,35 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
   )
 
   /**
+   * One recording's header row, list-shape. The deep link ("Watch replay of
+   * this error", the chat online list) must play a recording even when it is
+   * off the first page or hidden by the list's filters — matching only
+   * against loaded rows silently landed on the bare list.
+   */
+  app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const rec = (await db('nivaro_session_recordings as r')
+      .leftJoin('nivaro_users as u', 'r.user', 'u.id')
+      .where('r.id', req.params.id)
+      .first(
+        'r.id',
+        'r.user',
+        'r.app',
+        'r.origin',
+        'r.started_at',
+        'r.ended_at',
+        'r.last_event_at',
+        'r.event_count',
+        'r.byte_size',
+        'r.truncated',
+        db.raw(
+          "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
+        )
+      )) as Record<string, unknown> | undefined
+    if (!rec) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: rec })
+  })
+
+  /**
    * The same recording as a runnable Playwright script — watch a reported
    * problem happen in a real browser instead of reading a description of it.
    * Admin-only, like every other read here: a recording is someone's session.

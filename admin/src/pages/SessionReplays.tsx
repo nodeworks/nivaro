@@ -549,12 +549,23 @@ export function SessionReplaysPage() {
   // One-shot: open the linked recording as soon as the list resolves. Guarded
   // so a later refetch can't yank someone out of what they switched to.
   useEffect(() => {
-    if (deepLinkApplied.current || !deepLinkId || recordings.length === 0) return
-    const match = recordings.find((r) => String(r.id) === deepLinkId)
-    if (!match) return
+    if (deepLinkApplied.current || !deepLinkId) return
     deepLinkApplied.current = true
-    setPlaying(match)
-    if (deepLinkT && Number.isFinite(Number(deepLinkT))) setStartAt(Number(deepLinkT))
+    const match = recordings.find((r) => String(r.id) === deepLinkId)
+    const openIt = (rec: Recording) => {
+      setPlaying(rec)
+      if (deepLinkT && Number.isFinite(Number(deepLinkT))) setStartAt(Number(deepLinkT))
+    }
+    if (match) {
+      openIt(match)
+      return
+    }
+    // Not in the loaded page (older recording, error clip hidden by the list
+    // filters) — fetch the header directly and play it anyway.
+    void api
+      .get<{ data: Recording }>(`/session-recordings/${deepLinkId}`)
+      .then((r) => openIt(r.data.data))
+      .catch(() => toast.error('That recording no longer exists (recordings expire with retention)'))
   }, [deepLinkId, deepLinkT, recordings])
 
   const { data: settings } = useQuery({
