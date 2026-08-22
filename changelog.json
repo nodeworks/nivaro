@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-22T21:30:52.159Z",
+  "generated_at": "2026-08-22T21:51:08.472Z",
   "releases": [
+    {
+      "version": "0.1.103",
+      "tag": "v0.1.103",
+      "date": "2026-08-22T17:51:05-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "admin dark mode light-on-light + stuck favourites",
+              "hash": "b141515a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.102",
       "tag": "v0.1.102",
-      "date": "2026-08-22T17:30:47-04:00",
+      "date": "2026-08-22T17:30:52-04:00",
       "sections": [
         {
           "label": "Fixed",
