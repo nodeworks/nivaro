@@ -2961,7 +2961,17 @@ export function ItemEditForm({
   /** Copy summary (#83): FRIENDLY values only — M2O ids resolve to their
    *  display labels, select values to their choice text, booleans to Yes/No;
    *  bare internal ids never appear. */
+  const [copyingSummary, setCopyingSummary] = useState(false)
   const copyRecordSummary = async () => {
+    if (copyingSummary) return
+    setCopyingSummary(true)
+    try {
+      await copyRecordSummaryInner()
+    } finally {
+      setCopyingSummary(false)
+    }
+  }
+  const copyRecordSummaryInner = async () => {
     const m2oByField = new Map(
       relations
         .filter(
@@ -5999,9 +6009,14 @@ export function ItemEditForm({
                                         type='button'
                                         title='Copy a plain-text summary of this record (fields + link) for chat or email'
                                         onClick={() => void copyRecordSummary()}
-                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                        disabled={copyingSummary}
+                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
                                       >
-                                        <Clipboard className='h-3.5 w-3.5' />
+                                        {copyingSummary ? (
+                                          <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                        ) : (
+                                          <Clipboard className='h-3.5 w-3.5' />
+                                        )}
                                       </button>
                                     )}
                                     {!isNew && itemId && (
