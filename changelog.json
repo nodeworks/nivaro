@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-08-22T19:41:54.144Z",
+  "generated_at": "2026-08-22T21:24:52.137Z",
   "releases": [
+    {
+      "version": "0.1.101",
+      "tag": "v0.1.101",
+      "date": "2026-08-22T17:24:48-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "sprint round 2 batch 3 — record merge, preview-as-role, owner impact, blocking sessions, force-unlock, must-ack, copy lines, tags field + skip-jump attribution",
+              "hash": "e0683e94"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "sprint round 2 batch 2 — digest hour, safe rename, select-all, snapshots, bulk ERP retry, state flow, state help, find-in-record, copy summary, conditional formatting, export presets",
+              "hash": "38d7e839"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "sprint round 2 batch 1 — deletion guards, mail log, sequences console, SQL scratchpad, query plans, required_if, task delegation, version diffs",
+              "hash": "19aecd51"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "copy-record-summary includes M2M fields — committed junction ids resolve to display labels (first 15, '+N more' overflow)",
+              "hash": "dde55306"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.100",
       "tag": "v0.1.100",
-      "date": "2026-08-22T15:41:50-04:00",
+      "date": "2026-08-22T15:41:54-04:00",
       "sections": [
         {
           "label": "Fixed",
