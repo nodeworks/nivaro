@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-22T21:51:08.472Z",
+  "generated_at": "2026-08-22T22:47:00.190Z",
   "releases": [
+    {
+      "version": "0.1.104",
+      "tag": "v0.1.104",
+      "date": "2026-08-22T18:46:56-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "round-3 picks — cron watchdog, scheduled broadcasts, dependency map, digest test-send, owner-matrix lint, revision value search + mail-log repair",
+              "hash": "c157c0fe"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.103",
       "tag": "v0.1.103",
-      "date": "2026-08-22T17:51:05-04:00",
+      "date": "2026-08-22T17:51:08-04:00",
       "sections": [
         {
           "label": "Fixed",
