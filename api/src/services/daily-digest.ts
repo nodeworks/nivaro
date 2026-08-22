@@ -146,7 +146,16 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
  * hour; a manual run passes nothing and sends to everyone due (#75). Users
  * without the pref default to 7 (the historic 07:45 send).
  */
-export async function runDailyActionDigest(hour?: number): Promise<{ sent: number }> {
+export async function runDailyActionDigest(
+  hour?: number,
+  opts?: {
+    /** Test-send (#96): build + send for ONLY this user, regardless of their
+     *  pref or delivery hour, and DON'T flush their deferred rows — the real
+     *  digest must still carry them. */
+    onlyUserId?: string
+    preserveDeferred?: boolean
+  }
+): Promise<{ sent: number }> {
   // Opt-in users + anyone holding deferred rows (covers a pref flipped back).
   const users = (await db('nivaro_users')
     .where('status', 'active')
@@ -181,7 +190,11 @@ export async function runDailyActionDigest(hour?: number): Promise<{ sent: numbe
     created_at: Date
   }>
   for (const d of deferred) if (!digestUsers.has(d.user)) digestUsers.set(d.user, d.email)
-  if (hour != null) {
+  if (opts?.onlyUserId) {
+    const target = users.find((u) => u.id === opts.onlyUserId)
+    digestUsers.clear()
+    if (target?.email) digestUsers.set(target.id, target.email)
+  } else if (hour != null) {
     for (const id of [...digestUsers.keys()]) {
       if ((prefHour.get(id) ?? 7) !== hour) digestUsers.delete(id)
     }
@@ -240,7 +253,7 @@ export async function runDailyActionDigest(hour?: number): Promise<{ sent: numbe
         skipDigest: true
       })
       sent++
-      flushedIds.push(...mine.map((d) => d.id))
+      if (!opts?.preserveDeferred) flushedIds.push(...mine.map((d) => d.id))
     } catch (err) {
       console.warn('[daily-digest] send failed for', email, err instanceof Error ? err.message : err)
     }
@@ -253,6 +266,7 @@ export async function runDailyActionDigest(hour?: number): Promise<{ sent: numbe
         .del()
     }
   }
+  if (opts?.onlyUserId) return { sent } // test-sends don't log the daily run
   await logActivity({
     action: 'daily-action-digest',
     user: null,

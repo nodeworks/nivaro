@@ -155,7 +155,10 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
         to: String(me.email),
         subject: `[Template test] ${req.params.name}`,
         html,
-        wrap: false
+        wrap: false,
+        // A template TEST must arrive now — deferring it into the tester's
+        // daily digest reads as "send failed".
+        skipDigest: true
       })
       return { data: { sent: true, to: me.email } }
     } catch (err) {

@@ -401,8 +401,20 @@ function logMail(
       body: opts?.body ? String(opts.body).slice(0, 200_000) : null,
       created_at: new Date()
     })
-    .catch(() => {})
+    .catch((err: unknown) => {
+      // Logging must never break sending — but a PERSISTENT insert failure
+      // (schema drift) must not be invisible either, or the log quietly
+      // records nothing while everyone trusts it.
+      if (!mailLogWarned) {
+        mailLogWarned = true
+        console.warn(
+          '[mail-log] insert failing — the mail log is NOT recording:',
+          err instanceof Error ? err.message : err
+        )
+      }
+    })
 }
+let mailLogWarned = false
 
 export async function sendMail(opts: MailOptions): Promise<void> {
   const smtp = await getSmtpConfig()

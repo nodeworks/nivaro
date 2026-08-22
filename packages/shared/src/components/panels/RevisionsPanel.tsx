@@ -837,8 +837,93 @@ export function RevisionsPanel({
             Revision History
           </SheetTitle>
         </SheetHeader>
+        <RevisionValueSearch collection={collection} item={item} />
         <RevisionsList collection={collection} item={item} onRollback={onRollback} inlineTableFields={inlineTableFields} />
       </SheetContent>
     </Sheet>
+  )
+}
+
+
+/** Revision value search (#98), record-scoped: "when did 42000 first appear on
+ *  this record, and who wrote it". Server-side over the record's deltas. */
+function RevisionValueSearch({ collection, item }: { collection: string; item: string }) {
+  const client = useNivaroClient()
+  const [q, setQ] = useState('')
+  const [applied, setApplied] = useState('')
+  const { data, isFetching } = useQuery<{
+    matches: Array<{
+      revision_id: number
+      timestamp: string | null
+      user_name: string | null
+      action: string | null
+      fields: Array<{ field: string; value: string }>
+    }>
+    truncated: boolean
+  }>({
+    queryKey: ['rev-value-search', collection, item, applied],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(
+          get('/revisions/value-search', { collection, item, q: applied })
+        )
+        .then((r) => r.data),
+    enabled: applied.length >= 2
+  })
+  return (
+    <div className='mt-3 rounded-lg border border-slate-200 p-2.5 dark:border-border'>
+      <div className='flex items-center gap-1.5'>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') setApplied(q.trim())
+          }}
+          placeholder='Search this record’s history for a value…'
+          className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+        />
+        <button
+          type='button'
+          disabled={q.trim().length < 2}
+          onClick={() => setApplied(q.trim())}
+          className='h-7 shrink-0 rounded-md border border-slate-200 px-2 text-[11.5px] text-slate-500 hover:text-slate-700 disabled:opacity-40 dark:border-border'
+        >
+          Find
+        </button>
+      </div>
+      {applied && (
+        <div className='mt-2 space-y-1.5'>
+          {isFetching ? (
+            <p className='text-[11.5px] text-slate-400'>Searching…</p>
+          ) : (data?.matches ?? []).length === 0 ? (
+            <p className='text-[11.5px] text-slate-400'>
+              “{applied}” never appears in this record’s recorded changes.
+            </p>
+          ) : (
+            <>
+              {data?.matches.map((m) => (
+                <div key={m.revision_id} className='text-[11.5px]'>
+                  <p className='text-slate-600 dark:text-slate-300'>
+                    {m.fields.map((f) => (
+                      <span key={f.field}>
+                        <span className='font-mono text-[10.5px]'>{f.field}</span> → “
+                        {f.value.length > 60 ? `${f.value.slice(0, 60)}…` : f.value}”{' '}
+                      </span>
+                    ))}
+                  </p>
+                  <p className='text-[10.5px] text-slate-400'>
+                    {m.user_name ?? 'System'} ·{' '}
+                    {m.timestamp ? new Date(m.timestamp).toLocaleString() : ''} · {m.action}
+                  </p>
+                </div>
+              ))}
+              {data?.truncated && (
+                <p className='text-[10.5px] text-amber-600'>Showing the newest 200 matches.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

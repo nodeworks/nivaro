@@ -146,6 +146,104 @@ export async function dataModelRoutes(app: FastifyInstance) {
    * of column count (COUNT(col) skips NULLs; columns batched 60 per query).
    * Finds dead fields worth pruning and half-adopted ones worth requiring.
    */
+  /**
+   * Field dependency map (#95): every configured "this feeds that" edge on a
+   * collection — write/read formulas, rollup sources (child collections as
+   * external nodes), field rules, cascade filters, auto-id tokens,
+   * cross-record defaults, default formulas. Config aggregation only; no
+   * data reads.
+   */
+  app.get<{ Params: { table: string } }>('/:table/dependency-map', async (req, reply) => {
+    const { table } = req.params
+    if (!TABLE_NAME_RE.test(table)) return reply.code(400).send({ error: 'Invalid table' })
+    const fields = (await db('nivaro_fields').where({ collection: table }).select('*')) as Array<
+      Record<string, unknown>
+    >
+    const fieldNames = new Set(fields.map((f) => String(f.field)))
+    const edges: Array<{ from: string; to: string; kind: string }> = []
+    const externals = new Set<string>()
+    const addEdge = (from: string, to: string, kind: string, external = false) => {
+      if (!from || !to || from === to) return
+      if (external) externals.add(from)
+      else if (!fieldNames.has(from)) return
+      if (!edges.some((e) => e.from === from && e.to === to && e.kind === kind))
+        edges.push({ from, to, kind })
+    }
+    const pj = (v: unknown): unknown => {
+      if (v == null) return null
+      if (typeof v === 'object') return v
+      try {
+        return JSON.parse(String(v))
+      } catch {
+        return null
+      }
+    }
+
+    for (const f of fields) {
+      const field = String(f.field)
+      // Formulas: expr-eval `item.<col>` refs and {{col}} tokens both count.
+      const formulaRefs = (src: unknown): string[] => {
+        const str = String(src ?? '')
+        const out = new Set<string>()
+        for (const m of str.matchAll(/\bitem\.([A-Za-z_][A-Za-z0-9_]*)/g)) out.add(m[1])
+        for (const m of str.matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)) out.add(m[1])
+        return [...out]
+      }
+      if (f.computed_type === 'rollup') {
+        const cfg = parseRollupFormula(f.computed_formula as string | null)
+        for (const src of cfg?.sources ?? []) {
+          const leaf = src.value_field ?? (src.aggregate === 'count' ? 'rows' : '?')
+          addEdge(`${src.related_collection}.${leaf}`, field, 'rollup', true)
+        }
+      } else if (f.computed_formula) {
+        for (const ref of formulaRefs(f.computed_formula)) addEdge(ref, field, 'formula')
+      }
+      if (f.default_formula) {
+        for (const ref of formulaRefs(f.default_formula)) addEdge(ref, field, 'default')
+      }
+      const dep = pj(f.dependency_config) as { cascade_filters?: Array<{ parent_field?: string }> } | null
+      for (const c of dep?.cascade_filters ?? []) {
+        if (c?.parent_field) addEdge(String(c.parent_field), field, 'cascade')
+      }
+      const opts = pj(f.options) as { auto_id?: { pattern?: string } | string } | null
+      const pattern =
+        typeof opts?.auto_id === 'string' ? opts.auto_id : (opts?.auto_id?.pattern ?? null)
+      if (pattern) {
+        for (const m of String(pattern).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)/g)) {
+          if (m[1] !== 'seq') addEdge(m[1], field, 'auto_id')
+        }
+      }
+      const crd = pj(f.cross_record_defaults) as
+        | { source_fk_field?: string; field_map?: Record<string, string> }
+        | null
+      if (crd?.field_map) {
+        const src = String(crd.source_fk_field ?? field)
+        for (const target of Object.keys(crd.field_map)) addEdge(src, target, 'copy')
+      }
+    }
+
+    const rules = (await db('nivaro_field_rules')
+      .where({ collection: table, is_active: true })
+      .select('trigger_field', 'target_field')) as Array<{
+      trigger_field: string
+      target_field: string
+    }>
+    for (const r of rules) addEdge(r.trigger_field, r.target_field, 'rule')
+
+    const labelOf = new Map(fields.map((f) => [String(f.field), String(f.label ?? f.field)]))
+    const involved = new Set(edges.flatMap((e) => [e.from, e.to]))
+    return reply.send({
+      data: {
+        nodes: [...involved].map((id) => ({
+          id,
+          label: externals.has(id) ? id : (labelOf.get(id) ?? id),
+          external: externals.has(id)
+        })),
+        edges
+      }
+    })
+  })
+
   app.get<{ Params: { table: string } }>('/:table/field-usage', async (req, reply) => {
     const { table } = req.params
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table)) {

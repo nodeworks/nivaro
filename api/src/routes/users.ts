@@ -168,6 +168,33 @@ export async function usersRoutes(app: FastifyInstance) {
     return reply.send({ data: user })
   })
 
+  // Digest test-send (#96): build + send MY digest right now, regardless of
+  // pref or delivery hour. Deferred rows are preserved — the real digest
+  // still carries them. An empty digest reports honestly instead of sending
+  // a blank email.
+  app.post('/me/digest-test', { preHandler: authenticate }, async (req, reply) => {
+    const { runDailyActionDigest } = await import('../services/daily-digest.js')
+    const { sent } = await runDailyActionDigest(undefined, {
+      onlyUserId: req.user!.id,
+      preserveDeferred: true
+    })
+    await logActivity({
+      action: 'digest-test-send',
+      user: req.user?.id,
+      comment: sent > 0 ? 'sent' : 'empty — nothing to include',
+      req
+    })
+    return reply.send({
+      data: {
+        sent: sent > 0,
+        note:
+          sent > 0
+            ? 'Check your inbox — mail test mode applies if enabled.'
+            : 'Your digest would be EMPTY today (no pending updates, no open items) — nothing was sent.'
+      }
+    })
+  })
+
   // ─── Self-service preferences ─────────────────────────────────────────────
   // PATCH /users/me/preferences — allowlisted keys only; merges into the
   // existing preferences JSON. email_digest drives daily-vs-instant emails

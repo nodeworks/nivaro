@@ -260,6 +260,118 @@ async function buildAudienceSummaries(
   return out
 }
 
+/**
+ * The send fan-out (#94: shared by immediate sends and the scheduler). Reads
+ * the row, resolves the audience, delivers every send channel with per-user
+ * receipts, stamps delivered_count + sent_at, and activates banner rows.
+ * Returns how many people were reached. Idempotence: rows with sent_at set
+ * are never re-delivered.
+ */
+async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<number> {
+  const row = (await db('nivaro_announcements').where('id', id).first()) as
+    | Record<string, unknown>
+    | undefined
+  if (!row || row.sent_at) return 0
+  const channels = parseJsonSafe<Channel[]>(row.channels) ?? ['banner']
+  const aud = parseJsonSafe<Audience>(row.audience) ?? {}
+  const subject = String(row.subject ?? '').slice(0, 500) || String(row.message ?? '').slice(0, 120)
+  const message = String(row.message ?? '')
+  const senderId = (row.created_by as string | null) ?? null
+
+  let delivered = 0
+  const needsSend = channels.some((c) => c !== 'banner')
+  if (needsSend) {
+    const users = await resolveAudienceUsers(aud)
+    const html = `<p style="margin:0 0 12px;white-space:pre-wrap;">${message
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')}</p>`
+    const receipts: Array<{
+      announcement: number
+      user: string
+      channel: string
+      status: 'sent' | 'failed' | 'skipped'
+      delivered_at: Date
+    }> = []
+    const record = (userId: string, channel: string, status: 'sent' | 'failed' | 'skipped') =>
+      receipts.push({ announcement: id, user: userId, channel, status, delivered_at: new Date() })
+    for (const u of users) {
+      let reached = false
+      if (channels.includes('message')) {
+        await notifyUser(app, u.id, {
+          subject,
+          message: message.slice(0, 500),
+          sender: senderId
+        })
+          .then(() => {
+            reached = true
+            record(u.id, 'message', 'sent')
+          })
+          .catch(() => record(u.id, 'message', 'failed'))
+      }
+      if (channels.includes('email')) {
+        if (!u.email) record(u.id, 'email', 'skipped')
+        else {
+          await sendRawMail({ to: u.email, subject, html })
+            .then(() => {
+              reached = true
+              record(u.id, 'email', 'sent')
+            })
+            .catch(() => record(u.id, 'email', 'failed'))
+        }
+      }
+      if (channels.includes('sms')) {
+        if (!u.phone) record(u.id, 'sms', 'skipped')
+        else {
+          await sendSms(String(u.phone), `${subject}: ${message}`.slice(0, 500))
+            .then(() => {
+              reached = true
+              record(u.id, 'sms', 'sent')
+            })
+            .catch(() => record(u.id, 'sms', 'failed'))
+        }
+      }
+      if (reached) delivered++
+    }
+    for (let i = 0; i < receipts.length; i += 300) {
+      await db('nivaro_announcement_deliveries')
+        .insert(receipts.slice(i, i + 300))
+        .catch(() => {})
+    }
+  }
+  await db('nivaro_announcements')
+    .where('id', id)
+    .update({
+      delivered_count: delivered,
+      sent_at: new Date(),
+      // Banner rows become visible AT delivery, not at compose.
+      is_active: channels.includes('banner'),
+      updated_at: new Date()
+    })
+  return delivered
+}
+
+/** Scheduler tick (#94): deliver every due scheduled broadcast. Called by the
+ *  scheduled-broadcasts cron every minute. */
+export async function deliverScheduledAnnouncements(app: FastifyInstance): Promise<number> {
+  const due = (await db('nivaro_announcements')
+    .whereNotNull('scheduled_send_at')
+    .whereNull('sent_at')
+    .where('scheduled_send_at', '<=', new Date())
+    .limit(20)
+    .pluck('id')) as number[]
+  let total = 0
+  for (const id of due) {
+    total += await deliverAnnouncement(app, Number(id)).catch(() => 0)
+    await logActivity({
+      action: 'announcement-scheduled-send',
+      user: null,
+      collection: 'nivaro_announcements',
+      item: String(id)
+    }).catch(() => {})
+  }
+  return total
+}
+
 export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   /** What the compose form can offer on this instance. */
   app.get('/config', { preHandler: requireAdmin }, async () => {
@@ -398,6 +510,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       starts_at?: string
       ends_at?: string
       require_ack?: boolean
+      scheduled_send_at?: string
     }
     const message = String(b.message ?? '').trim()
     if (!message) return reply.code(400).send({ error: 'message is required' })
@@ -411,6 +524,13 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'SMS is not configured on this instance' })
     }
     const subject = String(b.subject ?? '').trim() || message.slice(0, 120)
+    // Scheduled send (#94): a future timestamp parks the row for the
+    // scheduler. A past/invalid one just sends now — never silently drops.
+    const scheduledAt = (() => {
+      if (!b.scheduled_send_at) return null
+      const d = new Date(String(b.scheduled_send_at))
+      return !Number.isNaN(d.getTime()) && d.getTime() > Date.now() ? d : null
+    })()
     const aud: Audience = {
       roles: Array.isArray(b.audience?.roles) ? b.audience?.roles : undefined,
       groups: Array.isArray(b.audience?.groups) ? b.audience?.groups : undefined,
@@ -433,7 +553,11 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         // the dismissal, it just can't be ignored.
         require_ack: !!b.require_ack && channels.includes('banner'),
         // Only banner rows stay "active" — send-only broadcasts are history.
-        is_active: channels.includes('banner'),
+        // A scheduled row stays INACTIVE until delivery flips it, so a banner
+        // scheduled for Monday cannot show up Friday.
+        is_active: channels.includes('banner') && !scheduledAt,
+        scheduled_send_at: scheduledAt,
+        sent_at: scheduledAt ? null : new Date(),
         created_by: req.user?.id ?? null,
         created_at: new Date(),
         updated_at: new Date()
@@ -441,76 +565,11 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
 
-    // ── Send-time channels ────────────────────────────────────────────────
+    // Scheduled sends (#94) wait for the scheduler; immediate sends deliver
+    // through the SAME fan-out the scheduler uses (one code path, no drift).
     let delivered = 0
-    const needsSend = channels.some((c) => c !== 'banner')
-    if (needsSend) {
-      const users = await resolveAudienceUsers(aud)
-      const html = `<p style="margin:0 0 12px;white-space:pre-wrap;">${message
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')}</p>`
-      // Per-user, per-channel receipts — "who got what and when" is the
-      // history's whole value, so every outcome (incl. no-address skips) is
-      // a row, not just a counter.
-      const receipts: Array<{
-        announcement: number
-        user: string
-        channel: string
-        status: 'sent' | 'failed' | 'skipped'
-        delivered_at: Date
-      }> = []
-      const record = (userId: string, channel: string, status: 'sent' | 'failed' | 'skipped') =>
-        receipts.push({
-          announcement: Number(id),
-          user: userId,
-          channel,
-          status,
-          delivered_at: new Date()
-        })
-      for (const u of users) {
-        let reached = false
-        if (channels.includes('message')) {
-          await notifyUser(app, u.id, {
-            subject,
-            message: message.slice(0, 500),
-            sender: req.user!.id
-          })
-            .then(() => {
-              reached = true
-              record(u.id, 'message', 'sent')
-            })
-            .catch(() => record(u.id, 'message', 'failed'))
-        }
-        if (channels.includes('email')) {
-          if (!u.email) record(u.id, 'email', 'skipped')
-          else {
-            await sendRawMail({ to: u.email, subject, html })
-              .then(() => {
-                reached = true
-                record(u.id, 'email', 'sent')
-              })
-              .catch(() => record(u.id, 'email', 'failed'))
-          }
-        }
-        if (channels.includes('sms')) {
-          if (!u.phone) record(u.id, 'sms', 'skipped')
-          else {
-            await sendSms(String(u.phone), `${subject}: ${message}`.slice(0, 500))
-              .then(() => {
-                reached = true
-                record(u.id, 'sms', 'sent')
-              })
-              .catch(() => record(u.id, 'sms', 'failed'))
-          }
-        }
-        if (reached) delivered++
-      }
-      for (let i = 0; i < receipts.length; i += 300) {
-        await db('nivaro_announcement_deliveries')
-          .insert(receipts.slice(i, i + 300))
-          .catch(() => {})
-      }
-      await db('nivaro_announcements').where('id', id).update({ delivered_count: delivered })
+    if (!scheduledAt) {
+      delivered = await deliverAnnouncement(app, Number(id))
     }
 
     await logActivity({
@@ -521,7 +580,9 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       comment: `${channels.join('+')} · ${subject.slice(0, 100)}`,
       req
     })
-    return reply.code(201).send({ data: { id, delivered } })
+    return reply
+      .code(201)
+      .send({ data: { id, delivered, scheduled_for: scheduledAt?.toISOString() ?? null } })
   })
 
   /** Live audience resolution for the compose form: how many unique people a

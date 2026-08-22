@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
-import { get, patch } from '../lib/commands'
+import { get, patch, post } from '../lib/commands'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
@@ -482,6 +482,13 @@ function EmailDeliveryCard() {
       client.request(patch('/users/me/preferences', { digest_hour })),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
   })
+  const [testNote, setTestNote] = useState<string | null>(null)
+  const testSend = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { sent: boolean; note: string } }>(post('/users/me/digest-test', {})),
+    onSuccess: (r) => setTestNote(r.data.note),
+    onError: () => setTestNote('Test send failed — try again.')
+  })
   const fmtHour = (h: number) => {
     const ampm = h < 12 ? 'AM' : 'PM'
     const disp = h % 12 === 0 ? 12 : h % 12
@@ -555,6 +562,17 @@ function EmailDeliveryCard() {
             <span className='text-[11px] text-slate-400'>Eastern time</span>
           </div>
         )}
+        <div className='flex items-center gap-2 pl-1 pt-1'>
+          <button
+            type='button'
+            disabled={testSend.isPending}
+            onClick={() => testSend.mutate()}
+            className='text-[12px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200'
+          >
+            {testSend.isPending ? 'Building…' : 'Send me a test digest now'}
+          </button>
+          {testNote && <span className='text-[11.5px] text-slate-400'>{testNote}</span>}
+        </div>
       </div>
     </SectionCard>
   )

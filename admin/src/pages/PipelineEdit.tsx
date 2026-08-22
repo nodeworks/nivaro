@@ -3500,6 +3500,7 @@ export function PipelineEditPage() {
 
         {/* Owner gaps */}
         <OwnerGapsCard templateId={id!} />
+        <OwnerLintCard templateId={id!} />
 
         {/* Config versions */}
         <PipelineVersionsCard templateId={id!} />
@@ -4332,6 +4333,83 @@ const FLOW_COL_W = 230
  * Owner-gap advisor — why records resolve no owners, clustered by their
  * dimension values, with the closest owner-group repair suggested.
  */
+/** Owner-matrix lint (#97): matrix hygiene — empty groups, duplicate filter
+ *  sets, non-dimension filters, suspended members. On demand, read-only. */
+function OwnerLintCard({ templateId }: { templateId: string }) {
+  const [armed, setArmed] = useState(false)
+  const { data, isFetching } = useQuery<{
+    groups_checked: number
+    findings: Array<{
+      type: string
+      state: string
+      group_id: string
+      group_name: string
+      detail: string
+    }>
+  }>({
+    queryKey: ['owner-lint', templateId],
+    queryFn: () => api.get(`/pipelines/${templateId}/owner-lint`).then((r) => r.data.data),
+    enabled: armed
+  })
+  const TYPE_LABEL: Record<string, string> = {
+    empty: 'No members',
+    duplicate: 'Duplicate',
+    unknown_field: 'Dead filter',
+    inactive_member: 'Inactive member'
+  }
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-3'>
+      <div className='flex items-center gap-2'>
+        <h2 className='text-[13px] font-semibold text-slate-800'>Owner matrix lint</h2>
+        {data && (
+          <span className='ml-auto text-[11px] text-slate-400'>
+            {data.groups_checked.toLocaleString()} group(s) checked ·{' '}
+            {data.findings.length} finding(s)
+          </span>
+        )}
+      </div>
+      <p className='max-w-[72ch] text-[12px] text-slate-500'>
+        Hygiene problems in the matrix itself: cells with no members, exact-duplicate filter
+        sets, filters on fields no dimension declares, and suspended people still holding seats.
+      </p>
+      {!armed ? (
+        <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setArmed(true)}>
+          Run lint
+        </Button>
+      ) : isFetching ? (
+        <p className='text-[12px] text-slate-400'>Checking…</p>
+      ) : (data?.findings ?? []).length === 0 ? (
+        <p className='text-[12px] text-emerald-600'>Clean — nothing to fix.</p>
+      ) : (
+        <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
+          {data?.findings.map((f, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional
+            <div key={i} className='flex items-start gap-2 py-1.5 text-[12px]'>
+              <span
+                className={cn(
+                  'mt-0.5 shrink-0 rounded-full px-1.5 py-px text-[9.5px] font-semibold uppercase',
+                  f.type === 'empty' && 'bg-red-100 text-red-700',
+                  f.type === 'duplicate' && 'bg-amber-100 text-amber-700',
+                  f.type === 'unknown_field' && 'bg-slate-100 text-slate-600',
+                  f.type === 'inactive_member' && 'bg-violet-100 text-violet-700'
+                )}
+              >
+                {TYPE_LABEL[f.type] ?? f.type}
+              </span>
+              <span className='min-w-0'>
+                <span className='font-medium text-slate-700'>
+                  {f.state} · {f.group_name}
+                </span>{' '}
+                <span className='text-slate-500'>— {f.detail}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function OwnerGapsCard({ templateId }: { templateId: string }) {
   const [open, setOpen] = useState(false)
   const { data, isFetching, refetch } = useQuery({

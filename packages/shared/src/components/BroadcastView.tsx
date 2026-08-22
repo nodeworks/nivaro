@@ -43,6 +43,8 @@ interface Broadcast {
   ends_at: string | null
   created_at: string | null
   ack_count: number
+  scheduled_send_at?: string | null
+  sent_at?: string | null
 }
 
 const SEVERITY_DOT: Record<string, string> = {
@@ -65,6 +67,7 @@ export function BroadcastView({ className }: { className?: string }) {
   const [inAppKind, setInAppKind] = useState<'banner' | 'message'>('banner')
   const [requireAck, setRequireAck] = useState(false)
   const [startsAt, setStartsAt] = useState('')
+  const [sendAt, setSendAt] = useState('')
   const [endsAt, setEndsAt] = useState('')
   // Audience
   const [groups, setGroups] = useState<AudienceGroup[]>([])
@@ -143,19 +146,24 @@ export function BroadcastView({ className }: { className?: string }) {
           severity,
           channels,
           starts_at: startsAt || undefined,
+          scheduled_send_at: sendAt || undefined,
           ends_at: endsAt || undefined,
           require_ack: inApp && inAppKind === 'banner' ? requireAck : false,
           audience: fullAudience
         })
       ),
     onSuccess: (r) => {
+      const scheduledFor = (r.data as { scheduled_for?: string | null }).scheduled_for
       setResult(
-        channels.some((c) => c !== 'banner')
-          ? `Sent — reached ${r.data.delivered} recipient(s).`
-          : 'Banner published.'
+        scheduledFor
+          ? `Scheduled — delivers ${new Date(scheduledFor).toLocaleString()}. Cancel from the history below.`
+          : channels.some((c) => c !== 'banner')
+            ? `Sent — reached ${r.data.delivered} recipient(s).`
+            : 'Banner published.'
       )
       setMessage('')
       setSubject('')
+      setSendAt('')
       void qc.invalidateQueries({ queryKey: ['broadcasts'] })
       void qc.invalidateQueries({ queryKey: ['announcements-active'] })
     },
@@ -374,7 +382,17 @@ export function BroadcastView({ className }: { className?: string }) {
             inbox messages always send once, immediately — the window doesn't delay them.
           </p>
         )}
-        <div className='mt-4 flex items-center gap-3'>
+        <div className='mt-4 flex flex-wrap items-center gap-3'>
+          <label className='flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            Send later
+            <input
+              type='datetime-local'
+              value={sendAt}
+              onChange={(e) => setSendAt(e.target.value)}
+              title='Leave empty to send immediately. With a time set, every channel (banner included) waits until then.'
+              className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+            />
+          </label>
           <button
             type='button'
             disabled={!canSend}
@@ -461,6 +479,20 @@ function HistoryRow({
           <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
             To: <span className='font-medium'>{a.audience_summary ?? 'Everyone'}</span>
           </p>
+          {a.scheduled_send_at && !a.sent_at && (
+            <p className='mt-1 flex items-center gap-2 text-[11.5px]'>
+              <span className='rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'>
+                Scheduled · {new Date(a.scheduled_send_at).toLocaleString()}
+              </span>
+              <button
+                type='button'
+                onClick={() => onRemove(a.id)}
+                className='text-slate-400 underline decoration-dotted hover:text-red-500'
+              >
+                Cancel send
+              </button>
+            </p>
+          )}
           <p className='mt-0.5 text-[11px] text-slate-400'>
             {(a.channels ?? []).join(' + ')}
             {a.delivered_count != null && ` · reached ${a.delivered_count}`}

@@ -3957,6 +3957,7 @@ function SettingsTab({
       <CustomActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
       <SnapshotsSection tableName={tableName} />
+      <DependencyMapSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
@@ -4262,6 +4263,170 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+/** Field dependency map (#95): what feeds what — formulas, rollups, field
+ *  rules, cascades, auto-id tokens, copy-defaults — as one SVG. Nodes down
+ *  the left, edges as arcs colored by kind. Config-driven; loads on open. */
+function DependencyMapSection({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery<{
+    nodes: Array<{ id: string; label: string; external: boolean }>
+    edges: Array<{ from: string; to: string; kind: string }>
+  }>({
+    queryKey: ['dependency-map', tableName],
+    queryFn: () => api.get(`/data-model/${tableName}/dependency-map`).then((r) => r.data.data),
+    enabled: open
+  })
+  const KIND_COLOR: Record<string, string> = {
+    formula: '#00a5cc',
+    rollup: '#8b5cf6',
+    rule: '#f59e0b',
+    cascade: '#10b981',
+    auto_id: '#64748b',
+    copy: '#ec4899',
+    default: '#0ea5e9'
+  }
+  const KIND_LABEL: Record<string, string> = {
+    formula: 'Formula',
+    rollup: 'Rollup (from child rows)',
+    rule: 'Field rule',
+    cascade: 'Cascade filter',
+    auto_id: 'Auto-ID token',
+    copy: 'Copy default',
+    default: 'Default formula'
+  }
+  const nodes = data?.nodes ?? []
+  const edges = data?.edges ?? []
+  // Sources first, then mixed, then pure targets — reads top-down as "flows".
+  const inDeg = new Map<string, number>()
+  const outDeg = new Map<string, number>()
+  for (const e of edges) {
+    outDeg.set(e.from, (outDeg.get(e.from) ?? 0) + 1)
+    inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1)
+  }
+  const ordered = [...nodes].sort(
+    (a, b) =>
+      (inDeg.get(a.id) ?? 0) - (outDeg.get(a.id) ?? 0) - ((inDeg.get(b.id) ?? 0) - (outDeg.get(b.id) ?? 0))
+  )
+  const ROW = 30
+  const LEFT = 250
+  const H = ordered.length * ROW + 12
+  const W = 640
+  const yOf = new Map(ordered.map((n, i) => [n.id, 6 + i * ROW + ROW / 2]))
+  const kindsPresent = [...new Set(edges.map((e) => e.kind))]
+
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
+        <span>
+          <span className='block text-[13px] font-semibold text-slate-800'>Dependency map</span>
+          <span className='mt-0.5 block text-[11.5px] text-slate-500'>
+            What feeds what — formulas, rollups, field rules, cascades, auto-ID tokens,
+            copy-defaults — in one picture.
+          </span>
+        </span>
+        <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 px-4 py-3'>
+          {!data ? (
+            <p className='text-[12px] text-slate-400'>Loading…</p>
+          ) : edges.length === 0 ? (
+            <p className='text-[12px] text-slate-400'>
+              No configured dependencies on this collection.
+            </p>
+          ) : (
+            <>
+              <div className='mb-2 flex flex-wrap gap-3'>
+                {kindsPresent.map((k) => (
+                  <span key={k} className='flex items-center gap-1 text-[10.5px] text-slate-500'>
+                    <span
+                      className='inline-block h-2 w-2 rounded-full'
+                      style={{ backgroundColor: KIND_COLOR[k] ?? '#94a3b8' }}
+                    />
+                    {KIND_LABEL[k] ?? k}
+                  </span>
+                ))}
+              </div>
+              <div className='overflow-x-auto'>
+                <svg
+                  width={W}
+                  height={H}
+                  viewBox={`0 0 ${W} ${H}`}
+                  role='img'
+                  aria-label='Field dependency map'
+                  className='min-w-[520px]'
+                >
+                  {edges.map((e) => {
+                    const y1 = yOf.get(e.from)
+                    const y2 = yOf.get(e.to)
+                    if (y1 == null || y2 == null) return null
+                    const dx = 60 + Math.abs(y2 - y1) * 0.3
+                    return (
+                      <path
+                        key={`${e.from}-${e.to}-${e.kind}`}
+                        d={`M ${LEFT + 10} ${y1} C ${LEFT + 10 + dx} ${y1}, ${LEFT + 10 + dx} ${y2}, ${LEFT + 10} ${y2}`}
+                        fill='none'
+                        stroke={KIND_COLOR[e.kind] ?? '#94a3b8'}
+                        strokeOpacity={0.55}
+                        strokeWidth={1.75}
+                        markerEnd='url(#dep-arrow)'
+                      >
+                        <title>{`${e.from} → ${e.to} (${KIND_LABEL[e.kind] ?? e.kind})`}</title>
+                      </path>
+                    )
+                  })}
+                  <defs>
+                    <marker
+                      id='dep-arrow'
+                      viewBox='0 0 6 6'
+                      refX='5'
+                      refY='3'
+                      markerWidth='5'
+                      markerHeight='5'
+                      orient='auto-start-reverse'
+                    >
+                      <path d='M 0 0 L 6 3 L 0 6 z' fill='#94a3b8' />
+                    </marker>
+                  </defs>
+                  {ordered.map((n) => {
+                    const y = yOf.get(n.id) ?? 0
+                    return (
+                      <g key={n.id}>
+                        <circle
+                          cx={LEFT + 10}
+                          cy={y}
+                          r={4}
+                          fill={n.external ? '#8b5cf6' : '#00ceff'}
+                        />
+                        <text
+                          x={LEFT}
+                          y={y + 3.5}
+                          textAnchor='end'
+                          className={
+                            n.external
+                              ? 'fill-violet-600 text-[10.5px] italic'
+                              : 'fill-slate-700 text-[11px] font-medium dark:fill-slate-200'
+                          }
+                        >
+                          {n.label.length > 38 ? `${n.label.slice(0, 38)}…` : n.label}
+                        </text>
+                      </g>
+                    )
+                  })}
+                </svg>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

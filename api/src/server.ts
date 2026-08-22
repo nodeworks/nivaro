@@ -453,6 +453,12 @@ export async function buildServer() {
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
       })
 
+      // Scheduled broadcasts (#94): deliver every due scheduled announcement.
+      app.cron.schedule('scheduled-broadcasts', '* * * * *', async () => {
+        const { deliverScheduledAnnouncements } = await import('./routes/announcements.js')
+        await deliverScheduledAnnouncements(app)
+      })
+
       // Blocking-session monitor (#88): DB sessions blocked >15s form chains
       // that read as "everything is slow" with no visible cause. Every 5 min,
       // chains land as ONE deduped issue naming the head blocker + statement.

@@ -17,25 +17,72 @@ interface InternalEntry extends CronEntry {
   job: Cron
 }
 
+// Cron watchdog (#93): a tick still running when its budget expires raises a
+// deduped issue naming the job — a hung cron otherwise reads as "everything is
+// fine" while its work silently stops happening. Overlap skips (croner's
+// protect) were silent for the same reason; they raise the same way.
+const WATCHDOG_DEFAULT_MS = 15 * 60 * 1000
+
+function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
+  void import('../services/error-tracking.js')
+    .then(({ trackError }) =>
+      trackError({ source: 'server', route: 'cron/watchdog', message, severity })
+    )
+    .catch(() => {})
+}
+
 export class CronManager {
   private entries = new Map<string, InternalEntry>()
+  private runningSince = new Map<string, number>()
 
-  schedule(id: string, expression: string, fn: CronFn, opts?: { extensionId?: string }): void {
+  schedule(
+    id: string,
+    expression: string,
+    fn: CronFn,
+    opts?: { extensionId?: string; watchdogMs?: number }
+  ): void {
     // Replace any existing job with the same id
     this.unschedule(id)
 
-    const job = new Cron(expression, { protect: true, catch: true }, async () => {
-      // Every tick lands in nivaro_job_runs (best-effort) so the Background
-      // Jobs console and per-extension health read one source of truth.
-      const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
-      try {
-        await fn()
-        await run.complete()
-      } catch (err) {
-        console.error({ err, cronId: id }, 'Cron job error')
-        await run.fail(err)
+    const budget = opts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
+    const job = new Cron(
+      expression,
+      {
+        // protect blocks the tick when the previous one is still running —
+        // the callback form makes the skip VISIBLE instead of silent.
+        protect: () => {
+          const since = this.runningSince.get(id)
+          const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
+          raiseCronIssue(
+            `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
+            'medium'
+          )
+        },
+        catch: true
+      },
+      async () => {
+        // Every tick lands in nivaro_job_runs (best-effort) so the Background
+        // Jobs console and per-extension health read one source of truth.
+        const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
+        this.runningSince.set(id, Date.now())
+        const watchdog = setTimeout(() => {
+          raiseCronIssue(
+            `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
+            'high'
+          )
+        }, budget)
+        try {
+          await fn()
+          await run.complete()
+        } catch (err) {
+          console.error({ err, cronId: id }, 'Cron job error')
+          await run.fail(err)
+        } finally {
+          clearTimeout(watchdog)
+          this.runningSince.delete(id)
+        }
       }
-    })
+    )
 
     this.entries.set(id, {
       id,

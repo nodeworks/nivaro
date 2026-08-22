@@ -2741,6 +2741,143 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
+  // Owner-matrix lint (#97): config hygiene for the matrix itself — groups
+  // that can never resolve anyone (no members), redundant exact-duplicate
+  // filter sets, filters on fields no dimension declares, and members who
+  // can no longer act (suspended/redacted). Read-only; fixing stays manual.
+  app.get('/:id/owner-lint', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const states = (await db('nivaro_workflow_states')
+      .where({ template: id })
+      .select('id', 'key', 'label')) as Array<{ id: string; key: string; label: string }>
+    if (states.length === 0) return reply.code(404).send({ error: 'Template not found' })
+    const stateLabel = new Map(states.map((st) => [String(st.id).toUpperCase(), st.label]))
+
+    const groups = (await selectInChunks(
+      states.map((st) => String(st.id)),
+      1500,
+      (ids: string[]) => db('nivaro_pipeline_owner_groups').whereIn('state', ids).select('*')
+    )) as Array<{
+      id: string
+      state: string
+      name: string | null
+      filters: string | null
+      is_default: boolean | number
+      priority: number
+    }>
+    const memberRows = (await selectInChunks(
+      groups.map((g) => String(g.id)),
+      1500,
+      (ids: string[]) =>
+        db('nivaro_pipeline_owner_group_users as gu')
+          .leftJoin('nivaro_users as u', 'u.id', 'gu.user')
+          .whereIn('gu.group', ids)
+          // `group` is reserved-ish on this stack — always alias-select it.
+          .select('gu.group as owner_group', 'gu.user', 'u.status', 'u.is_redacted', 'u.first_name', 'u.last_name', 'u.email')
+    )) as Array<{
+      owner_group: string
+      user: string
+      status: string | null
+      is_redacted: boolean | number
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    const membersByGroup = new Map<string, typeof memberRows>()
+    for (const m of memberRows) {
+      const k = String(m.owner_group)
+      membersByGroup.set(k, [...(membersByGroup.get(k) ?? []), m])
+    }
+    // Dimensions hang off the template's BINDINGS, not the template row.
+    const bindingIds = (await db('nivaro_workflow_bindings')
+      .where({ template: id })
+      .pluck('id')) as Array<string | number>
+    const dims =
+      bindingIds.length > 0
+        ? ((await db('nivaro_pipeline_owner_dimensions')
+            .whereIn('binding', bindingIds)
+            .pluck('field')) as string[])
+        : []
+    const dimSet = new Set(dims.map((d) => d.toLowerCase()))
+
+    const findings: Array<{
+      type: 'empty' | 'duplicate' | 'unknown_field' | 'inactive_member'
+      state: string
+      group_id: string
+      group_name: string
+      detail: string
+    }> = []
+    const groupLabel = (g: (typeof groups)[number]) => {
+      if (g.name?.trim()) return g.name
+      const filters = (parseJson(g.filters) as Array<{ field: string; value: unknown }> | null) ?? []
+      return filters.map((f) => String(f.value)).join(' · ') || '(unnamed)'
+    }
+    const filterSig = (g: (typeof groups)[number]) => {
+      const filters =
+        (parseJson(g.filters) as Array<{ field?: string; op?: string; value?: unknown }> | null) ?? []
+      return filters
+        .map((f) => `${String(f.field ?? '')}|${String(f.op ?? 'eq')}|${String(f.value ?? '')}`)
+        .sort()
+        .join('&&')
+    }
+
+    const sigMap = new Map<string, (typeof groups)[number]>()
+    for (const g of groups) {
+      const st = stateLabel.get(String(g.state).toUpperCase()) ?? g.state
+      const members = membersByGroup.get(String(g.id)) ?? []
+      if (members.length === 0 && !g.is_default) {
+        findings.push({
+          type: 'empty',
+          state: st,
+          group_id: g.id,
+          group_name: groupLabel(g),
+          detail: 'No members — records matching this cell resolve nobody from it'
+        })
+      }
+      const sig = `${String(g.state).toUpperCase()}::${filterSig(g)}`
+      const twin = sigMap.get(sig)
+      if (twin) {
+        findings.push({
+          type: 'duplicate',
+          state: st,
+          group_id: g.id,
+          group_name: groupLabel(g),
+          detail: `Identical filter set to "${groupLabel(twin)}" — merge them (both win jointly today; edits to one silently diverge)`
+        })
+      } else {
+        sigMap.set(sig, g)
+      }
+      const filters = (parseJson(g.filters) as Array<{ field?: string }> | null) ?? []
+      for (const f of filters) {
+        const fld = String(f.field ?? '')
+        if (fld && !dimSet.has(fld.toLowerCase())) {
+          findings.push({
+            type: 'unknown_field',
+            state: st,
+            group_id: g.id,
+            group_name: groupLabel(g),
+            detail: `Filter on "${fld}" — not a configured dimension, so it never narrows anything`
+          })
+        }
+      }
+      for (const m of members) {
+        if (m.status === 'suspended' || m.is_redacted) {
+          const who = [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || m.user
+          findings.push({
+            type: 'inactive_member',
+            state: st,
+            group_id: g.id,
+            group_name: groupLabel(g),
+            detail: `${who} is ${m.is_redacted ? 'redacted' : 'suspended'} — a dead seat in this cell`
+          })
+        }
+      }
+    }
+    return reply.send({
+      data: { groups_checked: groups.length, findings }
+    })
+  })
+
   // Owner-matrix impact preview (#87): how many live records a proposed cell
   // (state + filters) would govern, before saving it.
   app.post('/:id/owner-impact', { preHandler: requireAdmin }, async (req, reply) => {

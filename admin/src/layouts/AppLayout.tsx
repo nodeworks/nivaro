@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Activity, AlertOctagon, AlertTriangle, ArrowRightLeft, BarChart2, BarChart3, Bell, BellDot, BookOpen, Braces, Building2, CalendarClock, CalendarOff, Check, CheckSquare, Clapperboard, Clock, Code2, Database, DatabaseZap, Eye, FileBarChart, FileImage, FileText, FlaskConical, GitBranch, GitCompare, Globe, Grid3x3, HeartPulse, House, Inbox, KeyRound,
   ListOrdered,
+  FileSearch,
   MailCheck,
   TerminalSquare, LayoutGrid, Link2, ListFilter, LogOut, Mail, Megaphone, MessagesSquare, Network, Package, PanelLeftClose, PanelLeftOpen, PuzzleIcon, Radar, Radio, RefreshCw, Replace, Rocket, RotateCcw, Scale, ScanSearch, ScrollText, SearchCode, ServerCog, Settings, Shield, ShieldAlert, ShieldCheck, ShieldOff, Siren, SlidersHorizontal, Sparkles, Star, Terminal, ThumbsUp, Trash2, TrendingUp, Upload, UserRound, UserX, Users, Webhook, Wifi, Workflow, X as XIcon } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
@@ -138,6 +139,7 @@ export const navCategories: NavCategory[] = [
       { icon: SearchCode, label: 'Config Search', to: '/config-search' },
       { icon: ListOrdered, label: 'ID Sequences', to: '/sequences' },
       { icon: TerminalSquare, label: 'SQL Scratchpad', to: '/sql-scratchpad' },
+      { icon: FileSearch, label: 'History Search', to: '/revision-search' },
       { icon: KeyRound, label: 'Access Requests', to: '/access-requests' },
       { icon: MailCheck, label: 'Mail Log', to: '/mail-log' },
       { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist' },

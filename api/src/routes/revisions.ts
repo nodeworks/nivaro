@@ -51,6 +51,114 @@ export async function revisionsRoutes(app: FastifyInstance) {
 
   // GET /revisions/deleted-o2m?collection=X&many_field=Y&parent_id=Z
   // Returns revision snapshots of items deleted from an O2M child collection for a given parent.
+  /**
+   * Revision value search (#98): "when did this value first appear" /
+   * "which records ever held it". Per-record scope needs read permission and
+   * scans one record's revisions; collection-wide is ADMIN-only (revisions
+   * carry fields a role may not read) and is bounded by a date window +
+   * TOP-N so the 6.5M-row table can't be scanned end to end. LIKE runs over
+   * the DELTA (changed fields only, small) — field attribution is exact,
+   * done in JS over the parsed JSON.
+   */
+  app.get('/value-search', async (req, reply) => {
+    const q = req.query as {
+      collection?: string
+      q?: string
+      item?: string
+      field?: string
+      days?: string
+    }
+    const collection = String(q.collection ?? '')
+    const needle = String(q.q ?? '').trim()
+    if (!collection || /^nivaro_/i.test(collection)) {
+      return reply.code(400).send({ error: 'collection is required (business collections only)' })
+    }
+    if (needle.length < 2) {
+      return reply.code(400).send({ error: 'Search value must be at least 2 characters' })
+    }
+    if (q.item) {
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+    } else if (!req.isAdmin) {
+      return reply
+        .code(403)
+        .send({ error: 'Collection-wide history search is admin-only — add an item id' })
+    }
+
+    const like = `%${needle.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    const days = Math.min(730, Math.max(1, Number(q.days) || 90))
+    let query = db('nivaro_revisions as r')
+      .leftJoin('nivaro_activity as a', 'a.id', 'r.activity')
+      .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+      .where('r.collection', collection)
+      .orderBy('r.id', 'desc')
+      .limit(200)
+      .select(
+        'r.id',
+        'r.item',
+        'r.delta',
+        'a.action',
+        'a.timestamp',
+        db.raw("CONCAT(u.first_name, ' ', u.last_name) as user_name")
+      )
+    if (q.item) {
+      query = query.where('r.item', String(q.item))
+    } else {
+      query = query.where('a.timestamp', '>=', new Date(Date.now() - days * 86_400_000))
+    }
+    query = query.where('r.delta', 'like', like)
+    const rows = (await query) as Array<{
+      id: number
+      item: string
+      delta: string | null
+      action: string | null
+      timestamp: Date | string | null
+      user_name: string | null
+    }>
+
+    const matches = rows
+      .map((r) => {
+        let delta: Record<string, unknown> = {}
+        try {
+          delta = JSON.parse(r.delta ?? '{}') as Record<string, unknown>
+        } catch {
+          return null
+        }
+        const hits = Object.entries(delta)
+          .filter(([k, v]) => {
+            if (q.field && k !== q.field) return false
+            const str = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+            return str.toLowerCase().includes(needle.toLowerCase())
+          })
+          .map(([k, v]) => ({
+            field: k,
+            value: (typeof v === 'object' ? JSON.stringify(v) : String(v ?? '')).slice(0, 200)
+          }))
+        if (hits.length === 0) return null
+        return {
+          revision_id: r.id,
+          item: r.item,
+          action: r.action,
+          timestamp: r.timestamp,
+          user_name: r.user_name?.trim() || null,
+          fields: hits
+        }
+      })
+      .filter(Boolean)
+
+    await logActivity({
+      action: 'revision-value-search',
+      user: req.user?.id,
+      collection,
+      comment: `"${needle.slice(0, 100)}"${q.item ? ` on ${q.item}` : ' (collection-wide)'}`,
+      req
+    })
+    return reply.send({
+      data: { matches, scanned: rows.length, truncated: rows.length >= 200 }
+    })
+  })
+
   app.get('/deleted-o2m', async (req, reply) => {
     const { collection, many_field, parent_id } = req.query as { collection?: string; many_field?: string; parent_id?: string }
     if (!collection || !many_field || !parent_id) {
