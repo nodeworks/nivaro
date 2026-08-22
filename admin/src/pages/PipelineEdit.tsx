@@ -377,6 +377,7 @@ interface StateFormData {
   lock_record: boolean
   skip_if_no_owners: boolean
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
+  description: string
 }
 
 function StateForm({
@@ -398,7 +399,8 @@ function StateForm({
     is_terminal: initial.is_terminal ?? false,
     lock_record: initial.lock_record ?? false,
     skip_if_no_owners: initial.skip_if_no_owners ?? false,
-    stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always'
+    stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always',
+    description: initial.description ?? ''
   })
 
   const set = <K extends keyof StateFormData>(k: K, v: StateFormData[K]) =>
@@ -442,6 +444,18 @@ function StateForm({
       <div className='space-y-1.5'>
         <Label className='text-[12px]'>Color</Label>
         <ColorPicker value={form.color} onChange={(c) => set('color', c)} />
+      </div>
+
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>Help text</Label>
+        <textarea
+          value={form.description}
+          onChange={(e) => set('description', e.target.value)}
+          rows={2}
+          maxLength={1000}
+          placeholder='What this state means and what happens here — shown as a tooltip on the record’s progress track'
+          className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12.5px] dark:border-border dark:bg-card'
+        />
       </div>
 
       <div className='flex flex-wrap gap-4 text-[13px]'>

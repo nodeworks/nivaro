@@ -140,7 +140,13 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
   return buckets
 }
 
-export async function runDailyActionDigest(): Promise<{ sent: number }> {
+/**
+ * `hour` (0-23, America/New_York) filters recipients to those whose
+ * preferences.digest_hour matches — the hourly cron passes the current ET
+ * hour; a manual run passes nothing and sends to everyone due (#75). Users
+ * without the pref default to 7 (the historic 07:45 send).
+ */
+export async function runDailyActionDigest(hour?: number): Promise<{ sent: number }> {
   // Opt-in users + anyone holding deferred rows (covers a pref flipped back).
   const users = (await db('nivaro_users')
     .where('status', 'active')
@@ -152,8 +158,11 @@ export async function runDailyActionDigest(): Promise<{ sent: number }> {
     preferences: unknown
   }>
   const digestUsers = new Map<string, string>() // id -> email
+  const prefHour = new Map<string, number>()
   for (const u of users) {
     const p = parsePrefs(u.preferences)
+    const h = Number(p?.['digest_hour'])
+    prefHour.set(u.id, Number.isInteger(h) && h >= 0 && h <= 23 ? h : 7)
     if (p && p['email_digest'] === 'daily' && u.email) digestUsers.set(u.id, u.email)
   }
   const deferred = (await db('nivaro_deferred_emails').select(
@@ -172,6 +181,11 @@ export async function runDailyActionDigest(): Promise<{ sent: number }> {
     created_at: Date
   }>
   for (const d of deferred) if (!digestUsers.has(d.user)) digestUsers.set(d.user, d.email)
+  if (hour != null) {
+    for (const id of [...digestUsers.keys()]) {
+      if ((prefHour.get(id) ?? 7) !== hour) digestUsers.delete(id)
+    }
+  }
   if (digestUsers.size === 0) return { sent: 0 }
 
   const ownership = await buildOwnershipBuckets()

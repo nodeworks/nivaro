@@ -1,6 +1,6 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
+import { Clipboard,
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
@@ -94,6 +94,7 @@ import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { FindInRecordButton, type FindableField } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
@@ -2929,6 +2930,34 @@ export function ItemEditForm({
       }, 300)
     }, 1200)
   }
+  // Find-in-record (#82): searchable field list from the deduped config +
+  // current draft values; jump = the same flash, reporting a miss when the
+  // field's DOM node isn't mounted (another tab/step).
+  const findableFields = useMemo<FindableField[]>(
+    () =>
+      allFields
+        .filter((f) => !f.hidden && !f.field.startsWith('__'))
+        .map((f) => {
+          const v = draft[f.field]
+          return {
+            field: f.field,
+            label: f.label ?? titleCase(f.field),
+            group: null,
+            value:
+              v == null || typeof v === 'object'
+                ? ''
+                : String(v).replace(/<[^>]+>/g, ' ').slice(0, 120)
+          }
+        }),
+    [allFields, draft]
+  )
+  const jumpToField = (key: string): boolean => {
+    const el = document.querySelector(`[data-field="${key}"]`)
+    if (!el) return false
+    flashField(key)
+    return true
+  }
+
   const focusedOnceRef = useRef(false)
   useEffect(() => {
     if (!focusField || focusedOnceRef.current) return
@@ -5854,6 +5883,29 @@ export function ItemEditForm({
                                         getLabel={(t) => t.reimport?.button_label ?? t.button_label}
                                         onParsed={handleReimportParsed}
                                       />
+                                    )}
+                                    <FindInRecordButton fields={findableFields} onJump={jumpToField} />
+                                    {!isNew && itemId && (
+                                      <button
+                                        type='button'
+                                        title='Copy a plain-text summary of this record (fields + link) for chat or email'
+                                        onClick={() => {
+                                          // Copy summary (#83): label: value lines + the record URL —
+                                          // paste-ready for chat/email.
+                                          const lines = findableFields
+                                            .filter((f) => f.value !== '')
+                                            .slice(0, 40)
+                                            .map((f) => `${f.label}: ${f.value}`)
+                                          const text = `${collection} ${String(itemId)}\n${window.location.href}\n\n${lines.join('\n')}`
+                                          void navigator.clipboard.writeText(text).then(
+                                            () => toast.success('Summary copied'),
+                                            () => toast.error('Could not copy')
+                                          )
+                                        }}
+                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                      >
+                                        <Clipboard className='h-3.5 w-3.5' />
+                                      </button>
                                     )}
                                     {!isNew && itemId && (
                                       <RecordSubscribeButton

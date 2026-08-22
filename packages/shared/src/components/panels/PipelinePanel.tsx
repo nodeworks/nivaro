@@ -32,6 +32,7 @@ interface PipelineState {
   is_initial: boolean
   is_terminal: boolean
   stage_visibility?: string | null
+  description?: string | null
 }
 interface PipelineTransition {
   id: string
@@ -352,6 +353,8 @@ function StateTrack({
               <div className='flex min-w-0 flex-1 flex-col items-center gap-1.5 px-1'>
                 <div
                   className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full'
+                  // Per-state help text (#81) — instant tip via TipLayer.
+                  data-tip={s.description || undefined}
                   style={{
                     backgroundColor: isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
                     border: isCurrent || isDone

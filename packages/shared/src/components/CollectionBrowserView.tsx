@@ -127,7 +127,13 @@ export interface ActiveFilter {
 
 type SavedViewColumn =
   | string
-  | { key: string; label?: string; format?: ColumnFormatConfig; pin?: 'left' | 'right' }
+  | {
+      key: string
+      label?: string
+      format?: ColumnFormatConfig
+      pin?: 'left' | 'right'
+      tint?: TintRule[]
+    }
 
 interface SavedView {
   id: number
@@ -141,6 +147,53 @@ interface SavedView {
 }
 
 const viewColumnKey = (c: SavedViewColumn) => (typeof c === 'string' ? c : c.key)
+
+/** Conditional column formatting (#84): first matching rule tints the cell.
+ *  Numeric ops compare numerically when both sides parse; view-persisted. */
+export interface TintRule {
+  op: 'gt' | 'lt' | 'eq' | 'neq' | 'contains' | 'empty' | 'nempty'
+  value?: string
+  color: 'red' | 'amber' | 'green' | 'blue'
+}
+export const TINT_TEXT: Record<TintRule['color'], string> = {
+  red: 'text-red-600 dark:text-red-400 font-semibold',
+  amber: 'text-amber-600 dark:text-amber-400 font-semibold',
+  green: 'text-emerald-600 dark:text-emerald-400 font-semibold',
+  blue: 'text-sky-600 dark:text-sky-400 font-semibold'
+}
+export function tintFor(raw: unknown, rules: TintRule[] | undefined): TintRule['color'] | null {
+  if (!rules || rules.length === 0) return null
+  const str = raw == null ? '' : String(raw)
+  const num = Number(str)
+  for (const r of rules) {
+    const rv = Number(r.value)
+    const bothNum = Number.isFinite(num) && Number.isFinite(rv)
+    switch (r.op) {
+      case 'gt':
+        if (bothNum && num > rv) return r.color
+        break
+      case 'lt':
+        if (bothNum && num < rv) return r.color
+        break
+      case 'eq':
+        if (str.toLowerCase() === String(r.value ?? '').toLowerCase()) return r.color
+        break
+      case 'neq':
+        if (str !== '' && str.toLowerCase() !== String(r.value ?? '').toLowerCase()) return r.color
+        break
+      case 'contains':
+        if (str.toLowerCase().includes(String(r.value ?? '').toLowerCase())) return r.color
+        break
+      case 'empty':
+        if (str === '') return r.color
+        break
+      case 'nempty':
+        if (str !== '') return r.color
+        break
+    }
+  }
+  return null
+}
 
 const FORMAT_PRESETS: Array<{ label: string; cfg: ColumnFormatConfig | null }> = [
   { label: 'None', cfg: null },
@@ -2894,6 +2947,7 @@ export function CollectionBrowserView({
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
+  const [columnTints, setColumnTints] = useState<Record<string, TintRule[]>>({})
   const [formattingCol, setFormattingCol] = useState<string | null>(null)
   const [presetOpen, setPresetOpen] = useState(false)
   const dragIdxRef = useRef<number | null>(null)
@@ -3033,6 +3087,16 @@ export function CollectionBrowserView({
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!exportMenuRef.current?.contains(e.target as Node)) setExportMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [exportMenuOpen])
   const colsRef = useRef<HTMLDivElement>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const defaultAppliedRef = useRef(false)
@@ -3785,13 +3849,16 @@ export function CollectionBrowserView({
       const labels: Record<string, string> = {}
       const formats: Record<string, ColumnFormatConfig> = {}
       const pins: Record<string, 'left' | 'right'> = {}
+      const tints: Record<string, TintRule[]> = {}
       for (const c of v.columns) {
         if (typeof c !== 'string' && c.label) labels[c.key] = c.label
         if (typeof c !== 'string' && c.format) formats[c.key] = c.format
         if (typeof c !== 'string' && c.pin) pins[c.key] = c.pin
+        if (typeof c !== 'string' && c.tint?.length) tints[c.key] = c.tint
       }
       setColumnLabels(labels)
       setColumnFormats(formats)
+      setColumnTints(tints)
       setColumnPins(Object.keys(pins).length ? pins : null)
     } else {
       setColumnPins(null)
@@ -3823,12 +3890,14 @@ export function CollectionBrowserView({
         const label = columnLabels[k]
         const format = columnFormats[k]
         const pin = effectivePins[k]
-        if (!label && !format && !pin) return k
+        const tint = columnTints[k]
+        if (!label && !format && !pin && !tint?.length) return k
         return {
           key: k,
           ...(label ? { label } : {}),
           ...(format ? { format } : {}),
-          ...(pin ? { pin } : {})
+          ...(pin ? { pin } : {}),
+          ...(tint?.length ? { tint } : {})
         }
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
@@ -3847,6 +3916,44 @@ export function CollectionBrowserView({
     if (def && activeViewId == null) applyView(def)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [views, nonHidden])
+  // ── Export presets (#85): named server-side exports (xlsx/csv) ────────────
+  const { data: exportPresets = [] } = useQuery<
+    Array<{ id: number; name: string; config: { format: string } | null }>
+  >({
+    queryKey: ['cbv-export-presets', collection],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string; config: { format: string } | null }> }>(
+          get('/export-presets', { collection })
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 60_000
+  })
+  const [presetName, setPresetName] = useState('')
+  const saveExportPreset = async () => {
+    if (!presetName.trim()) return
+    await client.request(
+      post('/export-presets', {
+        collection,
+        name: presetName.trim(),
+        config: {
+          format: 'xlsx',
+          columns: effectiveColumns.map((k) => ({ key: k, label: columnLabel(k) }))
+        },
+        is_shared: true
+      })
+    )
+    setPresetName('')
+    void qc.invalidateQueries({ queryKey: ['cbv-export-presets', collection] })
+  }
+  const runExportPreset = (id: number) => {
+    const params = new URLSearchParams()
+    if (appliedSearch) params.set('search', appliedSearch)
+    if (conditionsParam) params.set('conditions', conditionsParam)
+    if (sort) params.set('sort', sort)
+    window.open(`/api/export-presets/${id}/run?${params.toString()}`, '_blank')
+  }
+
   const saveView = useMutation({
     mutationFn: () =>
       client.request<{ data: SavedView }>(
@@ -4019,6 +4126,28 @@ export function CollectionBrowserView({
     )
   const toggleRow = (id: string | number) =>
     setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+
+  // Select every row the CURRENT filters match, not just this page (#77) —
+  // an id-only fetch capped at 2000 so the selection stays a real id list the
+  // existing bulk endpoints already understand.
+  const SELECT_ALL_CAP = 2000
+  const [selectingAll, setSelectingAll] = useState(false)
+  const selectAllMatching = async () => {
+    setSelectingAll(true)
+    try {
+      const res = await client.request<{ data: Array<{ id: string | number }> }>(
+        get(`/items/${collection}`, {
+          limit: SELECT_ALL_CAP,
+          fields: 'id',
+          ...(appliedSearch ? { search: appliedSearch } : {}),
+          ...(conditionsParam ? { conditions: conditionsParam } : {})
+        })
+      )
+      setSelectedIds(res.data.map((r) => r.id))
+    } finally {
+      setSelectingAll(false)
+    }
+  }
 
   const start = total === 0 ? 0 : (page - 1) * effPageSize + 1
   const end = Math.min(page * effPageSize, total)
@@ -4693,6 +4822,104 @@ export function CollectionBrowserView({
                         }}
                         className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
                       />
+                      {/* Conditional tint (#84): first matching rule colors the cell. */}
+                      <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                        <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                          Conditional color
+                        </p>
+                        {(columnTints[k] ?? []).map((r, ri) => (
+                          <div
+                            // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
+                            key={ri}
+                            className='mb-1 flex items-center gap-1'
+                          >
+                            <SimpleSelectXs
+                              ariaLabel='Rule operator'
+                              value={r.op}
+                              onChange={(v) =>
+                                setColumnTints((t) => ({
+                                  ...t,
+                                  [k]: (t[k] ?? []).map((x, i) =>
+                                    i === ri ? { ...x, op: v as TintRule['op'] } : x
+                                  )
+                                }))
+                              }
+                              options={[
+                                { value: 'gt', label: '>' },
+                                { value: 'lt', label: '<' },
+                                { value: 'eq', label: '=' },
+                                { value: 'neq', label: '≠' },
+                                { value: 'contains', label: 'contains' },
+                                { value: 'empty', label: 'is empty' },
+                                { value: 'nempty', label: 'is set' }
+                              ]}
+                            />
+                            {!['empty', 'nempty'].includes(r.op) && (
+                              <input
+                                value={r.value ?? ''}
+                                onChange={(e) =>
+                                  setColumnTints((t) => ({
+                                    ...t,
+                                    [k]: (t[k] ?? []).map((x, i) =>
+                                      i === ri ? { ...x, value: e.target.value } : x
+                                    )
+                                  }))
+                                }
+                                placeholder='value'
+                                className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                              />
+                            )}
+                            {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
+                              <button
+                                key={c}
+                                type='button'
+                                aria-label={c}
+                                onClick={() =>
+                                  setColumnTints((t) => ({
+                                    ...t,
+                                    [k]: (t[k] ?? []).map((x, i) => (i === ri ? { ...x, color: c } : x))
+                                  }))
+                                }
+                                className={cn(
+                                  'h-3.5 w-3.5 rounded-full border',
+                                  c === 'red' && 'bg-red-500',
+                                  c === 'amber' && 'bg-amber-400',
+                                  c === 'green' && 'bg-emerald-500',
+                                  c === 'blue' && 'bg-sky-500',
+                                  r.color === c
+                                    ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
+                                    : 'border-transparent opacity-50'
+                                )}
+                              />
+                            ))}
+                            <button
+                              type='button'
+                              aria-label='Remove rule'
+                              onClick={() =>
+                                setColumnTints((t) => ({
+                                  ...t,
+                                  [k]: (t[k] ?? []).filter((_, i) => i !== ri)
+                                }))
+                              }
+                              className='ml-auto text-slate-300 hover:text-slate-500'
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type='button'
+                          onClick={() =>
+                            setColumnTints((t) => ({
+                              ...t,
+                              [k]: [...(t[k] ?? []), { op: 'gt', value: '', color: 'red' }]
+                            }))
+                          }
+                          className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                        >
+                          ＋ Add color rule
+                        </button>
+                      </div>
                     </div>
                   )}
                   </div>
@@ -4791,14 +5018,70 @@ export function CollectionBrowserView({
             </div>
           )}
         </div>
-        <button
-          type='button'
-          onClick={() => void exportCsv()}
-          disabled={exporting}
-          className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
-        >
-          {exporting ? 'Exporting…' : 'Export'}
-        </button>
+        <div className='relative' ref={exportMenuRef}>
+          <button
+            type='button'
+            onClick={() => setExportMenuOpen((v) => !v)}
+            disabled={exporting}
+            className='h-8 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400'
+          >
+            {exporting ? 'Exporting…' : 'Export'}
+          </button>
+          {exportMenuOpen && (
+            <div className='absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
+              <button
+                type='button'
+                onClick={() => {
+                  setExportMenuOpen(false)
+                  void exportCsv()
+                }}
+                className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+              >
+                CSV — visible columns
+              </button>
+              {exportPresets.length > 0 && (
+                <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
+                  Presets (server, current filters apply)
+                </p>
+              )}
+              {exportPresets.map((pr) => (
+                <button
+                  key={pr.id}
+                  type='button'
+                  onClick={() => {
+                    setExportMenuOpen(false)
+                    runExportPreset(pr.id)
+                  }}
+                  className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                >
+                  {pr.name}
+                  <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
+                    {pr.config?.format ?? 'xlsx'}
+                  </span>
+                </button>
+              ))}
+              <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
+                <input
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveExportPreset()
+                  }}
+                  placeholder='Save columns as preset…'
+                  className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11.5px] dark:border-border'
+                />
+                <button
+                  type='button'
+                  disabled={!presetName.trim()}
+                  onClick={() => void saveExportPreset()}
+                  className='h-6 shrink-0 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         {canCreate && !meta?.singleton && (
           newItemLayouts ? (
             <div className='relative' data-cbv-newitem-menu ref={newItemMenuRef}>
@@ -5507,8 +5790,29 @@ export function CollectionBrowserView({
                                   <RelationLabel relatedCollection={m2oRel.one_collection as string} id={row[key]} />
                                 </button>
                               ) : columnFormats[key] && row[key] != null ? (
-                                <span className='text-[12px] tabular-nums text-slate-700 dark:text-slate-200'>
+                                <span
+                                  className={cn(
+                                    'text-[12px] tabular-nums text-slate-700 dark:text-slate-200',
+                                    tintFor(row[key], columnTints[key]) &&
+                                      TINT_TEXT[tintFor(row[key], columnTints[key])!]
+                                  )}
+                                >
                                   {formatValue(String(row[key]), columnFormats[key])}
+                                </span>
+                              ) : tintFor(row[key], columnTints[key]) ? (
+                                <span
+                                  className={cn(
+                                    'text-[12px]',
+                                    TINT_TEXT[tintFor(row[key], columnTints[key])!]
+                                  )}
+                                >
+                                  <CellValue
+                                    collection={collection}
+                                    field={key}
+                                    fieldType={fieldByName.get(key)?.type ?? null}
+                                    value={row[key]}
+                                    relations={relations}
+                                  />
                                 </span>
                               ) : (
                                 <CellValue
@@ -5620,6 +5924,32 @@ export function CollectionBrowserView({
           }}
         />
       )}
+
+      {/* Select-all-matching strip (#77): the whole page is checked and more
+          rows match the filter — offer the full set. */}
+      {enableCheckboxes &&
+        allSelected &&
+        !groupBy &&
+        total > rows.length &&
+        selectedIds.length < Math.min(total, SELECT_ALL_CAP) && (
+          <div className='fixed bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[12.5px] shadow-lg dark:border-border dark:bg-card'>
+            <span className='text-slate-600 dark:text-muted-foreground'>
+              All {rows.length} rows on this page are selected.
+            </span>{' '}
+            <button
+              type='button'
+              disabled={selectingAll}
+              onClick={() => void selectAllMatching()}
+              className='font-semibold text-nvr-navy underline decoration-dotted hover:text-nvr-cyan dark:text-nvr-cyan'
+            >
+              {selectingAll
+                ? 'Selecting…'
+                : total > SELECT_ALL_CAP
+                  ? `Select the first ${SELECT_ALL_CAP.toLocaleString()} of ${total.toLocaleString()} matching`
+                  : `Select all ${total.toLocaleString()} matching rows`}
+            </button>
+          </div>
+        )}
 
       {/* Bulk bar */}
       {enableCheckboxes && selectedIds.length > 0 && (

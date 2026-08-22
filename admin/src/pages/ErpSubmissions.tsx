@@ -382,6 +382,27 @@ export function ErpSubmissionsPage() {
       queryKey: ['erp-submissions', applied?.collection, applied?.item]
     })
 
+  // Bulk retry (#79): every failed/rejected row in the loaded history in one
+  // click — the server retries sequentially and reports what landed.
+  const failedIds = (submissions ?? [])
+    .filter((x) => x.status === 'failed' || x.status === 'rejected')
+    .map((x) => x.id)
+  const bulkRetry = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { recovered: number; results: Array<{ id: number; status: string }> } }>(
+          '/erp-submissions/bulk-retry',
+          { ids: failedIds }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(`Retried ${failedIds.length} — ${d.recovered} landed`)
+      refetch()
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Bulk retry failed')
+  })
+
   const load = () => {
     if (!collection || !itemId.trim()) return
     setApplied({ collection, item: itemId.trim() })
@@ -466,16 +487,32 @@ export function ErpSubmissionsPage() {
                   {applied.collection}/{applied.item}
                 </code>
               </p>
-              <Button
-                size='sm'
-                variant='ghost'
-                className='h-6 px-2 text-[11px] text-slate-400'
-                onClick={refetch}
-                disabled={isFetching}
-              >
-                <RotateCw className={cn('mr-1 h-3 w-3', isFetching && 'animate-spin')} />
-                Refresh
-              </Button>
+              <div className='flex items-center gap-1.5'>
+                {failedIds.length > 1 && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 px-2 text-[11px]'
+                    disabled={bulkRetry.isPending}
+                    onClick={() => bulkRetry.mutate()}
+                  >
+                    <RotateCw
+                      className={cn('mr-1 h-3 w-3', bulkRetry.isPending && 'animate-spin')}
+                    />
+                    Retry all {failedIds.length} failed
+                  </Button>
+                )}
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  className='h-6 px-2 text-[11px] text-slate-400'
+                  onClick={refetch}
+                  disabled={isFetching}
+                >
+                  <RotateCw className={cn('mr-1 h-3 w-3', isFetching && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </div>
             </div>
             <table className='w-full text-[12px]'>
               <thead>

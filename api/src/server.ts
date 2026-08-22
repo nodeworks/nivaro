@@ -386,9 +386,19 @@ export async function buildServer() {
         await evaluateAllMonitors(app)
       })
 
-      app.cron.schedule('daily-action-digest', '45 7 * * *', async () => {
+      // Hourly at :45 — each user gets theirs at their chosen hour (#75);
+      // preferences.digest_hour in America/New_York, default 7 (the historic
+      // 07:45 send). A manual run (no hour arg) sends to everyone due.
+      app.cron.schedule('daily-action-digest', '45 * * * *', async () => {
         const { runDailyActionDigest } = await import('./services/daily-digest.js')
-        await runDailyActionDigest()
+        const etHour = Number(
+          new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour: 'numeric',
+            hour12: false
+          }).format(new Date())
+        )
+        await runDailyActionDigest(etHour % 24)
       })
 
       app.cron.schedule('workflow-auto-sweep', '30 * * * *', async () => {

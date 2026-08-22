@@ -33,6 +33,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { get, patch } from '../lib/commands'
+import { SimpleSelectXs } from './ui/SimpleSelect'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
@@ -475,6 +476,17 @@ function EmailDeliveryCard() {
       client.request(patch('/users/me/preferences', { email_digest })),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
   })
+  const digestHour = Number.isInteger(Number(prefs?.digest_hour)) ? Number(prefs?.digest_hour) : 7
+  const saveHour = useMutation({
+    mutationFn: (digest_hour: number) =>
+      client.request(patch('/users/me/preferences', { digest_hour })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+  })
+  const fmtHour = (h: number) => {
+    const ampm = h < 12 ? 'AM' : 'PM'
+    const disp = h % 12 === 0 ? 12 : h % 12
+    return `${disp}:45 ${ampm}`
+  }
   const Option = ({
     value,
     label,
@@ -528,6 +540,21 @@ function EmailDeliveryCard() {
           label='Daily action summary'
           hint='One morning email — all updates, items assigned to you, and invoices awaiting review'
         />
+        {mode === 'daily' && (
+          <div className='flex items-center gap-2 pl-1 pt-1'>
+            <span className='text-[12px] text-slate-500 dark:text-slate-400'>Deliver at</span>
+            <SimpleSelectXs
+              ariaLabel='Digest delivery hour'
+              value={String(digestHour)}
+              onChange={(v) => saveHour.mutate(Number(v))}
+              options={Array.from({ length: 24 }, (_, h) => ({
+                value: String(h),
+                label: fmtHour(h)
+              }))}
+            />
+            <span className='text-[11px] text-slate-400'>Eastern time</span>
+          </div>
+        )}
       </div>
     </SectionCard>
   )

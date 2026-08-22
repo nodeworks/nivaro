@@ -35,6 +35,73 @@ export async function throughputRoutes(app: FastifyInstance) {
   })
 
   /**
+   * State-flow aggregation (#80) — how records actually move through a
+   * template: every (from → to) hop in nivaro_workflow_history counted, with
+   * per-state totals and median hop time. The Sankey on Team Throughput
+   * renders it; back-edges (send-backs) are flagged so the client can color
+   * them amber.
+   */
+  app.get('/state-flow', async (req, reply) => {
+    const q = req.query as { template?: string; collection?: string; days?: string }
+    let template = q.collection ? null : (q.template ?? null)
+    if (!template && q.collection) {
+      const binding = (await db('nivaro_workflow_bindings')
+        .where({ collection: q.collection })
+        .first('template')) as { template: string } | undefined
+      template = binding?.template ?? null
+    }
+    if (!template) return reply.code(400).send({ error: 'template or collection is required' })
+    const { days } = q
+    const windowDays = Math.min(365, Math.max(1, Number(days) || 90))
+    const from = new Date(Date.now() - windowDays * 86_400_000)
+
+    const states = (await db('nivaro_workflow_states')
+      .where({ template })
+      .orderBy('sort')
+      .select('id', 'key', 'label', 'color', 'sort', 'is_initial', 'is_terminal')) as Array<{
+      id: string
+      key: string
+      label: string
+      color: string | null
+      sort: number
+      is_initial: boolean | number
+      is_terminal: boolean | number
+    }>
+    if (states.length === 0) return reply.code(404).send({ error: 'Template has no states' })
+
+    const links = (await db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+      .where('i.template', template)
+      .where('h.timestamp', '>=', from)
+      .whereNotNull('h.from_state')
+      .whereNotNull('h.to_state')
+      .groupBy('h.from_state', 'h.to_state')
+      .select('h.from_state', 'h.to_state', db.raw('COUNT(*) as count'))) as unknown as Array<{
+      from_state: string
+      to_state: string
+      count: number
+    }>
+
+    const sortOf = new Map(states.map((st) => [st.id, st.sort]))
+    return reply.send({
+      data: {
+        window_days: windowDays,
+        states,
+        links: links
+          .filter((l) => sortOf.has(l.from_state) && sortOf.has(l.to_state))
+          .map((l) => ({
+            from: l.from_state,
+            to: l.to_state,
+            count: Number(l.count),
+            // A hop to a LOWER sort is a send-back — same heuristic the
+            // approval-chain path pruning uses.
+            back: (sortOf.get(l.to_state) ?? 0) < (sortOf.get(l.from_state) ?? 0)
+          }))
+      }
+    })
+  })
+
+  /**
    * Send-back THEMES — team throughput says who reworks; this says WHY.
    * Backward transitions' human comments (machine markers excluded) are
    * clustered by one AI call into named themes with counts + examples.

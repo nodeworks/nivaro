@@ -1209,7 +1209,33 @@ function ColumnRow({
   canDrop?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [renameTo, setRenameTo] = useState('')
   const qc = useQueryClient()
+
+  const renameField = useMutation({
+    mutationFn: (newName: string) =>
+      api
+        .post<{
+          data: { remaining_references?: { total?: number } | null }
+        }>(`/data-model/collections/${tableName}/fields/${col.name}/rename`, {
+          new_name: newName
+        })
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      const left = d.remaining_references?.total ?? 0
+      toast.success(
+        left > 0
+          ? `Renamed — column, relations and layouts updated. ${left} other config reference(s) still use the old name (see field impact).`
+          : 'Renamed — column, relations and layouts updated'
+      )
+      setRenaming(false)
+      qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
+      onRefresh()
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Rename failed')
+  })
 
   const removeFieldMeta = useMutation({
     mutationFn: () => schemaApi.removeFieldMeta(tableName, col.name),
@@ -1297,6 +1323,39 @@ function ColumnRow({
           </div>
         )}
 
+        {renaming && (
+          <div className='ml-auto flex items-center gap-1.5'>
+            <input
+              value={renameTo}
+              onChange={(e) => setRenameTo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameTo && renameTo !== col.name)
+                  renameField.mutate(renameTo)
+                if (e.key === 'Escape') setRenaming(false)
+              }}
+              // biome-ignore lint/a11y/noAutofocus: the strip only exists after an explicit click
+              autoFocus
+              spellCheck={false}
+              className='h-6 w-44 rounded border border-slate-300 px-1.5 font-mono text-[12px] dark:border-border'
+            />
+            <button
+              type='button'
+              disabled={renameField.isPending || !renameTo || renameTo === col.name}
+              onClick={() => renameField.mutate(renameTo)}
+              className='h-6 rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-40'
+            >
+              {renameField.isPending ? '…' : 'Rename'}
+            </button>
+            <button
+              type='button'
+              onClick={() => setRenaming(false)}
+              className='h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-500 dark:border-border'
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {!renaming && null}
         {/* Action buttons — hidden for protected system columns */}
         {!isProtected && (
           <div className='ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
@@ -1309,6 +1368,19 @@ function ColumnRow({
               <Settings2 className='h-3.5 w-3.5' />
             </button>
 
+            {!col.is_primary_key && !col.is_virtual && !isSystem && (
+              <button
+                type='button'
+                onClick={() => {
+                  setRenameTo(col.name)
+                  setRenaming(true)
+                }}
+                className='rounded p-1 text-slate-400 hover:text-slate-700'
+                title='Rename column — carries the column, relations and layout assignments along, then reports any config still using the old name'
+              >
+                <Pencil className='h-3.5 w-3.5' />
+              </button>
+            )}
             {!col.is_primary_key && !col.is_virtual && canDrop && (
               <button
                 type='button'
@@ -3884,6 +3956,7 @@ function SettingsTab({
       <ChangeReasonSection tableName={tableName} />
       <CustomActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
+      <SnapshotsSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
     </div>
@@ -4188,6 +4261,134 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/** Collection snapshots (#78): point-in-time checkpoints for small reference
+ *  tables. Restore upserts by id and reports newer rows it left alone. */
+function SnapshotsSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [confirmRestore, setConfirmRestore] = useState<number | null>(null)
+  const { data: snaps = [] } = useQuery<
+    Array<{ id: number; name: string; row_count: number; created_at: string; created_by_name: string | null }>
+  >({
+    queryKey: ['collection-snapshots', tableName],
+    queryFn: () =>
+      api.get('/collection-snapshots', { params: { collection: tableName } }).then((r) => r.data.data)
+  })
+  const create = useMutation({
+    mutationFn: () => api.post('/collection-snapshots', { collection: tableName, name }),
+    onSuccess: () => {
+      toast.success('Snapshot captured')
+      setName('')
+      qc.invalidateQueries({ queryKey: ['collection-snapshots', tableName] })
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Snapshot failed')
+  })
+  const restore = useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ data: { updated: number; inserted: number; extra_rows: number } }>(
+        `/collection-snapshots/${id}/restore`
+      ),
+    onSuccess: (r) => {
+      const d = r.data.data
+      toast.success(
+        `Restored — ${d.updated} updated, ${d.inserted} re-inserted${d.extra_rows > 0 ? `, ${d.extra_rows} newer row(s) left alone` : ''}`
+      )
+      setConfirmRestore(null)
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Restore failed')
+  })
+  const remove = useMutation({
+    mutationFn: (id: number) => api.delete(`/collection-snapshots/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['collection-snapshots', tableName] })
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='border-b border-slate-100 px-4 py-3'>
+        <p className='text-[13px] font-semibold text-slate-800'>Snapshots</p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500'>
+          Point-in-time checkpoints for small reference tables (up to 5,000 rows) — capture one
+          before a risky edit. Restore updates changed rows and re-inserts deleted ones by id;
+          rows created AFTER the snapshot are left alone and reported.
+        </p>
+      </div>
+      <div className='space-y-2.5 px-4 py-3'>
+        <div className='flex items-center gap-2'>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder='Snapshot name (e.g. "before FY27 cleanup")'
+            className='h-7 flex-1 text-[12px]'
+          />
+          <Button
+            size='sm'
+            className='h-7 bg-nvr-cyan text-[12px] text-white'
+            disabled={create.isPending}
+            onClick={() => create.mutate()}
+          >
+            Capture now
+          </Button>
+        </div>
+        {snaps.length === 0 ? (
+          <p className='text-[12px] text-slate-400'>No snapshots yet.</p>
+        ) : (
+          <div className='divide-y divide-slate-50'>
+            {snaps.map((sn) => (
+              <div key={sn.id} className='flex items-center gap-2 py-1.5 text-[12px]'>
+                <span className='min-w-0 flex-1 truncate font-medium text-slate-700'>
+                  {sn.name}
+                </span>
+                <span className='shrink-0 tabular-nums text-slate-400'>
+                  {sn.row_count} rows · {new Date(sn.created_at).toLocaleString()}
+                </span>
+                {confirmRestore === sn.id ? (
+                  <span className='flex shrink-0 items-center gap-1'>
+                    <Button
+                      size='sm'
+                      variant='destructive'
+                      className='h-6 px-2 text-[11px]'
+                      disabled={restore.isPending}
+                      onClick={() => restore.mutate(sn.id)}
+                    >
+                      {restore.isPending ? 'Restoring…' : 'Yes, restore'}
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-6 px-2 text-[11px]'
+                      onClick={() => setConfirmRestore(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                ) : (
+                  <span className='flex shrink-0 items-center gap-1'>
+                    <button
+                      type='button'
+                      onClick={() => setConfirmRestore(sn.id)}
+                      className='rounded px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => remove.mutate(sn.id)}
+                      className='rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:text-red-500'
+                    >
+                      Delete
+                    </button>
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

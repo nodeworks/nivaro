@@ -320,7 +320,110 @@ export function TeamThroughputPage() {
             </p>
           )}
         </div>
+        <StateFlowCard collection={collection || 'workflows'} />
         <SendbackThemesCard collection={collection || 'workflows'} />
+      </div>
+    </div>
+  )
+}
+
+/** How records actually MOVE (#80): every from→to hop in the last 90 days as
+ *  a flow diagram — ribbon width ∝ volume, send-backs amber. Hand-rolled SVG
+ *  (states in sort order down the left, hops as arcs) — no chart dependency. */
+function StateFlowCard({ collection }: { collection: string }) {
+  const { data } = useQuery<{
+    window_days: number
+    states: Array<{ id: string; label: string; color: string | null; sort: number }>
+    links: Array<{ from: string; to: string; count: number; back: boolean }>
+  }>({
+    queryKey: ['state-flow', collection],
+    queryFn: () =>
+      api
+        .get('/reports/state-flow', { params: { collection, days: 90 } })
+        .then((r) => r.data.data),
+    enabled: !!collection,
+    retry: false
+  })
+  if (!data || data.links.length === 0) return null
+
+  const ROW_H = 44
+  const LEFT = 210
+  const W = 760
+  const H = data.states.length * ROW_H + 16
+  const yOf = new Map(data.states.map((st, i) => [st.id, 8 + i * ROW_H + ROW_H / 2]))
+  const maxCount = Math.max(...data.links.map((l) => l.count))
+  const stroke = (c: number) => 1.5 + (c / maxCount) * 10
+  const inbound = new Map<string, number>()
+  const outbound = new Map<string, number>()
+  for (const l of data.links) {
+    outbound.set(l.from, (outbound.get(l.from) ?? 0) + l.count)
+    inbound.set(l.to, (inbound.get(l.to) ?? 0) + l.count)
+  }
+
+  return (
+    <div className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+        State flow — last {data.window_days} days
+      </p>
+      <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+        How records actually moved. Ribbon width is volume; amber arcs are send-backs.
+      </p>
+      <div className='mt-3 overflow-x-auto'>
+        <svg
+          width={W}
+          height={H}
+          viewBox={`0 0 ${W} ${H}`}
+          role='img'
+          aria-label='State flow diagram'
+          className='min-w-[560px]'
+        >
+          {data.links.map((l) => {
+            const y1 = yOf.get(l.from)
+            const y2 = yOf.get(l.to)
+            if (y1 == null || y2 == null) return null
+            const dx = 90 + Math.abs(y2 - y1) * 0.35 + (l.back ? 70 : 0)
+            return (
+              <path
+                key={`${l.from}-${l.to}`}
+                d={`M ${LEFT + 8} ${y1} C ${LEFT + 8 + dx} ${y1}, ${LEFT + 8 + dx} ${y2}, ${LEFT + 8} ${y2}`}
+                fill='none'
+                stroke={l.back ? '#f59e0b' : '#00ceff'}
+                strokeOpacity={l.back ? 0.65 : 0.45}
+                strokeWidth={stroke(l.count)}
+                strokeLinecap='round'
+              >
+                <title>{`${l.count.toLocaleString()} record(s)${l.back ? ' (send-back)' : ''}`}</title>
+              </path>
+            )
+          })}
+          {data.states.map((st) => {
+            const y = yOf.get(st.id) ?? 0
+            const inN = inbound.get(st.id) ?? 0
+            const outN = outbound.get(st.id) ?? 0
+            return (
+              <g key={st.id}>
+                <circle cx={LEFT + 8} cy={y} r={5} fill={st.color ?? '#94a3b8'} />
+                <text
+                  x={LEFT - 2}
+                  y={y + 3.5}
+                  textAnchor='end'
+                  className='fill-slate-700 text-[11px] font-medium dark:fill-slate-200'
+                >
+                  {st.label}
+                </text>
+                <text
+                  x={LEFT + 20}
+                  y={y + 3.5}
+                  className='fill-slate-400 text-[9.5px] tabular-nums'
+                >
+                  {inN > 0 ? `in ${inN.toLocaleString()}` : ''}
+                  {inN > 0 && outN > 0 ? ' · ' : ''}
+                  {outN > 0 ? `out ${outN.toLocaleString()}` : ''}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
       </div>
     </div>
   )

@@ -181,6 +181,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.email_digest = body.email_digest
     }
+    if ('digest_hour' in body) {
+      // Which hour (America/New_York) the daily digest lands (#75).
+      const h = Number(body.digest_hour)
+      if (!Number.isInteger(h) || h < 0 || h > 23) {
+        return reply.code(400).send({ error: 'digest_hour must be 0-23' })
+      }
+      patch.digest_hour = h
+    }
     if ('nav_favorites' in body) {
       // Sidebar shortcuts. Validated rather than trusted: this is rendered as
       // navigation, so a path must be an in-app absolute route — never an

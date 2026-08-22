@@ -285,6 +285,68 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Bulk retry (#79): re-send a batch of FAILED submissions sequentially —
+  // parallel retries against the same ERP invite rate-limit trouble. Per-id
+  // outcomes come back so the caller can name what recovered.
+  app.post<{ Body: { ids?: number[] } }>(
+    '/bulk-retry',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+        .map(Number)
+        .filter((n) => Number.isFinite(n))
+        .slice(0, 100)
+      if (ids.length === 0) return reply.code(400).send({ error: 'No submission ids' })
+      const results: Array<{ id: number; status: string; error?: string }> = []
+      for (const id of ids) {
+        const row = (await db('nivaro_erp_submissions').where({ id }).first()) as
+          | ErpSubmissionRow
+          | undefined
+        if (!row) {
+          results.push({ id, status: 'missing' })
+          continue
+        }
+        if (row.status !== 'failed' && row.status !== 'rejected') {
+          results.push({ id, status: 'skipped', error: `already ${row.status}` })
+          continue
+        }
+        if (!(await can(req.user!, 'update', row.collection))) {
+          results.push({ id, status: 'forbidden' })
+          continue
+        }
+        const stored = parseJson<StoredPayload>(row.payload)
+        if (!stored?.endpoint_path) {
+          results.push({ id, status: 'skipped', error: 'no stored payload' })
+          continue
+        }
+        try {
+          const outcome = await sendPayload(row.external_api, stored, req.user?.id)
+          await db('nivaro_erp_submissions')
+            .where({ id })
+            .update({
+              status: outcome.status,
+              response: serializeResponseBody(outcome.response),
+              external_ref: outcome.external_ref ?? row.external_ref,
+              attempts: row.attempts + 1,
+              last_error: outcome.error,
+              updated_at: new Date()
+            })
+          results.push({ id, status: outcome.status, error: outcome.error ?? undefined })
+        } catch (err) {
+          results.push({ id, status: 'error', error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      const recovered = results.filter((r) => r.status === 'pending' || r.status === 'accepted').length
+      await logActivity({
+        action: 'erp-bulk-retry',
+        user: req.user?.id,
+        comment: `${ids.length} retried, ${recovered} landed`,
+        req
+      })
+      return { data: { results, recovered } }
+    }
+  )
+
   // Manual status override — for webhook-driven updates from the ERP side
   app.patch<{
     Params: { id: string }

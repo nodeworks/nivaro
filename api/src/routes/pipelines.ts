@@ -59,6 +59,7 @@ interface WorkflowState {
   skip_criteria: string | null
   skip_if_no_owners: boolean
   stage_visibility: string
+  description: string | null
 }
 
 interface WorkflowTransition {
@@ -610,6 +611,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'sort'
       | 'skip_if_no_owners'
       | 'stage_visibility'
+      | 'description'
     >
     if (!body.key?.trim()) return reply.code(400).send({ error: 'key is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
@@ -626,6 +628,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       lock_record: body.lock_record ? 1 : 0,
       skip_if_no_owners: body.skip_if_no_owners ? 1 : 0,
       stage_visibility: body.stage_visibility ?? 'always',
+      description: body.description ? String(body.description).slice(0, 1000) : null,
       sort: body.sort ?? 0
     })
     const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
@@ -665,6 +668,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
               : 0
             : state.skip_if_no_owners,
         stage_visibility: body.stage_visibility ?? state.stage_visibility ?? 'always',
+        description:
+          body.description !== undefined
+            ? body.description
+              ? String(body.description).slice(0, 1000)
+              : null
+            : state.description,
         sort: body.sort ?? state.sort
       })
     const updated = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()

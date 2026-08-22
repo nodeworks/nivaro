@@ -1400,7 +1400,39 @@ export async function dataModelRoutes(app: FastifyInstance) {
       await db.transaction(async (trx) => {
         await trx.raw(`EXEC sp_rename ?, ?, 'COLUMN'`, [`${collection}.${field}`, newName])
         await trx('nivaro_fields').where({ collection, field }).update({ field: newName })
+        // Safe rename (#76): carry the DIRECT render/relation config along so
+        // the form doesn't break the moment the column moves. Everything else
+        // (formulas, filters, queue sources…) is reported, not rewritten —
+        // token-context rewriting is guesswork and a wrong guess is silent.
+        await trx('nivaro_relations')
+          .where({ many_collection: collection, many_field: field })
+          .update({ many_field: newName })
+        await trx('nivaro_relations')
+          .where({ one_collection: collection, one_field: field })
+          .update({ one_field: newName })
+        await trx('nivaro_relations')
+          .where({ many_collection: collection, junction_field: field })
+          .update({ junction_field: newName })
+        const layoutIds = (await trx('nivaro_collection_layouts')
+          .where({ collection })
+          .pluck('id')) as number[]
+        if (layoutIds.length > 0) {
+          await trx('nivaro_layout_field_assignments')
+            .whereIn('layout_id', layoutIds)
+            .where({ field })
+            .update({ field: newName })
+        }
       })
+
+      // What still references the OLD name across the 14 config surfaces —
+      // the caller shows this as the "now go fix these" list.
+      let remaining: unknown = null
+      try {
+        const { buildImpactReport } = await import('../services/schema-impact.js')
+        remaining = await buildImpactReport(collection, field)
+      } catch {
+        remaining = null
+      }
 
       await logActivity({
         action: 'update',
@@ -1410,7 +1442,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
         req,
         comment: `rename → ${newName}`
       })
-      return reply.send({ data: { collection, field: newName, previous: field } })
+      return reply.send({ data: { collection, field: newName, previous: field, remaining_references: remaining } })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(500).send({ error: msg })
