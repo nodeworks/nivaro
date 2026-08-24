@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-08-24T18:37:47.579Z",
+  "generated_at": "2026-08-24T19:38:37.300Z",
   "releases": [
+    {
+      "version": "0.1.113",
+      "tag": "v0.1.113",
+      "date": "2026-08-24T15:38:33-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Lists & Browsing sprint (#131 #142 #143 #193 #195 #196 #202 #204 #205 #210 #240 #339 #395 #396 #397 #398)",
+              "hash": "33b5c4b9"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Formulas, Validation & Time sprint (#130 #239 #244 #343 #344 #349 #391 #402 #403)",
+              "hash": "5ab898d4"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.112",
       "tag": "v0.1.112",
-      "date": "2026-08-24T14:37:44-04:00",
+      "date": "2026-08-24T14:37:47-04:00",
       "sections": [
         {
           "label": "Added",
