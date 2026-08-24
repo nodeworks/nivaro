@@ -1,4 +1,5 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
+import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clipboard,
   AlertCircle,
@@ -2297,7 +2298,9 @@ export function ItemEditForm({
     acquired: _acquired,
     isReadOnly,
     takeOver,
-    takingOver
+    takingOver,
+    requestLock,
+    requesting
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
 
   // ── Layout / groups ────────────────────────────────────────────────────────
@@ -6989,6 +6992,14 @@ export function ItemEditForm({
                                       onTakeOver={takeOver}
                                       takingOver={takingOver}
                                       isAdmin={isAdmin}
+                                      onRequestLock={requestLock}
+                                      requesting={requesting}
+                                    />
+                                  )}
+                                  {!isNew && (
+                                    <RecordLiveSync
+                                      collection={collection}
+                                      itemId={String(itemId)}
                                     />
                                   )}
                                   {staleBy && (

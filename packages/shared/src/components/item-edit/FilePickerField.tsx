@@ -296,6 +296,9 @@ export function FilePickerField({
       setPendingFile(f)
     } else {
       setUploading(true)
+      window.dispatchEvent(
+        new CustomEvent('nvr:upload-state', { detail: { name: f.name, state: 'start' } })
+      )
       try {
         const result = await client.upload(f)
         onChange(result.id)
@@ -304,6 +307,9 @@ export function FilePickerField({
         /* ignore */
       } finally {
         setUploading(false)
+        window.dispatchEvent(
+          new CustomEvent('nvr:upload-state', { detail: { name: f.name, state: 'done' } })
+        )
       }
     }
   }

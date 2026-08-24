@@ -150,6 +150,7 @@ const IntegrationHealthPage = lazy(() =>
   import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
 )
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
+const Realtime = lazy(() => import('@/pages/Realtime'))
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
@@ -455,6 +456,7 @@ export default function App() {
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
+                  <Route path='realtime' element={<Realtime />} />
                   <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />

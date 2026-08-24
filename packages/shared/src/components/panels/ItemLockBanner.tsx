@@ -2,6 +2,7 @@ import { Lock } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
+import { useOptionalRealtime } from '../../lib/realtime'
 import { del, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 
@@ -107,6 +108,82 @@ export function useItemLock(
     }
   }, [enabled, collection, item, acquire, client, stopHeartbeat])
 
+  // ── Lock handoff (#286) ─────────────────────────────────────────────────
+  // Holder side: a live 'lock:requested' for THIS record shows a toast with
+  // Release / Decline. Requester side: 'lock:response' release → auto-acquire.
+  const realtime = useOptionalRealtime()
+  const [requesting, setRequesting] = useState(false)
+  const requestLock = useCallback(async () => {
+    if (!collection || !item) return
+    setRequesting(true)
+    try {
+      await client.request(post(`/item-locks/${collection}/${item}/lock/request`, {}))
+      toast.success('Asked the current editor to release the lock')
+    } catch {
+      toast.error('Could not send the lock request')
+    } finally {
+      setRequesting(false)
+    }
+  }, [client, collection, item])
+
+  useEffect(() => {
+    if (!realtime || !collection || !item) return
+    const unsubReq = realtime.on('lock:requested', (p: any) => {
+      if (p?.collection !== collection || String(p?.item) !== String(item)) return
+      if (!acquiredRef.current) return
+      const requester = p?.from ?? {}
+      toast(`${requester.name ?? 'Someone'} is asking you to release this record`, {
+        duration: 30_000,
+        action: {
+          label: 'Release',
+          onClick: () => {
+            stopHeartbeat()
+            acquiredRef.current = false
+            setAcquired(false)
+            client
+              .request(
+                post(`/item-locks/${collection}/${item}/lock/respond`, {
+                  to: requester.id,
+                  action: 'release'
+                })
+              )
+              .then(() => toast.success('Lock released'))
+              .catch(() => toast.error('Failed to release the lock'))
+          }
+        },
+        cancel: {
+          label: 'Keep editing',
+          onClick: () => {
+            client
+              .request(
+                post(`/item-locks/${collection}/${item}/lock/respond`, {
+                  to: requester.id,
+                  action: 'decline'
+                })
+              )
+              .catch(() => {})
+          }
+        }
+      })
+    })
+    const unsubResp = realtime.on('lock:response', (p: any) => {
+      if (p?.collection !== collection || String(p?.item) !== String(item)) return
+      if (acquiredRef.current) return
+      if (p?.action === 'release') {
+        toast.success(`${p?.from?.name ?? 'The editor'} released the lock — it's yours`)
+        void acquire()
+      } else {
+        toast.warning(
+          `${p?.from?.name ?? 'The editor'} is keeping the lock${p?.note ? `: "${p.note}"` : ''}`
+        )
+      }
+    })
+    return () => {
+      unsubReq()
+      unsubResp()
+    }
+  }, [realtime, collection, item, client, acquire, stopHeartbeat])
+
   const takeOver = useCallback(async () => {
     if (!collection || !item) return
     setTakingOver(true)
@@ -122,19 +199,32 @@ export function useItemLock(
     }
   }, [client, collection, item, acquire])
 
-  return { lockHolder, acquired, isReadOnly: !!lockHolder, takeOver, takingOver, isAdmin }
+  return {
+    lockHolder,
+    acquired,
+    isReadOnly: !!lockHolder,
+    takeOver,
+    takingOver,
+    isAdmin,
+    requestLock,
+    requesting
+  }
 }
 
 export function ItemLockBanner({
   lockHolder,
   onTakeOver,
   takingOver,
-  isAdmin
+  isAdmin,
+  onRequestLock,
+  requesting
 }: {
   lockHolder: LockHolder | null
   onTakeOver: () => void
   takingOver: boolean
   isAdmin?: boolean
+  onRequestLock?: () => void
+  requesting?: boolean
 }) {
   if (!lockHolder) return null
   const name = lockHolder.locked_by_name || 'Another user'
@@ -145,6 +235,17 @@ export function ItemLockBanner({
         <span className='font-medium'>{name}</span> is editing this item — fields are read-only
         until the lock is released.
       </span>
+      {onRequestLock && (
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100'
+          onClick={onRequestLock}
+          disabled={requesting}
+        >
+          {requesting ? 'Asking…' : 'Request lock'}
+        </Button>
+      )}
       {isAdmin && (
         <Button
           size='sm'

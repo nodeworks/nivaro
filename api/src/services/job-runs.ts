@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { getIo } from './io-holder.js'
 
 /**
  * The one funnel for background-execution history. Wrap any cron/backfill/
@@ -15,6 +16,16 @@ export interface JobRunHandle {
   progress(blob: Record<string, unknown>): void
   complete(outcome?: string): Promise<void>
   fail(err: unknown): Promise<void>
+}
+
+/** Live job progress (#271): every lifecycle change lands on the Background
+ *  Jobs console's watch room. Fire-and-forget decoration. */
+function emitJobEvent(payload: Record<string, unknown>): void {
+  try {
+    getIo()?.to('watch:jobs').emit('job:update', payload)
+  } catch {
+    /* decoration */
+  }
 }
 
 export async function startJobRun(
@@ -40,6 +51,7 @@ export async function startJobRun(
   } catch {
     // degraded bookkeeping — the job itself proceeds
   }
+  emitJobEvent({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
 
   const finish = async (patch: Record<string, unknown>) => {
     if (id == null) return
@@ -64,14 +76,25 @@ export async function startJobRun(
         .where('id', id)
         .update({ progress: JSON.stringify(blob).slice(0, 4000) })
         .catch(() => {})
+      emitJobEvent({ id, kind, job_id: jobId, status: 'running', progress: blob })
     },
-    complete: (outcome) =>
-      finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null }),
-    fail: (err) =>
-      finish({
+    complete: async (outcome) => {
+      await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
+      emitJobEvent({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
+    },
+    fail: async (err) => {
+      await finish({
         status: 'error',
         error: String(err instanceof Error ? (err.stack ?? err.message) : err).slice(0, 4000)
       })
+      emitJobEvent({
+        id,
+        kind,
+        job_id: jobId,
+        status: 'error',
+        error: String(err instanceof Error ? err.message : err).slice(0, 300)
+      })
+    }
   }
 }
 

@@ -62,6 +62,19 @@ export function useRecordPresence(collection: string | undefined, item: string |
       setViewers(payload.viewers ?? [])
     })
 
+    // Upload presence relay (#282): this socket is the one actually inside
+    // the record room, so it carries upload announcements both ways —
+    // outbound from the file fields' window event, inbound re-dispatched as
+    // a window event RecordLiveSync renders as chips.
+    const onLocalUpload = (e: Event) => {
+      const d = (e as CustomEvent).detail as { name?: string; state?: string }
+      if (d?.name) socket.emit('record:uploading', { name: d.name, state: d.state })
+    }
+    window.addEventListener('nvr:upload-state', onLocalUpload)
+    socket.on('record:uploading', (payload: unknown) => {
+      window.dispatchEvent(new CustomEvent('nvr:record-uploading', { detail: payload }))
+    })
+
     socket.on('field:editing', (payload: { field: string; user: Viewer | null }) => {
       setEditing((prev) => {
         const next = { ...prev }
@@ -115,6 +128,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     document.addEventListener('input', onInput)
 
     return () => {
+      window.removeEventListener('nvr:upload-state', onLocalUpload)
       disposed = true
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)

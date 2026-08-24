@@ -301,6 +301,15 @@ export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<
   for (const m of monitors) {
     const r = await evaluateMonitor(m, app)
     if (r.status === 'failing') failing++
+    // Live monitor board (#279): each evaluation lands on watchers instantly.
+    try {
+      const { getIo } = await import('./io-holder.js')
+      getIo()
+        ?.to('watch:monitors')
+        .emit('monitor:status', { id: m.id, name: m.name, status: r.status })
+    } catch {
+      /* emit is decoration */
+    }
   }
   return `${monitors.length} monitor(s) evaluated, ${failing} failing`
 }

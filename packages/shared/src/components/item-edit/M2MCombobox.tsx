@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useDrilldown, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
+import { useOnlineUsers } from '../../lib/use-online-users'
 import { Button } from '../ui/button'
 import {
   Command,
@@ -129,6 +130,7 @@ export function M2MCombobox({
   // nivaro_users options mirror listUsers(): redacted accounts never appear
   // and suspended users are not pickable (committed values still display).
   const redactionFilter = relatedCollection === 'nivaro_users' ? ACTIVE_USER_OPTION_FILTER : null
+  const onlineUsers = useOnlineUsers(relatedCollection === 'nivaro_users')
   const effectiveFilter = extraFilter
     ? redactionFilter
       ? { _and: [extraFilter, redactionFilter] }
@@ -401,6 +403,13 @@ export function M2MCombobox({
                         >
                           {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
                         </div>
+                        {relatedCollection === 'nivaro_users' &&
+                          onlineUsers.has(optId.toUpperCase()) && (
+                            <span
+                              className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                              data-tip='Online now'
+                            />
+                          )}
                         <span className='truncate'>{getLabel(opt)}</span>
                       </CommandItem>
                     )
@@ -483,6 +492,7 @@ export function M2MSingleSelectCombobox({
   // nivaro_users options mirror listUsers(): redacted accounts never appear
   // and suspended users are not pickable (committed values still display).
   const redactionFilter = relatedCollection === 'nivaro_users' ? ACTIVE_USER_OPTION_FILTER : null
+  const onlineUsers = useOnlineUsers(relatedCollection === 'nivaro_users')
   const effectiveFilter = extraFilter
     ? redactionFilter
       ? { _and: [extraFilter, redactionFilter] }
@@ -720,6 +730,13 @@ export function M2MSingleSelectCombobox({
                           >
                             {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
                           </div>
+                          {relatedCollection === 'nivaro_users' &&
+                            onlineUsers.has(optId.toUpperCase()) && (
+                              <span
+                                className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                                data-tip='Online now'
+                              />
+                            )}
                           <span className='truncate'>{getLabel(opt)}</span>
                         </CommandItem>
                       )

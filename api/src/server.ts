@@ -139,6 +139,15 @@ export async function buildServer() {
 
   // ─── Socket.io ────────────────────────────────────────────────────────────
   await app.register(socketioPlugin)
+  // Global io + journal wiring (realtime sprint): services with no app in
+  // scope emit through the holder; the event journal (#266) shares the
+  // app Redis connection.
+  {
+    const { setIo } = await import('./services/io-holder.js')
+    setIo(app.io)
+    const { setJournalRedis } = await import('./services/event-journal.js')
+    setJournalRedis(app.redis)
+  }
 
   // ─── Inngest ──────────────────────────────────────────────────────────────
   await app.register(inngestPlugin)
@@ -451,6 +460,29 @@ export async function buildServer() {
           .whereNotNull('ooo_end')
           .where('ooo_end', '<=', now)
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+      })
+
+      // Concurrency sampling (#275): sockets + distinct users every 5 min,
+      // per instance (multi-replica charts sum by timestamp).
+      app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
+        const { db } = await import('./db/index.js')
+        const { getLocalConcurrency } = await import('./plugins/socketio.js')
+        const { sockets, users } = getLocalConcurrency()
+        await db('nivaro_concurrency_samples')
+          .insert({
+            sampled_at: new Date(),
+            instance: process.env.HOSTNAME?.slice(0, 100) ?? null,
+            sockets,
+            users
+          })
+          .catch(() => {})
+        // 90-day retention, pruned opportunistically on a daily-ish cadence.
+        if (new Date().getHours() === 4 && new Date().getMinutes() < 5) {
+          await db('nivaro_concurrency_samples')
+            .where('sampled_at', '<', new Date(Date.now() - 90 * 86_400_000))
+            .del()
+            .catch(() => {})
+        }
       })
 
       // Scheduled broadcasts (#94): deliver every due scheduled announcement.

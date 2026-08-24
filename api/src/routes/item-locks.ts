@@ -300,4 +300,82 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       return reply.code(204).send()
     }
   )
+
+  // ── Lock handoff (#286) ───────────────────────────────────────────────────
+  // "Request the lock" pings the holder live (socket to their user room +
+  // an in-app notification fallback); the holder releases or declines with a
+  // note. Chat-them-and-wait, replaced with a button.
+  app.post<{ Params: { collection: string; item: string } }>(
+    '/:collection/:item/lock/request',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      const me = req.user!
+      const existing = await getCurrentLock(collection, item)
+      if (!existing) return reply.code(404).send({ error: 'Nobody holds this lock' })
+      if (existing.user === me.id)
+        return reply.code(400).send({ error: 'You already hold this lock' })
+      const fromName =
+        [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id
+      app.io?.to(`user:${existing.user}`).emit('lock:requested', {
+        collection,
+        item: String(item),
+        from: { id: me.id, name: fromName }
+      })
+      const { notifyUser } = await import('../services/notification-channels.js')
+      await notifyUser(app, existing.user, {
+        subject: 'Edit lock requested',
+        message: `${fromName} is asking you to release ${collection}/${item} so they can edit it.`,
+        collection,
+        item: String(item),
+        sender: me.id
+      }).catch(() => {})
+      return { data: { requested: true } }
+    }
+  )
+
+  app.post<{
+    Params: { collection: string; item: string }
+    Body: { to?: string; action?: string; note?: string }
+  }>('/:collection/:item/lock/respond', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { collection, item } = req.params
+    const me = req.user!
+    const to = String(req.body?.to ?? '')
+    const action = req.body?.action === 'release' ? 'release' : 'decline'
+    const note = String(req.body?.note ?? '').slice(0, 300)
+    if (!to) return reply.code(400).send({ error: 'to (requester id) is required' })
+    const existing = await getCurrentLock(collection, item)
+    if (existing && existing.user === me.id && action === 'release') {
+      await db('nivaro_item_locks').where({ id: existing.id }).delete()
+      emitLockEvent(app, collection, item, me.id, false)
+      await logActivity({
+        action: 'lock-release',
+        user: me.id,
+        collection,
+        item: String(item),
+        req,
+        comment: `handoff to ${to}`
+      })
+    }
+    const myName = [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id
+    app.io?.to(`user:${to}`).emit('lock:response', {
+      collection,
+      item: String(item),
+      action,
+      note,
+      from: { id: me.id, name: myName }
+    })
+    const { notifyUser } = await import('../services/notification-channels.js')
+    await notifyUser(app, to, {
+      subject: action === 'release' ? 'Lock released for you' : 'Lock request declined',
+      message:
+        action === 'release'
+          ? `${myName} released ${collection}/${item} — it's yours.`
+          : `${myName} declined to release ${collection}/${item}${note ? `: "${note}"` : '.'}`,
+      collection,
+      item: String(item),
+      sender: me.id
+    }).catch(() => {})
+    return { data: { responded: action } }
+  })
 }

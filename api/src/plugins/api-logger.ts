@@ -88,6 +88,20 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       created_at: new Date()
     })
 
+    // Live traffic view (#276): stream to admin watchers only when someone is
+    // actually watching — the room-size probe is a local map lookup.
+    const watchers = app.io?.sockets?.adapter?.rooms?.get('watch:traffic')?.size ?? 0
+    if (watchers > 0) {
+      app.io.to('watch:traffic').emit('traffic:request', {
+        method: req.method,
+        path: path.slice(0, 300),
+        status: reply.statusCode,
+        latency_ms: Math.round(reply.elapsedTime),
+        user: req.user?.id ?? null,
+        at: Date.now()
+      })
+    }
+
     if (buffer.length >= FLUSH_THRESHOLD) void flush()
   })
 

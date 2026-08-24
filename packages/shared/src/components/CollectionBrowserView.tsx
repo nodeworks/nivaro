@@ -1,4 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useOptionalRealtime } from '../lib/realtime'
 import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -3603,6 +3604,67 @@ export function CollectionBrowserView({
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
+
+  // ── Surgical live row patches (#267) ──────────────────────────────────────
+  // When the host provides a RealtimeAdapter, an update to a VISIBLE row
+  // refetches just that one record (through /items — RBAC/RLS apply) and
+  // patches it into the cached page in place: no full-table refetch, no
+  // scroll jump. Creates/deletes and off-page rows fall back to a full
+  // invalidate, debounced so bulk writes coalesce.
+  const realtime = useOptionalRealtime()
+  const visibleIdsRef = useRef<Set<string>>(new Set())
+  visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
+  const itemsKeyRef = useRef<unknown[]>([])
+  itemsKeyRef.current = [
+    'cbv-items',
+    collection,
+    appliedSearch,
+    sort,
+    groupBy ? 'grouped' : page,
+    groupBy ? 500 : effPageSize,
+    conditionsParam
+  ]
+  useEffect(() => {
+    if (!realtime || !collection) return
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleInvalidate = () => {
+      if (invalidateTimer) return
+      invalidateTimer = setTimeout(() => {
+        invalidateTimer = null
+        void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
+      }, 2000)
+    }
+    const unsub = realtime.subscribeCollections([collection], (ev) => {
+      const id = String(ev.item)
+      if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) {
+        client
+          .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+          .then((res) => {
+            const fresh = res?.data
+            if (!fresh) return
+            qc.setQueryData(
+              itemsKeyRef.current,
+              (prev: { data: Array<Record<string, unknown>>; total: number } | undefined) =>
+                prev
+                  ? {
+                      ...prev,
+                      data: prev.data.map((r) =>
+                        String(r.id) === id ? { ...r, ...fresh } : r
+                      )
+                    }
+                  : prev
+            )
+          })
+          .catch(() => scheduleInvalidate())
+      } else {
+        scheduleInvalidate()
+      }
+    })
+    return () => {
+      unsub()
+      if (invalidateTimer) clearTimeout(invalidateTimer)
+    }
+  }, [realtime, collection, qc, client])
 
   // ── At-risk row highlighting (nivaro_at_risk_rules) ───────────────────────
   // One rules probe per collection; when any active rule exists, the visible

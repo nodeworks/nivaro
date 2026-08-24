@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { adminRealtime } from '@/lib/socket'
 import { ArrowLeft, BarChart2, LineChart, Loader2, Plus, Trash2, TrendingUp } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import {
@@ -66,6 +67,7 @@ const TYPE_CONFIG: Record<WidgetType, { label: string; color: string }> = {
 // ─── Widget card ──────────────────────────────────────────────────────────────
 
 function WidgetCard({ widget, onDelete }: { widget: DashboardWidget; onDelete: () => void }) {
+  const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['widget-data', widget.id],
     queryFn: () =>
@@ -74,6 +76,25 @@ function WidgetCard({ widget, onDelete }: { widget: DashboardWidget; onDelete: (
         .then((r) => r.data.data),
     refetchInterval: 60_000
   })
+
+  // Live dashboards (#264): a write to this widget's source collection
+  // refreshes its number within ~2s instead of the 60s poll. Debounced so
+  // bulk writes coalesce into one refetch.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!widget.collection) return
+    const unsub = adminRealtime.subscribeCollections([widget.collection], () => {
+      if (debounceRef.current) return
+      debounceRef.current = setTimeout(() => {
+        debounceRef.current = null
+        void qc.invalidateQueries({ queryKey: ['widget-data', widget.id] })
+      }, 2000)
+    })
+    return () => {
+      unsub()
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [widget.collection, widget.id, qc])
 
   const cfg = TYPE_CONFIG[widget.type]
 

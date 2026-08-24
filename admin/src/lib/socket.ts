@@ -1,22 +1,31 @@
+import { createLeaderSocket, type RealtimeAdapter } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
 
 /**
- * One shared authenticated socket for chat + collection feeds. The admin's
- * older features (notification bell, page presence) each open their own
- * socket — this module is the go-forward shared instance; new features should
- * use it rather than adding another `io()` call.
+ * One shared authenticated socket for chat + collection feeds + realtime
+ * surfaces. Realtime sprint v2:
  *
- * Nivaro contract: emit `auth {token}` after connect, join collection rooms
- * via `join 'collection:<name>'`, chat rooms via `chat:join {room}` (gated
- * server-side by the same visibility check as the REST routes). Session-cookie
- * users mint a one-time ws token via GET /auth/ws-token on every (re)connect.
+ * - FIX: collection subscriptions used to emit `join`, an event the server
+ *   never handled (`collection:join` is the real one) — admin collection
+ *   feeds were silently dead.
+ * - Leader election (#277): only ONE tab joins collection rooms; followers
+ *   receive collection events over a BroadcastChannel. Chat/presence keep
+ *   their own per-tab socket behaviour (room-gated, low volume).
+ * - Missed-event catch-up (#266): events carry `_seq`; on reconnect the
+ *   client sends its cursor and replays the gap, or fires a full-refresh
+ *   window event when the journal no longer covers it.
+ * - `client:hello` reports reconnect count + app label; `nvr:ping`/`nvr:pong`
+ *   feeds the /realtime RTT column; `client:force-refresh` (#285) surfaces as
+ *   a window event AppLayout renders as a countdown banner.
  */
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 let socket: Socket | null = null
-const joinedCollections = new Set<string>()
+let reconnects = -1
+let lastSeq = 0
+let everAuthed = false
 
 async function authToken(): Promise<string | null> {
   try {
@@ -36,14 +45,137 @@ export function getSocket(): Socket {
     reconnectionDelay: 2000
   })
   socket.on('connect', () => {
+    reconnects += 1
     void authToken().then((token) => {
       if (token) socket?.emit('auth', { token })
     })
   })
   socket.on('auth:ok', () => {
-    for (const room of joinedCollections) socket?.emit('join', room)
+    socket?.emit('client:hello', { reconnects: Math.max(0, reconnects), app: 'admin' })
+    // Rejoin what this tab holds, then replay whatever happened while away.
+    for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
+    for (const room of joinedWatchRooms) socket?.emit('admin:join', { room })
+    if (everAuthed && lastSeq > 0) socket?.emit('catchup', { cursor: lastSeq })
+    everAuthed = true
+  })
+  socket.on('nvr:ping', (p: { t?: number }) => socket?.emit('nvr:pong', { t: p?.t }))
+  socket.onAny((_event, payload) => {
+    const seq = (payload as { _seq?: number } | undefined)?._seq
+    if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+  })
+  socket.on(
+    'catchup:events',
+    (p: { events?: Array<{ seq: number; event: string; payload: Record<string, unknown> }> }) => {
+      for (const ev of p?.events ?? []) {
+        if (ev.seq > lastSeq) lastSeq = ev.seq
+        // Re-dispatch into local listeners as if it arrived live.
+        for (const l of socket?.listeners(ev.event) ?? []) {
+          l({ ...ev.payload, _seq: ev.seq })
+        }
+      }
+    }
+  )
+  socket.on('catchup:full', () => {
+    window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+  })
+  socket.on('client:force-refresh', (p: { seconds?: number; message?: string }) => {
+    window.dispatchEvent(new CustomEvent('nvr:force-refresh', { detail: p ?? {} }))
   })
   return socket
+}
+
+// ── Collection feed via leader election ─────────────────────────────────────
+// Only the LEADER tab joins collection rooms + relays events to followers.
+// joinedCollections tracks bare collection names the leader must be in.
+const joinedCollections = new Set<string>()
+const joinedWatchRooms = new Set<string>()
+
+const RELAYED_EVENTS = new Set([
+  'collection:update',
+  'job:update',
+  'monitor:status',
+  'traffic:request',
+  'lock:requested',
+  'lock:response',
+  'record:uploading'
+])
+
+let leaderHandle: ReturnType<typeof createLeaderSocket> | null = null
+
+function ensureLeaderSocket() {
+  if (leaderHandle) return leaderHandle
+  leaderHandle = createLeaderSocket('admin-feed', {
+    becomeLeader(deliver, emitRef) {
+      const s = getSocket()
+      for (const c of joinedCollections) {
+        if (s.connected) s.emit('collection:join', { collection: c })
+      }
+      for (const r of joinedWatchRooms) {
+        if (s.connected) s.emit('admin:join', { room: r })
+      }
+      s.onAny((event, payload) => {
+        if (RELAYED_EVENTS.has(event)) deliver(event, payload)
+      })
+      emitRef.current = (event, payload) => {
+        const so = getSocket()
+        if (event === '__join_collection') {
+          joinedCollections.add(String(payload))
+          if (so.connected) so.emit('collection:join', { collection: payload })
+        } else if (event === '__join_watch') {
+          joinedWatchRooms.add(String(payload))
+          if (so.connected) so.emit('admin:join', { room: payload })
+        } else if (event === '__leave_watch') {
+          joinedWatchRooms.delete(String(payload))
+          if (so.connected) so.emit('admin:leave', { room: payload })
+        } else {
+          so.emit(event, payload)
+        }
+      }
+    },
+    resignLeader() {
+      // The socket stays up for chat; we just stop being the feed source.
+    }
+  })
+  return leaderHandle
+}
+
+/** RealtimeAdapter for shared components (CBV patches, RecordLiveSync, MyWork). */
+export const adminRealtime: RealtimeAdapter = {
+  subscribeCollections(collections, cb) {
+    const handle = ensureLeaderSocket()
+    for (const c of collections) {
+      // Track locally too — if this tab later PROMOTES to leader it must know
+      // which rooms to join (the sentinel emit only reaches the current leader).
+      joinedCollections.add(c)
+      handle.emit('__join_collection', c)
+    }
+    const off = handle.onEvent((event, payload) => {
+      if (event !== 'collection:update') return
+      const p = payload as { collection?: string; item?: string | number }
+      if (p?.collection && collections.includes(p.collection)) cb(p as never)
+    })
+    return off
+  },
+  on(event, cb) {
+    const handle = ensureLeaderSocket()
+    return handle.onEvent((ev, payload) => {
+      if (ev === event) cb(payload)
+    })
+  },
+  emit(event, payload) {
+    ensureLeaderSocket().emit(event, payload)
+  }
+}
+
+/** Join an admin watch room (traffic/jobs/monitors); returns leave fn. */
+export function joinWatchRoom(room: string): () => void {
+  const handle = ensureLeaderSocket()
+  joinedWatchRooms.add(room)
+  handle.emit('__join_watch', room)
+  return () => {
+    joinedWatchRooms.delete(room)
+    handle.emit('__leave_watch', room)
+  }
 }
 
 /** Subscribe to live updates for a collection; returns an unsubscribe. */
@@ -51,17 +183,7 @@ export function onCollectionUpdate(
   collection: string,
   handler: (payload?: { collection?: string; item?: string | number }) => void
 ): () => void {
-  const s = getSocket()
-  const room = `collection:${collection}`
-  joinedCollections.add(room)
-  if (s.connected) s.emit('join', room)
-  const listener = (payload: { collection?: string; item?: string | number }) => {
-    if (payload?.collection === collection) handler(payload)
-  }
-  s.on('collection:update', listener)
-  return () => {
-    s.off('collection:update', listener)
-  }
+  return adminRealtime.subscribeCollections([collection], (ev) => handler(ev))
 }
 
 /**

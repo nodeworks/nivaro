@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { Link2, Play, RotateCw } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -54,6 +55,20 @@ export function IntegrationHealthPage() {
     queryFn: () => api.get<{ data: Health }>('/integration-health').then((r) => r.data.data),
     refetchInterval: 30_000
   })
+
+  // Live monitor status (#279): join the monitors watch room while this page
+  // is open — a monitor flipping ok↔failing refreshes the page immediately.
+  useEffect(() => {
+    const leave = joinWatchRoom('monitors')
+    const off = adminRealtime.on('monitor:status', () => {
+      void qc.invalidateQueries({ queryKey: ['integration-health'] })
+      void qc.invalidateQueries({ queryKey: ['ops-monitors'] })
+    })
+    return () => {
+      off()
+      leave()
+    }
+  }, [qc])
 
   const runCron = useMutation({
     mutationFn: (id: string) => api.post(`/cron/${id}/run`),

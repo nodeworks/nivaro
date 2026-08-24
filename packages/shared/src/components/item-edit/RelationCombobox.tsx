@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get } from '../../lib/commands'
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
+import { useOnlineUsers } from '../../lib/use-online-users'
 import { applyDisplayTemplate } from './helpers'
 
 /**
@@ -218,6 +219,8 @@ export function RelationCombobox({
   // System user pickers: nivaro_users has no nivaro_collections row, so give it a
   // sane default template + exclude redacted/suspended users (mirrors listUsers()).
   const isUserCollection = collection === 'nivaro_users'
+  // Online presence dots in user pickers (#284) — the shared 30s-polled set.
+  const onlineUsers = useOnlineUsers(isUserCollection)
   const combinedFilter = useMemo(() => {
     const clauses: Record<string, unknown>[] = []
     if (isUserCollection) clauses.push(ACTIVE_USER_OPTION_FILTER)
@@ -483,6 +486,12 @@ export function RelationCombobox({
                     >
                       {sel && <Check className='h-2.5 w-2.5 text-white' />}
                     </div>
+                    {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
+                      <span
+                        className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                        data-tip='Online now'
+                      />
+                    )}
                     {label}
                   </button>
                 )

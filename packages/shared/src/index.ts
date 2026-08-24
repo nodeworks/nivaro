@@ -156,6 +156,14 @@ export {
   useMyScopes
 } from './lib/use-my-scopes'
 export * from './lib/utils'
+export {
+  RealtimeContext,
+  useOptionalRealtime,
+  type RealtimeAdapter,
+  type CollectionUpdateEvent
+} from './lib/realtime'
+export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export { useOnlineUsers } from './lib/use-online-users'
 export * from './lib/field-interfaces'
 export { applyValidationRule } from './lib/validation-rules'
 export * from './types'

@@ -40,6 +40,14 @@ export type {
   ReportViewProps,
   TokenResolver
 } from '@nivaro/shared'
+// ─── Realtime sprint 2026-08-24 ─────────────────────────────────────────────
+export {
+  RealtimeContext,
+  useOptionalRealtime,
+  createLeaderSocket,
+  useOnlineUsers
+} from '@nivaro/shared'
+export type { RealtimeAdapter, CollectionUpdateEvent, LeaderSocketHandle } from '@nivaro/shared'
 // ─── Parity sweep 2026-08-19 — shared surfaces headless hosts need ──────────
 // Feature components
 // Panels — completes the set (siblings were already exported)

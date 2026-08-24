@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useOptionalRealtime } from '../lib/realtime'
 import { useApiFetchConfig, useItemNavigation } from '../context'
 import { UserAvatar } from './UserAvatar'
 import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '../lib/notification-target'
@@ -116,6 +118,14 @@ export function MyWorkView({
   const { open: openItem } = useItemNavigation()
   const qc = useQueryClient()
 
+  // Live "updates available" pill (#278). My Work re-aggregation is expensive
+  // (~seconds of live owner resolution) so events never auto-refresh — a
+  // 30s-debounced pill offers the refresh instead. Collections come from the
+  // owned records already on screen.
+  const realtime = useOptionalRealtime()
+  const [updatesPending, setUpdatesPending] = useState(false)
+  const debounceRef = useRef(0)
+
   const { data, isLoading, refetch, isFetching } = useQuery<MyWorkData>({
     queryKey: ['my-work'],
     queryFn: async () => {
@@ -125,6 +135,21 @@ export function MyWorkView({
     },
     staleTime: 60_000
   })
+
+  const liveCollections = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of data?.owned ?? []) if (r.collection) set.add(r.collection)
+    return [...set]
+  }, [data])
+  useEffect(() => {
+    if (!realtime || liveCollections.length === 0) return
+    return realtime.subscribeCollections(liveCollections, () => {
+      const now = Date.now()
+      if (now - debounceRef.current < 30_000) return
+      debounceRef.current = now
+      setUpdatesPending(true)
+    })
+  }, [realtime, liveCollections])
 
   const completeTask = useMutation({
     mutationFn: (id: number) =>
@@ -204,9 +229,25 @@ export function MyWorkView({
           <Tile label='Open tasks' value={data.counts.tasks} />
           <Tile label='Unread notifications' value={data.counts.notifications} />
         </div>
+        {updatesPending && (
+          <button
+            type='button'
+            onClick={() => {
+              setUpdatesPending(false)
+              void refetch()
+            }}
+            className='ml-3 inline-flex items-center gap-1.5 rounded-full border border-[#00ceff]/40 bg-[#00ceff]/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-[#00ceff]/20 dark:text-[#67e8f9]'
+          >
+            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+            Updates available — refresh
+          </button>
+        )}
         <button
           type='button'
-          onClick={() => refetch()}
+          onClick={() => {
+            setUpdatesPending(false)
+            void refetch()
+          }}
           disabled={isFetching}
           className='ml-3 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
         >

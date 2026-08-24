@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { Activity, Play, RotateCw } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -88,6 +89,7 @@ function StatusPill({ status, staleRunning }: { status: string; staleRunning?: b
 }
 
 export default function BackgroundJobs() {
+  const qc = useQueryClient()
   const [kind, setKind] = useState('')
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
@@ -114,6 +116,20 @@ export default function BackgroundJobs() {
         .then((r) => r.data),
     refetchInterval: 15_000
   })
+
+  // Live job progress (#271): while this page is open, join the jobs watch
+  // room — every run start/progress/finish refreshes the lists immediately.
+  useEffect(() => {
+    const leave = joinWatchRoom('jobs')
+    const off = adminRealtime.on('job:update', () => {
+      void qc.invalidateQueries({ queryKey: ['job-runs'] })
+      void qc.invalidateQueries({ queryKey: ['job-registry'] })
+    })
+    return () => {
+      off()
+      leave()
+    }
+  }, [qc])
 
   const crons: CronEntry[] = registry.data?.crons ?? []
   const activeRuns: JobRun[] = (registry.data?.running ?? []).filter(

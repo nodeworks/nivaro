@@ -2106,7 +2106,9 @@ export async function createOne(
 
   await hooks.trigger('after', { ...ctx, keys: [returnedId as string | number], result })
 
-  broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number)
+  broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
+    action: 'create'
+  })
 
   return result
 }
@@ -2332,7 +2334,10 @@ export async function updateOne(
     })
   )
 
-  broadcastCollectionUpdate(req?.server?.io, collection, id)
+  broadcastCollectionUpdate(req?.server?.io, collection, id, {
+    action: 'update',
+    changed_fields: Object.keys(columnPayload ?? {})
+  })
 
   return result
 }
@@ -2447,4 +2452,6 @@ export async function deleteOne(
   await recomputeJunctionAutoIds(collection, previousData)
 
   await hooks.trigger('after', { ...ctx, previousData })
+
+  broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
 }

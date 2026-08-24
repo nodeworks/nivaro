@@ -22,18 +22,95 @@ export function emitNotification(io: SocketIOServer, userId: string, notificatio
   io.to(`user:${userId}`).emit('notification:new', notification)
 }
 
+// record room → socketId → viewer (presence v2). Module scope so services
+// (notification suppression #269) can ask "is this user viewing this record"
+// without a plugin reference. Per-node, same accepted Redis-adapter limitation.
+const recordViewers = new Map<string, Map<string, { id: string; name: string }>>()
+
+/** Presence-aware suppression (#269): is the user actively viewing the record
+ *  RIGHT NOW (joined its record room on this node)? */
+export function isUserViewing(collection: string, item: string, userId: string): boolean {
+  const map = recordViewers.get(`record:${collection}:${item}`)
+  if (!map) return false
+  for (const v of map.values()) if (v.id === userId) return true
+  return false
+}
+
+/** Per-socket connection metadata for the realtime diagnostics page (#270). */
+interface SocketMeta {
+  user: { id: string; name: string } | null
+  connectedAt: number
+  rtt: number | null
+  reconnects: number
+  app: string | null
+}
+const socketMeta = new Map<string, SocketMeta>()
+let _ioRef: SocketIOServer | null = null
+
+export function getRealtimeStats(): {
+  sockets: Array<SocketMeta & { id: string; rooms: string[] }>
+  rooms: Array<{ room: string; size: number }>
+} {
+  const io = _ioRef
+  const sockets: Array<SocketMeta & { id: string; rooms: string[] }> = []
+  if (io) {
+    for (const [id, sock] of io.sockets.sockets) {
+      const meta = socketMeta.get(id) ?? {
+        user: null,
+        connectedAt: Date.now(),
+        rtt: null,
+        reconnects: 0,
+        app: null
+      }
+      sockets.push({ id, ...meta, rooms: [...sock.rooms].filter((r) => r !== id) })
+    }
+  }
+  const rooms: Array<{ room: string; size: number }> = []
+  if (io) {
+    for (const [room, set] of io.sockets.adapter.rooms) {
+      if (!io.sockets.sockets.has(room)) rooms.push({ room, size: set.size })
+    }
+    rooms.sort((a, b) => b.size - a.size)
+  }
+  return { sockets, rooms: rooms.slice(0, 100) }
+}
+
+/** Local concurrency snapshot for the sampling cron (#275). */
+export function getLocalConcurrency(): { sockets: number; users: number } {
+  const users = new Set<string>()
+  for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
+  return { sockets: _ioRef?.engine?.clientsCount ?? socketMeta.size, users: users.size }
+}
+
+/** Now-editing pulse (#273): per-node record-room viewers snapshot. */
+export function getRecordViewerSnapshot(): Array<{
+  collection: string
+  item: string
+  viewers: Array<{ id: string; name: string }>
+}> {
+  const out: Array<{ collection: string; item: string; viewers: Array<{ id: string; name: string }> }> = []
+  for (const [room, map] of recordViewers) {
+    const m = room.match(/^record:([^:]+):(.+)$/)
+    if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
+  }
+  return out
+}
+
+// Watch rooms admins may join via admin:join (traffic feed, job progress,
+// monitor flips). Allowlisted — a socket can't invent a privileged room name.
+const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors'])
+
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const io = new SocketIOServer(app.server, {
     cors: { origin: '*', credentials: true },
     transports: ['websocket', 'polling']
   })
+  _ioRef = io
 
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
 
   io.adapter(createAdapter(pubClient, subClient))
-  // record room → socketId → viewer (presence v2)
-  const recordViewers = new Map<string, Map<string, { id: string; name: string }>>()
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
   const pagePresence = new Map<
@@ -82,6 +159,65 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
+    socketMeta.set(socket.id, {
+      user: null,
+      connectedAt: Date.now(),
+      rtt: null,
+      reconnects: 0,
+      app: null
+    })
+    // RTT sampling for the diagnostics page (#270): app-level ping so we
+    // measure the full path our own events travel.
+    const rttTimer = setInterval(() => {
+      socket.emit('nvr:ping', { t: Date.now() })
+    }, 25_000)
+    socket.emit('nvr:ping', { t: Date.now() })
+    socket.on('nvr:pong', (payload: { t?: number }) => {
+      const meta = socketMeta.get(socket.id)
+      if (meta && typeof payload?.t === 'number') meta.rtt = Date.now() - payload.t
+    })
+    // Client self-report: reconnect count + which app (admin/efp-new).
+    socket.on('client:hello', (payload: { reconnects?: number; app?: string }) => {
+      const meta = socketMeta.get(socket.id)
+      if (!meta) return
+      if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
+      if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
+    })
+
+    // Missed-event catch-up (#266): client sends its last-seen sequence after
+    // (re)joining its rooms; we replay what it missed, or tell it honestly
+    // that the window is gone and it should refetch.
+    socket.on('catchup', async (payload: { cursor?: number }) => {
+      const cursor = Number(payload?.cursor)
+      if (!Number.isFinite(cursor) || cursor < 0) return
+      try {
+        const { replaySince } = await import('../services/event-journal.js')
+        const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
+        const result = await replaySince(cursor, rooms)
+        if (result.full) socket.emit('catchup:full', {})
+        else socket.emit('catchup:events', { events: result.events })
+      } catch (err) {
+        app.log.debug({ err }, 'catchup failed')
+        socket.emit('catchup:full', {})
+      }
+    })
+
+    // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
+    socket.on('admin:join', async (payload: { room?: string }) => {
+      const room = payload?.room
+      const user = authenticatedUser
+      if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
+      try {
+        const role = await db('nivaro_roles').where({ id: user.role }).first()
+        if (role?.admin_access) socket.join(`watch:${room}`)
+      } catch {
+        /* silent */
+      }
+    })
+    socket.on('admin:leave', (payload: { room?: string }) => {
+      const room = payload?.room
+      if (typeof room === 'string' && WATCH_ROOMS.has(room)) socket.leave(`watch:${room}`)
+    })
 
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
@@ -162,6 +298,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             .first()
           if (user) {
             authenticatedUser = user
+            const meta = socketMeta.get(socket.id)
+            if (meta)
+              meta.user = {
+                id: user.id,
+                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+              }
             socket.join(`user:${user.id}`)
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
@@ -180,6 +322,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             .first()
           if (user) {
             authenticatedUser = user
+            const meta = socketMeta.get(socket.id)
+            if (meta)
+              meta.user = {
+                id: user.id,
+                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+              }
             socket.join(`user:${user.id}`)
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
@@ -192,6 +340,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           .first()
         if (user) {
           authenticatedUser = user
+          const meta = socketMeta.get(socket.id)
+          if (meta)
+            meta.user = {
+              id: user.id,
+              name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+            }
           socket.join(`user:${user.id}`)
           socket.emit('auth:ok', { userId: user.id })
         }
@@ -402,7 +556,26 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       socket.to(joinedRecordRoom).emit('field:editing', { field: payload.field, user: null })
     })
 
+    // Upload presence (#282): "Beth is uploading quote.pdf" chips for
+    // co-viewers. Start/done only — fetch-based uploads have no progress.
+    socket.on('record:uploading', (payload: { name?: string; state?: string }) => {
+      const user = authenticatedUser
+      if (!user || !joinedRecordRoom) return
+      const state = payload?.state === 'done' ? 'done' : 'start'
+      const [, roomCollection, ...roomItem] = joinedRecordRoom.split(':')
+      socket.to(joinedRecordRoom).emit('record:uploading', {
+        collection: roomCollection,
+        item: roomItem.join(':'),
+        user: user.id,
+        user_name: displayName(user),
+        name: String(payload?.name ?? 'a file').slice(0, 200),
+        state
+      })
+    })
+
     socket.on('disconnect', () => {
+      clearInterval(rttTimer)
+      socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
       void closeJourneyRow(socket.id)

@@ -202,6 +202,20 @@ export async function notifyUser(
   const prefs = await getNotifyPrefs(userId)
   const matrixRow = prefs?.matrix?.[category]
   const critical = CRITICAL_SUBJECTS.test(opts.subject)
+  // Presence-aware suppression (#269): the recipient is LOOKING at the record
+  // this notification is about — they watched it happen; the inbox doesn't
+  // need to tell them. In-app + push only (email/digest unaffected); critical
+  // subjects always land. Per-node presence, same accepted limitation.
+  if (!critical && opts.collection && opts.item) {
+    try {
+      const { isUserViewing } = await import('../plugins/socketio.js')
+      if (isUserViewing(opts.collection, String(opts.item), userId)) {
+        channels.inapp = false
+      }
+    } catch {
+      // presence lookup failing must never swallow delivery decisions
+    }
+  }
   // Matrix: in-app off for this category kills the whole in-app channel
   // (row, push, toast) — critical subjects always land.
   if (matrixRow?.inapp === false && !critical) channels.inapp = false
