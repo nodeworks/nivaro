@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T16:48:00.577Z",
+  "generated_at": "2026-08-24T17:18:01.130Z",
   "releases": [
+    {
+      "version": "0.1.110",
+      "tag": "v0.1.110",
+      "date": "2026-08-24T13:17:57-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "platform",
+              "text": "Extensions Platform + API & SDK sprints — 15 features (backlog 112-427, 162-345; migrations 254-255)",
+              "hash": "95852476"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.109",
       "tag": "v0.1.109",
-      "date": "2026-08-24T12:47:55-04:00",
+      "date": "2026-08-24T12:48:00-04:00",
       "sections": [
         {
           "label": "Added",
