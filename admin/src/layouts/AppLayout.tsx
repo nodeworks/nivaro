@@ -88,6 +88,7 @@ import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { rumRouteChange, setDisplayTimezone, startRum } from '@nivaro/shared'
 import { adminRealtime } from '@/lib/socket'
+import { preloadRoute } from '@/lib/preload-routes'
 
 /** '/collections/workflows/312100' → '/collections/:c/:id' — RUM aggregates
  *  per page, not per record. */
@@ -121,7 +122,7 @@ import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
-import { AnnouncementBanner, ApiUpdateBanner, NivaroProvider, RealtimeContext } from '@nivaro/shared'
+import { AnnouncementBanner, ApiUpdateBanner, ErrorSurface, NivaroProvider, OfflineBanner, RealtimeContext } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 
 const announcementsClient = createNivaro(window.location.origin)
@@ -310,19 +311,19 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   render() {
     if (this.state.error) {
       return (
-        <div className='flex flex-1 min-h-0 flex-col items-center justify-center gap-3 p-8 text-center'>
-          <p className='text-sm font-medium text-slate-900 dark:text-foreground'>
-            Something went wrong loading this page.
-          </p>
-          <p className='max-w-sm text-xs text-muted-foreground'>{this.state.error.message}</p>
-          <button
-            type='button'
-            onClick={() => this.setState({ error: null })}
-            className='rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110'
-          >
-            Try again
-          </button>
-        </div>
+        <ErrorSurface
+          variant='500'
+          detail={this.state.error.message}
+          action={
+            <button
+              type='button'
+              onClick={() => this.setState({ error: null })}
+              className='rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110'
+            >
+              Try again
+            </button>
+          }
+        />
       )
     }
     return this.props.children
@@ -491,6 +492,8 @@ function PanelNavItem({ icon: Icon, label, to }: NavItem) {
   return (
     <Link
       to={to}
+      viewTransition
+      onMouseEnter={() => preloadRoute(to)}
       className={cn(
         // Full-bleed rows — the active background spans the entire panel width
         'flex items-center gap-2.5 px-4 py-[7px] text-[13px] font-medium transition-colors duration-100',
@@ -523,6 +526,7 @@ function hexToRgbChannels(hex: string): string | null {
 }
 
 export function AppLayout() {
+  useSessionKeepalive()
   const t = useT()
   usePagePresence()
   useSessionRecorder()
@@ -733,6 +737,7 @@ export function AppLayout() {
         {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
         <ApiUpdateBanner appName='Nivaro' />
+        <OfflineBanner />
         <NivaroProvider client={announcementsClient}>
           <AnnouncementBanner />
         </NivaroProvider>
@@ -1006,6 +1011,30 @@ export function AppLayout() {
  * Also handles catchup:full (#266): the event journal couldn't cover a
  * reconnect gap, so every cached query refetches.
  */
+/**
+ * Session auto-extend (#386): the session cookie is `rolling`, so ANY request
+ * refreshes it — this quietly guarantees one request per 10 minutes of real
+ * user activity, so someone reading a long record never gets logged out
+ * mid-thought. /api/version is the cheapest same-origin endpoint (no DB).
+ */
+function useSessionKeepalive() {
+  useEffect(() => {
+    let last = 0
+    const onActivity = () => {
+      const now = Date.now()
+      if (now - last < 10 * 60_000) return
+      last = now
+      void fetch('/api/version', { credentials: 'include', cache: 'no-store' }).catch(() => {})
+    }
+    window.addEventListener('pointerdown', onActivity, { passive: true })
+    window.addEventListener('keydown', onActivity, { passive: true })
+    return () => {
+      window.removeEventListener('pointerdown', onActivity)
+      window.removeEventListener('keydown', onActivity)
+    }
+  }, [])
+}
+
 function ForceRefreshBanner() {
   const qc = useQueryClient()
   const [refresh, setRefresh] = useState<{ seconds: number; message: string } | null>(null)

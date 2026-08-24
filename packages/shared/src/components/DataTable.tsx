@@ -1,5 +1,7 @@
+import { EmptyState } from './EmptyState'
 import {
   Check,
+  Inbox,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
@@ -75,7 +77,7 @@ export interface DataTableProps<T = Record<string, unknown>> {
   filterValues?: Record<string, string | string[]>
   onFilterChange?: (key: string, value: string | string[]) => void
   toolbarRight?: React.ReactNode
-  emptyMessage?: string
+  emptyMessage?: React.ReactNode
   /** Suppress the inline filter-control row while keeping filterDefs available
    *  to the host (e.g. a page rendering its own filter rail). */
   hideFilterRow?: boolean
@@ -903,7 +905,11 @@ export function DataTable<T = Record<string, unknown>>({
                       className='py-12 text-center align-middle text-[13px] text-slate-400'
                       style={minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined}
                     >
-                      {emptyMessage}
+                      {typeof emptyMessage === 'string' ? (
+                        <EmptyState icon={Inbox} title={emptyMessage} />
+                      ) : (
+                        emptyMessage
+                      )}
                     </TableCell>
                   </TableRow>
                 )}

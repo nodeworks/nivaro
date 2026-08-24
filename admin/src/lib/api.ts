@@ -156,6 +156,7 @@ export type CMSSettings = {
   brand_logo?: string | null
   brand_login_title?: string | null
   brand_login_message?: string | null
+  login_links?: string | null
   id: number
   project_name: string
   project_description: string | null

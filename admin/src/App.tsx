@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
+import { ErrorSurface } from '@nivaro/shared'
 import { Toaster } from 'sonner'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
@@ -151,6 +152,7 @@ const IntegrationHealthPage = lazy(() =>
 )
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const Realtime = lazy(() => import('@/pages/Realtime'))
+
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
@@ -345,6 +347,24 @@ function PostLoginRedirect() {
     }
   }, [user, loading, navigate])
   return null
+}
+
+function NotFoundPage() {
+  const navigate = useNavigate()
+  return (
+    <ErrorSurface
+      variant='404'
+      action={
+        <button
+          type='button'
+          onClick={() => navigate('/')}
+          className='rounded-md bg-nvr-cyan px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110'
+        >
+          Go to the dashboard
+        </button>
+      }
+    />
+  )
 }
 
 function AppShell() {
@@ -551,6 +571,7 @@ export default function App() {
                       </div>
                     }
                   />
+                  <Route path='*' element={<NotFoundPage />} />
                 </Route>
               </Routes>
             </BrowserRouter>

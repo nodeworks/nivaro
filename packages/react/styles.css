@@ -150,3 +150,46 @@ tr.nvr-row-flash > td {
   background-color: hsl(var(--card));
   color: hsl(var(--foreground));
 }
+
+/* ─── Motion system (#317) — tokens + shared keyframes ─────────────────────
+   All sprint animations draw from these; reduced-motion collapses them. */
+:root {
+  --nvr-dur-fast: 120ms;
+  --nvr-dur-base: 200ms;
+  --nvr-dur-slow: 320ms;
+  --nvr-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --nvr-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes nvr-glow-sweep {
+  0% { box-shadow: 0 0 0 0 rgba(0, 206, 255, 0.45); }
+  60% { box-shadow: 0 0 0 5px rgba(0, 206, 255, 0.12); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 206, 255, 0); }
+}
+.nvr-saved-glow {
+  animation: nvr-glow-sweep 900ms var(--nvr-ease-out) 1;
+  border-radius: 8px;
+}
+@keyframes nvr-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.nvr-pop { animation: nvr-pop var(--nvr-dur-slow) var(--nvr-ease-out-expo) 1; }
+@keyframes nvr-state-pulse {
+  0% { transform: scale(0.92); filter: brightness(1.25); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.nvr-state-pulse { animation: nvr-state-pulse 480ms var(--nvr-ease-out-expo) 1; }
+@keyframes nvr-fill-sweep {
+  from { transform: scale(0); }
+  to { transform: scale(1); }
+}
+.nvr-fill-sweep { animation: nvr-fill-sweep var(--nvr-dur-slow) var(--nvr-ease-out) 1; transform-origin: center; }
+@keyframes nvr-rise-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.nvr-rise-in { animation: nvr-rise-in var(--nvr-dur-base) var(--nvr-ease-out) 1; }
+@media (prefers-reduced-motion: reduce) {
+  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in { animation: none; }
+}

@@ -1,5 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useOptionalRealtime } from '../lib/realtime'
+import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -3611,6 +3612,8 @@ export function CollectionBrowserView({
   // patches it into the cached page in place: no full-table refetch, no
   // scroll jump. Creates/deletes and off-page rows fall back to a full
   // invalidate, debounced so bulk writes coalesce.
+  // Long-request honesty (#370): after 3s the loading pill starts counting.
+  const loadElapsed = useElapsedLoading(isFetching)
   const realtime = useOptionalRealtime()
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
@@ -5546,7 +5549,7 @@ export function CollectionBrowserView({
               <div className='cbv-overlay pointer-events-none absolute inset-0 z-[5] flex items-start justify-center bg-white/40 pt-24 dark:bg-slate-950/35'>
                 <span className='flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'>
                   <RotateCw aria-hidden className='h-3.5 w-3.5 animate-spin text-[#00a5cc]' />
-                  Loading…
+                  {loadElapsed != null ? `Still working — ${loadElapsed}s` : 'Loading…'}
                 </span>
               </div>
             </>

@@ -116,7 +116,8 @@ function StateBadge({
   const size = small ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-[12px]'
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full font-medium ${size}`}
+      key={label}
+      className={`nvr-state-pulse inline-flex items-center gap-1.5 rounded-full font-medium transition-colors duration-300 ${size}`}
       style={{
         backgroundColor: color ? `${color}22` : '#f1f5f9',
         color: color ?? '#475569',
@@ -365,7 +366,10 @@ function StateTrack({
             <div key={s.id} className='flex min-w-[48px] flex-1 items-start'>
               <div className='flex min-w-0 flex-1 flex-col items-center gap-1.5 px-1'>
                 <div
-                  className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full'
+                  key={isCurrent ? 'cur' : isDone ? 'done' : isSkipped ? 'skip' : 'todo'}
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                    isCurrent || isDone ? 'nvr-fill-sweep' : ''
+                  }`}
                   // Per-state help text (#81) — instant tip via TipLayer.
                   data-tip={s.description || undefined}
                   style={{

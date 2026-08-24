@@ -322,6 +322,8 @@ export function SettingsPage() {
   const [brandLogo, setBrandLogo] = useState<string | null>(null)
   const [brandLoginTitle, setBrandLoginTitle] = useState('')
   const [brandLoginMessage, setBrandLoginMessage] = useState('')
+  // Login help/support links (#347) — [{label, url}] JSON on settings.
+  const [loginLinks, setLoginLinks] = useState<Array<{ label: string; url: string }>>([])
   const [defaultLanguage, setDefaultLanguage] = useState('en-US')
   const [availableLocales, setAvailableLocales] = useState<string[]>(['en'])
   const [newLocale, setNewLocale] = useState('')
@@ -378,6 +380,12 @@ export function SettingsPage() {
     setBrandLogo((settings as { brand_logo?: string | null }).brand_logo ?? null)
     setBrandLoginTitle((settings as { brand_login_title?: string | null }).brand_login_title ?? '')
     setBrandLoginMessage((settings as { brand_login_message?: string | null }).brand_login_message ?? '')
+    try {
+      const raw = JSON.parse((settings as { login_links?: string | null }).login_links ?? '[]')
+      setLoginLinks(Array.isArray(raw) ? raw : [])
+    } catch {
+      setLoginLinks([])
+    }
     setDefaultLanguage(settings.default_language ?? 'en-US')
     setAvailableLocales(toLocaleArray((settings as Record<string, unknown>).available_locales))
     setTeamsWebhook(settings.teams_webhook_url ?? '')
@@ -445,7 +453,8 @@ export function SettingsPage() {
       project_color: projectColor,
       brand_logo: brandLogo,
       brand_login_title: brandLoginTitle.trim() || null,
-      brand_login_message: brandLoginMessage.trim() || null
+      brand_login_message: brandLoginMessage.trim() || null,
+      login_links: JSON.stringify(loginLinks.filter((l) => l.label.trim() && l.url.trim()))
     })
   }
 
@@ -795,6 +804,54 @@ export function SettingsPage() {
                       placeholder='e.g. Engineering Facilities Planning'
                       className='h-8 text-[13px]'
                     />
+                  </Field>
+                  <Field
+                    label='Login page links'
+                    hint='Help/support links shown under the login headline (https only).'
+                  >
+                    <div className='space-y-1.5'>
+                      {loginLinks.map((l, i) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: positional editor rows
+                        <div key={i} className='flex items-center gap-1.5'>
+                          <Input
+                            value={l.label}
+                            onChange={(e) =>
+                              setLoginLinks((prev) =>
+                                prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x))
+                              )
+                            }
+                            placeholder='Label (e.g. Help desk)'
+                            className='h-8 w-[180px] text-[12.5px]'
+                          />
+                          <Input
+                            value={l.url}
+                            onChange={(e) =>
+                              setLoginLinks((prev) =>
+                                prev.map((x, j) => (j === i ? { ...x, url: e.target.value } : x))
+                              )
+                            }
+                            placeholder='https://…'
+                            className='h-8 flex-1 font-mono text-[12px]'
+                          />
+                          <button
+                            type='button'
+                            onClick={() => setLoginLinks((prev) => prev.filter((_, j) => j !== i))}
+                            className='rounded-md px-2 py-1 text-[12px] text-slate-400 hover:bg-muted hover:text-red-500'
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      {loginLinks.length < 6 && (
+                        <button
+                          type='button'
+                          onClick={() => setLoginLinks((prev) => [...prev, { label: '', url: '' }])}
+                          className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[12px] text-slate-500 hover:bg-muted dark:border-border'
+                        >
+                          ＋ Add link
+                        </button>
+                      )}
+                    </div>
                   </Field>
                 </SectionWrap>
               )}

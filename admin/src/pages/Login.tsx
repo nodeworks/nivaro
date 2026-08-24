@@ -221,6 +221,7 @@ export function LoginPage() {
     logo_url: string | null
     login_title: string | null
     login_message: string | null
+    login_links?: Array<{ label: string; url: string }>
   } | null>(null)
   useEffect(() => {
     fetch('/api/auth/branding')
@@ -337,6 +338,26 @@ export function LoginPage() {
           >
             {branding?.login_message || 'Headless CMS'}
           </p>
+
+          {/* Configurable help/support links (#347) — Settings → Project. */}
+          {(branding?.login_links?.length ?? 0) > 0 && (
+            <div
+              className='mt-4 flex flex-wrap items-center gap-x-4 gap-y-1'
+              style={{ animation: 'login-fade 0.8s ease 0.24s both' }}
+            >
+              {branding?.login_links?.map((l) => (
+                <a
+                  key={l.url}
+                  href={l.url}
+                  target='_blank'
+                  rel='noreferrer'
+                  className='text-[12px] text-white/50 underline decoration-white/20 underline-offset-2 transition-colors hover:text-white/85'
+                >
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          )}
 
           <div
             className='mt-12 flex items-center gap-2'

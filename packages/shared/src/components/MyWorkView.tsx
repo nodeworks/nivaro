@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { TickerNumber } from './TickerNumber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOptionalRealtime } from '../lib/realtime'
 import { useApiFetchConfig, useItemNavigation } from '../context'
@@ -100,7 +101,9 @@ function Tile({ label, value, tone }: { label: string; value: number; tone?: str
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       <p className='text-[10.5px] uppercase tracking-wide text-muted-foreground'>{label}</p>
-      <p className={`mt-0.5 text-[18px] font-semibold tabular-nums ${tone ?? ''}`}>{value}</p>
+      <p className={`mt-0.5 text-[18px] font-semibold tabular-nums ${tone ?? ''}`}>
+        <TickerNumber value={value} />
+      </p>
     </div>
   )
 }

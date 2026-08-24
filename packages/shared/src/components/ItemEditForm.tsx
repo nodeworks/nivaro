@@ -967,6 +967,14 @@ export function ItemEditForm({
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+  // Condensing header (#321): long forms shrink the header to a mini-bar
+  // (title + state + save) once the body scrolls past ~90px.
+  const [headerCondensed, setHeaderCondensed] = useState(false)
+  const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const top = (e.target as HTMLDivElement).scrollTop
+    setHeaderCondensed((prev) => (prev ? top > 40 : top > 110))
+  }, [])
 
   // The revision this draft is BASED on — the collision check's baseline.
   const { data: baseRevisionData } = useQuery<{ latest: number | null }>({
@@ -4425,6 +4433,24 @@ export function ItemEditForm({
       return savedId
     },
     onSuccess: (id) => {
+      // Save ceremony (#318): the button morphs to a check and each field the
+      // user actually touched gets a one-time glow sweep. Purely cosmetic —
+      // read from userTouchedRef BEFORE the dirty state clears.
+      setJustSaved(true)
+      setTimeout(() => setJustSaved(false), 1600)
+      try {
+        for (const f of userTouchedRef.current) {
+          const el = document.querySelector(`[data-field="${CSS.escape(f)}"]`)
+          if (el) {
+            el.classList.remove('nvr-saved-glow')
+            void (el as HTMLElement).offsetWidth
+            el.classList.add('nvr-saved-glow')
+            setTimeout(() => el.classList.remove('nvr-saved-glow'), 1000)
+          }
+        }
+      } catch {
+        /* cosmetic only */
+      }
       changeReasonRef.current = null
       baseRevisionOverrideRef.current = null
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
@@ -5806,9 +5832,11 @@ export function ItemEditForm({
                               {showHeader && (
                                 <header
                                   className={cn(
-                                    'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 py-3.5 flex items-center gap-3',
+                                    'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-3 transition-[padding] duration-200',
+                                    headerCondensed ? 'py-1.5' : 'py-3.5',
                                     headerClassName
                                   )}
+                                  data-nvr-condensed={headerCondensed || undefined}
                                 >
                                   {onBack && (
                                     <button
@@ -5899,7 +5927,7 @@ export function ItemEditForm({
                                         )}
                                       </p>
                                     )}
-                                    {subtitleParts.length > 0 && (
+                                    {subtitleParts.length > 0 && !headerCondensed && (
                                       <div className='group/subtitle mt-0.5 flex items-center gap-1'>
                                         {/* Capped to 350px on one line — a long subtitle used to wrap
                       and push the whole header taller. The full text rides in
@@ -6531,10 +6559,12 @@ export function ItemEditForm({
                                         >
                                           {saveMut.isPending ? (
                                             <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                          ) : justSaved ? (
+                                            <Check className='nvr-pop h-3.5 w-3.5' />
                                           ) : (
                                             <Save className='h-3.5 w-3.5' />
                                           )}
-                                          {isNew ? 'Create' : 'Save'}
+                                          {justSaved ? 'Saved' : isNew ? 'Create' : 'Save'}
                                         </Button>
                                       </div>
                                     )}
@@ -6641,6 +6671,7 @@ export function ItemEditForm({
                               )}
 
                               {showHeader &&
+                                !headerCondensed &&
                                 (headerWidgets.length > 0 || headerFields.length > 0) && (
                                   <div className='flex shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
                                     {[
@@ -6952,6 +6983,7 @@ export function ItemEditForm({
                                   'flex-1 min-h-0',
                                   summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
                                 )}
+                                onScroll={summaryEnabled ? undefined : condenseOnScroll}
                               >
                                 <div
                                   ref={bodyRef}
@@ -6959,6 +6991,7 @@ export function ItemEditForm({
                                     'p-6 space-y-4',
                                     summaryEnabled ? 'flex-1 overflow-y-auto' : ''
                                   )}
+                                  onScroll={summaryEnabled ? condenseOnScroll : undefined}
                                 >
                                   {extraTopContent}
                                   {!isNew && itemId && (

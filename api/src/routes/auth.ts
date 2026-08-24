@@ -111,7 +111,7 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
-        .first('project_name', 'project_color', 'brand_logo', 'brand_login_title', 'brand_login_message')) as
+        .first('project_name', 'project_color', 'brand_logo', 'brand_login_title', 'brand_login_message', 'login_links')) as
         | Record<string, unknown>
         | undefined
       return {
@@ -120,7 +120,25 @@ export async function authRoutes(app: FastifyInstance) {
           color: (row?.project_color as string | null) ?? null,
           logo_url: row?.brand_logo ? `/api/files/${row.brand_logo}` : null,
           login_title: (row?.brand_login_title as string | null) ?? null,
-          login_message: (row?.brand_login_message as string | null) ?? null
+          login_message: (row?.brand_login_message as string | null) ?? null,
+          login_links: (() => {
+            try {
+              const parsed = JSON.parse((row?.login_links as string) ?? '[]')
+              return Array.isArray(parsed)
+                ? parsed
+                    .filter(
+                      (l) =>
+                        l &&
+                        typeof l.label === 'string' &&
+                        typeof l.url === 'string' &&
+                        /^https?:\/\//.test(l.url)
+                    )
+                    .slice(0, 6)
+                : []
+            } catch {
+              return []
+            }
+          })()
         }
       }
     } catch {

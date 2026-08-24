@@ -86,7 +86,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       // Branding (#21)
       'brand_logo',
       'brand_login_title',
-      'brand_login_message'
+      'brand_login_message',
+      'login_links'
     ]
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))

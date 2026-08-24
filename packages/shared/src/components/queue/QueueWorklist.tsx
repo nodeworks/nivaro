@@ -1,3 +1,6 @@
+import { TickerNumber } from '../TickerNumber'
+import { EmptyState } from '../EmptyState'
+import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import {
   closestCenter,
   DndContext,
@@ -14,7 +17,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
+import { Inbox,
   AlertTriangle,
   ChevronDown,
   Filter,
@@ -290,14 +293,14 @@ function StatTile({
             {filteredCount != null ? (
               <>
                 <span className='text-nvr-navy dark:text-nvr-cyan'>
-                  {formatNumber(filteredCount)}
+                  <TickerNumber value={filteredCount} format={formatNumber} />
                 </span>
                 <span className='text-[11px] font-medium text-slate-400'>
-                  / {formatNumber(count)}
+                  / <TickerNumber value={count} format={formatNumber} />
                 </span>
               </>
             ) : (
-              formatNumber(count)
+              <TickerNumber value={count} format={formatNumber} />
             )}
           </span>
           <span
@@ -727,6 +730,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // True while a sort/filter/page change is in flight over kept-previous data —
   // the table dims slightly instead of unmounting (no layout shift).
   const isRefetching = (isFetching && !isLoading) || (isPlaceholderData && isFetching)
+  // Long-request honesty (#370)
+  const loadElapsed = useElapsedLoading(isFetching)
 
   async function performTransition(item: QueueItemRow, targetState: string) {
     const instanceRes = await client.request<{
@@ -2619,11 +2624,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               )}
               <div
                 className={cn(
-                  'min-w-0 flex-1 transition-opacity duration-200',
+                  'relative min-w-0 flex-1 transition-opacity duration-200',
                   isRefetching && 'pointer-events-none opacity-60'
                 )}
                 aria-busy={isRefetching || undefined}
               >
+                {loadElapsed != null && (
+                  <span className='absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
+                    Still working — {loadElapsed}s
+                  </span>
+                )}
                 <DataTable<QueueItemRow>
                   fillHeight
                   density={density}
@@ -2652,7 +2662,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                         ? rowHighlightClass(row.at_risk_color ?? 'red')
                         : undefined
                   }
-                  emptyMessage='Nothing in this queue.'
+                  emptyMessage={
+                    <EmptyState
+                      icon={Inbox}
+                      title='Nothing in this queue'
+                      detail='Records land here when they match the queue sources — a state change or new record can appear at any moment.'
+                    />
+                  }
                   sort={sort}
                   onSortChange={(next) => {
                     setSort(next)
