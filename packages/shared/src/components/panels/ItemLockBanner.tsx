@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { useOptionalRealtime } from '../../lib/realtime'
+import { idleState } from '../../lib/idle'
 import { del, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 
@@ -42,8 +43,31 @@ export function useItemLock(
       setLockHolder(null)
       stopHeartbeat()
       heartbeatRef.current = setInterval(() => {
+        // Report how long since real input — the server releases the lock past
+        // settings.lock_idle_release_minutes so an abandoned tab frees the record.
+        const idleSecs = Math.max(
+          0,
+          Math.floor((Date.now() - new Date(idleState().last_active).getTime()) / 1000)
+        )
         client
-          .request(post(`/item-locks/${collection}/${item}/heartbeat`, {}))
+          .request(
+            post(`/item-locks/${collection}/${item}/heartbeat`, { idle_seconds: idleSecs })
+          )
+          .then((r) => {
+            if (!(r as { idle_released?: boolean } | null)?.idle_released) return
+            stopHeartbeat()
+            acquiredRef.current = false
+            setAcquired(false)
+            toast.info('Your edit lock was released after inactivity — it re-locks when you resume.')
+            // Re-acquire on the next real input, if the record is still free.
+            const resume = () => {
+              window.removeEventListener('pointerdown', resume, true)
+              window.removeEventListener('keydown', resume, true)
+              acquire()
+            }
+            window.addEventListener('pointerdown', resume, true)
+            window.addEventListener('keydown', resume, true)
+          })
           .catch((err: unknown) => {
             // The heartbeat is the ONLY moment a client learns its lock was
             // taken over. Swallowing the failure left the loser editing a

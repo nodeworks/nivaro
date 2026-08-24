@@ -424,6 +424,20 @@ export function CommentPanel({
     }
   }, [defaultExpanded])
   const [draft, setDraft] = useState('')
+  // AI text cleanup (#217): one click fixes grammar/clarity, meaning kept.
+  const [cleaning, setCleaning] = useState(false)
+  const cleanDraft = async () => {
+    if (!draft.trim() || cleaning) return
+    setCleaning(true)
+    try {
+      const r = await client.request<{ data: { text: string } }>(post('/ai/cleanup', { text: draft }))
+      if (r.data?.text) setDraft(r.data.text)
+    } catch {
+      /* cleanup is optional polish */
+    } finally {
+      setCleaning(false)
+    }
+  }
   // Comment typing (#263): show co-viewers' "writing a note…" and emit our
   // own while the draft changes (throttled; relayed via RecordLiveSync).
   const [typingUser, setTypingUser] = useState<string | null>(null)
@@ -664,9 +678,20 @@ export function CommentPanel({
                     Type @ plus two letters to mention a teammate, or @owners to notify everyone
                     currently assigned.
                   </p>
-                  <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
-                    {create.isPending ? 'Posting…' : 'Comment'}
-                  </Button>
+                  <span className='flex items-center gap-1.5'>
+                    <button
+                      type='button'
+                      disabled={!draft.trim() || cleaning}
+                      onClick={() => void cleanDraft()}
+                      data-tip='✨ Fix grammar & clarity (meaning preserved)'
+                      className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-500 hover:bg-muted disabled:opacity-50 dark:border-border'
+                    >
+                      {cleaning ? '…' : '✨ Polish'}
+                    </button>
+                    <Button type='submit' size='sm' disabled={!draft.trim() || create.isPending}>
+                      {create.isPending ? 'Posting…' : 'Comment'}
+                    </Button>
+                  </span>
                 </div>
               </form>
               {typingUser && (

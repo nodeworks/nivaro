@@ -33,8 +33,16 @@ export async function persistedQueriesRoutes(app: FastifyInstance) {
     const rows = (await db('nivaro_persisted_queries').orderBy(
       'name',
       'asc'
-    )) as PersistedQueryRow[]
-    return { data: rows }
+    )) as Array<PersistedQueryRow & { use_count?: number; last_used_at?: Date | null }>
+    // Hygiene (#176): 90 days unused (or never used since counting began) =
+    // stale, flagged for cleanup.
+    const cutoff = Date.now() - 90 * 86400e3
+    return {
+      data: rows.map((r) => ({
+        ...r,
+        stale: !r.last_used_at || new Date(r.last_used_at).getTime() < cutoff
+      }))
+    }
   })
 
   // Single

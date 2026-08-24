@@ -3658,11 +3658,23 @@ export function ItemEditForm({
 
   // Completeness meter (#59): filled ÷ visible-editable fields on this layout,
   // with required gaps called out. Display only — nothing blocks on it.
+  // Judged against the CURRENTLY VIEWED layout's own assignments when one is
+  // active — a field the open layout doesn't show must not count against the
+  // percentage (Rob, 2026-08-24).
   const completeness = useMemo(() => {
+    const layoutFieldSet =
+      (activeLayoutData?.assignments?.length ?? 0) > 0
+        ? new Set(
+            (activeLayoutData?.assignments ?? [])
+              .filter((a) => !(a.is_visible === 0 || a.is_visible === false))
+              .map((a) => a.field)
+          )
+        : null
     const fields = (fieldConfig ?? []).filter((fc) => {
       if (fc.hidden || (fc as { readonly?: boolean }).readonly) return false
       if ((fc as { computed_type?: string | null }).computed_type) return false
       if ((fc as { layout_assigned?: boolean }).layout_assigned === false) return false
+      if (layoutFieldSet && !layoutFieldSet.has(fc.field)) return false
       if (fc.field.startsWith('__') || fc.field.includes('.')) return false
       const opts = fc.options as Record<string, unknown> | null
       if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) return false
@@ -3683,7 +3695,7 @@ export function ItemEditForm({
       total: fields.length,
       requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
     }
-  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates])
+  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates, activeLayoutData])
 
   // Provenance (#29): where the record came from — shown as a chip beside the
   // last-touched line.

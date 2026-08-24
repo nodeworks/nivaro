@@ -346,6 +346,39 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.digest_layout = body.digest_layout
     }
+    if ('time_display' in body) {
+      // Timestamp display pref (#229): relative ("3h ago") vs exact.
+      if (!['relative', 'exact'].includes(String(body.time_display))) {
+        return reply.code(400).send({ error: "time_display must be 'relative' or 'exact'" })
+      }
+      patch.time_display = body.time_display
+    }
+    if ('number_format' in body) {
+      // Number format (#230) + compact toggle (#411).
+      const raw = body.number_format
+      if (raw === null) patch.number_format = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const nf = raw as { locale?: unknown; compact?: unknown }
+        patch.number_format = {
+          locale: typeof nf.locale === 'string' ? nf.locale.slice(0, 20) : undefined,
+          compact: nf.compact === true
+        }
+      } else {
+        return reply.code(400).send({ error: 'number_format must be an object or null' })
+      }
+    }
+    if ('week_start' in body) {
+      if (!['mon', 'sun'].includes(String(body.week_start))) {
+        return reply.code(400).send({ error: "week_start must be 'mon' or 'sun'" })
+      }
+      patch.week_start = body.week_start
+    }
+    if ('font_size' in body) {
+      if (!['small', 'default', 'large'].includes(String(body.font_size))) {
+        return reply.code(400).send({ error: "font_size must be small/default/large" })
+      }
+      patch.font_size = body.font_size
+    }
     if ('timezone' in body) {
       // Per-user display timezone (#31). null = browser default.
       const tz = body.timezone

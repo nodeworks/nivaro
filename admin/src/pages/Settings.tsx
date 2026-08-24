@@ -11,6 +11,7 @@ import {
   Plus,
   Radio,
   Send,
+  Server,
   Settings2,
   Trash2,
   X
@@ -135,6 +136,7 @@ type Section =
   | 'email'
   | 'sms'
   | 'backups'
+  | 'instance'
 
 const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'project', label: 'Project', icon: <Settings2 className='h-3.5 w-3.5' /> },
@@ -146,7 +148,8 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'content', label: 'Content', icon: <Database className='h-3.5 w-3.5' /> },
   { id: 'email', label: 'Email', icon: <Mail className='h-3.5 w-3.5' /> },
   { id: 'sms', label: 'SMS', icon: <MessageSquare className='h-3.5 w-3.5' /> },
-  { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> }
+  { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> },
+  { id: 'instance', label: 'This Instance', icon: <Server className='h-3.5 w-3.5' /> }
 ]
 
 const AI_MODELS = [
@@ -192,6 +195,137 @@ function SectionWrap({
         </div>
       </div>
     </div>
+  )
+}
+
+
+// ─── Per-instance overrides section ──────────────────────────────────────────
+// Several instances (local dev + staging) can share ONE database and therefore
+// one settings row — this section overrides individual settings for THIS
+// instance only (keyed by NIVARO_INSTANCE env, defaulting to NODE_ENV).
+// Typical use: a local SMTP setup while staging keeps the relay config.
+
+const INSTANCE_OVERRIDE_KEYS = [
+  'smtp_host',
+  'smtp_port',
+  'smtp_user',
+  'smtp_pass',
+  'smtp_from',
+  'smtp_secure',
+  'mail_test_mode',
+  'mail_test_recipient',
+  'mail_test_allowlist',
+  'environment_label',
+  'sms_provider',
+  'sms_account_sid',
+  'sms_auth_token',
+  'sms_from',
+  'sms_region',
+  'sms_test_mode',
+  'sms_test_recipient',
+  'sms_test_allowlist'
+]
+
+function coerceOverrideValue(raw: string): unknown {
+  const v = raw.trim()
+  if (v === '') return null
+  if (v === 'true') return true
+  if (v === 'false') return false
+  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v)
+  return v
+}
+
+function InstanceOverridesSection() {
+  const queryClient = useQueryClient()
+  const { data } = useQuery({
+    queryKey: ['instance-overrides'],
+    queryFn: () =>
+      api
+        .get<{ data: { instance_key: string; overrides: Record<string, unknown> } }>(
+          '/settings/instance-overrides'
+        )
+        .then((r) => r.data.data)
+  })
+  const [rows, setRows] = useState<Array<{ key: string; value: string }>>([])
+  const [hydrated, setHydrated] = useState(false)
+  if (data && !hydrated) {
+    setRows(Object.entries(data.overrides).map(([key, v]) => ({ key, value: v == null ? '' : String(v) })))
+    setHydrated(true)
+  }
+  const save = useMutation({
+    mutationFn: () => {
+      const overrides: Record<string, unknown> = {}
+      for (const r of rows) {
+        if (r.key) overrides[r.key] = coerceOverrideValue(r.value)
+      }
+      return api.put('/settings/instance-overrides', { overrides })
+    },
+    onSuccess: () => {
+      toast.success('Instance overrides saved')
+      queryClient.invalidateQueries({ queryKey: ['instance-overrides'] })
+    },
+    onError: () => toast.error('Could not save overrides')
+  })
+  const unused = INSTANCE_OVERRIDE_KEYS.filter((k) => !rows.some((r) => r.key === k))
+  return (
+    <SectionWrap title='This Instance' onSave={() => save.mutate()} saving={save.isPending}>
+      <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+        Overrides for <span className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11.5px] text-slate-700 dark:bg-muted dark:text-slate-300'>{data?.instance_key ?? '…'}</span>{' '}
+        only. When several environments share this database, values set here win over the shared
+        settings on this instance — e.g. a local mail server while staging keeps its relay. Leave a
+        value blank to force the setting back to this instance's env-var fallback.
+      </p>
+      <div className='space-y-2'>
+        {rows.map((r, i) => (
+          <div key={i} className='flex items-center gap-2'>
+            <div className='w-52 shrink-0'>
+              <Select
+                value={r.key}
+                onValueChange={(v) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, key: v } : x)))}
+              >
+                <SelectTrigger className='h-8 text-[12px]'>
+                  <SelectValue placeholder='Setting…' />
+                </SelectTrigger>
+                <SelectContent>
+                  {[r.key, ...unused].filter(Boolean).map((k) => (
+                    <SelectItem key={k} value={k} className='font-mono text-[12px]'>
+                      {k}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Input
+              value={r.value}
+              onChange={(e) =>
+                setRows((rs) => rs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+              }
+              placeholder='value (blank = clear to env fallback)'
+              className='h-8 flex-1 text-[12.5px]'
+            />
+            <button
+              type='button'
+              className='rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-red-500 dark:hover:bg-accent'
+              onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+              aria-label='Remove override'
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
+          </div>
+        ))}
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          className='gap-1.5'
+          disabled={unused.length === 0}
+          onClick={() => setRows((rs) => [...rs, { key: unused[0] ?? '', value: '' }])}
+        >
+          <Plus className='h-3.5 w-3.5' />
+          Add override
+        </Button>
+      </div>
+    </SectionWrap>
   )
 }
 
@@ -347,6 +481,7 @@ export function SettingsPage() {
   const [activityRetentionDays, setActivityRetentionDays] = useState<number | ''>('')
   const [revisionRetentionCount, setRevisionRetentionCount] = useState<number | ''>('')
   const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
+  const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState<number | ''>(587)
   const [smtpUser, setSmtpUser] = useState('')
@@ -412,6 +547,9 @@ export function SettingsPage() {
     setCollectionPageSize(settings.collection_page_size ?? 25)
     setActivityRetentionDays(settings.activity_retention_days ?? '')
     setFieldWatchEnabled(!!(settings as { field_watch_enabled?: boolean }).field_watch_enabled)
+    setLockIdleMinutes(
+      (settings as { lock_idle_release_minutes?: number | null }).lock_idle_release_minutes ?? ''
+    )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
     setSmsProvider((s.sms_provider as string) ?? '')
@@ -593,7 +731,8 @@ export function SettingsPage() {
       collection_page_size: collectionPageSize,
       activity_retention_days: activityRetentionDays === '' ? null : activityRetentionDays,
       revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount,
-      field_watch_enabled: fieldWatchEnabled
+      field_watch_enabled: fieldWatchEnabled,
+      lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes
     })
   }
 
@@ -1341,6 +1480,21 @@ export function SettingsPage() {
                     </div>
                     <Switch checked={fieldWatchEnabled} onCheckedChange={setFieldWatchEnabled} />
                   </div>
+                  <Field
+                    label='Idle lock release (minutes)'
+                    hint='Release a record edit lock after this many minutes without keyboard or mouse input from the holder — an abandoned tab stops holding the record hostage. Blank = never release on idle.'
+                  >
+                    <Input
+                      type='number'
+                      min={1}
+                      value={lockIdleMinutes}
+                      onChange={(e) =>
+                        setLockIdleMinutes(e.target.value === '' ? '' : Number(e.target.value))
+                      }
+                      placeholder='e.g. 15'
+                      className='h-8 w-40 text-[13px]'
+                    />
+                  </Field>
                 </SectionWrap>
               )}
 
@@ -1720,6 +1874,8 @@ export function SettingsPage() {
                 })()}
 
               {activeSection === 'backups' && <BackupsSection />}
+
+              {activeSection === 'instance' && <InstanceOverridesSection />}
             </>
           )}
         </div>

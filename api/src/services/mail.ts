@@ -4,6 +4,7 @@ import { Liquid } from 'liquidjs'
 import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { overlaySettings } from './settings-overrides.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -127,21 +128,23 @@ interface SmtpConfig {
  */
 async function getSmtpConfig(): Promise<SmtpConfig> {
   try {
-    const row = (await db('nivaro_settings')
-      .select(
-        'smtp_host',
-        'smtp_port',
-        'smtp_user',
-        'smtp_pass',
-        'smtp_from',
-        'smtp_secure',
-        'mail_test_mode',
-        'mail_test_recipient',
-        'mail_test_allowlist',
-        'environment_label'
-      )
-      .orderBy('id', 'asc')
-      .first()) as Record<string, unknown> | undefined
+    const row = await overlaySettings(
+      (await db('nivaro_settings')
+        .select(
+          'smtp_host',
+          'smtp_port',
+          'smtp_user',
+          'smtp_pass',
+          'smtp_from',
+          'smtp_secure',
+          'mail_test_mode',
+          'mail_test_recipient',
+          'mail_test_allowlist',
+          'environment_label'
+        )
+        .orderBy('id', 'asc')
+        .first()) as Record<string, unknown> | undefined
+    )
 
     const host = (row?.smtp_host as string | null) || config.SMTP_HOST
     const port = (row?.smtp_port as number | null) ?? config.SMTP_PORT

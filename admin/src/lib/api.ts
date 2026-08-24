@@ -159,6 +159,7 @@ export type CMSRelation = {
 
 export type CMSSettings = {
   field_watch_enabled?: boolean
+  lock_idle_release_minutes?: number | null
   brand_logo?: string | null
   brand_login_title?: string | null
   brand_login_message?: string | null

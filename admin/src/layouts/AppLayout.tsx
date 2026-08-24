@@ -86,7 +86,7 @@ import {
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
-import { rumRouteChange, setDisplayTimezone, startRum } from '@nivaro/shared'
+import { rumRouteChange, setDisplayTimezone, setNumberFormat, setTimeDisplay, startRum } from '@nivaro/shared'
 import { adminRealtime } from '@/lib/socket'
 import { preloadRoute } from '@/lib/preload-routes'
 
@@ -546,8 +546,27 @@ export function AppLayout() {
   // chosen zone once set; browser default otherwise.
   const { user: authUser } = useAuth()
   useEffect(() => {
-    const tz = (authUser?.preferences as { timezone?: string } | null | undefined)?.timezone
-    setDisplayTimezone(typeof tz === 'string' ? tz : null)
+    const prefs = (authUser?.preferences ?? {}) as {
+      timezone?: string
+      time_display?: string
+      number_format?: { locale?: string; compact?: boolean }
+      font_size?: string
+    }
+    // Instance default timezone (#178): users without a pref get the
+    // instance-configured default rather than the browser zone.
+    if (typeof prefs.timezone === 'string') setDisplayTimezone(prefs.timezone)
+    else {
+      void api
+        .get<{ data: { default_timezone?: string | null } }>('/settings')
+        .then((r) => setDisplayTimezone(r.data.data.default_timezone ?? null))
+        .catch(() => setDisplayTimezone(null))
+    }
+    // Display prefs (#229/#230/#411): shared formatters honor them.
+    setTimeDisplay(prefs.time_display ?? null)
+    setNumberFormat(prefs.number_format ?? null)
+    // Font size (#232): root scaling — everything in rem follows.
+    const size = prefs.font_size === 'small' ? '15px' : prefs.font_size === 'large' ? '17.5px' : ''
+    document.documentElement.style.fontSize = size
   }, [authUser])
 
   const location = useLocation()

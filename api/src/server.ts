@@ -577,6 +577,119 @@ export async function buildServer() {
         await deliverScheduledAnnouncements(app)
       })
 
+      // Scheduled DQ runs (#170): every collection's active quality rules,
+      // nightly — the runs table becomes a pass-rate trend for free.
+      app.cron.schedule('dq-nightly', '50 3 * * *', async () => {
+        const { runAllDqRules } = await import('./routes/data-quality.js')
+        await runAllDqRules()
+      })
+
+      // Subscription integrity (#367): weekly — per-record subscriptions
+      // pointing at deleted records, and view subscriptions whose saved view
+      // is gone, deactivate with one summary issue.
+      app.cron.schedule('subscription-integrity', '10 4 * * 0', async () => {
+        const { db } = await import('./db/index.js')
+        let cleaned = 0
+        try {
+          const recSubs = (await db('nivaro_notification_subscriptions')
+            .where({ is_active: true, filter_field: 'id' })
+            .whereNotNull('collection')
+            .select('id', 'collection', 'filter_value')
+            .limit(2000)) as Array<{ id: number; collection: string; filter_value: string }>
+          const byCol = new Map<string, Array<{ id: number; filter_value: string }>>()
+          for (const r of recSubs) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(r.collection)) continue
+            const arr = byCol.get(r.collection) ?? []
+            arr.push(r)
+            byCol.set(r.collection, arr)
+          }
+          for (const [col, subs] of byCol) {
+            try {
+              const ids = subs.map((x) => x.filter_value)
+              const existing = new Set(
+                ((await db(col).whereIn('id', ids).select('id')) as Array<{ id: unknown }>).map((x) =>
+                  String(x.id)
+                )
+              )
+              const dead = subs.filter((x) => !existing.has(String(x.filter_value)))
+              if (dead.length > 0) {
+                await db('nivaro_notification_subscriptions')
+                  .whereIn('id', dead.map((x) => x.id))
+                  .update({ is_active: false })
+                cleaned += dead.length
+              }
+            } catch {
+              /* collection dropped — leave subs, next sweep */
+            }
+          }
+          const viewSubs = (await db('nivaro_view_subscriptions as vs')
+            .leftJoin('nivaro_saved_views as v', 'vs.view_id', 'v.id')
+            .whereNull('v.id')
+            .where('vs.is_active', true)
+            .select('vs.id')) as Array<{ id: number }>
+          if (viewSubs.length > 0) {
+            await db('nivaro_view_subscriptions')
+              .whereIn('id', viewSubs.map((x) => x.id))
+              .update({ is_active: false })
+            cleaned += viewSubs.length
+          }
+          if (cleaned > 0) {
+            const { trackError } = await import('./services/error-tracking.js')
+            await trackError({
+              source: 'server',
+              route: 'subscription-integrity',
+              message: `Deactivated ${cleaned} subscription(s) pointing at deleted views/records`,
+              severity: 'low'
+            }).catch(() => {})
+          }
+        } catch {
+          /* sweep is best-effort */
+        }
+      })
+
+      // Dead-link sweep (#406): nivaro_record_links whose either end no longer
+      // exists — found nightly, reported as one deduped issue.
+      app.cron.schedule('dead-link-sweep', '55 3 * * *', async () => {
+        const { db } = await import('./db/index.js')
+        try {
+          const links = (await db('nivaro_record_links')
+            .select('id', 'from_collection', 'from_item', 'to_collection', 'to_item')
+            .limit(5000)) as Array<Record<string, unknown>>
+          const dead: number[] = []
+          const checked = new Map<string, boolean>()
+          const exists = async (col: string, id: string) => {
+            const key = `${col}:${id}`
+            if (checked.has(key)) return checked.get(key) as boolean
+            let ok = false
+            try {
+              if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) {
+                ok = !!(await db(col).where({ id }).first('id'))
+              }
+            } catch {
+              ok = true // unreadable table — never call a link dead on an error
+            }
+            checked.set(key, ok)
+            return ok
+          }
+          for (const l of links) {
+            const a = await exists(String(l.from_collection), String(l.from_item))
+            const b = await exists(String(l.to_collection), String(l.to_item))
+            if (!a || !b) dead.push(Number(l.id))
+          }
+          if (dead.length > 0) {
+            const { trackError } = await import('./services/error-tracking.js')
+            await trackError({
+              source: 'server',
+              route: 'dead-link-sweep',
+              message: `${dead.length} record link(s) point at deleted records (ids: ${dead.slice(0, 20).join(', ')}${dead.length > 20 ? '…' : ''})`,
+              severity: 'low'
+            }).catch(() => {})
+          }
+        } catch {
+          /* sweep is best-effort */
+        }
+      })
+
       // Ack chasers (#385): must-ack broadcasts remind non-ackers at 24h,
       // escalate to the sender at 48h — each exactly once.
       app.cron.schedule('broadcast-ack-chasers', '15 * * * *', async () => {

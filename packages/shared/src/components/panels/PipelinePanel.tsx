@@ -1429,6 +1429,8 @@ function PipelinePanelInner({
           : undefined
       if (txs.length === 1) {
         const tx = txs[0]
+        const running =
+          executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
         return (
           <Button
             key={label}
@@ -1436,8 +1438,10 @@ function PipelinePanelInner({
             variant={isActive ? 'default' : 'outline'}
             className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
             style={colorStyle(isActive)}
+            disabled={executeTransition.isPending}
             onClick={() => trySetPending(tx.id)}
           >
+            {running && <Loader2 className='h-3 w-3 animate-spin' />}
             {label}
           </Button>
         )
@@ -1450,6 +1454,7 @@ function PipelinePanelInner({
               variant={isActive ? 'default' : 'outline'}
               className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
               style={colorStyle(isActive)}
+              disabled={executeTransition.isPending}
             >
               {label}
               <ChevronDown className='h-3 w-3' />
@@ -1881,6 +1886,8 @@ function PipelineTransitionButtonsInner({
               : undefined
           if (txs.length === 1) {
             const tx = txs[0]
+            const running =
+              executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
             return (
               <Button
                 key={label}
@@ -1888,8 +1895,10 @@ function PipelineTransitionButtonsInner({
                 variant={isActive ? 'default' : 'outline'}
                 className='gap-1.5 text-[12px]'
                 style={colorStyle(isActive)}
+                disabled={executeTransition.isPending}
                 onClick={() => trySetPending(tx.id)}
               >
+                {running && <Loader2 className='h-3 w-3 animate-spin' />}
                 {label}
               </Button>
             )
@@ -1902,6 +1911,7 @@ function PipelineTransitionButtonsInner({
                   variant={isActive ? 'default' : 'outline'}
                   className='gap-1.5 text-[12px]'
                   style={colorStyle(isActive)}
+                  disabled={executeTransition.isPending}
                 >
                   {label}
                   <ChevronDown className='h-3 w-3' />

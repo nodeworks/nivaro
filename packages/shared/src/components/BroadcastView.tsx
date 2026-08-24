@@ -325,6 +325,23 @@ export function BroadcastView({ className }: { className?: string }) {
           placeholder='Compose your message… (plain text; line breaks are kept)'
           className='mt-2 w-full rounded-md border border-slate-200 bg-background px-2.5 py-2 text-[12.5px] text-slate-800 dark:border-border dark:text-foreground'
         />
+        <div className='mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          <span>Personalization tokens (subject &amp; message):</span>
+          {(['{{first_name}}', '{{name}}'] as const).map((tok) => (
+            <button
+              key={tok}
+              type='button'
+              onClick={() => setMessage((m) => (m ? `${m} ${tok}` : tok))}
+              className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] text-slate-600 hover:bg-slate-200 dark:bg-muted dark:text-slate-300 dark:hover:bg-accent'
+              title={`Insert ${tok} — replaced with each recipient's ${tok === '{{name}}' ? 'full name' : 'first name'} at send time`}
+            >
+              {tok}
+            </button>
+          ))}
+          <span className='text-slate-400 dark:text-slate-500'>
+            — replaced per recipient at send; unknown tokens render blank.
+          </span>
+        </div>
         <div className='mt-3 flex flex-wrap items-center gap-x-5 gap-y-2'>
           <label className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
             <input

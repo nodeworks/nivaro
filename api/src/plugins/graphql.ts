@@ -86,6 +86,19 @@ async function lookupPersistedQuery(key: { id?: unknown; hash?: string }): Promi
           .where({ id: Number(key.id) })
           .first()) as { query: string } | undefined)
     query = row?.query ?? null
+    // Persisted query hygiene (#176): usage counter + last-used stamp,
+    // fire-and-forget. The 60s cache means one bump per TTL window, which is
+    // exactly the granularity a stale-flag needs.
+    if (query) {
+      const bump = key.hash
+        ? db('nivaro_persisted_queries').where({ hash: key.hash })
+        : db('nivaro_persisted_queries').where({ id: Number(key.id) })
+      void bump.increment('use_count', 1).catch(() => {})
+      const stamp = key.hash
+        ? db('nivaro_persisted_queries').where({ hash: key.hash })
+        : db('nivaro_persisted_queries').where({ id: Number(key.id) })
+      void stamp.update({ last_used_at: new Date() }).catch(() => {})
+    }
   } catch {
     query = null
   }

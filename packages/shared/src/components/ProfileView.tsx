@@ -1769,6 +1769,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <TimezoneCard />
             <EmailDeliveryCard />
         <NotificationRulesCard />
+        <DisplayPrefsCard />
         <MySecurityCard />
         <MyPermissionsCard />
         <MyMatrixSeatsCard />
@@ -2072,6 +2073,94 @@ function MyPermissionsCard() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+
+// ─── Display preferences (#229/#230/#231/#232/#411) ──────────────────────────
+
+function DisplayPrefsCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: prefs } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
+  })
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      client.request(patch('/users/me/preferences', body)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      void import('sonner').then(({ toast }) => toast.success('Saved — takes effect on the next page load'))
+    }
+  })
+  const nf = (prefs?.number_format ?? {}) as { locale?: string; compact?: boolean }
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Display</h3>
+        <p className='mt-0.5 text-[11px] text-slate-400'>
+          How times, numbers and text render for you.
+        </p>
+      </header>
+      <div className='flex flex-wrap items-center gap-x-5 gap-y-2.5 p-4 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+        <label className='flex items-center gap-1.5'>
+          Timestamps
+          <SimpleSelectXs
+            value={String(prefs?.time_display ?? 'relative')}
+            onChange={(v) => save.mutate({ time_display: v })}
+            options={[
+              { value: 'relative', label: 'Relative (3h ago)' },
+              { value: 'exact', label: 'Exact (Aug 24, 3:12 PM)' }
+            ]}
+          />
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={nf.compact === true}
+            onChange={(e) => save.mutate({ number_format: { ...nf, compact: e.target.checked } })}
+            className='rounded'
+          />
+          Compact numbers (1.2M)
+        </label>
+        <label className='flex items-center gap-1.5'>
+          Number locale
+          <input
+            defaultValue={nf.locale ?? ''}
+            onBlur={(e) => save.mutate({ number_format: { ...nf, locale: e.target.value.trim() || undefined } })}
+            placeholder='en-US'
+            className='h-7 w-20 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+          />
+        </label>
+        <label className='flex items-center gap-1.5'>
+          Week starts
+          <SimpleSelectXs
+            value={String(prefs?.week_start ?? 'sun')}
+            onChange={(v) => save.mutate({ week_start: v })}
+            options={[
+              { value: 'sun', label: 'Sunday' },
+              { value: 'mon', label: 'Monday' }
+            ]}
+          />
+        </label>
+        <label className='flex items-center gap-1.5'>
+          Text size
+          <SimpleSelectXs
+            value={String(prefs?.font_size ?? 'default')}
+            onChange={(v) => save.mutate({ font_size: v })}
+            options={[
+              { value: 'small', label: 'Small' },
+              { value: 'default', label: 'Default' },
+              { value: 'large', label: 'Large' }
+            ]}
+          />
+        </label>
+      </div>
     </div>
   )
 }

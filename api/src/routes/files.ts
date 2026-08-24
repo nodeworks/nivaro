@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { db } from '../db/index.js'
 import type { FastifyInstance } from 'fastify'
 import mime from 'mime-types'
 import sharp from 'sharp'
@@ -38,6 +39,7 @@ export async function filesRoutes(app: FastifyInstance) {
       offset?: string
       search?: string
       filter?: string
+      tag?: string
     }
     // Support the items-style `filter={"id":{"_in":[...]}}` shape the shared
     // file fields send to batch-resolve metadata for a known id set.
@@ -56,7 +58,8 @@ export async function filesRoutes(app: FastifyInstance) {
       limit: Number(q.limit ?? 50),
       offset: Number(q.offset ?? 0),
       search: q.search,
-      ids
+      ids,
+      tag: q.tag
     })
     return reply.send(result)
   })
@@ -126,6 +129,37 @@ export async function filesRoutes(app: FastifyInstance) {
   })
 
   // Files referenced by nothing — deletion candidates (admin only)
+  // File usage counts (#200): "used on N records" per file, batched for the
+  // browser's visible page (FK-driven, same scan as single-file usage).
+  app.post('/usage/counts', async (req, reply) => {
+    const ids = (Array.isArray((req.body as { ids?: unknown[] })?.ids)
+      ? (req.body as { ids: unknown[] }).ids
+      : []
+    )
+      .map(String)
+      .slice(0, 100)
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
+    const { getFileRefColumns } = await import('../services/file-usage.js')
+    const refs = await getFileRefColumns()
+    const counts = new Map<string, number>(ids.map((id) => [id, 0]))
+    for (const ref of refs) {
+      try {
+        const rows = (await db(ref.table)
+          .whereIn(ref.column, ids)
+          .select(ref.column)
+          .count({ n: '*' })
+          .groupBy(ref.column)) as Array<Record<string, unknown>>
+        for (const r of rows) {
+          const key = String(r[ref.column])
+          counts.set(key, (counts.get(key) ?? 0) + Number(r.n ?? 0))
+        }
+      } catch {
+        /* one surface contributes zero */
+      }
+    }
+    return reply.send({ data: Object.fromEntries(counts) })
+  })
+
   app.get('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { limit?: string; offset?: string }
     const result = await findOrphanFiles({
@@ -237,6 +271,7 @@ export async function filesRoutes(app: FastifyInstance) {
       description?: string | null
       folder?: string | null
       expires_at?: string | null
+      tags?: string[] | null
     }
 
     const existing = await getFile(id)
@@ -246,6 +281,7 @@ export async function filesRoutes(app: FastifyInstance) {
     if ('title' in body) patch.title = body.title
     if ('description' in body) patch.description = body.description
     if ('folder' in body) patch.folder = body.folder
+    if ('tags' in body) patch.tags = body.tags
     if ('expires_at' in body) {
       if (!body.expires_at) {
         patch.expires_at = null

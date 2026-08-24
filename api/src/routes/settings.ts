@@ -5,6 +5,11 @@ import { bustFormulaContextCache } from '../services/formula-context.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
 import { sendSms } from '../services/sms.js'
+import {
+  bustInstanceOverridesCache,
+  envOverrideKeys,
+  instanceKey
+} from '../services/settings-overrides.js'
 
 const MASK = '••••••'
 
@@ -17,11 +22,82 @@ function maskSettings(settings: Record<string, unknown>) {
   }
 }
 
+const allowedSettingsKeys = [
+  'project_name',
+  'project_description',
+  'project_url',
+  'project_color',
+  'default_language',
+  'teams_webhook_url',
+  'ad_group_role_map',
+  'anthropic_api_key',
+  'presence_session_ttl',
+  'session_recording_enabled',
+  'error_replay_enabled',
+  'session_recording_retention_days',
+  'two_factor_enabled',
+  'presence_sweep_interval',
+  'presence_ping_interval',
+  'ai_model',
+  'ai_max_tokens_generate',
+  'ai_max_tokens_summarize',
+  'sla_business_day_start',
+  'sla_business_day_end',
+  'sla_business_days',
+  'sla_holidays',
+  'file_max_size_mb',
+  'collection_page_size',
+  'activity_retention_days',
+  'revision_retention_count',
+  'available_locales',
+  // SMTP / email
+  'smtp_host',
+  'smtp_port',
+  'smtp_user',
+  'smtp_pass',
+  'smtp_from',
+  'smtp_secure',
+  'mail_test_mode',
+  'mail_test_recipient',
+  'mail_test_allowlist',
+  'environment_label',
+  'maintenance_mode',
+  'maintenance_message',
+  'sms_test_mode',
+  'sms_test_recipient',
+  'sms_test_allowlist',
+  // SMS
+  'sms_provider',
+  'sms_account_sid',
+  'sms_auth_token',
+  'sms_from',
+  'sms_region',
+  // Chat
+  'chat_bot_name',
+  // Field-level record watches (#58) — instance feature flag, off by default
+  'field_watch_enabled',
+  // Branding (#21)
+  'brand_logo',
+  'brand_login_title',
+  'brand_login_message',
+  'welcome_message',
+  'login_links',
+  'formula_constants',
+  'fiscal_year_start_month',
+  'auto_index_fk',
+  'lock_takeover_roles',
+  'lock_idle_release_minutes',
+  'default_timezone',
+  'ai_disabled_features'
+]
+
 export async function settingsRoutes(app: FastifyInstance) {
   // GET is accessible to all authenticated users — sidebar + tab title use it
   app.get('/', { preHandler: authenticate }, async (_req, reply) => {
     const settings = await db('nivaro_settings').orderBy('id', 'asc').first()
-    return reply.send({ data: maskSettings(settings) })
+    // Which keys THIS instance overrides via NIVARO_SETTINGS_OVERRIDES — the
+    // values shown/edited stay the shared DB row; this is provenance only.
+    return reply.send({ data: maskSettings(settings), env_overrides: envOverrideKeys() })
   })
 
   app.patch('/', { preHandler: requireAdmin }, async (req, reply) => {
@@ -31,71 +107,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       const { bustMaintenanceCache } = await import('../services/security.js')
       reply.raw.once('finish', () => bustMaintenanceCache())
     }
-    const allowed = [
-      'project_name',
-      'project_description',
-      'project_url',
-      'project_color',
-      'default_language',
-      'teams_webhook_url',
-      'ad_group_role_map',
-      'anthropic_api_key',
-      'presence_session_ttl',
-      'session_recording_enabled',
-      'error_replay_enabled',
-      'session_recording_retention_days',
-      'two_factor_enabled',
-      'presence_sweep_interval',
-      'presence_ping_interval',
-      'ai_model',
-      'ai_max_tokens_generate',
-      'ai_max_tokens_summarize',
-      'sla_business_day_start',
-      'sla_business_day_end',
-      'sla_business_days',
-      'sla_holidays',
-      'file_max_size_mb',
-      'collection_page_size',
-      'activity_retention_days',
-      'revision_retention_count',
-      'available_locales',
-      // SMTP / email
-      'smtp_host',
-      'smtp_port',
-      'smtp_user',
-      'smtp_pass',
-      'smtp_from',
-      'smtp_secure',
-      'mail_test_mode',
-      'mail_test_recipient',
-      'mail_test_allowlist',
-      'environment_label',
-      'maintenance_mode',
-      'maintenance_message',
-      'sms_test_mode',
-      'sms_test_recipient',
-      'sms_test_allowlist',
-      // SMS
-      'sms_provider',
-      'sms_account_sid',
-      'sms_auth_token',
-      'sms_from',
-      'sms_region',
-      // Chat
-      'chat_bot_name',
-      // Field-level record watches (#58) — instance feature flag, off by default
-      'field_watch_enabled',
-      // Branding (#21)
-      'brand_logo',
-      'brand_login_title',
-      'brand_login_message',
-      'welcome_message',
-      'login_links',
-      'formula_constants',
-      'fiscal_year_start_month',
-      'auto_index_fk',
-      'lock_takeover_roles'
-    ]
+    const allowed = allowedSettingsKeys
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))
 
@@ -136,6 +148,59 @@ export async function settingsRoutes(app: FastifyInstance) {
       req
     })
     return reply.send({ data: maskSettings(updated) })
+  })
+
+  // ── Per-instance overrides (Settings → Instance) ──────────────────────────
+  // Several instances share one DB (local dev + staging) and need e.g.
+  // different SMTP config. One nivaro_settings_overrides row per instance key
+  // (NIVARO_INSTANCE env, defaulting to NODE_ENV) holds a JSON map of settings
+  // columns that win over the shared row on THIS instance only.
+  app.get('/instance-overrides', { preHandler: requireAdmin }, async (_req, reply) => {
+    let data: Record<string, unknown> = {}
+    try {
+      const row = (await db('nivaro_settings_overrides')
+        .where({ instance_key: instanceKey() })
+        .first('data')) as { data?: string | null } | undefined
+      if (row?.data) data = JSON.parse(row.data)
+    } catch {
+      /* table absent mid-migration — empty */
+    }
+    return reply.send({ data: { instance_key: instanceKey(), overrides: data } })
+  })
+
+  app.put('/instance-overrides', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { overrides?: Record<string, unknown> }
+    const overrides =
+      body.overrides && typeof body.overrides === 'object' && !Array.isArray(body.overrides)
+        ? body.overrides
+        : {}
+    // Same allowlist as the shared-row PATCH — an override can only name a
+    // column the settings surface itself may edit.
+    const filtered = Object.fromEntries(
+      Object.entries(overrides).filter(([k]) => allowedSettingsKeys.includes(k))
+    )
+    const key = instanceKey()
+    const existing = await db('nivaro_settings_overrides').where({ instance_key: key }).first('id')
+    if (existing) {
+      await db('nivaro_settings_overrides')
+        .where({ instance_key: key })
+        .update({ data: JSON.stringify(filtered), updated_at: new Date() })
+    } else {
+      await db('nivaro_settings_overrides').insert({
+        instance_key: key,
+        data: JSON.stringify(filtered),
+        updated_at: new Date()
+      })
+    }
+    bustInstanceOverridesCache()
+    await logActivity({
+      action: 'instance-overrides-update',
+      user: req.user?.id,
+      collection: 'nivaro_settings',
+      comment: `instance ${key}: ${Object.keys(filtered).join(', ') || '(cleared)'}`,
+      req
+    })
+    return reply.send({ data: { instance_key: key, overrides: filtered } })
   })
 
   // POST /settings/sms/test

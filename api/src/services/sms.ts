@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { overlaySettings } from './settings-overrides.js'
 
 export type SmsProvider = 'twilio' | 'aws-sns' | 'vonage' | 'sinch' | 'messagebird'
 
@@ -15,19 +16,21 @@ interface SmsConfig {
 
 async function getSmsConfig(): Promise<SmsConfig> {
   try {
-    const row = (await db('nivaro_settings')
-      .select(
-        'sms_provider',
-        'sms_account_sid',
-        'sms_auth_token',
-        'sms_from',
-        'sms_region',
-        'sms_test_mode',
-        'sms_test_recipient',
-        'sms_test_allowlist'
-      )
-      .orderBy('id', 'asc')
-      .first()) as Record<string, unknown> | undefined
+    const row = await overlaySettings(
+      (await db('nivaro_settings')
+        .select(
+          'sms_provider',
+          'sms_account_sid',
+          'sms_auth_token',
+          'sms_from',
+          'sms_region',
+          'sms_test_mode',
+          'sms_test_recipient',
+          'sms_test_allowlist'
+        )
+        .orderBy('id', 'asc')
+        .first()) as Record<string, unknown> | undefined
+    )
 
     return {
       provider: (row?.sms_provider as SmsProvider | null) ?? null,

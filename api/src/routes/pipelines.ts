@@ -307,8 +307,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // AI config reviewer (#361): deterministic structure analysis + AI critique
   // of a workflow template — unreachable states, dead ends, missing
   // send-backs, states with no owner coverage.
-  app.post<{ Params: { id: string } }>('/:id/ai-review', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { mode?: string } }>('/:id/ai-review', { preHandler: requireAdmin }, async (req, reply) => {
     const tid = req.params.id
+    // #428: 'explain' walks the template in plain language; 'critique'
+    // (default) hunts design risks. One surface, two modes.
+    const mode = (req.body as { mode?: string } | undefined)?.mode === 'explain' ? 'explain' : 'critique'
     const [states, transitions, groups] = await Promise.all([
       db('nivaro_workflow_states').where({ template: tid }).orderBy('sort').select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort'),
       db('nivaro_workflow_transitions').where({ template: tid }).select('id', 'from_state', 'to_state', 'label', 'condition_rules', 'auto_trigger'),
@@ -365,7 +368,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           model,
           max_tokens: 500,
           system:
-            'You review workflow state machines for a business process tool. Given the state graph, point out design risks in 3-6 short bullets: approval loops without escape, missing rejection paths, states that trap records, redundant states. Be concrete, reference state names. No preamble.',
+            mode === 'explain'
+              ? 'You explain workflow state machines to non-technical staff. Given the state graph, describe how a record moves through it in plain language: where it starts, what each step means, who acts, how it ends. 4-8 short sentences, no jargon, no preamble.'
+              : 'You review workflow state machines for a business process tool. Given the state graph, point out design risks in 3-6 short bullets: approval loops without escape, missing rejection paths, states that trap records, redundant states. Be concrete, reference state names. No preamble.',
           messages: [
             {
               role: 'user',

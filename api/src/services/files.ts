@@ -200,15 +200,24 @@ export async function readFileBuffer(file: StoredFile): Promise<Buffer> {
 }
 
 export async function listFiles(
-  opts: { folder?: string; limit?: number; offset?: number; search?: string; ids?: string[] } = {}
+  opts: {
+    folder?: string
+    limit?: number
+    offset?: number
+    search?: string
+    ids?: string[]
+    /** File tags (#159): rows whose tags JSON contains this label. */
+    tag?: string
+  } = {}
 ) {
-  const { folder, limit = 50, offset = 0, search, ids } = opts
+  const { folder, limit = 50, offset = 0, search, ids, tag } = opts
   const q = db('nivaro_files as f')
     .select(
       'f.*',
       db.raw(
         "COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name"
-      )
+      ),
+      'u.email as uploaded_by_email'
     )
     .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .limit(limit)
@@ -222,6 +231,9 @@ export async function listFiles(
       this.where('f.filename_download', 'like', p).orWhere('f.title', 'like', p)
     })
   }
+  if (tag) {
+    q.where('f.tags', 'like', `%"${tag.replace(/[%_[\"]/g, '')}"%`)
+  }
   const countQ = db('nivaro_files')
   if (folder) countQ.where({ folder })
   if (ids && ids.length > 0) countQ.whereIn('id', ids)
@@ -231,8 +243,28 @@ export async function listFiles(
       this.where('filename_download', 'like', p).orWhere('title', 'like', p)
     })
   }
+  if (tag) {
+    countQ.where('tags', 'like', `%"${tag.replace(/[%_[\"]/g, '')}"%`)
+  }
   const [files, [{ count }]] = await Promise.all([q, countQ.count('id as count')])
-  return { data: files, total: Number(count) }
+  // Attachment source badges (#413): how each file arrived, derived — a
+  // public-form upload has no user; a static-token identity is an
+  // integration; everything else came through the UI.
+  const enriched = (files as Array<Record<string, unknown>>).map((f) => {
+    let source: 'form' | 'integration' | 'ui' = 'ui'
+    if (!f.uploaded_by) source = 'form'
+    else if (/@nivaro\.local$|@invalid\.local$/.test(String(f.uploaded_by_email ?? ''))) {
+      source = 'integration'
+    }
+    let tags: string[] = []
+    try {
+      tags = f.tags ? (JSON.parse(String(f.tags)) as string[]) : []
+    } catch {
+      tags = []
+    }
+    return { ...f, source, tags }
+  })
+  return { data: enriched, total: Number(count) }
 }
 
 export async function updateFileMeta(
@@ -242,6 +274,7 @@ export async function updateFileMeta(
     description?: string | null
     folder?: string | null
     expires_at?: Date | null
+    tags?: string[] | null
   },
   userId?: string
 ): Promise<StoredFile | undefined> {
@@ -250,6 +283,13 @@ export async function updateFileMeta(
   if ('description' in patch) allowed.description = patch.description
   if ('folder' in patch) allowed.folder = patch.folder
   if ('expires_at' in patch) allowed.expires_at = patch.expires_at
+  if ('tags' in patch) {
+    const clean = (patch.tags ?? [])
+      .map((t) => String(t).trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 20)
+    allowed.tags = clean.length > 0 ? JSON.stringify(clean) : null
+  }
   if (Object.keys(allowed).length === 0) return getFile(id)
 
   allowed.modified_by = userId ?? null

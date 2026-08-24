@@ -65,7 +65,32 @@ export function formatDateTime(date: string | Date) {
   }).format(new Date(date))
 }
 
+// Display preference setters (#229/#230/#411) — hosts hydrate from the
+// user's preferences at startup; formatters below honor them.
+let _timeDisplay: 'relative' | 'exact' = 'relative'
+let _numberLocale = 'en-US'
+let _compactNumbers = false
+export function setTimeDisplay(mode: string | null | undefined): void {
+  _timeDisplay = mode === 'exact' ? 'exact' : 'relative'
+}
+export function setNumberFormat(opts: { locale?: string; compact?: boolean } | null | undefined): void {
+  if (opts?.locale) {
+    try {
+      new Intl.NumberFormat(opts.locale)
+      _numberLocale = opts.locale
+    } catch {
+      /* unknown locale keeps the default */
+    }
+  } else {
+    _numberLocale = 'en-US'
+  }
+  _compactNumbers = opts?.compact === true
+}
+
 export function formatRelative(date: string | Date) {
+  // Timestamp pref (#229): 'exact' renders the full stamp everywhere the
+  // relative form would have appeared.
+  if (_timeDisplay === 'exact') return formatDateTime(date)
   const d = new Date(date)
   const diff = Date.now() - d.getTime()
   const mins = Math.floor(diff / 60000)
@@ -114,7 +139,11 @@ export function choiceLabel(text: string | null | undefined): string {
 
 export function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—'
-  return n.toLocaleString('en-US')
+  // Number prefs (#230/#411): per-user locale + compact notation.
+  if (_compactNumbers && Math.abs(n) >= 10_000) {
+    return new Intl.NumberFormat(_numberLocale, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+  }
+  return n.toLocaleString(_numberLocale)
 }
 
 export function formatFileSize(bytes: number | null | undefined): string {

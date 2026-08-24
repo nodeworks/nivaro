@@ -7,6 +7,18 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
 
+/** AI governance (#407): per-feature toggles — settings.ai_disabled_features
+ *  JSON list of route keys; a disabled feature answers 403 with the reason. */
+async function aiFeatureEnabled(key: string): Promise<boolean> {
+  try {
+    const row = await db('nivaro_settings').first('ai_disabled_features')
+    const list = row?.ai_disabled_features ? (JSON.parse(row.ai_disabled_features) as string[]) : []
+    return !list.includes(key)
+  } catch {
+    return true
+  }
+}
+
 async function getClient(): Promise<Anthropic | null> {
   const key =
     config.ANTHROPIC_API_KEY ||
@@ -841,7 +853,21 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Item not found' })
     }
 
-    const prompt = `Summarize this ${collection} record in 2-3 sentences for a business user. Data: ${JSON.stringify(item)}. Be concise and factual.`
+    // Prompt templates (#408): a per-collection override replaces the default
+    // wording; {{data}} interpolates the record JSON.
+    let promptTemplate: string | null = null
+    try {
+      const aiRow = await db('nivaro_ai_collection_settings')
+        .where({ collection })
+        .first('prompt_overrides')
+      const ov = aiRow?.prompt_overrides ? (JSON.parse(aiRow.prompt_overrides) as { summarize?: string }) : null
+      promptTemplate = ov?.summarize?.trim() || null
+    } catch {
+      promptTemplate = null
+    }
+    const prompt = promptTemplate
+      ? promptTemplate.replace(/\{\{\s*data\s*\}\}/g, JSON.stringify(item))
+      : `Summarize this ${collection} record in 2-3 sentences for a business user. Data: ${JSON.stringify(item)}. Be concise and factual.`
 
     const { model, maxTokensSummarize } = await getAiSettings()
 
@@ -1056,6 +1082,38 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
   // POST /ai/brief — render a short plain-text briefing from caller-supplied
   // context (dashboard daily summaries etc.). The caller gathers the data —
   // this endpoint only writes the words.
+  // AI text cleanup (#217): grammar/clarity fix on user prose — returns the
+  // corrected text ONLY, meaning preserved.
+  app.post('/cleanup', { preHandler: authenticate }, async (req, reply) => {
+    if (!(await aiFeatureEnabled('cleanup'))) {
+      return reply.code(403).send({ error: 'AI text cleanup is disabled on this instance' })
+    }
+    const client = await getClient()
+    if (!client) return reply.code(503).send({ error: 'AI is not configured' })
+    const text = String((req.body as { text?: string })?.text ?? '').slice(0, 4000)
+    if (!text.trim()) return reply.code(400).send({ error: 'text is required' })
+    const { model } = await getAiSettings()
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: Math.min(2000, text.length + 200),
+        system:
+          'Fix grammar, spelling and clarity in the user\u2019s text. PRESERVE meaning, tone, names, numbers and formatting. Return ONLY the corrected text — no preamble, no notes.',
+        messages: [{ role: 'user', content: text }]
+      })
+      const out = msg.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('')
+        .trim()
+      return { data: { text: out || text } }
+    } catch (err) {
+      return reply
+        .code(502)
+        .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+    }
+  })
+
   app.post('/brief', { preHandler: authenticate }, async (req, reply) => {
     const client = await getClient()
     if (!client) {

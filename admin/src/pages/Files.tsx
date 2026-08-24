@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   LayoutList,
   Link2,
+  Tag,
   Trash2,
   Upload,
   X
@@ -25,7 +26,7 @@ import { formatNumber, formatRelative } from '@/lib/utils'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** CMSFile plus the expiry column added by the storage migrations. */
-type FileRow = CMSFile & { expires_at: string | null }
+type FileRow = CMSFile & { expires_at: string | null; tags?: string[]; source?: 'form' | 'integration' | 'ui' }
 
 function formatExpiry(value: string | null): { label: string; expired: boolean } | null {
   if (!value) return null
@@ -184,6 +185,69 @@ function FileCard({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+function TagEditButton({ file }: { file: { id: string; tags?: string[] } }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const save = useMutation({
+    mutationFn: (tags: string[]) => api.patch(`/files/${file.id}`, { tags }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+      setOpen(false)
+    },
+    onError: () => toast.error('Could not save tags')
+  })
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (o) setDraft((file.tags ?? []).join(', '))
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-accent dark:hover:text-nvr-cyan'
+          aria-label='Edit tags'
+          title='Edit tags'
+        >
+          <Tag className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-64 p-3'>
+        <p className='mb-2 text-[11px] font-semibold text-slate-500'>Tags (comma-separated)</p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            save.mutate(
+              draft
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean)
+            )
+          }}
+          className='flex items-center gap-1.5'
+        >
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder='invoice, 2026, signed'
+            className='h-7 flex-1 rounded border border-slate-200 px-2 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+          />
+          <button
+            type='submit'
+            disabled={save.isPending}
+            className='h-7 rounded bg-nvr-cyan px-2.5 text-[11px] font-medium text-white hover:bg-[#00b8e0] disabled:opacity-50'
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function UsageCell({ fileId }: { fileId: string }) {
   const [open, setOpen] = useState(false)
   const { data, isLoading } = useQuery({
@@ -244,17 +308,24 @@ export function FilesPage() {
   const [page, setPage] = useState(1)
   const [view, setView] = useState<'grid' | 'list'>('list')
   const [scope, setScope] = useState<'all' | 'unused'>('all')
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const limit = 50
 
   const { data, isLoading } = useQuery({
-    queryKey: ['files', page, scope],
+    queryKey: ['files', page, scope, tagFilter],
     queryFn: () =>
       api
         .get<{ data: CMSFile[]; total: number }>(
           scope === 'unused' ? '/files/usage/orphans' : '/files',
-          { params: { limit, offset: (page - 1) * limit } }
+          {
+            params: {
+              limit,
+              offset: (page - 1) * limit,
+              ...(tagFilter && scope !== 'unused' ? { tag: tagFilter } : {})
+            }
+          }
         )
         .then((r) => ({
           ...r.data,
@@ -265,8 +336,23 @@ export function FilesPage() {
         }))
   })
 
-  const files: CMSFile[] = data?.data ?? []
+  const files: FileRow[] = (data?.data ?? []) as FileRow[]
   const total: number = data?.total ?? 0
+
+  // Batch usage counts for the visible page (#200) — one POST instead of a
+  // per-row lookup; the per-file popover still fetches the table breakdown.
+  const pageIds = files.map((f) => f.id).join(',')
+  const { data: usageCounts } = useQuery({
+    queryKey: ['file-usage-counts', pageIds],
+    queryFn: () =>
+      api
+        .post<{ data: Record<string, number> }>('/files/usage/counts', {
+          ids: files.map((f) => f.id)
+        })
+        .then((r) => r.data.data),
+    enabled: files.length > 0,
+    staleTime: 60_000
+  })
   const totalPages = Math.ceil(total / limit)
 
   const upload = useMutation({
@@ -340,6 +426,20 @@ export function FilesPage() {
             )}
           </div>
           <div className='flex items-center gap-2'>
+            {tagFilter && (
+              <button
+                type='button'
+                onClick={() => {
+                  setTagFilter(null)
+                  setPage(1)
+                }}
+                className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+                title='Clear tag filter'
+              >
+                tag: {tagFilter}
+                <span aria-hidden='true'>×</span>
+              </button>
+            )}
             {/* Scope: all files vs unreferenced (deletion candidates) */}
             <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
               {(['all', 'unused'] as const).map((s) => (
@@ -467,6 +567,9 @@ export function FilesPage() {
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Type</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Size</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Uploaded</th>
+                  <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Tags</th>
+                  <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Source</th>
+                  <th className='px-4 py-2.5 text-right text-[11px] font-medium text-slate-500'>Used on</th>
                   <th className='w-24 px-4 py-2.5' />
                 </tr>
               </thead>
@@ -529,7 +632,55 @@ export function FilesPage() {
                         {formatRelative(file.uploaded_on)}
                       </td>
                       <td className='px-4 py-2.5'>
+                        {(file.tags ?? []).length === 0 ? (
+                          <span className='text-[12px] text-slate-300 dark:text-slate-600'>—</span>
+                        ) : (
+                          <div className='flex max-w-[180px] flex-wrap gap-1'>
+                            {(file.tags ?? []).slice(0, 3).map((t) => (
+                              <button
+                                key={t}
+                                type='button'
+                                className='rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-200 dark:bg-muted dark:text-slate-300 dark:hover:bg-accent'
+                                onClick={() => {
+                                  setTagFilter(tagFilter === t ? null : t)
+                                  setPage(1)
+                                }}
+                                title={`Filter by tag "${t}"`}
+                              >
+                                {t}
+                              </button>
+                            ))}
+                            {(file.tags ?? []).length > 3 && (
+                              <span className='text-[10px] text-slate-400'>
+                                +{(file.tags ?? []).length - 3}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className='px-4 py-2.5'>
+                        {file.source ? (
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              file.source === 'form'
+                                ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                                : file.source === 'integration'
+                                  ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                                  : 'bg-slate-500/10 text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            {file.source}
+                          </span>
+                        ) : (
+                          <span className='text-[12px] text-slate-300 dark:text-slate-600'>—</span>
+                        )}
+                      </td>
+                      <td className='px-4 py-2.5 text-right text-[13px] tabular-nums text-slate-500'>
+                        {usageCounts ? (usageCounts[file.id] ?? 0) : ''}
+                      </td>
+                      <td className='px-4 py-2.5'>
                         <div className='flex items-center justify-end gap-0.5'>
+                          <TagEditButton file={file} />
                           <UsageCell fileId={file.id} />
                           {pendingDelete === file.id ? (
                             <div className='flex items-center gap-1'>

@@ -81,6 +81,41 @@ function applyCondition(q: ReturnType<typeof db>, cond: FormulaCondition): Retur
   }
 }
 
+/** Scheduled DQ runs (#170): run every collection's active rules — the
+ *  nightly cron's body. Runs land in nivaro_dq_runs like manual ones
+ *  (created_by null = scheduled), which is what the pass-rate trend reads. */
+export async function runAllDqRules(): Promise<{ collections: number; failed: number }> {
+  const collections = (await db('nivaro_dq_rules')
+    .where({ is_active: true })
+    .distinct('collection')
+    .pluck('collection')) as string[]
+  let failedTotal = 0
+  for (const collection of collections) {
+    try {
+      const rules = await db<DqRule>('nivaro_dq_rules').where({ collection, is_active: true })
+      if (rules.length === 0) continue
+      const startedAt = new Date()
+      const totalRow = await db(collection).count('* as c').first()
+      const results: RuleResult[] = []
+      for (const rule of rules) results.push(await runRule(collection, rule))
+      const failedRecords = results.reduce((sum, r) => sum + r.failed_count, 0)
+      failedTotal += failedRecords
+      await db('nivaro_dq_runs').insert({
+        collection,
+        started_at: startedAt,
+        finished_at: new Date(),
+        total_records: Number(totalRow?.c ?? 0),
+        failed_records: failedRecords,
+        results: JSON.stringify(results),
+        created_by: null
+      })
+    } catch {
+      // one broken collection never stops the sweep
+    }
+  }
+  return { collections: collections.length, failed: failedTotal }
+}
+
 async function runRule(collection: string, rule: DqRule): Promise<RuleResult> {
   const base: RuleResult = {
     rule_id: rule.id,

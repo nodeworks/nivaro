@@ -322,6 +322,23 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         })
       }
 
+      // Idle release: the heartbeat carries how long the holder has been
+      // without real input. When settings.lock_idle_release_minutes is set and
+      // the holder has idled past it, the lock is released server-side — a tab
+      // left open must not hold a record hostage. The client re-acquires on
+      // the holder's next real input if the record is still free.
+      const idleSeconds = Number((req.body as { idle_seconds?: unknown } | null)?.idle_seconds)
+      if (Number.isFinite(idleSeconds) && idleSeconds > 0) {
+        const settings = (await db('nivaro_settings').first('lock_idle_release_minutes')) as
+          | { lock_idle_release_minutes?: number | null }
+          | undefined
+        const idleMinutes = Number(settings?.lock_idle_release_minutes)
+        if (Number.isFinite(idleMinutes) && idleMinutes > 0 && idleSeconds >= idleMinutes * 60) {
+          await db('nivaro_item_locks').where({ id: existing.id }).del()
+          return reply.send({ data: null, idle_released: true })
+        }
+      }
+
       const expiresAt = new Date(Date.now() + LOCK_TTL_MS)
       await db('nivaro_item_locks').where({ id: existing.id }).update({ expires_at: expiresAt })
 
