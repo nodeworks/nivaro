@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T15:54:18.250Z",
+  "generated_at": "2026-08-24T16:48:00.577Z",
   "releases": [
+    {
+      "version": "0.1.109",
+      "tag": "v0.1.109",
+      "date": "2026-08-24T12:47:55-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "queues",
+              "text": "queues sprint — 13 features (backlog 109-394, migration 253)",
+              "hash": "a6a5a17d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.108",
       "tag": "v0.1.108",
-      "date": "2026-08-24T11:54:15-04:00",
+      "date": "2026-08-24T11:54:18-04:00",
       "sections": [
         {
           "label": "Added",
