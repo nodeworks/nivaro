@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T22:02:30.781Z",
+  "generated_at": "2026-08-24T22:20:25.991Z",
   "releases": [
+    {
+      "version": "0.1.121",
+      "tag": "v0.1.121",
+      "date": "2026-08-24T18:20:22-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Security & Access sprint (#103 #110 #118 #120 #158 #177 #197 #199 #233 #255 #256 #431)",
+              "hash": "3426b16c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.120",
       "tag": "v0.1.120",
-      "date": "2026-08-24T18:02:27-04:00",
+      "date": "2026-08-24T18:02:30-04:00",
       "sections": [
         {
           "label": "Added",
