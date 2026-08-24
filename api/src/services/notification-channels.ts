@@ -200,6 +200,20 @@ export async function notifyUser(
     // A lookup failure must not swallow a notification — deliver and move on.
   }
 
+  // Record mute (#401): "never tell me about THIS record" beats every watch
+  // and subscription — the mute is the most specific signal the user can
+  // give. Critical subjects still bypass (same rule as quiet hours).
+  if (opts.collection && opts.item && !CRITICAL_SUBJECTS.test(opts.subject)) {
+    try {
+      const muted = await db('nivaro_notification_mutes')
+        .where({ user: userId, collection: opts.collection, item: String(opts.item) })
+        .first('id')
+      if (muted) return
+    } catch {
+      // table missing mid-migration — deliver rather than drop
+    }
+  }
+
   const category = classifyNotification(opts.subject)
   const prefs = await getNotifyPrefs(userId)
   const matrixRow = prefs?.matrix?.[category]

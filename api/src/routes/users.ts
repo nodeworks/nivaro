@@ -266,6 +266,42 @@ export async function usersRoutes(app: FastifyInstance) {
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)
     }
+    if ('notification_sound' in body) {
+      // Notification sounds (#179): {enabled, volume 0-1}; null clears.
+      const raw = body.notification_sound
+      if (raw === null) patch.notification_sound = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const v = Number((raw as { volume?: unknown }).volume)
+        patch.notification_sound = {
+          enabled: (raw as { enabled?: unknown }).enabled === true,
+          volume: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4
+        }
+      } else {
+        return reply.code(400).send({ error: 'notification_sound must be an object or null' })
+      }
+    }
+    if ('auto_watch' in body) {
+      // Auto-watch rules (#400): {created, commented, transitioned} booleans.
+      const raw = body.auto_watch
+      if (raw === null) patch.auto_watch = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const aw = raw as Record<string, unknown>
+        patch.auto_watch = {
+          created: aw.created === true,
+          commented: aw.commented === true,
+          transitioned: aw.transitioned === true
+        }
+      } else {
+        return reply.code(400).send({ error: 'auto_watch must be an object or null' })
+      }
+    }
+    if ('digest_layout' in body) {
+      // Digest layout (#366): compact = section counts only.
+      if (!['detailed', 'compact'].includes(String(body.digest_layout))) {
+        return reply.code(400).send({ error: "digest_layout must be 'detailed' or 'compact'" })
+      }
+      patch.digest_layout = body.digest_layout
+    }
     if ('timezone' in body) {
       // Per-user display timezone (#31). null = browser default.
       const tz = body.timezone

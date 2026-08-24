@@ -219,11 +219,19 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         many_field: string
       }>
       const parentIds = rows.map((r) => r.id).filter((v) => v != null)
+      const { can } = await import('../services/permissions.js')
       for (const rel of rels) {
         try {
-          const kids = (await db(rel.many_collection)
-            .whereIn(rel.many_field, parentIds as string[])
-            .limit(20000)) as Array<Record<string, unknown>>
+          // Child rows go through readItems AS THE CALLER — per-collection
+          // read permission, RLS row filters and User Scopes all bind, same
+          // as the parent rows above. A raw table read here would let a
+          // parent-only permission leak the child collection.
+          if (!req.isAdmin && !(await can(req.user!, 'read', rel.many_collection))) continue
+          const kidsRes = await readItems(req.user!, rel.many_collection, {
+            filter: { [rel.many_field]: { _in: parentIds } },
+            limit: 1000
+          })
+          const kids = (kidsRes.data ?? []) as Array<Record<string, unknown>>
           if (kids.length === 0) continue
           const kidCols = Object.keys(kids[0])
           const kidRows = kids.map((k) =>

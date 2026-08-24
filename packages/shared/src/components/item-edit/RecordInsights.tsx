@@ -14,7 +14,7 @@ import { get } from '../../lib/commands'
  * Plus #399 deep record search: find-in-record across fields.
  */
 
-type Tab = 'audience' | 'integrations' | 'owners'
+type Tab = 'audience' | 'integrations' | 'owners' | 'mail'
 
 export function RecordInsightsButton({
   collection,
@@ -52,7 +52,8 @@ export function RecordInsightsButton({
               [
                 ['audience', 'Audience'],
                 ['integrations', 'Integrations'],
-                ['owners', 'Owner history']
+                ['owners', 'Owner history'],
+                ['mail', 'Mail']
               ] as Array<[Tab, string]>
             ).map(([key, label]) => (
               <button
@@ -72,6 +73,7 @@ export function RecordInsightsButton({
           {tab === 'audience' && <AudienceTab collection={collection} itemId={itemId} />}
           {tab === 'integrations' && <IntegrationsTab collection={collection} itemId={itemId} />}
           {tab === 'owners' && <OwnerHistoryTab collection={collection} itemId={itemId} />}
+          {tab === 'mail' && <MailTab collection={collection} itemId={itemId} />}
         </div>
       )}
     </div>
@@ -245,6 +247,52 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
           </p>
           <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             {h.owners.length > 0 ? h.owners.map((o) => o.name).join(', ') : 'no resolved owners'}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+// ─── Mail tab (#261): mail sent about this record — headers only ─────────────
+function MailTab({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useNivaroClient()
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['record-mail-log', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ id: number; to: string; subject: string; template: string | null; status: string; created_at: string }>
+        }>(get(`/mail-log/record/${collection}/${itemId}`))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 30_000
+  })
+  if (isLoading) return <p className='p-3 text-[12px] text-slate-400'>Loading…</p>
+  if (rows.length === 0)
+    return (
+      <p className='p-3 text-[12px] text-slate-400'>
+        No emails recorded about this record. (Mail logging captures record context from
+        subscription and workflow sends.)
+      </p>
+    )
+  return (
+    <div className='max-h-72 overflow-y-auto'>
+      {rows.map((m) => (
+        <div key={m.id} className='border-b border-slate-100 px-3 py-1.5 last:border-b-0 dark:border-border/50'>
+          <div className='flex items-center gap-2'>
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                m.status === 'sent' ? 'bg-emerald-500' : m.status === 'failed' ? 'bg-red-500' : 'bg-slate-300'
+              }`}
+            />
+            <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+              {m.subject}
+            </span>
+          </div>
+          <p className='ml-3.5 truncate text-[10.5px] text-slate-400'>
+            to {m.to} · {m.status} · {new Date(m.created_at).toLocaleString()}
           </p>
         </div>
       ))}

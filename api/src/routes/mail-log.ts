@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
 
@@ -73,4 +73,31 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(502).send({ error: `Resend failed: ${msg.slice(0, 400)}` })
     }
   })
+}
+
+
+/** Record communications view (#261) — separate plugin: the admin-only hook
+ *  above is plugin-scoped, and this read is for anyone who can read the
+ *  record. Headers only (to/subject/status), never bodies. */
+export async function mailLogReadRoutes(app: FastifyInstance) {
+  app.get<{ Params: { collection: string; item: string } }>(
+    '/record/:collection/:item',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection)) {
+        return reply.code(400).send({ error: 'Invalid collection' })
+      }
+      const { can } = await import('../services/permissions.js')
+      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const rows = await db('nivaro_mail_log')
+        .where({ collection, item })
+        .orderBy('id', 'desc')
+        .limit(50)
+        .select('id', 'to', 'subject', 'template', 'status', 'created_at')
+      return reply.send({ data: rows })
+    }
+  )
 }

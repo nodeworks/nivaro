@@ -41,6 +41,8 @@ function displayName(u: Comment['user']): string {
 // ─── Mention autocomplete ─────────────────────────────────────────────────────
 
 type MentionUser = {
+  is_out_of_office?: boolean
+  ooo_end?: string | null
   id: string
   first_name: string | null
   last_name: string | null
@@ -237,6 +239,11 @@ function MentionTextarea({
                       {name}
                     </span>
                     <span className='block truncate text-[11px] text-slate-400'>
+                      {u.is_out_of_office && (
+                        <span className='mr-1 rounded bg-amber-100 px-1 py-px text-[9.5px] font-semibold text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'>
+                          OOO{u.ooo_end ? ` until ${String(u.ooo_end).slice(0, 10)}` : ''}
+                        </span>
+                      )}
                       @{mentionHandle(u)}
                     </span>
                   </span>

@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlarmClock, Bell, CheckCheck, ChevronLeft, ChevronRight, Search, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -251,13 +251,32 @@ export function NotificationsCenterPage() {
           </div>
         ) : (
           <div className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
-            {notifications.map((n) => {
+            {notifications.map((n, ni) => {
               const unread = isUnread(n)
+              // Day headers (#220): Today / Yesterday / This week / Older —
+              // computed per row against the previous row's bucket.
+              const bucketOf = (ts: string | Date | null | undefined) => {
+                if (!ts) return 'Older'
+                const d = new Date(ts)
+                const now = new Date()
+                const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+                if (d >= midnight) return 'Today'
+                if (d >= new Date(midnight.getTime() - 86400e3)) return 'Yesterday'
+                if (d >= new Date(midnight.getTime() - 6 * 86400e3)) return 'This week'
+                return 'Older'
+              }
+              const bucket = bucketOf(n.timestamp)
+              const prevBucket = ni > 0 ? bucketOf(notifications[ni - 1].timestamp) : null
+              const header =
+                bucket !== prevBucket ? (
+                  <div className='bg-slate-50/80 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:bg-muted/40'>
+                    {bucket}
+                  </div>
+                ) : null
               return (
-                <div
-                  key={n.id}
-                  className='group relative flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                >
+                <Fragment key={n.id}>
+                {header}
+                <div className='group relative flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'>
                   {/* Unread dot — subtle left-edge marker */}
                   <span
                     className={cn(
@@ -394,6 +413,7 @@ export function NotificationsCenterPage() {
                     )}
                   </div>
                 </div>
+                </Fragment>
               )
             })}
           </div>

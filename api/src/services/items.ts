@@ -2279,6 +2279,14 @@ export async function createOne(
 
   await hooks.trigger('after', { ...ctx, keys: [returnedId as string | number], result })
 
+  // Auto-watch (#400): creators subscribe to their own records when the
+  // preference says so — fire-and-forget.
+  void import('./auto-watch.js')
+    .then(({ ensureAutoWatch }) =>
+      ensureAutoWatch(user?.id, collection, returnedId as string | number, 'created')
+    )
+    .catch(() => {})
+
   broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
     action: 'create'
   })

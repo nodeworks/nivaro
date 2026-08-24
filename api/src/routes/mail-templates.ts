@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { bustNotificationTemplateCache } from '../services/notification-templates.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -95,6 +96,7 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
       })
     }
     bustMailTemplateOverrides()
+    bustNotificationTemplateCache()
     await logActivity({
       action: 'mail-template-update',
       user: req.user?.id,
@@ -109,6 +111,7 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
     if (!NAME_RE.test(req.params.name)) return reply.code(400).send({ error: 'Invalid name' })
     const deleted = await db('nivaro_mail_templates').where({ name: req.params.name }).del()
     bustMailTemplateOverrides()
+    bustNotificationTemplateCache()
     if (deleted > 0) {
       await logActivity({
         action: 'mail-template-revert',

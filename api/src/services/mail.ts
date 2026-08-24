@@ -370,6 +370,9 @@ function buildTransporter(smtp: SmtpConfig) {
 }
 
 export interface MailOptions {
+  /** Record context (#261) — logged, powers the record communications view. */
+  collection?: string | null
+  item?: string | number | null
   to: string | string[]
   subject: string
   template: string
@@ -386,7 +389,14 @@ function logMail(
   to: string | string[],
   subject: string,
   status: 'sent' | 'failed' | 'dropped' | 'deferred',
-  opts?: { template?: string | null; error?: unknown; body?: string }
+  opts?: {
+    template?: string | null
+    error?: unknown
+    body?: string
+    /** Record context (#261) — powers the per-record communications view. */
+    collection?: string | null
+    item?: string | number | null
+  }
 ): void {
   const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
   void db('nivaro_mail_log')
@@ -394,6 +404,8 @@ function logMail(
       to: addr,
       subject: String(subject ?? '').slice(0, 500),
       template: opts?.template ? String(opts.template).slice(0, 120) : null,
+      collection: opts?.collection ? String(opts.collection).slice(0, 255) : null,
+      item: opts?.item != null ? String(opts.item).slice(0, 255) : null,
       status,
       error: opts?.error
         ? String(opts.error instanceof Error ? opts.error.message : opts.error).slice(0, 2000)
@@ -479,9 +491,9 @@ export async function sendMail(opts: MailOptions): Promise<void> {
       html,
       text: opts.text
     })
-    logMail(routed.to, opts.subject, 'sent', { template: opts.template, body: html })
+    logMail(routed.to, opts.subject, 'sent', { template: opts.template, body: html, collection: opts.collection, item: opts.item })
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', { template: opts.template, error: err, body: html })
+    logMail(routed.to, opts.subject, 'failed', { template: opts.template, error: err, body: html, collection: opts.collection, item: opts.item })
     throw err
   }
 }
@@ -498,6 +510,9 @@ export async function sendRawMail(opts: {
   wrap?: boolean
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
+  /** Record context (#261) — logged, powers the record communications view. */
+  collection?: string | null
+  item?: string | number | null
 }): Promise<void> {
   // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -550,9 +565,9 @@ export async function sendRawMail(opts: {
       to: routed.to,
       subject: withEnvLabel(smtp, routed.subject)
     })
-    logMail(routed.to, opts.subject, 'sent', { body: html })
+    logMail(routed.to, opts.subject, 'sent', { body: html, collection: opts.collection, item: opts.item })
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', { error: err, body: html })
+    logMail(routed.to, opts.subject, 'failed', { error: err, body: html, collection: opts.collection, item: opts.item })
     throw err
   }
 }

@@ -282,6 +282,12 @@ function NotificationRulesCard() {
       client.request(patch('/users/me/preferences', { notification_prefs: next })),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
   })
+  // Direct pref writes for the sprint's flat keys (#179/#366/#400).
+  const saveRaw = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      client.request(patch('/users/me/preferences', body)),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+  })
   const commit = (overrides: Partial<typeof np>) => {
     save.mutate({
       quiet_start: overrides.quiet_start ?? (effStart || undefined),
@@ -367,6 +373,80 @@ function NotificationRulesCard() {
             })}
           </tbody>
         </table>
+        <div className='flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3 text-[12.5px] text-slate-600 dark:border-border/60 dark:text-muted-foreground'>
+          {/* Notification sounds (#179) */}
+          <label className='flex cursor-pointer items-center gap-1.5'>
+            <input
+              type='checkbox'
+              checked={(prefs?.notification_sound as { enabled?: boolean })?.enabled === true}
+              onChange={(e) =>
+                saveRaw.mutate({
+                  notification_sound: {
+                    enabled: e.target.checked,
+                    volume: (prefs?.notification_sound as { volume?: number })?.volume ?? 0.4
+                  }
+                })
+              }
+              className='rounded'
+            />
+            Sound on new notifications
+          </label>
+          {(prefs?.notification_sound as { enabled?: boolean })?.enabled === true && (
+            <label className='flex items-center gap-1.5'>
+              Volume
+              <input
+                type='range'
+                min={0}
+                max={100}
+                defaultValue={Math.round(((prefs?.notification_sound as { volume?: number })?.volume ?? 0.4) * 100)}
+                onMouseUp={(e) =>
+                  saveRaw.mutate({
+                    notification_sound: { enabled: true, volume: Number((e.target as HTMLInputElement).value) / 100 }
+                  })
+                }
+                className='w-24'
+              />
+            </label>
+          )}
+          {/* Digest layout (#366) */}
+          <label className='flex cursor-pointer items-center gap-1.5'>
+            <input
+              type='checkbox'
+              checked={prefs?.digest_layout === 'compact'}
+              onChange={(e) => saveRaw.mutate({ digest_layout: e.target.checked ? 'compact' : 'detailed' })}
+              className='rounded'
+            />
+            Compact daily digest (counts only)
+          </label>
+        </div>
+        <div className='flex flex-wrap items-center gap-4 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          {/* Auto-watch rules (#400) */}
+          <span className='text-[11.5px] text-slate-400'>Auto-watch records I…</span>
+          {(
+            [
+              ['created', 'create'],
+              ['commented', 'comment on'],
+              ['transitioned', 'move through a workflow']
+            ] as Array<[string, string]>
+          ).map(([key, label]) => (
+            <label key={key} className='flex cursor-pointer items-center gap-1.5'>
+              <input
+                type='checkbox'
+                checked={(prefs?.auto_watch as Record<string, boolean>)?.[key] === true}
+                onChange={(e) =>
+                  saveRaw.mutate({
+                    auto_watch: {
+                      ...((prefs?.auto_watch as Record<string, boolean>) ?? {}),
+                      [key]: e.target.checked
+                    }
+                  })
+                }
+                className='rounded'
+              />
+              {label}
+            </label>
+          ))}
+        </div>
       </div>
     </div>
   )

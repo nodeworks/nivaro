@@ -35,6 +35,9 @@ interface User {
   first_name: string | null
   last_name: string | null
   email: string
+  is_out_of_office?: boolean
+  ooo_end?: string | null
+  delegate_id?: string | null
 }
 
 export interface PendingTask {
@@ -270,6 +273,23 @@ export function TaskPanel({
                   <div>
                     <Label className='mb-1 block text-[11px]'>Assignee</Label>
                     <AssigneeCombobox users={users} value={newAssignee} onChange={setNewAssignee} />
+                    {(() => {
+                      // OOO assignment warning (#221): the assignee is out —
+                      // say so (with return date + delegate) before the task lands.
+                      const a = users.find((u) => u.id === newAssignee)
+                      if (!a?.is_out_of_office) return null
+                      const delegate = a.delegate_id ? users.find((u) => u.id === a.delegate_id) : null
+                      return (
+                        <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
+                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out of
+                          office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
+                          {delegate
+                            ? ` — their delegate is ${[delegate.first_name, delegate.last_name].filter(Boolean).join(' ') || delegate.email}`
+                            : ' — open tasks route to their delegate if one is set'}
+                          .
+                        </p>
+                      )
+                    })()}
                   </div>
                   <div>
                     <Label className='mb-1 block text-[11px]'>Due date</Label>
@@ -377,6 +397,23 @@ export function TaskPanel({
                   <div>
                     <Label className='mb-1 block text-[11px]'>Assignee</Label>
                     <AssigneeCombobox users={users} value={newAssignee} onChange={setNewAssignee} />
+                    {(() => {
+                      // OOO assignment warning (#221): the assignee is out —
+                      // say so (with return date + delegate) before the task lands.
+                      const a = users.find((u) => u.id === newAssignee)
+                      if (!a?.is_out_of_office) return null
+                      const delegate = a.delegate_id ? users.find((u) => u.id === a.delegate_id) : null
+                      return (
+                        <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
+                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out of
+                          office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
+                          {delegate
+                            ? ` — their delegate is ${[delegate.first_name, delegate.last_name].filter(Boolean).join(' ') || delegate.email}`
+                            : ' — open tasks route to their delegate if one is set'}
+                          .
+                        </p>
+                      )
+                    })()}
                   </div>
                   <div>
                     <Label className='mb-1 block text-[11px]'>Due date</Label>

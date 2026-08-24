@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { ensureAutoWatch } from './auto-watch.js'
 import { logActivity } from './activity.js'
 import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { resolveStateOwners } from './pipeline-engine.js'
@@ -629,6 +630,9 @@ export async function applyTransition(opts: {
   } catch {
     /* trigger emission is best-effort */
   }
+
+  // Auto-watch (#400): the person who moved the record starts watching it.
+  void ensureAutoWatch(opts.userId ?? undefined, instance.collection, instance.item, 'transitioned')
 
   // State-scoped notification subscriptions (multi-dim filters) — best-effort.
   if (newStateObj) {

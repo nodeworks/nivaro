@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { renderChangesToken, renderNotificationTemplate } from '../services/notification-templates.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
@@ -68,10 +69,25 @@ async function fireSubscriptionNotifications(
       }
 
       const label = sub.label || `${collection} ${eventType}`
-      const subject = `${label}: ${eventType} in ${collection}${by}`
-      const message = actorName
+      let subject = `${label}: ${eventType} in ${collection}${by}`
+      let message = actorName
         ? `${actorName} performed a ${eventType} on item ${item} in ${collection}`
         : `A ${eventType} event occurred on item ${item} in ${collection}`
+      // Notification templates (#126): a `notification:subscription.<event>`
+      // mail-template override rewrites the wording; {{changes}} carries the
+      // field diff (#384). Hardcoded wording stays the default.
+      const templated = await renderNotificationTemplate(`subscription.${eventType}`, {
+        collection,
+        record: item,
+        actor: actorName ?? '',
+        event: eventType,
+        label,
+        changes: renderChangesToken(data as Record<string, unknown>, null)
+      }).catch(() => null)
+      if (templated) {
+        subject = templated.subject
+        message = templated.message || message
+      }
 
       const [notif] = await db('nivaro_notifications')
         .insert({
@@ -104,6 +120,8 @@ async function fireSubscriptionNotifications(
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
       if (frequency === 'instant' && sub.email) {
         await sendMail({
+          collection,
+          item,
           to: sub.email,
           subject,
           template: 'notification',
@@ -263,12 +281,24 @@ export async function fireWorkflowStateSubscriptions(opts: {
 
       const label = sub.label || `${opts.collection} workflow`
       const friendly = opts.friendlyId ?? opts.item
-      const subject = `${label} ${friendly}: ${opts.transitionLabel} → ${opts.stateLabel}${
+      let subject = `${label} ${friendly}: ${opts.transitionLabel} → ${opts.stateLabel}${
         actorName ? ` by ${actorName}` : ''
       }`
-      const message = actorName
+      let message = actorName
         ? `${actorName} moved ${friendly} to "${opts.stateLabel}" (${opts.transitionLabel})`
         : `${friendly} moved to "${opts.stateLabel}" (${opts.transitionLabel})`
+      const templated = await renderNotificationTemplate('workflow_transition', {
+        collection: opts.collection,
+        record: friendly,
+        state: opts.stateLabel,
+        transition: opts.transitionLabel,
+        actor: actorName ?? '',
+        label
+      }).catch(() => null)
+      if (templated) {
+        subject = templated.subject
+        message = templated.message || message
+      }
 
       const [notif] = await db('nivaro_notifications')
         .insert({
@@ -298,6 +328,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
       if (frequency === 'instant' && sub.email) {
         await sendMail({
+          collection: opts.collection,
+          item: opts.item,
           to: sub.email,
           subject,
           template: 'notification',

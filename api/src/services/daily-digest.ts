@@ -168,10 +168,15 @@ export async function runDailyActionDigest(
   }>
   const digestUsers = new Map<string, string>() // id -> email
   const prefHour = new Map<string, number>()
+  const prefTz = new Map<string, string>()
+  const prefLayout = new Map<string, string>()
   for (const u of users) {
     const p = parsePrefs(u.preferences)
     const h = Number(p?.['digest_hour'])
     prefHour.set(u.id, Number.isInteger(h) && h >= 0 && h <= 23 ? h : 7)
+    const tz = typeof p?.['timezone'] === 'string' ? (p['timezone'] as string) : ''
+    if (tz) prefTz.set(u.id, tz)
+    if (p?.['digest_layout'] === 'compact') prefLayout.set(u.id, 'compact')
     if (p && p['email_digest'] === 'daily' && u.email) digestUsers.set(u.id, u.email)
   }
   const deferred = (await db('nivaro_deferred_emails').select(
@@ -195,8 +200,25 @@ export async function runDailyActionDigest(
     digestUsers.clear()
     if (target?.email) digestUsers.set(target.id, target.email)
   } else if (hour != null) {
+    // Digest hour in the USER's timezone (#117): a preference of 7 means 7am
+    // where they are, not 7am Eastern. Users without a timezone keep the
+    // historic Eastern interpretation (the cron's `hour` argument).
     for (const id of [...digestUsers.keys()]) {
-      if ((prefHour.get(id) ?? 7) !== hour) digestUsers.delete(id)
+      const tz = prefTz.get(id)
+      let localHour = hour
+      if (tz) {
+        try {
+          localHour = Number(
+            new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(
+              new Date()
+            )
+          )
+          if (!Number.isInteger(localHour)) localHour = hour
+        } catch {
+          localHour = hour
+        }
+      }
+      if ((prefHour.get(id) ?? 7) !== localHour) digestUsers.delete(id)
     }
   }
   if (digestUsers.size === 0) return { sent: 0 }
@@ -239,6 +261,14 @@ export async function runDailyActionDigest(
     }
 
     if (sections.length === 0) continue
+    // Digest layout choice (#366): 'compact' sends section counts only — one
+    // glance, click through for detail; 'detailed' (default) keeps the lines.
+    const compact = prefLayout.get(userId) === 'compact'
+    const bodyHtml = compact
+      ? `<ul style="margin:8px 0;padding-left:18px;font-size:13px;color:#334155;">${sections
+          .map((sec) => `<li style="margin:2px 0;">${sec.title}</li>`)
+          .join('')}</ul>`
+      : sections.map(sectionHtml).join('')
     try {
       await sendRawMail({
         to: email,
@@ -249,7 +279,7 @@ export async function runDailyActionDigest(
             Everything waiting on you, in one place. You're receiving this instead of
             individual notification emails — switch back any time from your profile.
           </p>
-          ${sections.map(sectionHtml).join('')}`,
+          ${bodyHtml}`,
         skipDigest: true
       })
       sent++

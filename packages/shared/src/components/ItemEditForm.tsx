@@ -985,6 +985,21 @@ export function ItemEditForm({
     window.addEventListener('nvr:set-field', onSet)
     return () => window.removeEventListener('nvr:set-field', onSet)
   })
+  // Config hot-push (#268): a schema/layout edit anywhere re-resolves this
+  // form's definition in place and shows an "updated" chip — no stale form
+  // until reload, no forced reload either (the draft is untouched).
+  const [configUpdated, setConfigUpdated] = useState(false)
+  useEffect(() => {
+    const onConfig = () => {
+      void qc.invalidateQueries({ queryKey: ['field-config'] })
+      void qc.invalidateQueries({ queryKey: ['active-layout'] })
+      void qc.invalidateQueries({ queryKey: ['collection-meta'] })
+      setConfigUpdated(true)
+      setTimeout(() => setConfigUpdated(false), 8000)
+    }
+    window.addEventListener('nvr:config-update', onConfig)
+    return () => window.removeEventListener('nvr:config-update', onConfig)
+  }, [qc])
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
@@ -7197,6 +7212,13 @@ export function ItemEditForm({
                                   onScroll={summaryEnabled ? condenseOnScroll : undefined}
                                 >
                                   {extraTopContent}
+                                  {configUpdated && (
+                                    <div className='mb-2 flex items-center gap-2 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
+                                      <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+                                      Form definition updated — fields refreshed in place. Your
+                                      unsaved edits are untouched.
+                                    </div>
+                                  )}
                                   {!isNew && itemId && (
                                     <RecordRecapStrip
                                       collection={collection}

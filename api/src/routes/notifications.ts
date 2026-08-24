@@ -325,6 +325,39 @@ export async function notificationsRoutes(app: FastifyInstance) {
 
   /** Snooze: hide from the inbox until `until`, then resurface UNREAD. Own
    *  rows only. `until: null` unsnoozes immediately. */
+  // Record mute (#401): own-row toggle — GET reports state, POST toggles.
+  app.get('/mutes/:collection/:item', async (req, reply) => {
+    const { collection, item } = req.params as { collection: string; item: string }
+    const row = await db('nivaro_notification_mutes')
+      .where({ user: req.user!.id, collection, item })
+      .first('id')
+    return reply.send({ data: { muted: !!row } })
+  })
+  app.post('/mutes/:collection/:item/toggle', async (req, reply) => {
+    const { collection, item } = req.params as { collection: string; item: string }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^nivaro_/i.test(collection)) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    const existing = await db('nivaro_notification_mutes')
+      .where({ user: req.user!.id, collection, item })
+      .first('id')
+    if (existing) {
+      await db('nivaro_notification_mutes').where({ id: existing.id }).del()
+      return reply.send({ data: { muted: false } })
+    }
+    try {
+      await db('nivaro_notification_mutes').insert({
+        user: req.user!.id,
+        collection,
+        item,
+        created_at: new Date()
+      })
+    } catch {
+      // unique race — the mute exists, which is the requested state
+    }
+    return reply.send({ data: { muted: true } })
+  })
+
   app.post('/:id/snooze', async (req, reply) => {
     const b = req.body as { until?: string | null }
     const until = b.until == null ? null : new Date(String(b.until))

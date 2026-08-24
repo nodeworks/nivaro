@@ -88,6 +88,11 @@ export function getSocket(): Socket {
   socket.on('client:force-refresh', (p: { seconds?: number; message?: string }) => {
     window.dispatchEvent(new CustomEvent('nvr:force-refresh', { detail: p ?? {} }))
   })
+  // Config hot-push (#268): schema/layout edits broadcast — open forms
+  // re-resolve their field-config/layout queries in place.
+  socket.on('config:update', (p: { surface?: string }) => {
+    window.dispatchEvent(new CustomEvent('nvr:config-update', { detail: p ?? {} }))
+  })
   return socket
 }
 

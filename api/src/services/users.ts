@@ -138,7 +138,12 @@ const DIRECTORY_USER_COLS = [
   'title',
   'department',
   'company',
-  'status'
+  'status',
+  // OOO mention warnings (#221): pickers warn inline when the person being
+  // mentioned/assigned is out — availability is org-visible information.
+  'is_out_of_office',
+  'ooo_end',
+  'delegate_id'
 ] as const
 
 const SORTABLE_USER_COLS = new Set<string>([

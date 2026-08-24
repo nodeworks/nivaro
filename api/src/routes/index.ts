@@ -52,7 +52,7 @@ import { mailTemplateRoutes } from './mail-templates.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { setupRoutes } from './setup.js'
 import { configSearchRoutes } from './config-search.js'
-import { mailLogRoutes } from './mail-log.js'
+import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
 import { sequenceRoutes } from './sequences.js'
 import { sqlScratchpadRoutes } from './sql-scratchpad.js'
 import { collectionSnapshotRoutes } from './collection-snapshots.js'
@@ -199,6 +199,15 @@ export async function registerRoutes(app: FastifyInstance) {
     if (META_ROUTES.test(req.url)) {
       clearMetadataCache()
       clearRowRuleCache()
+      // Config hot-push (#268): tell open clients the schema/layout changed —
+      // they re-resolve field-config/layout queries in place and show an
+      // "updated" chip instead of serving a stale form until reload.
+      try {
+        const surface = req.url.split('/')[2] ?? 'config'
+        app.io?.emit('config:update', { surface, at: Date.now() })
+      } catch {
+        /* broadcast is best-effort */
+      }
     }
   })
 
@@ -244,6 +253,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(setupRoutes, { prefix: '/setup' })
   await app.register(configSearchRoutes, { prefix: '/config-search' })
   await app.register(mailLogRoutes, { prefix: '/mail-log' })
+  await app.register(mailLogReadRoutes, { prefix: '/mail-log' })
   await app.register(sequenceRoutes, { prefix: '/sequences' })
   await app.register(sqlScratchpadRoutes, { prefix: '/sql-scratchpad' })
   await app.register(collectionSnapshotRoutes, { prefix: '/collection-snapshots' })

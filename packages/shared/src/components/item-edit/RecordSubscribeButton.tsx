@@ -71,6 +71,31 @@ export function RecordSubscribeButton({
     staleTime: 60_000
   })
 
+  // Record mute (#401): "never notify me about THIS record" — beats every
+  // watch and subscription server-side (critical subjects still land).
+  const { data: muted = false } = useQuery<boolean>({
+    queryKey: ['record-mute', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: { muted: boolean } }>(get(`/notifications/mutes/${collection}/${itemId}`))
+        .then((r) => r.data?.muted ?? false)
+        .catch(() => false),
+    enabled: open,
+    staleTime: 30_000
+  })
+  const muteMut = useMutation({
+    mutationFn: () =>
+      client
+        .request<{ data: { muted: boolean } }>(
+          post(`/notifications/mutes/${collection}/${itemId}/toggle`, {})
+        )
+        .then((r) => r.data?.muted ?? false),
+    onSuccess: (nowMuted) => {
+      qc.setQueryData(['record-mute', collection, itemId], nowMuted)
+      toast.success(nowMuted ? 'Muted — no notifications about this record' : 'Unmuted')
+    }
+  })
+
   const { data: subs = [], isLoading } = useQuery<SubRow[]>({
     queryKey: ['record-subscriptions', collection, itemId],
     queryFn: async () => {
@@ -265,6 +290,21 @@ export function RecordSubscribeButton({
             ) : (
               <span />
             )}
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              disabled={muteMut.isPending}
+              className={muted ? 'text-amber-600 hover:text-amber-700' : 'text-slate-500'}
+              data-tip={
+                muted
+                  ? 'Muted — nothing about this record reaches you (critical alerts excepted)'
+                  : 'Mute this record — overrides every watch and subscription'
+              }
+              onClick={() => muteMut.mutate()}
+            >
+              {muted ? '🔇 Muted' : 'Mute record'}
+            </Button>
             <div className='flex gap-2'>
               <Button type='button' variant='outline' size='sm' onClick={() => setOpen(false)}>
                 Cancel

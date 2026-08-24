@@ -49,6 +49,42 @@ export function NotificationBell({
     refetchInterval: 30_000
   })
 
+  // Notification sounds (#179): a soft two-tone chime (WebAudio, no asset)
+  // when the unread count RISES — preference-gated, off by default. The
+  // watermark ref means a mount never chimes for existing unread.
+  const prevUnreadRef = useRef<number | null>(null)
+  useEffect(() => {
+    const prefs = (user as { preferences?: { notification_sound?: { enabled?: boolean; volume?: number } } } | null)
+      ?.preferences?.notification_sound
+    const prev = prevUnreadRef.current
+    prevUnreadRef.current = unread
+    if (prev === null || unread <= prev) return
+    if (!prefs?.enabled) return
+    try {
+      const AC = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AC) return
+      const ctx = new AC()
+      const vol = Math.min(1, Math.max(0.05, prefs.volume ?? 0.4))
+      const play = (freq: number, at: number) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.frequency.value = freq
+        osc.type = 'sine'
+        gain.gain.setValueAtTime(0, ctx.currentTime + at)
+        gain.gain.linearRampToValueAtTime(vol * 0.25, ctx.currentTime + at + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.35)
+        osc.connect(gain).connect(ctx.destination)
+        osc.start(ctx.currentTime + at)
+        osc.stop(ctx.currentTime + at + 0.4)
+      }
+      play(880, 0)
+      play(1174.66, 0.12)
+      setTimeout(() => void ctx.close(), 800)
+    } catch {
+      /* audio blocked pre-gesture — silent */
+    }
+  }, [unread, user])
+
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', 'list'],
     queryFn: () => getNotifications()

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { ensureAutoWatch } from '../services/auto-watch.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
@@ -875,6 +876,9 @@ export async function commentsRoutes(app: FastifyInstance) {
         created_at: now,
         updated_at: now
       })
+      // Auto-watch (#400): commenting subscribes the commenter when their
+      // preference says so — fire-and-forget.
+      void ensureAutoWatch(userId, body.collection, body.item, 'commented')
 
       // Resolve and persist mentions. "@owners" expands to the record's
       // current pipeline owners (resolved server-side, so the set is always
