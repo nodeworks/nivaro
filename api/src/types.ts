@@ -25,6 +25,10 @@ export interface User {
    * receives the user, not the request. See migration 208.
    */
   api_key_scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }>
+  /** Sandbox key (#166): writes validate + simulate, persist nothing. */
+  api_key_sandbox?: boolean
+  /** Per-key GraphQL depth cap (#162). */
+  api_key_graphql_max_depth?: number
   delegate_expires_at: Date | null
   is_out_of_office: boolean
   created_at: Date

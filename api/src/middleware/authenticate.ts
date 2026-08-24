@@ -83,6 +83,8 @@ interface ApiKeyRow {
   ip_allowlist: string | null
   last_used_at: Date | string | null
   is_active: boolean
+  sandbox?: boolean | number
+  graphql_max_depth?: number | null
 }
 
 function parseJsonArray<T>(raw: unknown): T[] {
@@ -127,6 +129,10 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
     key.scope_restrictions
   ).filter((r) => r && typeof r.dimension === 'string' && Array.isArray(r.values))
   if (restrictions.length > 0) user.api_key_scope_restrictions = restrictions
+  // Sandbox keys (#166): writes simulate instead of persisting.
+  if (key.sandbox === true || key.sandbox === 1) user.api_key_sandbox = true
+  // Per-key GraphQL cost cap (#162).
+  if (key.graphql_max_depth != null) user.api_key_graphql_max_depth = Number(key.graphql_max_depth)
   req.apiKeyScopes = parseJsonArray<ApiKeyScope>(key.scopes)
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
   req.apiKeyId = Number(key.id)

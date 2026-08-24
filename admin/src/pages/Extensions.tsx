@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   Download,
   Package,
   Puzzle,
   RefreshCw,
+  ScrollText,
+  Settings as SettingsIcon,
   Store,
   Trash2,
   XCircle
@@ -27,6 +30,10 @@ type Extension = {
   enabled: boolean
   path: string
   error?: string
+  scopes?: string[]
+  requires?: string[]
+  has_settings?: boolean
+  has_health_check?: boolean
 }
 
 type MarketplaceExtension = {
@@ -247,6 +254,20 @@ export function ExtensionsPage() {
     }
   })
 
+  // Settings sheet (#112), logs viewer (#427), probe results (#262).
+  const [settingsFor, setSettingsFor] = useState<string | null>(null)
+  const [logsFor, setLogsFor] = useState<string | null>(null)
+  const runProbe = (id: string) => {
+    void api
+      .get<{ data: { ok: boolean; note?: string } }>(`/extensions/${id}/health`)
+      .then((r) => {
+        const d = r.data.data
+        if (d.ok) toast.success(`${id}: healthy${d.note ? ` — ${d.note}` : ''}`)
+        else toast.error(`${id}: unhealthy${d.note ? ` — ${d.note}` : ''}`)
+      })
+      .catch(() => toast.error('Health check failed to run'))
+  }
+
   const reloadMutation = useMutation({
     mutationFn: () =>
       api.post<{ data: Extension[]; loaded: string[] }>('/extensions/reload').then((r) => r.data),
@@ -328,6 +349,24 @@ export function ExtensionsPage() {
               Scan for new
             </Button>
           )}
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => {
+              void api.get('/extensions/scaffold', { responseType: 'blob' }).then((r) => {
+                const url = URL.createObjectURL(r.data as Blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'index.ts'
+                a.click()
+                URL.revokeObjectURL(url)
+              })
+            }}
+            data-tip='Download a starter extension (typed ctx, example hook/cron/route/setting)'
+          >
+            <Download className='mr-1.5 h-3.5 w-3.5' />
+            Starter
+          </Button>
         </div>
       </div>
 
@@ -415,6 +454,24 @@ export function ExtensionsPage() {
                             Folder not found on disk
                           </p>
                         )}
+                        {(ext.scopes?.length ?? 0) > 0 && (
+                          <div className='mt-1 flex flex-wrap gap-1'>
+                            {ext.scopes?.map((sc) => (
+                              <span
+                                key={sc}
+                                className='rounded bg-slate-100 px-1.5 py-px font-mono text-[10px] text-slate-500 dark:bg-muted dark:text-muted-foreground'
+                                data-tip='Declared permission scope'
+                              >
+                                {sc}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {(ext.requires?.length ?? 0) > 0 && (
+                          <p className='mt-0.5 text-[10.5px] text-slate-400'>
+                            requires: {ext.requires?.join(', ')}
+                          </p>
+                        )}
                       </td>
                       <td className='px-4 py-3.5'>
                         <code className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground'>
@@ -471,6 +528,41 @@ export function ExtensionsPage() {
                         })()}
                       </td>
                       <td className='px-4 py-3.5 text-right'>
+                        <span className='mr-2 inline-flex items-center gap-1 align-middle'>
+                          {ext.has_health_check && (
+                            <button
+                              type='button'
+                              onClick={() => runProbe(ext.id)}
+                              className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-emerald-600 dark:hover:bg-muted'
+                              data-tip='Run health check'
+                              aria-label={`Probe ${ext.id}`}
+                            >
+                              <Activity className='h-3.5 w-3.5' />
+                            </button>
+                          )}
+                          {ext.has_settings && (
+                            <button
+                              type='button'
+                              onClick={() => setSettingsFor(ext.id)}
+                              className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-muted dark:hover:text-nvr-cyan'
+                              data-tip='Extension settings'
+                              aria-label={`Settings for ${ext.id}`}
+                            >
+                              <SettingsIcon className='h-3.5 w-3.5' />
+                            </button>
+                          )}
+                          {ext.status === 'loaded' && (
+                            <button
+                              type='button'
+                              onClick={() => setLogsFor(ext.id)}
+                              className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-muted dark:hover:text-nvr-cyan'
+                              data-tip='Recent log lines'
+                              aria-label={`Logs for ${ext.id}`}
+                            >
+                              <ScrollText className='h-3.5 w-3.5' />
+                            </button>
+                          )}
+                        </span>
                         {ext.status === 'missing' ? (
                           <button
                             type='button'
@@ -510,6 +602,133 @@ export function ExtensionsPage() {
           </p>
         </div>
       )}
+      {settingsFor && (
+        <ExtensionSettingsSheet id={settingsFor} onClose={() => setSettingsFor(null)} />
+      )}
+      {logsFor && <ExtensionLogsSheet id={logsFor} onClose={() => setLogsFor(null)} />}
+    </div>
+  )
+}
+
+// ─── Extension settings sheet (#112) ─────────────────────────────────────────
+function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const qc = useQueryClient()
+  const { data: decls = [], isLoading } = useQuery<
+    Array<{ key: string; label: string; type?: string; secret?: boolean; value: string | null }>
+  >({
+    queryKey: ['extension-settings', id],
+    queryFn: () => api.get(`/extensions/${id}/settings`).then((r) => r.data.data)
+  })
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const save = useMutation({
+    mutationFn: () => api.put(`/extensions/${id}/settings`, { values: draft }),
+    onSuccess: () => {
+      toast.success('Settings saved — live within a minute (60s cache)')
+      void qc.invalidateQueries({ queryKey: ['extension-settings', id] })
+      onClose()
+    },
+    onError: () => toast.error('Save failed')
+  })
+  return (
+    <div className='fixed inset-0 z-[120] flex justify-end bg-black/30' onClick={onClose}>
+      <div
+        className='h-full w-[380px] overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className='text-[14px] font-semibold'>
+          <code className='font-mono'>{id}</code> settings
+        </h2>
+        <p className='mt-0.5 text-[11.5px] text-muted-foreground'>
+          Declared by the extension; stored in the database — no redeploy needed.
+        </p>
+        {isLoading ? (
+          <p className='mt-4 text-[12.5px] text-slate-400'>Loading…</p>
+        ) : (
+          <div className='mt-4 space-y-3'>
+            {decls.map((d) => (
+              <label key={d.key} className='block'>
+                <span className='text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+                  {d.label}
+                </span>
+                <input
+                  type={d.secret ? 'password' : 'text'}
+                  defaultValue={d.value ?? ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, [d.key]: e.target.value }))}
+                  className='mt-1 h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+                />
+                <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>{d.key}</span>
+              </label>
+            ))}
+            <div className='flex justify-end gap-2 pt-2'>
+              <Button size='sm' variant='outline' onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                size='sm'
+                onClick={() => save.mutate()}
+                disabled={save.isPending || Object.keys(draft).length === 0}
+              >
+                {save.isPending ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Extension logs sheet (#427) ─────────────────────────────────────────────
+function ExtensionLogsSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data: lines = [], isLoading } = useQuery<
+    Array<{ at: string; level: string; msg: string }>
+  >({
+    queryKey: ['extension-logs', id],
+    queryFn: () => api.get(`/extensions/${id}/logs`).then((r) => r.data.data),
+    refetchInterval: 5000
+  })
+  return (
+    <div className='fixed inset-0 z-[120] flex justify-end bg-black/30' onClick={onClose}>
+      <div
+        className='h-full w-[520px] overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className='text-[14px] font-semibold'>
+          <code className='font-mono'>{id}</code> log channel
+        </h2>
+        <p className='mt-0.5 text-[11.5px] text-muted-foreground'>
+          Last {lines.length} lines from this extension (in-memory, this API node, refreshes every
+          5s). Every line is also tagged in the server log.
+        </p>
+        {isLoading ? (
+          <p className='mt-4 text-[12.5px] text-slate-400'>Loading…</p>
+        ) : lines.length === 0 ? (
+          <p className='mt-4 text-[12.5px] text-slate-400'>
+            Nothing logged since this node started.
+          </p>
+        ) : (
+          <div className='mt-3 space-y-0.5 font-mono text-[11px]'>
+            {[...lines].reverse().map((l, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: append-only log lines
+              <p key={i} className='break-words'>
+                <span className='text-slate-400'>{new Date(l.at).toLocaleTimeString()}</span>{' '}
+                <span
+                  className={
+                    l.level === 'error'
+                      ? 'text-red-500'
+                      : l.level === 'warn'
+                        ? 'text-amber-500'
+                        : 'text-slate-500'
+                  }
+                >
+                  {l.level}
+                </span>{' '}
+                <span className='text-slate-700 dark:text-slate-200'>{l.msg}</span>
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

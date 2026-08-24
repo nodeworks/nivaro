@@ -585,11 +585,96 @@ export async function itemsRoutes(app: FastifyInstance) {
     return reply.send({ data: out })
   })
 
+  // ── REST batch endpoint (#165) ────────────────────────────────────────────
+  // Create/update many in one call, per-row results. Every row goes through
+  // the FULL items service (RBAC, validation, hooks, revisions) — this is a
+  // round-trip saver, never a fast path around the rules. Cap 100 rows.
+  app.post('/:collection/batch', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    if (req.user?.api_key_sandbox) {
+      return reply.code(403).send({ error: 'Sandbox keys cannot batch-write' })
+    }
+    const body = req.body as {
+      create?: Array<Record<string, unknown>>
+      update?: Array<Record<string, unknown> & { id?: string | number }>
+    }
+    const creates = Array.isArray(body?.create) ? body.create : []
+    const updates = Array.isArray(body?.update) ? body.update : []
+    if (creates.length + updates.length === 0)
+      return reply.code(400).send({ error: 'Provide create[] and/or update[] rows' })
+    if (creates.length + updates.length > 100)
+      return reply.code(422).send({ error: 'Batch cap is 100 rows per call' })
+    const results: Array<{
+      op: 'create' | 'update'
+      index: number
+      ok: boolean
+      id?: unknown
+      data?: unknown
+      error?: string
+    }> = []
+    for (const [i, row] of creates.entries()) {
+      try {
+        const item = (await createOne(
+          req.user!,
+          collection,
+          row,
+          req,
+          req.workspaceId ?? undefined
+        )) as Record<string, unknown>
+        results.push({ op: 'create', index: i, ok: true, id: item.id, data: item })
+      } catch (err) {
+        results.push({
+          op: 'create',
+          index: i,
+          ok: false,
+          error: err instanceof Error ? err.message : 'failed'
+        })
+      }
+    }
+    for (const [i, row] of updates.entries()) {
+      const rowId = row.id
+      if (rowId == null) {
+        results.push({ op: 'update', index: i, ok: false, error: 'row missing id' })
+        continue
+      }
+      const { id: _id, ...patch } = row
+      try {
+        const item = (await updateOne(
+          req.user!,
+          collection,
+          String(rowId),
+          patch,
+          req,
+          req.workspaceId ?? undefined
+        )) as Record<string, unknown>
+        results.push({ op: 'update', index: i, ok: true, id: rowId, data: item })
+      } catch (err) {
+        results.push({
+          op: 'update',
+          index: i,
+          ok: false,
+          error: err instanceof Error ? err.message : 'failed'
+        })
+      }
+    }
+    const failed = results.filter((r) => !r.ok).length
+    return reply.code(failed === results.length ? 422 : 200).send({
+      data: { results, ok: results.length - failed, failed }
+    })
+  })
+
   app.post('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
+    // Sandbox key (#166): the write is permission-checked and shaped like a
+    // real response, but NOTHING persists — integration test traffic against
+    // production stays side-effect free.
+    if (req.user?.api_key_sandbox) {
+      const sim = await simulateSandboxWrite(req, collection, 'create', null)
+      return reply.code(sim.code).send(sim.body)
+    }
     try {
       const item = await createOne(
         req.user!,
@@ -619,6 +704,10 @@ export async function itemsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
+    if (req.user?.api_key_sandbox) {
+      const sim = await simulateSandboxWrite(req, collection, 'update', id)
+      return reply.code(sim.code).send(sim.body)
+    }
     try {
       const item = await updateOne(
         req.user!,
@@ -649,6 +738,10 @@ export async function itemsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
+    if (req.user?.api_key_sandbox) {
+      const sim = await simulateSandboxWrite(req, collection, 'delete', id)
+      return reply.code(sim.code).send(sim.body)
+    }
     // capture snapshot before deletion so we can store it in parent activity
     let childSnapshot: Record<string, unknown> | null = null
     if (parentCollection && parentId) {
@@ -804,4 +897,44 @@ export async function itemsRoutes(app: FastifyInstance) {
 
     return reply.send({ data: history })
   })
+}
+
+// ─── Sandbox key simulation (#166) ───────────────────────────────────────────
+// Runs the SAME permission gate as a real write, then fabricates a realistic
+// response with `sandbox: true` — nothing touches the database. Deliberately
+// route-level: hooks/rules/computed fields never run, so no side effect can
+// leak from "simulated" work.
+async function simulateSandboxWrite(
+  req: import('fastify').FastifyRequest,
+  collection: string,
+  action: 'create' | 'update' | 'delete',
+  id: string | null
+): Promise<{ code: number; body: unknown }> {
+  const { can } = await import('../services/permissions.js')
+  if (/^nivaro_/i.test(collection)) {
+    return { code: 403, body: { error: 'Sandbox keys cannot write system collections' } }
+  }
+  const allowed = await can(req.user!, action, collection)
+  if (!allowed) {
+    return { code: 403, body: { error: `No ${action} permission on ${collection}` } }
+  }
+  if (action === 'delete') {
+    return { code: 200, body: { data: { id, deleted: true }, sandbox: true } }
+  }
+  const payload = (req.body ?? {}) as Record<string, unknown>
+  if (action === 'update') {
+    const current = ((await db(collection)
+      .where({ id })
+      .first()
+      .catch(() => null)) ?? null) as Record<string, unknown> | null
+    if (!current) return { code: 404, body: { error: 'Not found' } }
+    return { code: 200, body: { data: { ...current, ...payload }, sandbox: true } }
+  }
+  return {
+    code: 201,
+    body: {
+      data: { id: `sandbox-${Date.now().toString(36)}`, ...payload },
+      sandbox: true
+    }
+  }
 }

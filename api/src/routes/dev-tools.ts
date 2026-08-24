@@ -474,6 +474,154 @@ export async function devToolsRoutes(app: FastifyInstance) {
     return reply.type('text/plain; charset=utf-8').send(source)
   })
 
+  // Typed SDK client (#164): the generated interfaces PLUS a thin typed
+  // wrapper over @nivaro/sdk keyed by collection name — item reads/writes
+  // autocomplete against THIS instance's schema.
+  app.get('/typed-client.ts', async (_req, reply) => {
+    const { collections, fieldsByCollection, relations, projectName } = await loadSchema()
+    const types = generateTypes(collections, fieldsByCollection, relations, projectName)
+    const names = collections.map((c) => c.collection)
+    const mapEntries = names
+      .map((n) => `  ${JSON.stringify(n)}: ${pascalCase(n)}`)
+      .join('\n')
+    const wrapper = `
+
+// ─── Typed client wrapper ─────────────────────────────────────────────────────
+// Usage:
+//   import { createTypedNivaro } from './typed-client'
+//   const cms = createTypedNivaro({ url: '...', token: '...' })
+//   const rows = await cms.items('workflows').list({ limit: 25 })
+
+import { createNivaro, type NivaroConfig } from '@nivaro/sdk'
+
+export interface NivaroCollections {
+${mapEntries}
+}
+
+export function createTypedNivaro(config: NivaroConfig) {
+  const client = createNivaro(config)
+  return {
+    client,
+    items<C extends keyof NivaroCollections>(collection: C) {
+      type Row = NivaroCollections[C]
+      return {
+        list: (params?: Record<string, unknown>) =>
+          client.request<{ data: Row[]; total?: number }>({
+            method: 'GET',
+            path: \`/items/\${String(collection)}\`,
+            params
+          } as never) as Promise<{ data: Row[]; total?: number }>,
+        get: (id: string | number) =>
+          client.request<{ data: Row }>({
+            method: 'GET',
+            path: \`/items/\${String(collection)}/\${id}\`
+          } as never) as Promise<{ data: Row }>,
+        create: (data: Partial<Row>) =>
+          client.request<{ data: Row }>({
+            method: 'POST',
+            path: \`/items/\${String(collection)}\`,
+            body: data
+          } as never) as Promise<{ data: Row }>,
+        update: (id: string | number, data: Partial<Row>) =>
+          client.request<{ data: Row }>({
+            method: 'PATCH',
+            path: \`/items/\${String(collection)}/\${id}\`,
+            body: data
+          } as never) as Promise<{ data: Row }>,
+        remove: (id: string | number) =>
+          client.request({
+            method: 'DELETE',
+            path: \`/items/\${String(collection)}/\${id}\`
+          } as never) as Promise<void>
+      }
+    }
+  }
+}
+`
+    return reply.type('text/plain; charset=utf-8').send(types + wrapper)
+  })
+
+  // SDK mock server (#345): a dependency-free node script embedding this
+  // instance's schema — fake /api/items endpoints with type-plausible data
+  // for offline frontend development.
+  app.get('/mock-server.mjs', async (_req, reply) => {
+    const { collections, fieldsByCollection } = await loadSchema()
+    const schema: Record<string, Array<{ field: string; type: string }>> = {}
+    for (const c of collections) {
+      schema[c.collection] = (fieldsByCollection.get(c.collection) ?? [])
+        .filter((f) => f.type !== 'alias')
+        .map((f) => ({ field: f.field, type: f.type ?? 'string' }))
+        .slice(0, 60)
+    }
+    const script = `#!/usr/bin/env node
+// Nivaro mock API — generated from a live instance's schema (#345).
+// Run: node mock-server.mjs [port]   (default 3999)
+// Serves GET /api/items/:collection (25 fake rows), GET /api/items/:collection/:id,
+// and accepts POST/PATCH/DELETE with echo responses. No auth, no persistence.
+import { createServer } from 'node:http'
+
+const SCHEMA = ${JSON.stringify(schema)}
+
+let seed = 42
+const rand = () => {
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  return seed / 2147483648
+}
+const WORDS = ['alpha','bravo','delta','echo','ridge','north','union','harbor','summit','mesa']
+function fake(type, field, i) {
+  if (field === 'id') return i + 1
+  if (/int|number|decimal|float/.test(type)) return Math.round(rand() * 10000) / 100
+  if (/bool/.test(type)) return rand() > 0.5
+  if (/date|time/.test(type)) return new Date(Date.now() - rand() * 90 * 864e5).toISOString()
+  if (/uuid/.test(type)) return '00000000-0000-4000-8000-' + String(i).padStart(12, '0')
+  return WORDS[Math.floor(rand() * WORDS.length)] + '-' + (i + 1)
+}
+function rows(collection, count = 25) {
+  const fields = SCHEMA[collection] ?? [{ field: 'id', type: 'integer' }]
+  return Array.from({ length: count }, (_, i) =>
+    Object.fromEntries(fields.map((f) => [f.field, fake(f.type, f.field, i)]))
+  )
+}
+const server = createServer((req, res) => {
+  const url = new URL(req.url, 'http://x')
+  const m = url.pathname.match(/^\\/api\\/items\\/([a-z0-9_]+)(?:\\/([^/]+))?$/i)
+  res.setHeader('content-type', 'application/json')
+  res.setHeader('access-control-allow-origin', '*')
+  res.setHeader('access-control-allow-headers', '*')
+  res.setHeader('access-control-allow-methods', '*')
+  if (req.method === 'OPTIONS') return res.end()
+  if (!m) {
+    res.statusCode = 404
+    return res.end(JSON.stringify({ error: 'mock: only /api/items/* is served' }))
+  }
+  const [, collection, id] = m
+  if (!SCHEMA[collection]) {
+    res.statusCode = 404
+    return res.end(JSON.stringify({ error: 'unknown collection: ' + collection }))
+  }
+  if (req.method === 'GET' && !id) {
+    const limit = Math.min(100, Number(url.searchParams.get('limit')) || 25)
+    return res.end(JSON.stringify({ data: rows(collection, limit), total: 250 }))
+  }
+  if (req.method === 'GET') {
+    return res.end(JSON.stringify({ data: { ...rows(collection, 1)[0], id } }))
+  }
+  let body = ''
+  req.on('data', (c) => { body += c })
+  req.on('end', () => {
+    const payload = (() => { try { return JSON.parse(body || '{}') } catch { return {} } })()
+    if (req.method === 'DELETE') { res.statusCode = 204; return res.end() }
+    res.statusCode = req.method === 'POST' ? 201 : 200
+    res.end(JSON.stringify({ data: { id: id ?? Math.floor(rand() * 100000), ...payload }, mock: true }))
+  })
+})
+const port = Number(process.argv[2]) || 3999
+server.listen(port, () => console.log('nivaro mock api on http://localhost:' + port))
+`
+    reply.header('content-disposition', 'attachment; filename="mock-server.mjs"')
+    return reply.type('text/plain; charset=utf-8').send(script)
+  })
+
   app.get('/openapi.json', async (_req, reply) => {
     const { collections, fieldsByCollection, projectName } = await loadSchema()
     return reply.send(generateOpenApi(collections, fieldsByCollection, projectName))
@@ -482,6 +630,25 @@ export async function devToolsRoutes(app: FastifyInstance) {
   app.get('/postman.json', async (_req, reply) => {
     const { collections, fieldsByCollection, projectName } = await loadSchema()
     return reply.send(generatePostman(collections, fieldsByCollection, projectName))
+  })
+
+  // Changelogs (#163/#315): what changed in the API surface, and when.
+  app.get('/graphql-changelog', async (_req, reply) => {
+    const { db } = await import('../db/index.js')
+    const rows = await db('nivaro_graphql_schema_log')
+      .orderBy('id', 'desc')
+      .limit(30)
+      .select('id', 'at', 'diff', 'breaking')
+    return reply.send({ data: rows })
+  })
+
+  app.get('/api-changelog', async (_req, reply) => {
+    const { db } = await import('../db/index.js')
+    const rows = await db('nivaro_api_changelog')
+      .orderBy('id', 'desc')
+      .limit(30)
+      .select('id', 'version', 'at', 'diff', 'breaking')
+    return reply.send({ data: rows })
   })
 
   app.get('/bruno.json', async (_req, reply) => {

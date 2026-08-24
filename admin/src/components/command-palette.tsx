@@ -184,6 +184,23 @@ export function CommandPalette() {
     staleTime: 15_000
   })
 
+  // Extension palette entries (#260): server extensions declare navigation
+  // entries; served beside the UI-bundle manifest (not admin-gated).
+  const { data: extPalette = [] } = useQuery<
+    Array<{ label: string; path: string; extension: string }>
+  >({
+    queryKey: ['extension-palette'],
+    queryFn: () =>
+      api
+        .get<{ palette?: Array<{ label: string; path: string; extension: string }> }>(
+          '/extensions/manifest'
+        )
+        .then((r) => r.data.palette ?? [])
+        .catch(() => []),
+    enabled: open,
+    staleTime: 300_000
+  })
+
   const { data: collections } = useQuery({
     queryKey: ['command-palette-collections'],
     queryFn: () =>
@@ -195,7 +212,8 @@ export function CommandPalette() {
   })
 
   const q = query.trim()
-  const pageMatches = q ? PAGES.filter((p) => matchesQuery(p, q)).slice(0, 8) : PAGES.slice(0, 8)
+  const allPages = [...PAGES, ...extPalette.map((e) => ({ label: e.label, path: e.path, keywords: e.extension }))]
+  const pageMatches = q ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8) : allPages.slice(0, 8)
   const records = debouncedQuery.length >= 2 ? (searchData?.records ?? []) : []
   const serverActions = debouncedQuery.length >= 2 ? (searchData?.actions ?? []) : []
   const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []

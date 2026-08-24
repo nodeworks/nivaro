@@ -428,6 +428,79 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     }
   })
 
+  // ── Query-as-endpoint (#340) ──────────────────────────────────────────────
+  // Publish a query behind an unguessable token: GET with params in the
+  // querystring — a URL you can hand to a spreadsheet or partner without
+  // making the query public or minting an account.
+  app.post<{ Params: { id: string } }>(
+    '/:id/publish-token',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id } = req.params
+      const query = await db('nivaro_custom_queries').where({ id: Number(id) }).first('id')
+      if (!query) return reply.code(404).send({ error: 'Not found' })
+      const { randomBytes } = await import('node:crypto')
+      const token = randomBytes(24).toString('hex')
+      await db('nivaro_custom_queries').where({ id: Number(id) }).update({ public_token: token })
+      await logActivity({
+        action: 'custom-query-publish',
+        user: req.user?.id,
+        collection: 'nivaro_custom_queries',
+        item: String(id),
+        req
+      })
+      return reply.send({ data: { token, url: `/api/custom-queries/public/${token}` } })
+    }
+  )
+
+  app.delete<{ Params: { id: string } }>(
+    '/:id/publish-token',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id } = req.params
+      await db('nivaro_custom_queries').where({ id: Number(id) }).update({ public_token: null })
+      await logActivity({
+        action: 'custom-query-unpublish',
+        user: req.user?.id,
+        collection: 'nivaro_custom_queries',
+        item: String(id),
+        req
+      })
+      return reply.code(204).send()
+    }
+  )
+
+  app.get<{ Params: { token: string } }>('/public/:token', async (req, reply) => {
+    const { token } = req.params
+    if (!/^[0-9a-f]{48}$/.test(token)) return reply.code(404).send({ error: 'Not found' })
+    const query = (await db('nivaro_custom_queries').where({ public_token: token }).first()) as
+      | CustomQueryRow
+      | undefined
+    if (!query || !query.enabled) return reply.code(404).send({ error: 'Not found' })
+    const defs = parseJson<ParamDef[]>(query.params) ?? []
+    // Params ride the querystring; only DECLARED params pass through.
+    const incoming: Record<string, unknown> = {}
+    for (const d of defs) {
+      const v = (req.query as Record<string, string>)[d.name]
+      if (v !== undefined) incoming[d.name] = v
+    }
+    let finalParams: Record<string, unknown>
+    try {
+      finalParams = buildFinalParams(defs, incoming)
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
+    }
+    const { runCustomQueryBySlug } = await import('../services/custom-query-exec.js')
+    try {
+      const rows = await runCustomQueryBySlug(query.slug, finalParams)
+      return reply.send({ data: rows })
+    } catch (err) {
+      return reply
+        .code(422)
+        .send({ error: err instanceof Error ? err.message : 'Query failed' })
+    }
+  })
+
   app.post<{ Params: { slug: string }; Body: { params?: Record<string, unknown> } }>(
     '/:slug/execute',
     async (req: FastifyRequest, reply: FastifyReply) => {

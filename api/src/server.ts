@@ -138,6 +138,15 @@ export async function buildServer() {
   await registerSession(app)
 
   // ─── Socket.io ────────────────────────────────────────────────────────────
+  const collectedRoutes: string[] = []
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method]
+    for (const m of methods) {
+      if (m === 'HEAD' || m === 'OPTIONS') continue
+      collectedRoutes.push(`${m} ${route.url}`)
+    }
+  })
+
   await app.register(socketioPlugin)
   // Global io + journal wiring (realtime sprint): services with no app in
   // scope emit through the holder; the event journal (#266) shares the
@@ -863,6 +872,16 @@ export async function buildServer() {
       }
       app.cron.schedule('anomaly-checks-daily', '0 3 * * *', () => anomalyPass('daily'))
       app.cron.schedule('anomaly-checks-weekly', '20 3 * * 1', () => anomalyPass('weekly'))
+
+      // REST API changelog (#315): record this release's route inventory and
+      // diff against the previous release (removed routes = breaking).
+      setTimeout(() => {
+        void (async () => {
+          const { recordRestRoutes } = await import('./services/api-changelog.js')
+          const { NIVARO_VERSION } = await import('./version.js')
+          await recordRestRoutes(NIVARO_VERSION, collectedRoutes)
+        })()
+      }, 10_000)
 
       // Missed-cron catch-up (#328): the idempotent nightly detectors run once
       // now if a restart straddled their window. Deliberately NOT flagged:

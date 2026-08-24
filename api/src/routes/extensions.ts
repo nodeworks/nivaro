@@ -154,7 +154,13 @@ export async function extensionsRoutes(app: FastifyInstance) {
         slots: e.manifest?.slots ?? [],
         cloud: e.cloud ?? false
       }))
-    return reply.send({ data })
+    // Palette entries (#260): server extensions may declare command-palette
+    // navigation entries — served beside the UI-bundle manifest so the
+    // palette can merge them without an admin-gated call.
+    const palette = Array.from(extensionRegistry.values())
+      .filter((e) => e.enabled && (e.palette?.length ?? 0) > 0)
+      .flatMap((e) => (e.palette ?? []).map((pp) => ({ ...pp, extension: e.id })))
+    return reply.send({ data, palette })
   })
 
   app.addHook('preHandler', requireAdmin)
@@ -208,6 +214,103 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ─── GET /marketplace — registry index (env URL or built-in curated list) ──
+
+  // ── Extension settings (#112) ─────────────────────────────────────────────
+  app.get('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { extensionSettingsDecls, bustExtensionSettingsCache } = await import(
+      '../extensions/loader.js'
+    )
+    void bustExtensionSettingsCache
+    const decls = extensionSettingsDecls.get(id)
+    if (!decls) return reply.code(404).send({ error: 'Extension declares no settings' })
+    const rows = (await db('nivaro_extension_settings')
+      .where({ extension_id: id })
+      .select('key', 'value')) as Array<{ key: string; value: string | null }>
+    const stored = new Map(rows.map((r) => [r.key, r.value]))
+    return reply.send({
+      data: decls.map((d) => ({
+        ...d,
+        value: d.secret && stored.get(d.key) ? '••••••' : (stored.get(d.key) ?? d.default ?? null)
+      }))
+    })
+  })
+
+  app.put('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { values?: Record<string, string | null> }
+    const { extensionSettingsDecls, bustExtensionSettingsCache } = await import(
+      '../extensions/loader.js'
+    )
+    const decls = extensionSettingsDecls.get(id)
+    if (!decls) return reply.code(404).send({ error: 'Extension declares no settings' })
+    const declared = new Map(decls.map((d) => [d.key, d]))
+    for (const [key, raw] of Object.entries(body?.values ?? {})) {
+      const decl = declared.get(key)
+      if (!decl) continue // undeclared keys are ignored, never stored
+      // Masked secret re-submitted → keep the stored value.
+      if (decl.secret && raw === '••••••') continue
+      const value = raw == null ? null : String(raw).slice(0, 4000)
+      const existing = await db('nivaro_extension_settings')
+        .where({ extension_id: id, key })
+        .first('id')
+      if (existing) {
+        await db('nivaro_extension_settings')
+          .where({ id: existing.id })
+          .update({ value, updated_at: new Date() })
+      } else {
+        await db('nivaro_extension_settings').insert({
+          extension_id: id,
+          key,
+          value,
+          updated_at: new Date()
+        })
+      }
+    }
+    bustExtensionSettingsCache(id)
+    await logActivity({
+      action: 'extension-settings-update',
+      user: req.user?.id,
+      comment: id,
+      req
+    })
+    return reply.send({ data: { saved: true } })
+  })
+
+  // ── Health probes (#262) ──────────────────────────────────────────────────
+  app.get('/:id/health', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { extensionHealthChecks } = await import('../extensions/loader.js')
+    const check = extensionHealthChecks.get(id)
+    if (!check) return reply.code(404).send({ error: 'Extension declares no health check' })
+    try {
+      const result = await Promise.race([
+        check(),
+        new Promise<{ ok: boolean; note: string }>((resolve) =>
+          setTimeout(() => resolve({ ok: false, note: 'health check timed out (5s)' }), 5000)
+        )
+      ])
+      return reply.send({ data: result })
+    } catch (err) {
+      return reply.send({
+        data: { ok: false, note: err instanceof Error ? err.message : 'check threw' }
+      })
+    }
+  })
+
+  // ── Log channels (#427) ───────────────────────────────────────────────────
+  app.get('/:id/logs', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { getExtensionLogs } = await import('../extensions/loader.js')
+    return reply.send({ data: getExtensionLogs(id) })
+  })
+
+  // ── Starter scaffold (#181) ───────────────────────────────────────────────
+  app.get('/scaffold', { preHandler: requireAdmin }, async (_req, reply) => {
+    reply.header('content-type', 'text/plain; charset=utf-8')
+    reply.header('content-disposition', 'attachment; filename="index.ts"')
+    return reply.send(EXTENSION_SCAFFOLD)
+  })
 
   app.get('/marketplace', async (_req, reply) => {
     let entries: MarketplaceEntry[] = []
@@ -381,3 +484,50 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data, loaded: newIds })
   })
 }
+
+
+// Starter extension (#181): everything a first extension needs — typed ctx,
+// a hook, a cron, a route, a setting, a health check.
+const EXTENSION_SCAFFOLD = `// my-extension/index.ts — drop this folder into api/extensions/
+// Dev runs .ts directly (tsx); production deployments compile to index.js.
+export default {
+  id: 'my-extension',
+
+  // Shown on the Extensions page before enabling — declare what you touch.
+  scopes: ['hooks:articles', 'cron', 'routes'],
+
+  // Admin-editable settings (Extensions page) — read via ctx.settings.get().
+  settings: [
+    { key: 'greeting', label: 'Greeting text', type: 'string', default: 'hello' }
+  ],
+
+  // Quick self-check surfaced on the Extensions page.
+  async healthCheck() {
+    return { ok: true, note: 'all good' }
+  },
+
+  async register({ app, database, logger, hooks, cron, settings }) {
+    // A route under /api
+    app.register(
+      async (f) => {
+        f.get('/my-extension/ping', async () => ({
+          ok: true,
+          greeting: (await settings?.get('greeting')) ?? 'hello'
+        }))
+      },
+      { prefix: '/api' }
+    )
+
+    // React to writes (RBAC/validation already ran)
+    hooks.after('articles', 'create', async ({ item }) => {
+      logger.info({ item }, 'article created')
+    })
+
+    // Scheduled work — appears on /background-jobs automatically
+    cron.schedule('nightly', '0 3 * * *', async () => {
+      const count = await database('articles').count('* as c').first()
+      logger.info({ count }, 'nightly article count')
+    })
+  }
+}
+`

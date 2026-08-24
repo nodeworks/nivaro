@@ -83,6 +83,7 @@ export function CustomQueryEditPage() {
     params: [],
     scope_params: ''
   })
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
 
   // SQL copilot (#54)
   const [aiPrompt, setAiPrompt] = useState('')
@@ -132,6 +133,11 @@ export function CustomQueryEditPage() {
         params: data.params ?? [],
         scope_params: data.scope_params ?? ''
       })
+      setPublishedUrl(
+        (data as { public_token?: string | null }).public_token
+          ? `/api/custom-queries/public/${(data as { public_token?: string }).public_token}`
+          : null
+      )
     }
   }, [data])
 
@@ -457,6 +463,65 @@ export function CustomQueryEditPage() {
                     ids, "display" passes the dimension's display values (e.g. zone short names).
                   </p>
                 </div>
+
+                {/* Query-as-endpoint (#340) */}
+                {id && id !== 'new' && (
+                  <div className='rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3 dark:border-border dark:bg-muted/30'>
+                    <p className='text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                      Public endpoint
+                    </p>
+                    <p className='text-[11px] text-slate-400'>
+                      Publish this query behind an unguessable token — a plain GET URL with params
+                      in the querystring, for spreadsheets and partners with no account.
+                    </p>
+                    {publishedUrl ? (
+                      <div className='mt-2 flex items-center gap-2'>
+                        <code className='min-w-0 flex-1 truncate rounded bg-white px-2 py-1 font-mono text-[11px] dark:bg-background'>
+                          {publishedUrl}
+                        </code>
+                        <button
+                          type='button'
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(
+                              `${window.location.origin}${publishedUrl}`
+                            )
+                            toast.success('URL copied')
+                          }}
+                          className='shrink-0 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] hover:bg-white dark:border-border'
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => {
+                            void api.delete(`/custom-queries/${id}/publish-token`).then(() => {
+                              setPublishedUrl(null)
+                              toast.success('Endpoint revoked')
+                            })
+                          }}
+                          className='shrink-0 rounded-md border border-red-200 px-2 py-1 text-[11.5px] text-red-600 hover:bg-red-50 dark:border-red-500/40'
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type='button'
+                        onClick={() => {
+                          void api
+                            .post<{ data: { url: string } }>(`/custom-queries/${id}/publish-token`)
+                            .then((r) => {
+                              setPublishedUrl(r.data.data.url)
+                              toast.success('Published — copy the URL')
+                            })
+                        }}
+                        className='mt-2 rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-white dark:border-border'
+                      >
+                        Publish as endpoint…
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <div className='flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3'>
                   <div>

@@ -56,6 +56,10 @@ export interface ExtensionContext {
   database: Database
   inngest: Inngest
   logger: FastifyInstance['log']
+  /** Admin-editable extension settings (#112) — declared on the export. */
+  settings?: {
+    get(key: string): Promise<string | null>
+  }
   /** Call a configured external API by name or numeric ID. Auth resolved automatically. */
   callExternalApi(nameOrId: string | number, options?: CallOptions): Promise<CallResult>
   /**
@@ -180,6 +184,24 @@ export interface ExtensionContext {
 export interface Extension {
   id: string
   register(ctx: ExtensionContext): void | Promise<void>
+  /** Permission scopes (#215): what this extension touches — a declared
+   *  manifest shown before enabling, not an enforcement boundary. */
+  scopes?: string[]
+  /** Dependencies (#426): extension ids that must load FIRST. Missing or
+   *  failed deps make this extension error instead of half-working. */
+  requires?: string[]
+  /** Command-palette entries (#260) served to the admin palette. */
+  palette?: Array<{ label: string; path: string }>
+  /** Admin-editable settings (#112), stored in nivaro_extension_settings. */
+  settings?: Array<{
+    key: string
+    label: string
+    type?: 'string' | 'number' | 'boolean'
+    default?: string
+    secret?: boolean
+  }>
+  /** Health probe (#262): quick self-check surfaced on the Extensions page. */
+  healthCheck?(): Promise<{ ok: boolean; note?: string }>
 }
 
 export interface PluginManifest {
@@ -197,6 +219,11 @@ export interface ExtensionEntry {
   error?: string
   manifest?: PluginManifest
   cloud?: boolean
+  scopes?: string[]
+  requires?: string[]
+  palette?: Array<{ label: string; path: string }>
+  has_settings?: boolean
+  has_health_check?: boolean
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -226,6 +253,67 @@ function writeConfig(config: Record<string, boolean>): void {
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const extensionRegistry = new Map<string, ExtensionEntry>()
+
+// ── Extension settings (#112) ────────────────────────────────────────────────
+export const extensionSettingsDecls = new Map<string, NonNullable<Extension['settings']>>()
+const settingsCache = new Map<string, { values: Record<string, string | null>; at: number }>()
+export function bustExtensionSettingsCache(extId?: string): void {
+  if (extId) settingsCache.delete(extId)
+  else settingsCache.clear()
+}
+async function readExtensionSettings(extId: string): Promise<Record<string, string | null>> {
+  const hit = settingsCache.get(extId)
+  if (hit && Date.now() - hit.at < 60_000) return hit.values
+  const { db } = await import('../db/index.js')
+  const decls = extensionSettingsDecls.get(extId) ?? []
+  const values: Record<string, string | null> = {}
+  for (const d of decls) values[d.key] = d.default ?? null
+  try {
+    const rows = (await db('nivaro_extension_settings')
+      .where({ extension_id: extId })
+      .select('key', 'value')) as Array<{ key: string; value: string | null }>
+    for (const r of rows) values[r.key] = r.value
+  } catch {
+    /* table missing pre-migration — declared defaults stand */
+  }
+  settingsCache.set(extId, { values, at: Date.now() })
+  return values
+}
+
+// ── Health probes (#262) ─────────────────────────────────────────────────────
+export const extensionHealthChecks = new Map<string, () => Promise<{ ok: boolean; note?: string }>>()
+
+// ── Log channels (#427) ──────────────────────────────────────────────────────
+// Per-extension ring buffer of recent log lines — served by
+// GET /extensions/:id/logs so an extension's chatter is inspectable without
+// grepping the server log.
+const extensionLogs = new Map<string, Array<{ at: string; level: string; msg: string }>>()
+export function getExtensionLogs(extId: string): Array<{ at: string; level: string; msg: string }> {
+  return extensionLogs.get(extId) ?? []
+}
+function pushExtLog(extId: string, level: string, args: unknown[]): void {
+  const list = extensionLogs.get(extId) ?? []
+  const msg = args
+    .map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a) } catch { return String(a) } })()))
+    .join(' ')
+    .slice(0, 500)
+  list.push({ at: new Date().toISOString(), level, msg })
+  if (list.length > 200) list.splice(0, list.length - 200)
+  extensionLogs.set(extId, list)
+}
+function channelLogger(base: FastifyInstance['log'], extId: string): FastifyInstance['log'] {
+  // pino child tags every server log line with {extension}; the wrapper also
+  // mirrors info/warn/error/debug into the per-extension ring buffer.
+  const child = base.child({ extension: extId })
+  const wrapped = Object.create(child) as FastifyInstance['log']
+  for (const level of ['info', 'warn', 'error', 'debug'] as const) {
+    ;(wrapped as unknown as Record<string, unknown>)[level] = (...args: unknown[]) => {
+      pushExtLog(extId, level, args)
+      ;(child[level] as (...a: unknown[]) => void)(...args)
+    }
+  }
+  return wrapped
+}
 
 // ─── Load a single extension folder ──────────────────────────────────────────
 
@@ -309,6 +397,11 @@ async function loadExtension(
     // Scoped hooks + cron context — all entries are tagged with this extension's id
     const scopedCtx: ExtensionContext = {
       ...ctx,
+      // Log channels (#427): every line tagged {extension} + ring-buffered.
+      logger: channelLogger(ctx.logger, extId),
+      settings: {
+        get: async (key: string) => (await readExtensionSettings(extId))[key] ?? null
+      },
       callExternalApi,
       logActivity: (entry) =>
         logActivity({
@@ -379,11 +472,25 @@ async function loadExtension(
       ctx.app.cron.setExtensionEnabled(extId, false)
     }
 
+    if (Array.isArray(ext.settings) && ext.settings.length > 0)
+      extensionSettingsDecls.set(extId, ext.settings)
+    if (typeof ext.healthCheck === 'function')
+      extensionHealthChecks.set(extId, ext.healthCheck.bind(ext))
+
     extensionRegistry.set(ext.id, {
       id: ext.id,
       status: 'loaded',
       enabled,
-      path: dirPath
+      path: dirPath,
+      scopes: Array.isArray(ext.scopes) ? ext.scopes.map(String).slice(0, 30) : undefined,
+      requires: Array.isArray(ext.requires) ? ext.requires.map(String) : undefined,
+      palette: Array.isArray(ext.palette)
+        ? ext.palette
+            .filter((pp) => pp && typeof pp.label === 'string' && typeof pp.path === 'string')
+            .slice(0, 20)
+        : undefined,
+      has_settings: Array.isArray(ext.settings) && ext.settings.length > 0,
+      has_health_check: typeof ext.healthCheck === 'function'
     })
 
     // Load optional manifest.json for UI plugin support
@@ -474,8 +581,75 @@ export async function loadExtensions(
   // Filter out hidden files/dirs (like .config.json itself)
   const dirs = entries.filter((e) => !e.startsWith('.'))
 
-  for (const entry of dirs) {
-    await loadExtension(entry, ctx, config)
+  // Dependencies (#426): pre-import every module to read `requires`, then
+  // topologically order the load. A missing/failed dependency turns its
+  // dependents into explicit errors instead of half-working extensions.
+  const meta = new Map<string, { dir: string; requires: string[] }>()
+  const dirById = new Map<string, string>()
+  for (const dir of dirs) {
+    try {
+      const entryFile = await resolveIndexPath(join(EXTENSIONS_DIR, dir))
+      if (!entryFile) continue
+      const mod = (await import(entryFile)) as { default?: Extension }
+      const id = mod.default?.id
+      if (id) {
+        meta.set(id, {
+          dir,
+          requires: Array.isArray(mod.default?.requires) ? mod.default.requires.map(String) : []
+        })
+        dirById.set(id, dir)
+      } else {
+        meta.set(`__dir:${dir}`, { dir, requires: [] })
+      }
+    } catch {
+      // Import error — loadExtension will surface it properly below.
+      meta.set(`__dir:${dir}`, { dir, requires: [] })
+    }
+  }
+  const ordered: string[] = []
+  const visiting = new Set<string>()
+  const done = new Set<string>()
+  const failedDeps = new Map<string, string>()
+  const visit = (id: string): void => {
+    if (done.has(id)) return
+    if (visiting.has(id)) {
+      failedDeps.set(id, 'circular dependency')
+      done.add(id)
+      return
+    }
+    visiting.add(id)
+    const m = meta.get(id)
+    if (m) {
+      for (const dep of m.requires) {
+        if (!meta.has(dep)) {
+          failedDeps.set(id, `missing dependency "${dep}"`)
+        } else {
+          visit(dep)
+          if (failedDeps.has(dep)) failedDeps.set(id, `dependency "${dep}" failed`)
+        }
+      }
+    }
+    visiting.delete(id)
+    done.add(id)
+    if (m) ordered.push(m.dir)
+  }
+  for (const id of meta.keys()) visit(id)
+
+  for (const dir of ordered) {
+    const failedId = [...failedDeps.entries()].find(([fid]) => dirById.get(fid) === dir)?.[0]
+    if (failedId) {
+      const reason = failedDeps.get(failedId) ?? 'dependency failure'
+      ctx.logger.error(`Extension "${failedId}" not loaded: ${reason}`)
+      extensionRegistry.set(failedId, {
+        id: failedId,
+        status: 'error',
+        enabled: false,
+        path: join(EXTENSIONS_DIR, dir),
+        error: reason
+      })
+      continue
+    }
+    await loadExtension(dir, ctx, config)
   }
 
   // Surface any IDs in config that didn't resolve to a real folder

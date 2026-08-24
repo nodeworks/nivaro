@@ -54,7 +54,11 @@ const GRAPHIQL_HTML = /* html */ `<!DOCTYPE html>
 let _schema: GraphQLSchema | null = null
 
 async function getSchema(): Promise<GraphQLSchema> {
-  if (!_schema) _schema = await buildGraphQLSchema()
+  if (!_schema) {
+    _schema = await buildGraphQLSchema()
+    const { recordGraphQLSchema } = await import('../services/api-changelog.js')
+    void recordGraphQLSchema(_schema)
+  }
   return _schema
 }
 
@@ -92,6 +96,10 @@ async function lookupPersistedQuery(key: { id?: unknown; hash?: string }): Promi
 
 export async function rebuildGraphQLSchema(): Promise<void> {
   _schema = await buildGraphQLSchema()
+  {
+    const { recordGraphQLSchema } = await import('../services/api-changelog.js')
+    void recordGraphQLSchema(_schema)
+  }
 }
 
 export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
@@ -156,6 +164,8 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
     try {
       _schema = await buildGraphQLSchema()
       app.log.info('GraphQL schema built')
+      const { recordGraphQLSchema } = await import('../services/api-changelog.js')
+      void recordGraphQLSchema(_schema)
     } catch (err) {
       app.log.warn({ err }, 'GraphQL schema build failed at startup — will retry on first request')
     }
@@ -219,6 +229,35 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       return reply.send({ errors: validationErrors })
     }
 
+    // GraphQL cost limits (#162): depth + selection-count caps, overridable
+    // per API key (nivaro_api_keys.graphql_max_depth). A runaway nested query
+    // is refused before execution, not after it has fanned out.
+    {
+      const keyDepth = (req.user as { api_key_graphql_max_depth?: number | null } | undefined)
+        ?.api_key_graphql_max_depth
+      const maxDepth = keyDepth ?? Number(process.env.GRAPHQL_MAX_DEPTH ?? 12)
+      const maxSelections = Number(process.env.GRAPHQL_MAX_SELECTIONS ?? 2500)
+      const cost = measureQueryCost(document)
+      if (cost.depth > maxDepth) {
+        return reply.code(400).send({
+          errors: [
+            {
+              message: `Query depth ${cost.depth} exceeds the limit of ${maxDepth} for this key`
+            }
+          ]
+        })
+      }
+      if (cost.selections > maxSelections) {
+        return reply.code(400).send({
+          errors: [
+            {
+              message: `Query requests ${cost.selections} fields — the limit is ${maxSelections}`
+            }
+          ]
+        })
+      }
+    }
+
     const result = await execute({
       schema,
       document,
@@ -246,4 +285,45 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
   )
 
   app.log.info('GraphQL API registered at /api/graphql')
+}
+
+
+// Depth + selection count for the cost limiter (#162). Fragments count at
+// their spread site; a fragment cycle is impossible past validation.
+function measureQueryCost(document: ReturnType<typeof parse>): {
+  depth: number
+  selections: number
+} {
+  let selections = 0
+  let maxDepth = 0
+  const fragments = new Map<string, unknown>()
+  for (const def of document.definitions) {
+    if (def.kind === 'FragmentDefinition') fragments.set(def.name.value, def)
+  }
+  const walk = (selectionSet: unknown, depth: number): void => {
+    const set = selectionSet as { selections?: unknown[] } | undefined
+    if (!set?.selections) return
+    if (depth > maxDepth) maxDepth = depth
+    for (const sel of set.selections) {
+      const node = sel as {
+        kind: string
+        selectionSet?: unknown
+        name?: { value: string }
+      }
+      if (node.kind === 'Field') {
+        selections++
+        if (node.selectionSet) walk(node.selectionSet, depth + 1)
+      } else if (node.kind === 'InlineFragment') {
+        walk(node.selectionSet, depth)
+      } else if (node.kind === 'FragmentSpread' && node.name) {
+        const frag = fragments.get(node.name.value) as { selectionSet?: unknown } | undefined
+        if (frag?.selectionSet) walk(frag.selectionSet, depth)
+      }
+      if (selections > 100_000) return // hard stop — cost check itself must stay cheap
+    }
+  }
+  for (const def of document.definitions) {
+    if (def.kind === 'OperationDefinition') walk(def.selectionSet, 1)
+  }
+  return { depth: maxDepth, selections }
 }
