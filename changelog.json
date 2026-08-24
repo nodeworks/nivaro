@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T21:44:52.760Z",
+  "generated_at": "2026-08-24T21:54:49.803Z",
   "releases": [
+    {
+      "version": "0.1.119",
+      "tag": "v0.1.119",
+      "date": "2026-08-24T17:54:46-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "SQL & Query Tools sprint (#111 #115 #237 #238 #254 #341 #430)",
+              "hash": "45043059"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.118",
       "tag": "v0.1.118",
-      "date": "2026-08-24T17:44:49-04:00",
+      "date": "2026-08-24T17:44:52-04:00",
       "sections": [
         {
           "label": "Added",
