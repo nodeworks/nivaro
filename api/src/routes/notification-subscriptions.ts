@@ -18,6 +18,7 @@ function serialize(row: Record<string, unknown>) {
     user: row.user,
     collection: row.collection ?? null,
     queue_id: row.queue_id ?? null,
+    queue_view_id: row.queue_view_id ?? null,
     event_type: row.event_type,
     filter_field: row.filter_field ?? null,
     filter_value: row.filter_value ?? null,
@@ -99,6 +100,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     const body = req.body as {
       collection?: string
       queue_id?: string
+      queue_view_id?: number | null
       event_type?: string
       filter_field?: string
       filter_value?: string
@@ -130,10 +132,14 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       if (!canReadQueue(queue, req)) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
-      if (body.digest_frequency === 'instant') {
-        return reply
-          .code(400)
-          .send({ error: 'queue subscriptions only support daily or weekly digest_frequency' })
+      // Instant queue-entry notifications (#121): 'instant' is allowed now —
+      // the queue-entry-notify cron (*/5) diffs the queue's id set per
+      // subscription and notifies on NEW arrivals (view-subscriptions pattern).
+      if (body.queue_view_id != null) {
+        const view = await db('nivaro_queue_views')
+          .where({ id: Number(body.queue_view_id), queue_id: body.queue_id })
+          .first('id')
+        if (!view) return reply.code(404).send({ error: 'Saved view not found on this queue' })
       }
       if (body.event_type && body.event_type !== 'all') {
         return reply.code(400).send({ error: 'queue subscriptions must use event_type "all"' })
@@ -157,7 +163,8 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       ? await db('nivaro_notification_subscriptions')
           .where({
             user: userId,
-            queue_id: queueId
+            queue_id: queueId,
+            queue_view_id: hasQueue ? (body.queue_view_id ?? null) : null
           })
           .first('id')
       : await db('nivaro_notification_subscriptions')
@@ -179,6 +186,7 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
         user: userId,
         collection,
         queue_id: queueId,
+        queue_view_id: hasQueue ? (body.queue_view_id ?? null) : null,
         event_type,
         filter_field,
         filter_value,

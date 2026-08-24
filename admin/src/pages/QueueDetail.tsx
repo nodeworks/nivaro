@@ -67,7 +67,7 @@ export function QueueDetailPage() {
   const mySub = subs?.data.find((s) => s.queue_id === id)
 
   const subscribeMut = useMutation({
-    mutationFn: (frequency: 'daily' | 'weekly') =>
+    mutationFn: (frequency: 'instant' | 'daily' | 'weekly') =>
       api.post('/notification-subscriptions', { queue_id: id, digest_frequency: frequency }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['notification-subscriptions'] })
@@ -125,13 +125,24 @@ export function QueueDetailPage() {
                   Subscribed ({mySub.digest_frequency}) · Unsubscribe
                 </button>
               ) : (
-                <button
-                  type='button'
-                  onClick={() => subscribeMut.mutate('daily')}
-                  className='shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
-                >
-                  Get daily digest
-                </button>
+                <div className='flex shrink-0 items-center gap-1'>
+                  {/* Instant queue-entry notifications (#121) alongside digests. */}
+                  <button
+                    type='button'
+                    onClick={() => subscribeMut.mutate('instant')}
+                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+                    data-tip='Notify me the moment an item enters this queue (checked every 5 min)'
+                  >
+                    Notify on arrival
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => subscribeMut.mutate('daily')}
+                    className='rounded-md px-2.5 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+                  >
+                    Get daily digest
+                  </button>
+                </div>
               )}
             </div>
 

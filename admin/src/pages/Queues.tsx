@@ -25,7 +25,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
@@ -110,6 +110,20 @@ interface QueueDisplayConfig {
   /** Builder-set default column pins applied when a viewer has no saved-view
    *  pins; null = the historic first-column-pinned-left. */
   default_pins: Record<string, 'left' | 'right'> | null
+  /** Priority tuning (#353) — null = defaults. */
+  priority_weights?: {
+    sla_warning: number
+    sla_breached: number
+    at_risk: number
+    age_hour_cap: number
+  } | null
+  /** Formula columns (#133) — display-only computed columns. */
+  formula_columns?: Array<{
+    key: string
+    label: string
+    formula: string
+    format?: 'currency' | 'number' | null
+  }> | null
 }
 
 // Preview sidebar width presets — mirror the drill-down sheet's options.
@@ -318,11 +332,13 @@ function FieldCombobox({
 function QueueListItem({
   queue,
   selected,
-  onSelect
+  onSelect,
+  badge
 }: {
   queue: Queue
   selected: boolean
   onSelect: () => void
+  badge?: { total: number; sla_breached: number; source: string } | null
 }) {
   return (
     <li>
@@ -349,6 +365,24 @@ function QueueListItem({
           {queue.is_shared && (
             <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-muted'>
               Shared
+            </span>
+          )}
+          {badge && badge.total > 0 && (
+            <span
+              className={cn(
+                'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums',
+                badge.sla_breached > 0
+                  ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+                  : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
+              )}
+              data-tip={
+                badge.source === 'cache'
+                  ? 'Live count (materialized cache)'
+                  : 'From the latest daily snapshot'
+              }
+            >
+              {badge.total.toLocaleString()}
+              {badge.sla_breached > 0 ? ` · ${badge.sla_breached}⚠` : ''}
             </span>
           )}
         </div>
@@ -866,6 +900,38 @@ function SourceRow({
   const resolveField = (v: string) =>
     filterFieldOptions.find((f) => f.value.toLowerCase() === v.toLowerCase())?.value ?? v
 
+  // Live matched-count preview (#194): re-resolves this source (capped 2000)
+  // 600ms after the last edit, so the builder shows the blast radius live.
+  const previewKey = JSON.stringify({
+    c: source.collection,
+    f: source.filters,
+    s: source.state_values,
+    m: source.state_mode,
+    t: source.type
+  })
+  const debouncedPreviewKey = useDebouncedValue(previewKey, 600)
+  const { data: previewCount, isFetching: previewLoading } = useQuery<{
+    count: number
+    truncated: boolean
+  }>({
+    queryKey: ['queue-source-preview', debouncedPreviewKey],
+    queryFn: () =>
+      api
+        .post('/queues/preview-count', {
+          source: {
+            type: source.type,
+            collection: source.collection,
+            filters: source.filters ?? [],
+            state_values: source.state_values ?? [],
+            state_mode: source.state_mode ?? 'include'
+          }
+        })
+        .then((r) => r.data.data),
+    enabled: isCollection && !!source.collection,
+    staleTime: 30_000,
+    retry: false
+  })
+
   function updateCondition(idx: number, patch: Partial<QueueCondition>) {
     onChange({
       ...source,
@@ -967,6 +1033,25 @@ function SourceRow({
                     <span className='text-[11px] text-slate-400'>No state filter — all states</span>
                   )}
                 </div>
+                {/* Live matched-count preview (#194) */}
+                {isCollection && source.collection && (
+                  <span
+                    className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] tabular-nums text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+                    data-tip='Rows this source currently matches (capped at 2,000)'
+                  >
+                    {previewLoading ? (
+                      'counting…'
+                    ) : previewCount ? (
+                      <>
+                        matches <b>{previewCount.count.toLocaleString()}</b>
+                        {previewCount.truncated ? '+' : ''} row
+                        {previewCount.count === 1 ? '' : 's'}
+                      </>
+                    ) : (
+                      'matches —'
+                    )}
+                  </span>
+                )}
                 <div className='flex flex-wrap items-center gap-1.5'>
                   {stateValues.map((k) => (
                     <Badge key={k} className='gap-1 text-[11px]'>
@@ -1206,6 +1291,15 @@ function SourceRow({
 }
 
 // ─── Builder panel ──────────────────────────────────────────────────────────
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(t)
+  }, [value, delayMs])
+  return debounced
+}
 
 function SimpleCombobox({
   value,
@@ -1926,6 +2020,156 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   }
                 />
               </div>
+
+              {/* Priority tuning (#353) */}
+              <div className='space-y-1.5 rounded-lg border border-slate-200 p-3 dark:border-border'>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Priority sort weights
+                </p>
+                <p className='text-[11px] text-slate-400'>
+                  Score = SLA weight + at-risk weight + hours in state (capped). Higher lands
+                  higher in the priority sort.
+                </p>
+                <div className='grid grid-cols-2 gap-2'>
+                  {(
+                    [
+                      ['sla_breached', 'SLA breached', 2000],
+                      ['sla_warning', 'SLA warning', 1000],
+                      ['at_risk', 'At risk', 500],
+                      ['age_hour_cap', 'Age cap (hours)', 499]
+                    ] as Array<[string, string, number]>
+                  ).map(([k, label, dflt]) => (
+                    <label key={k} className='flex items-center justify-between gap-2 text-[12px]'>
+                      <span className='text-slate-500 dark:text-muted-foreground'>{label}</span>
+                      <input
+                        value={String(
+                          (displayConfig.priority_weights as Record<string, number> | null)?.[k] ??
+                            dflt
+                        )}
+                        disabled={!canEdit}
+                        inputMode='numeric'
+                        onChange={(e) => {
+                          const n = Number(e.target.value)
+                          setDisplayConfig((prev) => ({
+                            ...prev,
+                            priority_weights: {
+                              sla_warning: prev.priority_weights?.sla_warning ?? 1000,
+                              sla_breached: prev.priority_weights?.sla_breached ?? 2000,
+                              at_risk: prev.priority_weights?.at_risk ?? 500,
+                              age_hour_cap: prev.priority_weights?.age_hour_cap ?? 499,
+                              [k]: Number.isFinite(n) ? n : dflt
+                            }
+                          }))
+                        }}
+                        className='h-7 w-20 rounded-md border border-slate-200 bg-background px-2 text-right tabular-nums dark:border-border'
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Formula columns (#133) */}
+              <div className='space-y-1.5 rounded-lg border border-slate-200 p-3 dark:border-border'>
+                <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                  Formula columns
+                </p>
+                <p className='text-[11px] text-slate-400'>
+                  Computed display columns over row fields — e.g.{' '}
+                  <code className='font-mono text-[10.5px]'>
+                    {'{{extra.amount}} - {{extra.allocated_total}}'}
+                  </code>
+                  . Not sortable or cached.
+                </p>
+                {(displayConfig.formula_columns ?? []).map((fc, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: positional editor rows
+                  <div key={i} className='flex items-center gap-1.5'>
+                    <input
+                      value={fc.label}
+                      disabled={!canEdit}
+                      placeholder='Label'
+                      onChange={(e) =>
+                        setDisplayConfig((prev) => ({
+                          ...prev,
+                          formula_columns: (prev.formula_columns ?? []).map((x, j) =>
+                            j === i
+                              ? {
+                                  ...x,
+                                  label: e.target.value,
+                                  key: e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+                                }
+                              : x
+                          )
+                        }))
+                      }
+                      className='h-7 w-[120px] rounded-md border border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+                    />
+                    <input
+                      value={fc.formula}
+                      disabled={!canEdit}
+                      placeholder='{{extra.a}} - {{extra.b}}'
+                      onChange={(e) =>
+                        setDisplayConfig((prev) => ({
+                          ...prev,
+                          formula_columns: (prev.formula_columns ?? []).map((x, j) =>
+                            j === i ? { ...x, formula: e.target.value } : x
+                          )
+                        }))
+                      }
+                      className='h-7 flex-1 rounded-md border border-slate-200 bg-background px-2 font-mono text-[11px] dark:border-border'
+                    />
+                    <SimpleCombobox
+                      value={fc.format ?? ''}
+                      disabled={!canEdit}
+                      options={[
+                        { value: '', label: 'Raw' },
+                        { value: 'number', label: 'Number' },
+                        { value: 'currency', label: 'Currency' }
+                      ]}
+                      onChange={(v) =>
+                        setDisplayConfig((prev) => ({
+                          ...prev,
+                          formula_columns: (prev.formula_columns ?? []).map((x, j) =>
+                            j === i
+                              ? { ...x, format: (v || null) as 'currency' | 'number' | null }
+                              : x
+                          )
+                        }))
+                      }
+                    />
+                    <button
+                      type='button'
+                      disabled={!canEdit}
+                      onClick={() =>
+                        setDisplayConfig((prev) => ({
+                          ...prev,
+                          formula_columns: (prev.formula_columns ?? []).filter((_, j) => j !== i)
+                        }))
+                      }
+                      className='rounded-md px-1.5 py-1 text-[12px] text-slate-400 hover:text-red-500'
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                {(displayConfig.formula_columns ?? []).length < 10 && (
+                  <button
+                    type='button'
+                    disabled={!canEdit}
+                    onClick={() =>
+                      setDisplayConfig((prev) => ({
+                        ...prev,
+                        formula_columns: [
+                          ...(prev.formula_columns ?? []),
+                          { key: `col_${(prev.formula_columns ?? []).length + 1}`, label: '', formula: '', format: null }
+                        ]
+                      }))
+                    }
+                    className='rounded-md border border-dashed border-slate-300 px-2 py-1 text-[11.5px] text-slate-500 hover:bg-muted dark:border-border'
+                  >
+                    ＋ Add formula column
+                  </button>
+                )}
+              </div>
               <label htmlFor='q-work-next' className='flex cursor-pointer items-start gap-3'>
                 <Checkbox
                   id='q-work-next'
@@ -2113,6 +2357,17 @@ export function QueuesPage() {
     queryFn: () => api.get('/queues').then((r) => r.data.data)
   })
 
+  // Sidebar badges (#172): cheap counts per queue — materialized caches are
+  // live, live queues serve the latest daily snapshot.
+  const { data: badges } = useQuery<
+    Record<string, { total: number; sla_breached: number; source: string; as_of: string | null }>
+  >({
+    queryKey: ['queue-badges'],
+    queryFn: () => api.get('/queues/badges').then((r) => r.data.data),
+    refetchInterval: 60_000,
+    retry: false
+  })
+
   const createMut = useMutation({
     mutationFn: () => api.post('/queues', { name: 'New Queue' }).then((r) => r.data.data as Queue),
     onSuccess: (queue) => {
@@ -2148,6 +2403,7 @@ export function QueuesPage() {
                   queue={q}
                   selected={q.id === selectedId}
                   onSelect={() => setSelectedId(q.id)}
+                  badge={badges?.[q.id] ?? null}
                 />
               ))}
             </ul>

@@ -1792,7 +1792,40 @@ const WidgetCard = memo(function WidgetCard({
       'Failed to load'
     body = <p className='px-1 text-[12px] text-red-400'>{msg}</p>
   } else if (data) {
-    if (widget.type === 'kpi' || widget.type === 'calc') {
+    if (widget.type === 'queue') {
+      // Queue stat widget (#380): current value + the daily snapshot series.
+      const series = data.series ?? []
+      const maxV = Math.max(...series.map((pt) => pt.value), 1)
+      const minV = Math.min(...series.map((pt) => pt.value), 0)
+      const span = Math.max(maxV - minV, 1)
+      const pts = series
+        .map(
+          (pt, i) =>
+            `${(i / Math.max(1, series.length - 1)) * 100},${28 - ((pt.value - minV) / span) * 26}`
+        )
+        .join(' ')
+      body = (
+        <div className='flex min-h-0 flex-1 flex-col justify-center'>
+          <p className='text-[28px] font-semibold leading-none tracking-tight tabular-nums text-slate-900 dark:text-foreground'>
+            {data.value == null ? '—' : Number(data.value).toLocaleString()}
+          </p>
+          {series.length >= 3 && (
+            <svg viewBox='0 0 100 30' preserveAspectRatio='none' className='mt-1.5 h-7 w-full'>
+              <polyline
+                points={pts}
+                fill='none'
+                stroke='#00ceff'
+                strokeWidth='2'
+                vectorEffect='non-scaling-stroke'
+              />
+            </svg>
+          )}
+          <p className='mt-0.5 text-[10.5px] text-slate-400'>
+            {(widget.config as { metric?: string })?.metric ?? 'total'} · daily snapshots
+          </p>
+        </div>
+      )
+    } else if (widget.type === 'kpi' || widget.type === 'calc') {
       body = (
         <div className='flex items-baseline gap-2'>
           <p

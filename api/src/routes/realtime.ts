@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { getRealtimeStats, getRecordViewerSnapshot } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
@@ -10,6 +10,31 @@ import { currentSeq } from '../services/event-journal.js'
  * #275 concurrency history, #285 force refresh). Stats are per-node with the
  * Redis adapter — honest about it in the payload rather than pretending.
  */
+/**
+ * Record-viewer counts (#272): how many people have each record open RIGHT NOW
+ * (this node's record rooms). Authenticated — viewer counts are presence-tier
+ * data, not admin telemetry; names are deliberately NOT returned here.
+ */
+export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook('preHandler', requireAuth)
+  app.post<{ Body: { pairs?: Array<{ collection?: string; item_id?: string }> } }>(
+    '/record-viewers',
+    async (req) => {
+      const pairs = (req.body?.pairs ?? []).slice(0, 200)
+      const snapshot = getRecordViewerSnapshot()
+      const out: Record<string, number> = {}
+      for (const p of pairs) {
+        if (!p?.collection || p.item_id == null) continue
+        const hit = snapshot.find(
+          (v) => v.collection === p.collection && String(v.item) === String(p.item_id)
+        )
+        if (hit && hit.viewers.length > 0) out[`${p.collection}:${p.item_id}`] = hit.viewers.length
+      }
+      return { data: out }
+    }
+  )
+}
+
 export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 

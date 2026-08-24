@@ -826,6 +826,7 @@ export type ReportWidgetType =
   | 'table'
   | 'divider'
   | 'query'
+  | 'queue'
   | 'calc'
   | 'movers'
   | 'heatmap'

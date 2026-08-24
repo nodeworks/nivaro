@@ -199,6 +199,23 @@ export interface QueueDisplayConfig {
   /** Builder-set default column pins ({columnKey: 'left'|'right'}) applied when
    *  a viewer has no saved-view pins; null = the historic first-column-left. */
   default_pins: Record<string, 'left' | 'right'> | null
+  /** Priority tuning (#353): per-queue weights for the priority sort.
+   *  Null = historic defaults (breached 2000, warning 1000, at-risk 500,
+   *  age capped at 499 hours). */
+  priority_weights: {
+    sla_warning: number
+    sla_breached: number
+    at_risk: number
+    age_hour_cap: number
+  } | null
+  /** Formula columns (#133): client-computed display columns over base +
+   *  extra fields. Never cached, never filtered server-side. */
+  formula_columns: Array<{
+    key: string
+    label: string
+    formula: string
+    format?: 'currency' | 'number' | null
+  }> | null
 }
 
 export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
@@ -211,7 +228,9 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   item_layout: null,
   sheet_width: null,
   default_columns: null,
-  default_pins: null
+  default_pins: null,
+  priority_weights: null,
+  formula_columns: null
 }
 
 /** Normalize a display_config sheet width: finite px in [280, 2000], or an
@@ -283,7 +302,44 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     item_layout,
     sheet_width: normalizeSheetWidth(src.sheet_width),
     default_columns: default_columns && default_columns.length > 0 ? default_columns : null,
-    default_pins
+    default_pins,
+    priority_weights: (() => {
+      const w = src.priority_weights as Record<string, unknown> | null | undefined
+      if (!w || typeof w !== 'object') return null
+      const num = (v: unknown, min: number, max: number, dflt: number) => {
+        const n = Number(v)
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt
+      }
+      return {
+        sla_warning: num(w.sla_warning, 0, 100000, 1000),
+        sla_breached: num(w.sla_breached, 0, 100000, 2000),
+        at_risk: num(w.at_risk, 0, 100000, 500),
+        age_hour_cap: num(w.age_hour_cap, 0, 10000, 499)
+      }
+    })(),
+    formula_columns: (() => {
+      if (!Array.isArray(src.formula_columns)) return null
+      const out = (src.formula_columns as Array<Record<string, unknown>>)
+        .filter(
+          (c) =>
+            c &&
+            typeof c.key === 'string' &&
+            c.key.trim() !== '' &&
+            typeof c.formula === 'string' &&
+            c.formula.trim() !== ''
+        )
+        .slice(0, 10)
+        .map((c) => ({
+          key: String(c.key).trim(),
+          label: typeof c.label === 'string' && c.label.trim() ? c.label.trim() : String(c.key),
+          formula: String(c.formula),
+          format: (c.format === 'currency' || c.format === 'number' ? c.format : null) as
+            | 'currency'
+            | 'number'
+            | null
+        }))
+      return out.length > 0 ? out : null
+    })()
   }
 }
 
@@ -313,6 +369,8 @@ export interface QueueItem {
   extra?: Record<string, unknown>
   /** Related-record ids per relation extra-field path — powers drill-down. */
   extra_ids?: Record<string, string[]>
+  /** Queue-local triage labels (#109). */
+  labels?: string[]
   url: string
 }
 
@@ -323,6 +381,8 @@ export interface QueueStats {
   sla_warning: number
   sla_breached: number
   at_risk: number
+  /** Aging buckets (#116): counts by hours-in-state (0-24 / 24-72 / 72-168 / 168+). */
+  aging?: { d1: number; d3: number; d7: number; over: number }
 }
 
 export interface WorkloadRow {
@@ -463,6 +523,12 @@ export function applyColumnFilters(
       if (value == null || value === '') continue
       if (Array.isArray(value) && value.length === 0) continue
 
+      if (key === 'labels') {
+        const wanted = Array.isArray(value) ? value.map(String) : [String(value)]
+        if (wanted.length === 0) return true
+        const have = item.labels ?? []
+        return wanted.some((w) => have.includes(w))
+      }
       if (key === 'aging_hours') {
         const range = value as { min?: number; max?: number }
         if (item.aging_hours == null) return false
@@ -510,12 +576,27 @@ const SLA_SEVERITY: Record<string, number> = { ok: 0, warning: 1, breached: 2 }
 // outranks warning outranks ok/none), at-risk breaks ties within a band, and
 // aging breaks ties within that — capped at 499 so age can never cross a band
 // boundary. Used by sort=-priority (most urgent first).
-export function computePriorityScore(item: QueueItem): number {
-  const slaRank = item.sla_status === 'breached' ? 2 : item.sla_status === 'warning' ? 1 : 0
-  return slaRank * 1000 + (item.at_risk ? 500 : 0) + Math.min(item.aging_hours ?? 0, 499)
+export interface PriorityWeights {
+  sla_warning: number
+  sla_breached: number
+  at_risk: number
+  age_hour_cap: number
 }
 
-function sortValue(item: QueueItem, key: string): string | number | null {
+export function computePriorityScore(item: QueueItem, weights?: PriorityWeights | null): number {
+  // Priority tuning (#353): weights come from display_config; the defaults
+  // reproduce the historic slaRank*1000 + 500 + min(age, 499) formula.
+  const w = weights ?? { sla_warning: 1000, sla_breached: 2000, at_risk: 500, age_hour_cap: 499 }
+  const sla =
+    item.sla_status === 'breached' ? w.sla_breached : item.sla_status === 'warning' ? w.sla_warning : 0
+  return sla + (item.at_risk ? w.at_risk : 0) + Math.min(item.aging_hours ?? 0, w.age_hour_cap)
+}
+
+function sortValue(
+  item: QueueItem,
+  key: string,
+  weights?: PriorityWeights | null
+): string | number | null {
   if (key === 'collection') return item.collection
   if (key === 'label') return item.label
   if (key === 'state') return item.state
@@ -523,7 +604,7 @@ function sortValue(item: QueueItem, key: string): string | number | null {
   if (key === 'aging_hours') return item.aging_hours
   if (key === 'sla_status') return item.sla_status ? (SLA_SEVERITY[item.sla_status] ?? null) : null
   if (key === 'at_risk') return item.at_risk ? 1 : 0
-  if (key === 'priority') return computePriorityScore(item)
+  if (key === 'priority') return computePriorityScore(item, weights)
   if (key.startsWith('extra.')) {
     const v = item.extra?.[key.slice('extra.'.length)]
     return v == null ? null : String(v)
@@ -531,7 +612,11 @@ function sortValue(item: QueueItem, key: string): string | number | null {
   return null
 }
 
-export function sortItems(items: QueueItem[], sort: string): QueueItem[] {
+export function sortItems(
+  items: QueueItem[],
+  sort: string,
+  weights?: PriorityWeights | null
+): QueueItem[] {
   if (!sort) return items
   const desc = sort.startsWith('-')
   const key = desc ? sort.slice(1) : sort
@@ -539,8 +624,8 @@ export function sortItems(items: QueueItem[], sort: string): QueueItem[] {
   // non-null values flips with direction. A plain ascending-sort-then-reverse
   // would incorrectly push nulls to the front on descending sorts.
   return [...items].sort((a, b) => {
-    const av = sortValue(a, key)
-    const bv = sortValue(b, key)
+    const av = sortValue(a, key, weights)
+    const bv = sortValue(b, key, weights)
     if (av == null && bv == null) return 0
     if (av == null) return 1
     if (bv == null) return -1
@@ -602,6 +687,7 @@ export function computeStats(items: QueueItem[]): QueueStats {
   let sla_warning = 0
   let sla_breached = 0
   let at_risk = 0
+  const aging = { d1: 0, d3: 0, d7: 0, over: 0 }
   for (const item of items) {
     const key = item.state ?? 'none'
     by_state[key] = (by_state[key] ?? 0) + 1
@@ -609,8 +695,15 @@ export function computeStats(items: QueueItem[]): QueueStats {
     if (item.sla_status === 'warning') sla_warning++
     if (item.sla_status === 'breached') sla_breached++
     if (item.at_risk) at_risk++
+    const h = item.aging_hours
+    if (h != null) {
+      if (h < 24) aging.d1++
+      else if (h < 72) aging.d3++
+      else if (h < 168) aging.d7++
+      else aging.over++
+    }
   }
-  return { total: items.length, by_state, unowned, sla_warning, sla_breached, at_risk }
+  return { total: items.length, by_state, unowned, sla_warning, sla_breached, at_risk, aging }
 }
 
 const UNASSIGNED_KEY = '__unassigned__'
@@ -1935,8 +2028,35 @@ export async function fetchQueueItems(
   total: number
 }> {
   const queueRow = (await db('nivaro_queues').where({ id: queueId }).first()) as
-    | { materialized: boolean }
+    | { materialized: boolean; display_config?: string | null }
     | undefined
+  const displayCfg = normalizeDisplayConfig(parseJson(queueRow?.display_config ?? null))
+  const priorityWeights = displayCfg.priority_weights
+  // Triage labels (#109): one queue-scoped query, attached to every
+  // returned row on BOTH the live and materialized paths.
+  const labelRowsPromise = db('nivaro_queue_labels')
+    .where({ queue_id: queueId })
+    .select('collection', 'item_id', 'label')
+    .catch(() => [] as Array<{ collection: string; item_id: string; label: string }>)
+  const attachLabels = async (items: QueueItem[]) => {
+    const rows = (await labelRowsPromise) as Array<{
+      collection: string
+      item_id: string
+      label: string
+    }>
+    if (rows.length === 0) return
+    const byKey = new Map<string, string[]>()
+    for (const r of rows) {
+      const k = `${r.collection}:${r.item_id}`
+      const list = byKey.get(k) ?? []
+      list.push(r.label)
+      byKey.set(k, list)
+    }
+    for (const it of items) {
+      const l = byKey.get(`${it.collection}:${it.item_id}`)
+      if (l) it.labels = l.sort()
+    }
+  }
   // When a materialized queue's ROWS must live-resolve (priority sort, sla_status
   // filter, extra.* sort/filter, owners sort), its STATS still come exact from the
   // cache — stats depend only on scope, never on the requested sort/filters, and
@@ -1954,7 +2074,9 @@ export async function fetchQueueItems(
     const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =
       await import('./queue-materialization-read.js')
     if (!requiresLiveResolveFallback(options.sort ?? '', options.filters ?? {})) {
-      return fetchMaterializedQueueItems(queueId, user, scope, options)
+      const res = await fetchMaterializedQueueItems(queueId, user, scope, options)
+      await attachLabels(res.items)
+      return res
     }
     materializedStats = fetchMaterializedStats(queueId, user, scope)
     materializedStats.catch(() => {})
@@ -2001,9 +2123,10 @@ export async function fetchQueueItems(
   const claims = await span('queue:claims', () => getClaims(queueId))
   const withClaims = attachClaims(merged, claims)
   const scoped = applyScopeFilter(withClaims, scope, user.id)
+  await attachLabels(scoped)
   const availableValues = computeAvailableValues(scoped)
   const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
-  const sorted = options.sort ? sortItems(filtered, options.sort) : filtered
+  const sorted = options.sort ? sortItems(filtered, options.sort, priorityWeights) : filtered
   // Each resolver's `matchedCount` feeds only the `truncated` flag above — it is
   // intentionally NOT summed into stats.total, since that would double-count
   // items that appear in more than one source and would ignore scope filtering.

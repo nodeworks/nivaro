@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
+import { normalizeDisplayConfig } from './queues.js'
+import { parseJson } from './pipeline-engine.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -35,6 +37,9 @@ export function requiresLiveResolveFallback(
   _filters: Record<string, unknown>
 ): boolean {
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
+  // Triage-label filters (#109) join a queue-local table the SQL pushdown
+  // doesn't know — route to the live path, which filters in memory.
+  if (_filters && Array.isArray((_filters as Record<string, unknown>).labels)) return true
   // Only an owners sort still live-resolves (it would need SQL string
   // aggregation across the owners M2M). priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +
@@ -77,7 +82,8 @@ const SLA_RANK: Record<string, number> = { ok: 1, warning: 2, breached: 3 }
 export function filterAndOrderNarrowRows(
   rows: NarrowScanRow[],
   filters: Record<string, unknown>,
-  sort: string
+  sort: string,
+  weights?: { sla_warning: number; sla_breached: number; at_risk: number; age_hour_cap: number } | null
 ): NarrowScanRow[] {
   let out = rows
   const sla = filters.sla_status
@@ -96,9 +102,12 @@ export function filterAndOrderNarrowRows(
   if (!key) return out
   const val = (r: NarrowScanRow): number | string | null => {
     if (key === 'priority') {
-      // Same formula as computePriorityScore in queues.ts (parity unit-tested).
-      const rank = r.sla_status === 'breached' ? 2 : r.sla_status === 'warning' ? 1 : 0
-      return rank * 1000 + (r.at_risk ? 500 : 0) + Math.min(r.aging_hours ?? 0, 499)
+      // Same formula as computePriorityScore in queues.ts (parity unit-tested);
+      // weights come from display_config.priority_weights (#353).
+      const w = weights ?? { sla_warning: 1000, sla_breached: 2000, at_risk: 500, age_hour_cap: 499 }
+      const sla =
+        r.sla_status === 'breached' ? w.sla_breached : r.sla_status === 'warning' ? w.sla_warning : 0
+      return sla + (r.at_risk ? w.at_risk : 0) + Math.min(r.aging_hours ?? 0, w.age_hour_cap)
     }
     if (key === 'aging_hours') return r.aging_hours
     if (key === 'sla_status') return r.sla_status ? (SLA_RANK[r.sla_status] ?? null) : null
@@ -386,6 +395,15 @@ export async function fetchMaterializedQueueItems(
 }> {
   const filters = options.filters ?? {}
 
+  // Priority weights (#353) from the queue's display_config — used by the
+  // JS narrow-scan path's priority sort.
+  const queueCfgRow = (await db('nivaro_queues')
+    .where({ id: queueId })
+    .first('display_config')) as { display_config?: string | null } | undefined
+  const displayCfgWeights = normalizeDisplayConfig(
+    parseJson(queueCfgRow?.display_config ?? null)
+  ).priority_weights
+
   // scopeBase = queue_id + scope only (no column filters) — feeds stats and
   // availableValues, matching fetchQueueItems' computeStats(scoped)/
   // computeAvailableValues(scoped) which are computed on the scope-filtered set
@@ -548,7 +566,7 @@ export async function fetchMaterializedQueueItems(
         sort_val: r.sort_val ?? null
       }
     })
-    const ordered = filterAndOrderNarrowRows(narrow, filters, sort)
+    const ordered = filterAndOrderNarrowRows(narrow, filters, sort, displayCfgWeights)
     total = ordered.length
     jsFilteredStats = statsFromNarrowRows(ordered)
 

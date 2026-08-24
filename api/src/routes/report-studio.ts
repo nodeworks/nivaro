@@ -369,6 +369,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       'table',
       'divider',
       'query',
+      'queue',
       'calc',
       'movers',
       'heatmap',

@@ -526,6 +526,13 @@ export async function buildServer() {
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
       })
 
+      // Instant queue-entry notifications (#121/#379): */5 diff pass over
+      // instant queue subscriptions.
+      app.cron.schedule('queue-entry-notify', '*/5 * * * *', async () => {
+        const { runQueueEntryNotifyPass } = await import('./services/queue-entry-notify.js')
+        await runQueueEntryNotifyPass(app)
+      })
+
       // Outbox worker (#326/#335): deliver pending rows every minute.
       app.cron.schedule('outbox-worker', '* * * * *', async () => {
         const { runOutboxPass } = await import('./services/outbox.js')

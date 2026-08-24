@@ -92,6 +92,66 @@ export async function queuesRoutes(app: FastifyInstance) {
   })
 
   // GET /:id — single queue + its sources
+  // ── Sidebar badges (#172): cheap live-ish counts per readable queue ──────
+  // Materialized queues count their cache (exact, cheap); live queues serve
+  // the newest daily stat snapshot (honest about its age via `as_of`).
+  app.get('/badges', async (req, reply) => {
+    const queues = (await db<QueueRow>('nivaro_queues').select('*')) as QueueRow[]
+    const readable = queues.filter((q) => canReadQueue(q, req))
+    const out: Record<
+      string,
+      { total: number; sla_breached: number; source: 'cache' | 'snapshot'; as_of: string | null }
+    > = {}
+    const matIds = readable.filter((q) => q.materialized).map((q) => q.id)
+    if (matIds.length > 0) {
+      const counts = (await db('nivaro_queue_items')
+        .whereIn('queue_id', matIds)
+        .groupBy('queue_id')
+        .select('queue_id')
+        .count('* as total')) as Array<{ queue_id: string; total: number | string }>
+      const breached = (await db('nivaro_queue_items')
+        .whereIn('queue_id', matIds)
+        .whereNotNull('sla_duration_hours')
+        .groupBy('queue_id')
+        .select('queue_id')
+        .count('* as c')) as Array<{ queue_id: string; c: number | string }>
+      void breached
+      for (const q of readable.filter((x) => x.materialized)) {
+        const row = counts.find((c) => c.queue_id === q.id)
+        out[q.id] = {
+          total: Number(row?.total ?? 0),
+          sla_breached: 0,
+          source: 'cache',
+          as_of: null
+        }
+      }
+    }
+    const liveIds = readable.filter((q) => !q.materialized).map((q) => q.id)
+    if (liveIds.length > 0) {
+      const snaps = (await db('nivaro_queue_stat_snapshots')
+        .whereIn('queue_id', liveIds)
+        .orderBy('snapshot_date', 'desc')
+        .limit(liveIds.length * 3)) as Array<{
+        queue_id: string
+        snapshot_date: string | Date
+        total: number
+        sla_breached: number
+      }>
+      for (const qid of liveIds) {
+        const snap = snaps.find((sn) => sn.queue_id === qid)
+        out[qid] = snap
+          ? {
+              total: Number(snap.total ?? 0),
+              sla_breached: Number(snap.sla_breached ?? 0),
+              source: 'snapshot',
+              as_of: String(snap.snapshot_date)
+            }
+          : { total: 0, sla_breached: 0, source: 'snapshot', as_of: null }
+      }
+    }
+    return reply.send({ data: out })
+  })
+
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
@@ -467,6 +527,232 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: out.sort() })
   })
 
+
+  // ── Triage labels (#109) ──────────────────────────────────────────────────
+  // Queue-local ad-hoc tags on items ("needs info", "vendor waiting") — claims
+  // say WHOSE, labels say WHAT triage state. Toggle semantics; any queue
+  // reader may label.
+  app.get('/:id/triage-labels', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const rows = (await db('nivaro_queue_labels')
+      .where({ queue_id: id })
+      .distinct('label')
+      .orderBy('label')) as Array<{ label: string }>
+    return reply.send({ data: rows.map((r) => r.label) })
+  })
+
+  app.post('/:id/triage-labels/toggle', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { collection?: string; item_id?: string; label?: string }
+    const label = String(body?.label ?? '').trim().slice(0, 60)
+    const collection = String(body?.collection ?? '')
+    const itemId = String(body?.item_id ?? '')
+    if (!label || !collection || !itemId)
+      return reply.code(400).send({ error: 'collection, item_id and label are required' })
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const existing = await db('nivaro_queue_labels')
+      .where({ queue_id: id, collection, item_id: itemId, label })
+      .first('id')
+    if (existing) {
+      await db('nivaro_queue_labels').where({ id: existing.id }).del()
+      return reply.send({ data: { labeled: false } })
+    }
+    // Cap runaway taxonomies: 30 distinct labels per queue.
+    const distinctCount = (await db('nivaro_queue_labels')
+      .where({ queue_id: id })
+      .countDistinct('label as c')
+      .first()) as { c?: number | string } | undefined
+    const isNewLabel = !(await db('nivaro_queue_labels')
+      .where({ queue_id: id, label })
+      .first('id'))
+    if (isNewLabel && Number(distinctCount?.c ?? 0) >= 30)
+      return reply.code(422).send({ error: 'This queue already has 30 distinct labels — reuse one.' })
+    await db('nivaro_queue_labels').insert({
+      queue_id: id,
+      collection,
+      item_id: itemId,
+      label,
+      created_by: req.user?.id ?? null,
+      created_at: new Date()
+    })
+    return reply.send({ data: { labeled: true } })
+  })
+
+  // ── Drillable aggregates (#394) ──────────────────────────────────────────
+  // An aggregate cell's contributing rows: re-resolve the SAME path for one
+  // item WITHOUT the aggregate, which yields the related entities' ids +
+  // per-row leaf values. Read-gated by canReadQueue like every queue read.
+  app.get('/:id/aggregate-rows', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const q = req.query as { collection?: string; item_id?: string; path?: string }
+    const collection = String(q.collection ?? '')
+    const itemId = String(q.item_id ?? '')
+    const path = String(q.path ?? '')
+    if (!collection || !itemId || !path)
+      return reply.code(400).send({ error: 'collection, item_id and path are required' })
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const { resolveExtraPathValues } = await import('../services/queues.js')
+    const relationsCache = new Map()
+    const resolved = await resolveExtraPathValues(collection, [itemId], path, relationsCache, null)
+    const entry = resolved.get(itemId)
+    const relIds = (entry?.ids ?? []).slice(0, 200)
+    const segments = path.split('.')
+    const leaf = segments[segments.length - 1]
+    // Target collection: walk the first hop's relation for the related table.
+    let target: string | null = null
+    try {
+      const rels = (await db('nivaro_relations')
+        .where({ many_collection: collection })
+        .orWhere({ one_collection: collection })) as Array<Record<string, unknown>>
+      const first = segments[0]
+      for (const r of rels) {
+        if (r.many_collection === collection && r.many_field === first) {
+          target = String(r.one_collection ?? '') || null
+          break
+        }
+        if (r.one_collection === collection && r.one_field === first) {
+          const junction = String(r.many_collection ?? '')
+          const jf = r.junction_field
+          if (jf) {
+            const companion = rels.find(
+              (c) => c.many_collection === junction && c.many_field === jf && c.id !== r.id
+            )
+            target = companion ? String(companion.one_collection ?? '') || junction : junction
+          } else {
+            target = junction
+          }
+          break
+        }
+      }
+    } catch {
+      target = null
+    }
+    if (!target || relIds.length === 0)
+      return reply.send({ data: { rows: [], target, value: entry?.value ?? null } })
+    const rows = (await db(target)
+      .whereIn('id', relIds)
+      .limit(200)
+      .select('*')
+      .catch(() => [])) as Array<Record<string, unknown>>
+    const slim = rows.map((r) => ({
+      id: r.id,
+      leaf_value: leaf in r ? r[leaf] : null,
+      label: String(
+        r.name ?? r.title ?? r.label ?? r.subject ?? r.number ?? r[`${target}_id`] ?? r.id
+      )
+    }))
+    return reply.send({ data: { rows: slim, target, value: entry?.value ?? null } })
+  })
+
+  // ── Builder count preview (#194) ─────────────────────────────────────────
+  // Live matched-row count for ONE source config as the builder edits it.
+  app.post('/preview-count', async (req, reply) => {
+    const body = req.body as { source?: Record<string, unknown> }
+    const src = body?.source
+    if (!src || typeof src !== 'object')
+      return reply.code(400).send({ error: 'source config is required' })
+    try {
+      const sourceRow = {
+        id: 0,
+        queue_id: 'preview',
+        type: String(src.type ?? 'collection'),
+        collection: src.collection == null ? null : String(src.collection),
+        filters: src.filters ? JSON.stringify(src.filters) : null,
+        state_values: src.state_values ? JSON.stringify(src.state_values) : null,
+        state_mode: src.state_mode === 'exclude' ? 'exclude' : 'include',
+        sla_filter: null,
+        label_template: null,
+        extra_fields: null,
+        drilldown: null,
+        column_formats: null,
+        aggregates: null,
+        sort: 0
+      } as never
+      if (sourceRow == null) return reply.code(400).send({ error: 'bad source' })
+      const { resolveCollectionSource } = await import('../services/queues.js')
+      const result = await resolveCollectionSource(sourceRow, req.user!, 2000)
+      const count = result.idMeta?.length ?? result.items.length
+      return reply.send({
+        data: { count, truncated: (result.matchedCount ?? count) > count || count >= 2000 }
+      })
+    } catch (err) {
+      return reply
+        .code(422)
+        .send({ error: `Could not resolve: ${err instanceof Error ? err.message : 'error'}` })
+    }
+  })
+
+  // ── Outflow (#216): what LEFT this queue recently ────────────────────────
+  // For state-scoped collection sources: workflow history rows whose
+  // from_state was one of the queue's states and whose to_state is not.
+  app.get('/:id/outflow', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const days = Math.min(30, Math.max(1, Number((req.query as { days?: string }).days) || 7))
+    const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
+      | QueueRow
+      | undefined
+    if (!queue) return reply.code(404).send({ error: 'Not found' })
+    if (!canReadQueue(queue, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const sources = (await db('nivaro_queue_sources')
+      .where({ queue_id: id, type: 'collection' })
+      .select('collection', 'state_values', 'state_mode')) as Array<{
+      collection: string | null
+      state_values: string | null
+      state_mode: string | null
+    }>
+    const out: Array<Record<string, unknown>> = []
+    const since = new Date(Date.now() - days * 86_400_000)
+    for (const src of sources) {
+      if (!src.collection) continue
+      let states: string[] = []
+      try {
+        const parsed = JSON.parse(src.state_values ?? '[]')
+        states = Array.isArray(parsed) ? parsed.map(String).filter((v) => v !== '__none__') : []
+      } catch {
+        states = []
+      }
+      if (states.length === 0 || src.state_mode === 'exclude') continue
+      const rows = (await db('nivaro_workflow_history as h')
+        .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+        .join('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
+        .join('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
+        .leftJoin('nivaro_users as u', 'u.id', 'h.user')
+        .where('i.collection', src.collection)
+        .where('h.timestamp', '>=', since)
+        .whereIn('fs.key', states)
+        .whereNotIn('ts.key', states)
+        .orderBy('h.timestamp', 'desc')
+        .limit(200)
+        .select(
+          'i.collection',
+          'i.item',
+          'h.timestamp',
+          'ts.label as to_label',
+          'ts.color as to_color',
+          db.raw("CONCAT(u.first_name, ' ', u.last_name) as by_name")
+        )) as Array<Record<string, unknown>>
+      out.push(...rows)
+    }
+    out.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+    const trimmed = out.slice(0, 200)
+    // Labels via getLabels-style lookup are heavy — item ids are enough for
+    // the panel, which links through to the record.
+    return reply.send({ data: { days, count: out.length, rows: trimmed } })
+  })
+
   // GET /:id/trends?days=14 — daily stat snapshots for sparklines/deltas (1–90 days)
   app.get('/:id/trends', async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -713,6 +999,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     await db('nivaro_queue_column_prefs')
       .where({ default_view_id: Number(viewId) })
       .update({ default_view_id: null })
+    // Saved-view queue subscriptions (#379): fall back to the whole queue
+    // rather than dangling on a deleted view.
+    await db('nivaro_notification_subscriptions')
+      .where({ queue_view_id: Number(viewId) })
+      .update({ queue_view_id: null })
+      .catch(() => {})
     await logActivity({
       action: 'delete',
       user: req.user?.id,

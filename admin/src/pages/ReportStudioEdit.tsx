@@ -72,7 +72,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  */
 
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
@@ -348,6 +348,7 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'donut', label: 'Donut' },
   { id: 'table', label: 'Table' },
   { id: 'query', label: 'Query' },
+  { id: 'queue', label: 'Queue stat' },
   { id: 'calc', label: 'Calculated' },
   { id: 'movers', label: 'Top Movers' },
   { id: 'heatmap', label: 'Heatmap' },
@@ -638,6 +639,7 @@ function WidgetBody({
       widget.type !== 'query' &&
       (!!widget.collection ||
         widget.type === 'kpi_group' ||
+        widget.type === 'queue' ||
         ((widget.type === 'calc' || widget.type === 'narrative') && !!reportId)),
     staleTime: 60_000,
     retry: false
@@ -775,6 +777,37 @@ function WidgetBody({
             ))}
           </div>
         )
+    } else if (widget.type === 'queue') {
+      const series = data.series ?? []
+      body = (
+        <div className='flex min-h-0 flex-1 flex-col justify-center'>
+          <p className='text-[26px] font-semibold leading-none tabular-nums'>
+            {data.value == null ? '—' : Number(data.value).toLocaleString()}
+          </p>
+          {series.length >= 3 && (
+            <svg viewBox='0 0 100 30' preserveAspectRatio='none' className='mt-1.5 h-7 w-full'>
+              <polyline
+                points={series
+                  .map((pt, i) => {
+                    const vals = series.map((x) => x.value)
+                    const maxV = Math.max(...vals, 1)
+                    const minV = Math.min(...vals, 0)
+                    const span = Math.max(maxV - minV, 1)
+                    return `${(i / Math.max(1, series.length - 1)) * 100},${28 - ((pt.value - minV) / span) * 26}`
+                  })
+                  .join(' ')}
+                fill='none'
+                stroke='#00ceff'
+                strokeWidth='2'
+                vectorEffect='non-scaling-stroke'
+              />
+            </svg>
+          )}
+          <p className='mt-0.5 text-[10.5px] text-slate-400'>
+            {(widget.config as { metric?: string })?.metric ?? 'total'} · daily snapshots
+          </p>
+        </div>
+      )
     } else if (widget.type === 'kpi' || widget.type === 'calc') {
       body = (
         <div className='flex h-full flex-col justify-center px-1'>
@@ -1095,6 +1128,13 @@ function ConfigSheet({
               ))}
             </div>
           </div>
+
+          {widget.type === 'queue' && (
+            <QueueStatConfigEditor
+              config={cfg as { queue_id?: string; metric?: string }}
+              onChange={(patch) => setCfg(patch as never)}
+            />
+          )}
 
           {widget.type === 'query' && (
             <QueryConfigEditor
@@ -4019,5 +4059,47 @@ function AddFilterField({
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+
+// ─── Queue stat widget config (#380) ─────────────────────────────────────────
+function QueueStatConfigEditor({
+  config,
+  onChange
+}: {
+  config: { queue_id?: string; metric?: string }
+  onChange: (patch: { queue_id?: string; metric?: string }) => void
+}) {
+  const { data: queues = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['report-queue-options'],
+    queryFn: () => api.get('/queues').then((r) => r.data.data ?? []),
+    staleTime: 60_000
+  })
+  return (
+    <div className='space-y-2'>
+      <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>Queue stat</p>
+      <Combo
+        value={config.queue_id ?? ''}
+        options={queues.map((q) => ({ id: q.id, label: q.name }))}
+        placeholder='Pick a queue…'
+        onChange={(v) => onChange({ ...config, queue_id: v ?? undefined })}
+      />
+      <Combo
+        value={config.metric ?? 'total'}
+        options={[
+          { id: 'total', label: 'Total items' },
+          { id: 'unowned', label: 'Unowned' },
+          { id: 'sla_warning', label: 'SLA warning' },
+          { id: 'sla_breached', label: 'SLA breached' },
+          { id: 'at_risk', label: 'At risk' }
+        ]}
+        placeholder='Metric'
+        onChange={(v) => onChange({ ...config, metric: v ?? 'total' })}
+      />
+      <p className='text-[11px] text-slate-400'>
+        Value comes from the queue's cache/snapshots; the sparkline is its daily history.
+      </p>
+    </div>
   )
 }

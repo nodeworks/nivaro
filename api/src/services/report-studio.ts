@@ -450,6 +450,48 @@ export async function resolveWidgetData(
     return { tiles }
   }
 
+  // Queue stat widgets (#380): a pinned queue metric — current value from
+  // the materialized cache (exact, cheap) or the newest stat snapshot, with
+  // the daily snapshot history as the series. canReadQueue gates the read.
+  if (widget.type === 'queue') {
+    const cfg = (widget.config ?? {}) as { queue_id?: string; metric?: string }
+    const queueId = String(cfg.queue_id ?? '')
+    const metric = ['total', 'unowned', 'sla_warning', 'sla_breached', 'at_risk'].includes(
+      String(cfg.metric)
+    )
+      ? (String(cfg.metric) as 'total' | 'unowned' | 'sla_warning' | 'sla_breached' | 'at_risk')
+      : 'total'
+    if (!queueId) return { value: null }
+    const queueRow = (await db('nivaro_queues').where({ id: queueId }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!queueRow) return { value: null }
+    const { canReadQueue } = await import('../routes/queues.js')
+    // canReadQueue takes (queue, req) — build the minimal shape it reads.
+    const readable = canReadQueue(queueRow as never, {
+      user,
+      isAdmin: (user as { admin_access?: boolean }).admin_access === true
+    } as never)
+    if (!readable) return { value: null }
+    const snaps = (await db('nivaro_queue_stat_snapshots')
+      .where({ queue_id: queueId })
+      .orderBy('snapshot_date')
+      .limit(90)) as Array<Record<string, unknown>>
+    const series = snaps.map((sn) => ({
+      dim: String(sn.snapshot_date).slice(0, 10),
+      value: Number(sn[metric] ?? 0)
+    }))
+    let current: number | null = series.length > 0 ? series[series.length - 1].value : null
+    if (queueRow.materialized && metric === 'total') {
+      const c = (await db('nivaro_queue_items')
+        .where({ queue_id: queueId })
+        .count('* as c')
+        .first()) as { c?: number | string } | undefined
+      current = Number(c?.c ?? current ?? 0)
+    }
+    return { value: current, series }
+  }
+
   // 'query' widgets execute client-side in viewers; the server resolves them
   // here for alerts + digest emails. $filters tokens draw from entity-filter
   // labels (procs take names); unresolved tokens are omitted (NULL params).

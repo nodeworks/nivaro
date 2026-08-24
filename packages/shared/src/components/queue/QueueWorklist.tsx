@@ -17,7 +17,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Inbox,
+import { Bell, Eye, Inbox,
   AlertTriangle,
   ChevronDown,
   Filter,
@@ -49,6 +49,7 @@ import {
 } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { evaluateExpression } from '../../lib/expression'
 import { RowActionsMenu } from '../CollectionBrowserView'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { buildGroups } from '../../lib/queue-grouping'
@@ -118,6 +119,7 @@ export interface QueueItemRow {
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
   extra_ids?: Record<string, string[]>
+  labels?: string[]
   url: string
 }
 
@@ -128,6 +130,7 @@ interface QueueStats {
   sla_warning: number
   sla_breached: number
   at_risk: number
+  aging?: { d1: number; d3: number; d7: number; over: number }
 }
 
 interface QueueSource {
@@ -172,6 +175,18 @@ interface QueueMeta {
     sheet_width: number | string | null
     default_columns?: string[] | null
     default_pins?: Record<string, 'left' | 'right'> | null
+    priority_weights?: {
+      sla_warning: number
+      sla_breached: number
+      at_risk: number
+      age_hour_cap: number
+    } | null
+    formula_columns?: Array<{
+      key: string
+      label: string
+      formula: string
+      format?: 'currency' | 'number' | null
+    }> | null
   }
 }
 
@@ -686,6 +701,121 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   }, [filtersOpen, queueId])
   const activeFilterCount = Object.values(filterValues).filter((v) => !isFilterEmpty(v)).length
 
+  // Saved-view arrival subscriptions (#379): my instant subs on this queue.
+  const { data: myQueueSubs = [] } = useQuery<
+    Array<{ id: number; queue_id: string | null; queue_view_id: number | null }>
+  >({
+    queryKey: ['queue-view-subs', queueId],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ id: number; queue_id: string | null; queue_view_id: number | null }>
+        }>(get('/notification-subscriptions'))
+        .then((r) => (r.data ?? []).filter((sub) => sub.queue_id === queueId))
+        .catch(() => []),
+    staleTime: 30_000
+  })
+  const viewSubFor = (viewId: number) => myQueueSubs.find((sub) => sub.queue_view_id === viewId)
+  const toggleViewSub = (viewId: number) => {
+    const existing = viewSubFor(viewId)
+    const req = existing
+      ? client.request(del(`/notification-subscriptions/${existing.id}`))
+      : client.request(
+          post('/notification-subscriptions', {
+            queue_id: queueId,
+            queue_view_id: viewId,
+            digest_frequency: 'instant'
+          })
+        )
+    void req
+      .then(() => {
+        toast.success(existing ? 'Unsubscribed' : 'Subscribed — new arrivals in this view notify you')
+        void qc.invalidateQueries({ queryKey: ['queue-view-subs', queueId] })
+      })
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Failed'))
+  }
+
+  // Drillable aggregates (#394): which aggregate cell is open.
+  const [aggDrill, setAggDrill] = useState<{
+    row: QueueItemRow
+    path: string
+    value: string
+  } | null>(null)
+
+  // Custom actions (#125): per-collection registered actions surfaced in the
+  // row menu; guards re-checked server-side at execute.
+  const actionCollections = [
+    ...new Set(
+      (queue?.sources ?? [])
+        .filter((sr) => sr.type === 'collection' && sr.collection)
+        .map((sr) => sr.collection as string)
+    )
+  ]
+  const { data: customActionsByCollection = {} } = useQuery<
+    Record<string, Array<{ id: number; label: string }>>
+  >({
+    queryKey: ['queue-custom-actions', queueId, actionCollections.join(',')],
+    queryFn: async () => {
+      const out: Record<string, Array<{ id: number; label: string }>> = {}
+      for (const c of actionCollections.slice(0, 6)) {
+        try {
+          const res = await client.request<{ data: Array<{ id: number; label: string }> }>(
+            get('/custom-actions', { collection: c })
+          )
+          out[c] = res.data ?? []
+        } catch {
+          out[c] = []
+        }
+      }
+      return out
+    },
+    enabled: actionCollections.length > 0,
+    staleTime: 60_000
+  })
+  const customActionsFor = (collection: string) => customActionsByCollection[collection] ?? []
+  const runCustomAction = (a: { id: number; label: string }, row: QueueItemRow) => {
+    void client
+      .request(post(`/custom-actions/${a.id}/execute`, { item: row.item_id }))
+      .then(() => {
+        toast.success(`${a.label} ran`)
+        void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+      })
+      .catch((err: unknown) => {
+        const resp = (err as { response?: { error?: string } }).response
+        toast.error(resp?.error ?? (err instanceof Error ? err.message : `${a.label} failed`))
+      })
+  }
+
+  // Record-viewer counts (#272): per-node presence — polled every 30s for the
+  // visible rows; chips render only at 2+ viewers (you are usually one).
+  const [viewerCounts, setViewerCounts] = useState<Record<string, number>>({})
+
+  // Triage labels (#109): the queue's distinct label vocabulary.
+  const { data: triageLabels = [] } = useQuery<string[]>({
+    queryKey: ['queue-triage-labels', queueId],
+    queryFn: () =>
+      client
+        .request<{ data: string[] }>(get(`/queues/${queueId}/triage-labels`))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 30_000
+  })
+  const toggleTriageLabel = (row: QueueItemRow, label: string) => {
+    void client
+      .request(
+        post(`/queues/${queueId}/triage-labels/toggle`, {
+          collection: row.collection,
+          item_id: row.item_id,
+          label
+        })
+      )
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+        void qc.invalidateQueries({ queryKey: ['queue-triage-labels', queueId] })
+      })
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Label failed'))
+  }
+
   const { data, isLoading, isFetching, isPlaceholderData } = useQuery<{
     data: QueueItemRow[]
     stats: QueueStats
@@ -730,6 +860,35 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // True while a sort/filter/page change is in flight over kept-previous data —
   // the table dims slightly instead of unmounting (no layout shift).
   const isRefetching = (isFetching && !isLoading) || (isPlaceholderData && isFetching)
+
+  // Poll record-viewer counts for the current page (#272). Per-node data —
+  // treated as a hint, never as truth.
+  const viewerRowsKey = (data?.data ?? [])
+    .slice(0, 100)
+    .map((r) => `${r.collection}:${r.item_id}`)
+    .join(',')
+  useEffect(() => {
+    if (!viewerRowsKey) return
+    let alive = true
+    const pairs = viewerRowsKey.split(',').map((k) => {
+      const i = k.indexOf(':')
+      return { collection: k.slice(0, i), item_id: k.slice(i + 1) }
+    })
+    const load = () => {
+      client
+        .request<{ data: Record<string, number> }>(post('/presence/record-viewers', { pairs }))
+        .then((r) => {
+          if (alive) setViewerCounts(r.data ?? {})
+        })
+        .catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 30_000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [viewerRowsKey, client])
   // Long-request honesty (#370)
   const loadElapsed = useElapsedLoading(isFetching)
 
@@ -1370,11 +1529,31 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         // Underlined because clicking opens the item. The row is clickable as
         // a whole, but nothing on it said so — an underline is the one
         // convention people already read as "this goes somewhere".
-        <span
-          className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
-          title={row.label}
-        >
-          {row.label}
+        <span className='flex items-center gap-1.5'>
+          <span
+            className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
+            title={row.label}
+          >
+            {row.label}
+          </span>
+          {(row.labels ?? []).slice(0, 3).map((l) => (
+            <span
+              key={l}
+              className='shrink-0 rounded-full bg-violet-100 px-1.5 py-px text-[9.5px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
+              data-tip={`Triage label: ${l}`}
+            >
+              {l}
+            </span>
+          ))}
+          {viewerCounts[`${row.collection}:${row.item_id}`] > 1 && (
+            <span
+              className='inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-px text-[9.5px] text-slate-500 dark:bg-muted dark:text-muted-foreground'
+              data-tip='People with this record open right now'
+            >
+              <Eye className='h-2.5 w-2.5' />
+              {viewerCounts[`${row.collection}:${row.item_id}`]}
+            </span>
+          )}
         </span>
       )
     },
@@ -1556,6 +1735,21 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           </button>
         )
       }
+      if (meta?.kind === 'relation' && meta.aggregate) {
+        return (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              setAggDrill({ row, path: field, value: display })
+            }}
+            title='Show the rows behind this number'
+            className='block max-w-[200px] truncate text-left text-[12px] tabular-nums underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-nvr-navy hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
+          >
+            {text}
+          </button>
+        )
+      }
       return (
         <span className='block max-w-[200px] truncate text-[12px]' title={title}>
           {text}
@@ -1616,7 +1810,38 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   }
 
   const labelColumn = baseColumns.find((c) => c.key === 'label') as Column<QueueItemRow>
-  const allToggleable = [...baseColumns, ...extraColumns]
+  // Formula columns (#133): display-only computed columns over base + extra
+  // fields — {{aging_hours}}, {{extra.amount}} etc. Null on parse/type miss.
+  const formulaColumns: Column<QueueItemRow>[] = (displayConfig?.formula_columns ?? []).map(
+    (fc) => ({
+      key: `formula.${fc.key}`,
+      header: fc.label,
+      render: (row) => {
+        const scope: Record<string, unknown> = {
+          ...row,
+          ...(row.extra
+            ? Object.fromEntries(Object.entries(row.extra).map(([k, v]) => [`extra.${k}`, v]))
+            : {})
+        }
+        const v = evaluateExpression(fc.formula, (path) => {
+          const raw = scope[path] ?? (row.extra ? row.extra[path] : undefined)
+          const n = Number(raw)
+          return Number.isFinite(n) ? n : ((raw as never) ?? null)
+        })
+        if (v == null || typeof v === 'boolean') return <span className='text-slate-300'>—</span>
+        const n = Number(v)
+        if (!Number.isFinite(n)) return <span>{String(v)}</span>
+        return (
+          <span className='tabular-nums'>
+            {fc.format === 'currency'
+              ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+              : n.toLocaleString()}
+          </span>
+        )
+      }
+    })
+  )
+  const allToggleable = [...baseColumns, ...extraColumns, ...formulaColumns]
 
   // CBV-parity per-row Actions menu (open / peek / transitions / copy / delete).
   // Hidden for 'tasks' sentinel rows — their item_id is a task PK, not a record.
@@ -1792,6 +2017,17 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       ]
     },
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
+    ...(triageLabels.length > 0
+      ? [
+          {
+            key: 'labels',
+            placeholder: 'Triage label',
+            type: 'combobox' as const,
+            multi: true,
+            options: triageLabels.map((l) => ({ label: l, value: l }))
+          }
+        ]
+      : []),
     {
       key: 'label',
       placeholder: aliasFor('label', 'Item'),
@@ -1932,6 +2168,39 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               }}
             />
           </div>
+          {stats?.aging && stats.total > 0 && (
+            <div className='flex items-center gap-1 text-[11px]' data-tip='Time in current state'>
+              {(
+                [
+                  ['0-1d', '0:24', stats.aging.d1],
+                  ['1-3d', '24:72', stats.aging.d3],
+                  ['3-7d', '72:168', stats.aging.d7],
+                  ['7d+', '168:', stats.aging.over]
+                ] as Array<[string, string, number]>
+              ).map(([label, range, count]) => (
+                <button
+                  key={label}
+                  type='button'
+                  onClick={() => {
+                    setFilterValues((prev) => ({
+                      ...prev,
+                      aging_hours: prev.aging_hours === range ? '' : range
+                    }))
+                    setPage(1)
+                  }}
+                  className={cn(
+                    'rounded-md border px-2 py-1 tabular-nums transition-colors',
+                    filterValues.aging_hours === range
+                      ? 'border-nvr-cyan bg-nvr-cyan/10 font-medium text-[#0e7490] dark:text-[#67e8f9]'
+                      : 'border-slate-200 text-slate-500 hover:bg-muted dark:border-border dark:text-muted-foreground',
+                    count === 0 && 'opacity-45'
+                  )}
+                >
+                  {label} · {count}
+                </button>
+              ))}
+            </div>
+          )}
           {burnDown && (
             <span
               data-queue-burndown
@@ -2259,6 +2528,26 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                     aria-label={`Update view ${v.name}`}
                   >
                     <Save className='h-3 w-3' />
+                  </button>
+                )}
+                {activeViewId === v.id && (
+                  <button
+                    type='button'
+                    onClick={() => toggleViewSub(v.id)}
+                    title={
+                      viewSubFor(v.id)
+                        ? 'Subscribed to new arrivals in this view — click to unsubscribe'
+                        : 'Notify me when items enter this view (checked every 5 min)'
+                    }
+                    className={cn(
+                      'shrink-0',
+                      viewSubFor(v.id)
+                        ? 'text-nvr-cyan'
+                        : 'hidden text-slate-300 hover:text-nvr-cyan group-hover:inline dark:text-slate-600'
+                    )}
+                    aria-label={`Subscribe to view ${v.name}`}
+                  >
+                    <Bell className={cn('h-3 w-3', viewSubFor(v.id) && 'fill-current')} />
                   </button>
                 )}
                 {v.user === userId && (
@@ -2810,7 +3099,12 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 layoutSlug: displayConfig?.item_layout ?? null
               })}`
             )
-        }
+        },
+        // Custom actions (#125): the record's registered actions, right here.
+        ...customActionsFor(rowCtxMenu.row.collection).map((a) => ({
+          label: a.label,
+          run: () => runCustomAction(a, rowCtxMenu.row)
+        }))
       ].map((a) => (
         <button
           key={a.label}
@@ -2824,10 +3118,75 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           {a.label}
         </button>
       ))}
+      {rowCtxMenu.row.collection !== 'tasks' && (
+        <div className='mt-1 border-t border-slate-100 pt-1 dark:border-border/60'>
+          <p className='px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            Triage labels
+          </p>
+          {triageLabels.slice(0, 8).map((l) => {
+            const active = (rowCtxMenu.row.labels ?? []).includes(l)
+            return (
+              <button
+                key={l}
+                type='button'
+                onClick={() => {
+                  toggleTriageLabel(rowCtxMenu.row, l)
+                  setRowCtxMenu(null)
+                }}
+                className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+              >
+                <span
+                  className={
+                    active
+                      ? 'h-1.5 w-1.5 rounded-full bg-violet-500'
+                      : 'h-1.5 w-1.5 rounded-full border border-slate-300 dark:border-slate-600'
+                  }
+                />
+                {l}
+              </button>
+            )
+          })}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              const input = (e.target as HTMLFormElement).elements.namedItem(
+                'newlabel'
+              ) as HTMLInputElement
+              const v = input.value.trim()
+              if (v) {
+                toggleTriageLabel(rowCtxMenu.row, v)
+                setRowCtxMenu(null)
+              }
+            }}
+            className='px-3 py-1'
+          >
+            <input
+              name='newlabel'
+              placeholder='＋ New label…'
+              maxLength={60}
+              className='h-6 w-full rounded border border-slate-200 bg-transparent px-1.5 text-[11.5px] dark:border-border'
+              onMouseDown={(e) => e.stopPropagation()}
+            />
+          </form>
+        </div>
+      )}
     </div>,
     document.body
   )}
 
+      {aggDrill &&
+        createPortal(
+          <AggregateDrillPanel
+            queueId={queueId}
+            drill={aggDrill}
+            onClose={() => setAggDrill(null)}
+            onOpenRecord={(collection, id) => {
+              setAggDrill(null)
+              itemNav.open({ collection, itemId: id, layoutSlug: null })
+            }}
+          />,
+          document.body
+        )}
       <QueueItemSheet
         item={sheetItem}
         stateLabels={stateLabelByKey}
@@ -2848,6 +3207,94 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         onNext={() => sheetItem && startWorkNext(sheetItem)}
         refetchItems={() => qc.invalidateQueries({ queryKey: ['queue-items', queueId] })}
       />
+    </div>
+  )
+}
+
+// ─── Drillable aggregates (#394) ─────────────────────────────────────────────
+// The rows behind an aggregate cell — fetched on open, capped 200 server-side.
+function AggregateDrillPanel({
+  queueId,
+  drill,
+  onClose,
+  onOpenRecord
+}: {
+  queueId: string
+  drill: { row: QueueItemRow; path: string; value: string }
+  onClose: () => void
+  onOpenRecord: (collection: string, id: string) => void
+}) {
+  const client = useNivaroClient()
+  const { data, isLoading } = useQuery<{
+    rows: Array<{ id: string | number; leaf_value: unknown; label: string }>
+    target: string | null
+    value: unknown
+  }>({
+    queryKey: ['queue-agg-rows', queueId, drill.row.collection, drill.row.item_id, drill.path],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            rows: Array<{ id: string | number; leaf_value: unknown; label: string }>
+            target: string | null
+            value: unknown
+          }
+        }>(
+          get(`/queues/${queueId}/aggregate-rows`, {
+            collection: drill.row.collection,
+            item_id: drill.row.item_id,
+            path: drill.path
+          })
+        )
+        .then((r) => r.data)
+  })
+  return (
+    <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/30 p-6' onClick={onClose}>
+      <div
+        className='max-h-[70vh] w-[480px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='mb-2 flex items-start justify-between gap-3'>
+          <div>
+            <p className='text-[13px] font-semibold'>{drill.row.label}</p>
+            <p className='text-[11.5px] text-muted-foreground'>
+              {formatColumnHeader(drill.path)} = <span className='tabular-nums'>{drill.value}</span>{' '}
+              — the rows behind this number
+            </p>
+          </div>
+          <button
+            type='button'
+            onClick={onClose}
+            className='rounded-md px-2 py-1 text-[12px] text-slate-400 hover:bg-muted'
+          >
+            ✕
+          </button>
+        </div>
+        {isLoading ? (
+          <p className='py-6 text-center text-[12.5px] text-slate-400'>Loading…</p>
+        ) : (data?.rows ?? []).length === 0 ? (
+          <p className='py-6 text-center text-[12.5px] text-slate-400'>
+            No contributing rows resolved.
+          </p>
+        ) : (
+          <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+            {data?.rows.map((r) => (
+              <li key={String(r.id)} className='flex items-center justify-between gap-3 py-1.5'>
+                <button
+                  type='button'
+                  onClick={() => data.target && onOpenRecord(data.target, String(r.id))}
+                  className='min-w-0 truncate text-left text-[12.5px] underline decoration-dotted underline-offset-2 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                >
+                  {r.label}
+                </button>
+                <span className='shrink-0 tabular-nums text-[12px] text-slate-600 dark:text-slate-300'>
+                  {r.leaf_value == null ? '—' : String(r.leaf_value)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
