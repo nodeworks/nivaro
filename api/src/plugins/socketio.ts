@@ -456,6 +456,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       broadcastViewers(room)
     }
 
+    // Comment typing (#263): "X is writing a note…" relayed to co-viewers of
+    // the same record. Ephemeral — no persistence, room members only.
+    socket.on(
+      'comment:typing',
+      (payload: { collection?: string; item?: string; user_name?: string }) => {
+        const { collection, item, user_name } = payload ?? {}
+        if (!collection || !item) return
+        socket
+          .to(`record:${collection}:${String(item)}`)
+          .emit('record:comment-typing', { collection, item, user_name: String(user_name ?? '').slice(0, 80) })
+      }
+    )
     socket.on('record:join', async (payload: { collection?: string; item?: string }) => {
       const { collection, item } = payload ?? {}
       const user = authenticatedUser

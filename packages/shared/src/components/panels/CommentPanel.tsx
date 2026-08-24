@@ -424,6 +424,31 @@ export function CommentPanel({
     }
   }, [defaultExpanded])
   const [draft, setDraft] = useState('')
+  // Comment typing (#263): show co-viewers' "writing a note…" and emit our
+  // own while the draft changes (throttled; relayed via RecordLiveSync).
+  const [typingUser, setTypingUser] = useState<string | null>(null)
+  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastTypedOutRef = useRef(0)
+  useEffect(() => {
+    const onTyping = (e: Event) => {
+      const d = (e as CustomEvent).detail as { user_name?: string }
+      setTypingUser(d?.user_name || 'Someone')
+      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+      typingClearRef.current = setTimeout(() => setTypingUser(null), 4000)
+    }
+    window.addEventListener('nvr:comment-typing', onTyping)
+    return () => {
+      window.removeEventListener('nvr:comment-typing', onTyping)
+      if (typingClearRef.current) clearTimeout(typingClearRef.current)
+    }
+  }, [])
+  useEffect(() => {
+    if (!draft.trim()) return
+    const now = Date.now()
+    if (now - lastTypedOutRef.current < 2500) return
+    lastTypedOutRef.current = now
+    window.dispatchEvent(new CustomEvent('nvr:comment-typing-out', { detail: {} }))
+  }, [draft])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
 
@@ -644,6 +669,12 @@ export function CommentPanel({
                   </Button>
                 </div>
               </form>
+              {typingUser && (
+                <p className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400'>
+                  <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+                  {typingUser} is writing a note…
+                </p>
+              )}
               <Separator className='my-4' />
               {isLoading ? (
                 <div className='space-y-4'>

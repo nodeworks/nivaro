@@ -161,6 +161,11 @@ export interface ExtensionContext {
      */
     emit(triggerType: string, payload: Record<string, unknown>): void
   }
+  /** Chat bot (#247): register tools the AI chat bot may call. Handlers run
+   *  with the ASKING user — the extension owns its permission posture. */
+  chatBot: {
+    registerTool(def: import('../services/chat-bot.js').BotToolDef): void
+  }
   /** Auth middleware helpers — use as Fastify `onRequest` handlers. */
   auth: {
     authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
@@ -334,6 +339,7 @@ async function loadExtension(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'chatBot'
     | 'digest'
     | 'readiness'
     | 'bulkActions'
@@ -461,6 +467,13 @@ async function loadExtension(
         registerOperation: (op) => registerOp(op),
         registerTrigger: (trigger) => registerTrigger(trigger),
         emit: (triggerType, payload) => emitTrigger(triggerType, payload, ctx.logger)
+      },
+      chatBot: {
+        registerTool: (def) => {
+          void import('../services/chat-bot.js')
+            .then(({ registerBotTool }) => registerBotTool(def))
+            .catch(() => {})
+        }
       }
     }
 
@@ -556,6 +569,7 @@ export async function loadExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'chatBot'
     | 'digest'
     | 'readiness'
     | 'bulkActions'
@@ -678,6 +692,7 @@ export async function loadCloudExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'chatBot'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -782,6 +797,13 @@ export async function loadCloudExtensions(
           registerOperation: (op) => registerOp(op),
           registerTrigger: (trigger) => registerTrigger(trigger),
           emit: (triggerType, payload) => emitTrigger(triggerType, payload, ctx.logger)
+        },
+        chatBot: {
+          registerTool: (def) => {
+            void import('../services/chat-bot.js')
+              .then(({ registerBotTool }) => registerBotTool(def))
+              .catch(() => {})
+          }
         }
       }
 
@@ -885,6 +907,7 @@ export async function scanNewExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'chatBot'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'

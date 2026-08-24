@@ -186,6 +186,91 @@ export async function chatRoutes(app: FastifyInstance) {
           tag: `chat-${room}`
         })
       }
+      // DM auto-reply when OOO (#375): the peer's out-of-office answers
+      // instantly with return date + delegate — once per room per 24h, and
+      // clearly marked automatic (the message row is FROM the peer).
+      if (peer) {
+        void (async () => {
+          try {
+            const p = (await db('nivaro_users')
+              .where({ id: peer })
+              .first('id', 'first_name', 'last_name', 'is_out_of_office', 'ooo_end', 'delegate_id')) as
+              | Record<string, unknown>
+              | undefined
+            if (!p?.is_out_of_office) return
+            const recent = await db('chat_messages')
+              .where({ room, sender: peer })
+              .where('message', 'like', '%(automatic out-of-office reply)%')
+              .where('date_created', '>=', new Date(Date.now() - 24 * 3600e3))
+              .first('id')
+            if (recent) return
+            let delegateName = ''
+            if (p.delegate_id) {
+              const d = (await db('nivaro_users')
+                .where({ id: p.delegate_id })
+                .first('first_name', 'last_name', 'email')) as Record<string, unknown> | undefined
+              delegateName =
+                [d?.first_name, d?.last_name].filter(Boolean).join(' ') || String(d?.email ?? '')
+            }
+            const pName = [p.first_name, p.last_name].filter(Boolean).join(' ') || 'This person'
+            const until = p.ooo_end ? ` until ${String(p.ooo_end).slice(0, 10)}` : ''
+            const autoText = `${pName} is out of office${until}.${
+              delegateName ? ` Reach out to ${delegateName} in the meantime.` : ''
+            } (automatic out-of-office reply)`
+            const [ins] = await db('chat_messages')
+              .insert({
+                room,
+                message: autoText,
+                sender: peer,
+                sender_name: pName,
+                date_created: new Date()
+              })
+              .returning('id')
+            const autoId = typeof ins === 'object' && ins !== null ? (ins as { id: number }).id : ins
+            app.io?.to(`chat:${room}`).emit('chat:message', {
+              id: autoId,
+              room,
+              message: autoText,
+              sender: peer,
+              sender_name: pName,
+              date_created: new Date().toISOString(),
+              attachments: [],
+              reactions: []
+            })
+          } catch {
+            /* auto-reply is best-effort */
+          }
+        })()
+      }
+    }
+    // @channel (#146): notify every room MEMBER — channel rooms only, and
+    // only the channel's creator or an admin may fire it (a whole-room ping
+    // is a bullhorn, not a mention).
+    if (/(^|\s)@channel\b/.test(message) && room.startsWith('ch:')) {
+      void (async () => {
+        try {
+          const ch = (await db('nivaro_chat_channels')
+            .where({ key: room.slice(3) })
+            .first('created_by')) as { created_by?: string | null } | undefined
+          const senderId = String(req.user!.id).toUpperCase()
+          const allowed = req.isAdmin || String(ch?.created_by ?? '').toUpperCase() === senderId
+          if (!allowed) return
+          const members = (await db('nivaro_chat_memberships')
+            .where({ room })
+            .select('user')) as Array<{ user: string }>
+          const { notifyUser } = await import('../services/notification-channels.js')
+          for (const m of members.slice(0, 300)) {
+            if (String(m.user).toUpperCase() === senderId) continue
+            await notifyUser(app, m.user, {
+              subject: `@channel in ${room.slice(3)}`,
+              message: `${senderName ?? 'Someone'}: ${message.slice(0, 300)}`,
+              sender: req.user?.id ?? null
+            }).catch(() => {})
+          }
+        } catch {
+          /* bullhorn is best-effort */
+        }
+      })()
     }
 
     // '@<bot>' routes the question to the AI assistant (fire-and-forget —
@@ -419,6 +504,158 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Ad-hoc multi-person conversation: a private channel flagged is_direct,
    *  rendered like a DM (member names as the title). */
+  // Saved messages (#148): personal cross-room bookmarks.
+  app.post<{ Params: { id: string } }>('/messages/:id/save', async (req, reply) => {
+    const mid = Number(req.params.id)
+    const msg = (await db('chat_messages').where({ id: mid }).first('id', 'room')) as
+      | { id: number; room: string }
+      | undefined
+    if (!msg) return reply.code(404).send({ error: 'Message not found' })
+    if (!(await canSeeRoom(req.user!, msg.room))) return reply.code(403).send(forbidden)
+    const existing = await db('nivaro_chat_saved')
+      .where({ user: req.user!.id, message_id: mid })
+      .first('id')
+    if (existing) {
+      await db('nivaro_chat_saved').where({ id: existing.id }).del()
+      return reply.send({ data: { saved: false } })
+    }
+    await db('nivaro_chat_saved')
+      .insert({ user: req.user!.id, message_id: mid, room: msg.room, created_at: new Date() })
+      .catch(() => {})
+    return reply.send({ data: { saved: true } })
+  })
+  app.get('/saved', async (req, reply) => {
+    const rows = (await db('nivaro_chat_saved as s')
+      .join('chat_messages as m', 's.message_id', 'm.id')
+      .where('s.user', req.user!.id)
+      .orderBy('s.id', 'desc')
+      .limit(100)
+      .select('s.id as saved_id', 'm.id', 'm.room', 'm.message', 'm.sender_name', 'm.date_created')) as Array<
+      Record<string, unknown>
+    >
+    // Visibility can change after saving — re-check per room (cheap cache).
+    const out: typeof rows = []
+    const seen = new Map<string, boolean>()
+    for (const r of rows) {
+      const room = String(r.room)
+      if (!seen.has(room)) seen.set(room, await canSeeRoom(req.user!, room))
+      if (seen.get(room)) out.push(r)
+    }
+    return reply.send({ data: out })
+  })
+
+  // Group-chat seen-by (#147): members' read watermarks for a room — the
+  // client derives "seen by N" per message from them.
+  app.get<{ Params: { room: string } }>('/rooms/:room/read-marks', async (req, reply) => {
+    const room = req.params.room
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const marks = (await db('nivaro_chat_memberships as ms')
+      .join('nivaro_users as u', 'ms.user', 'u.id')
+      .where('ms.room', room)
+      .whereNotNull('ms.last_read_at')
+      .select('ms.user', 'ms.last_read_at', 'u.first_name', 'u.last_name')) as Array<
+      Record<string, unknown>
+    >
+    return reply.send({
+      data: marks.map((m) => ({
+        user: m.user,
+        last_read_at: m.last_read_at,
+        name: [m.first_name, m.last_name].filter(Boolean).join(' ')
+      }))
+    })
+  })
+
+  // Chat mentions on records (#132): messages naming this record's token in
+  // rooms the VIEWER can see — beyond its own entity room.
+  app.get<{ Params: { collection: string; item: string } }>(
+    '/record-mentions/:collection/:item',
+    async (req, reply) => {
+      const { collection, item } = req.params
+      const { can } = await import('../services/permissions.js')
+      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send(forbidden)
+      }
+      const rt = (await db('nivaro_chat_room_types')
+        .where({ collection, is_active: true })
+        .first('prefix', 'match_field')) as { prefix: string; match_field: string } | undefined
+      if (!rt) return reply.send({ data: [] })
+      let token = item
+      if (rt.match_field && rt.match_field !== 'id') {
+        try {
+          const row = (await db(collection).where({ id: item }).first(rt.match_field)) as
+            | Record<string, unknown>
+            | undefined
+          token = String(row?.[rt.match_field] ?? item)
+        } catch {
+          /* fall back to the raw id */
+        }
+      }
+      if (!token || token.length < 4) return reply.send({ data: [] })
+      const like = `%${token.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+      const rows = (await db('chat_messages')
+        .where('message', 'like', like)
+        .whereNot('room', `${rt.prefix}:${token}`)
+        .whereNull('deleted_at')
+        .orderBy('id', 'desc')
+        .limit(30)
+        .select('id', 'room', 'message', 'sender_name', 'date_created')) as Array<
+        Record<string, unknown>
+      >
+      const out: typeof rows = []
+      const seen = new Map<string, boolean>()
+      for (const r of rows) {
+        const room = String(r.room)
+        if (!seen.has(room)) seen.set(room, await canSeeRoom(req.user!, room))
+        if (seen.get(room)) out.push(r)
+        if (out.length >= 15) break
+      }
+      return reply.send({ data: out })
+    }
+  )
+
+  // Room catch-up (#346): AI summary of what happened since your watermark.
+  app.post<{ Body: { room?: string } }>('/rooms/summary', async (req, reply) => {
+    const room = String(req.body?.room ?? '')
+    if (!room || !(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const membership = (await db('nivaro_chat_memberships')
+      .where({ user: req.user!.id, room })
+      .first('last_read_at')) as { last_read_at?: Date | null } | undefined
+    const since = membership?.last_read_at ?? new Date(Date.now() - 7 * 86400e3)
+    const msgs = (await db('chat_messages')
+      .where({ room })
+      .where('date_created', '>', since)
+      .whereNull('deleted_at')
+      .orderBy('id', 'asc')
+      .limit(120)
+      .select('sender_name', 'message', 'date_created')) as Array<Record<string, unknown>>
+    if (msgs.length < 5) {
+      return reply.send({ data: { summary: null, count: msgs.length } })
+    }
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const aiClient = await getAiClient()
+    if (!aiClient) return reply.code(503).send({ error: 'AI is not configured' })
+    const { model } = await getAiModelSettings()
+    const transcript = msgs
+      .map((m) => `${String(m.sender_name ?? 'Someone')}: ${String(m.message).slice(0, 300)}`)
+      .join('\n')
+      .slice(0, 14000)
+    try {
+      const resp = await aiClient.messages.create({
+        model,
+        max_tokens: 350,
+        system:
+          'Summarize a chat room\u2019s recent messages for someone catching up: 2-4 sentences, decisions and open questions first, names attached. No preamble.',
+        messages: [{ role: 'user', content: transcript }]
+      })
+      const text = resp.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim()
+      return reply.send({ data: { summary: text, count: msgs.length } })
+    } catch (err) {
+      return reply
+        .code(502)
+        .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+    }
+  })
+
   app.post('/group-dm', async (req, reply) => {
     const b = req.body as { user_ids?: string[]; name?: string }
     const userIds = [...new Set((b.user_ids ?? []).map(String).filter(Boolean))].filter(

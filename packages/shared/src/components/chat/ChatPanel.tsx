@@ -1,4 +1,4 @@
-import {
+import { Bookmark,
   Bell,
   BellOff,
   HelpCircle,
@@ -534,6 +534,56 @@ export function ChatRoomView({
   const toggleReaction = useToggleReaction(room)
   const pins = useRoomPins(room)
   const togglePin = useTogglePin(room)
+  // Seen-by (#147): members' read watermarks — "Seen by N" under your own
+  // messages in group rooms (channels/group DMs; 1:1 DMs keep the check).
+  const isGroupRoom = room.startsWith('ch:')
+  const { data: readMarks = [] } = useQuery<Array<{ user: string; last_read_at: string; name: string }>>({
+    queryKey: ['chat-read-marks', room],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ user: string; last_read_at: string; name: string }> }>(
+          get(`/chat/rooms/${encodeURIComponent(room)}/read-marks`)
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled: isGroupRoom,
+    refetchInterval: isGroupRoom ? 30_000 : false,
+    staleTime: 15_000
+  })
+  const seenBy = (msg: { date_created: string; sender?: string | null }) =>
+    readMarks.filter(
+      (mk) =>
+        mk.user !== String(msg.sender ?? '') &&
+        new Date(mk.last_read_at).getTime() >= new Date(msg.date_created).getTime()
+    )
+  // Saved messages (#148): personal cross-room bookmarks.
+  const { data: savedRows = [] } = useQuery<Array<{ id: number }>>({
+    queryKey: ['chat-saved'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number }> }>(get('/chat/saved'))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  const savedIds = useMemo(() => new Set(savedRows.map((r) => r.id)), [savedRows])
+  const toggleSave = useMutation({
+    mutationFn: (mid: number) => client.request(post(`/chat/messages/${mid}/save`, {})),
+    onSuccess: () => void qcRoom.invalidateQueries({ queryKey: ["chat-saved"] })
+  })
+
+  // Room catch-up (#346): AI "what you missed" for a busy unread backlog.
+  const [catchup, setCatchup] = useState<string | null>(null)
+  const catchupMut = useMutation({
+    mutationFn: () =>
+      client
+        .request<{ data: { summary: string | null; count: number } }>(
+          post('/chat/rooms/summary', { room })
+        )
+        .then((r) => r.data),
+    onSuccess: (d) => setCatchup(d?.summary ?? 'Not enough new messages to summarize.'),
+    onError: () => setCatchup('Summary unavailable.')
+  })
   // Entity-room record — powers "make task from message". Reads the room
   // card's cached resolution (same query key), so no extra fetch.
   const qcRoom = useQueryClient()
@@ -1049,7 +1099,22 @@ export function ChatRoomView({
                     <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
                       New messages
                     </span>
+                    {initialUnreadRef.current > 20 && (
+                      <button
+                        type='button'
+                        disabled={catchupMut.isPending}
+                        onClick={() => catchupMut.mutate()}
+                        className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-400 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
+                      >
+                        {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
+                      </button>
+                    )}
                     <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                  </div>
+                )}
+                {showUnreadDivider && catchup && (
+                  <div className='my-1 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+                    {catchup}
                   </div>
                 )}
                 <div className={cn('group/msg flex gap-2', mine && 'flex-row-reverse')}>
@@ -1104,6 +1169,19 @@ export function ChatRoomView({
                           )}
                         >
                           <Pin className='h-3 w-3' />
+                        </button>
+                        <button
+                          type='button'
+                          title={savedIds.has(m.id) ? 'Remove from saved' : 'Save for later (personal bookmark)'}
+                          onClick={() => toggleSave.mutate(m.id)}
+                          className={cn(
+                            'rounded-full p-0.5',
+                            savedIds.has(m.id)
+                              ? th.accentText
+                              : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                          )}
+                        >
+                          <Bookmark className='h-3 w-3' />
                         </button>
                         {editable && (
                           <>
@@ -1261,6 +1339,18 @@ export function ChatRoomView({
                         hour: 'numeric',
                         minute: '2-digit'
                       })}
+                      {mine && isGroupRoom && !deleted && (() => {
+                        const seen = seenBy(m)
+                        if (seen.length === 0) return null
+                        return (
+                          <span
+                            className={cn('font-medium', th.accentText)}
+                            data-tip={`Seen by ${seen.map((sb) => sb.name || 'someone').join(', ')}`}
+                          >
+                            Seen by {seen.length}
+                          </span>
+                        )
+                      })()}
                       {isLastMine &&
                         room.startsWith('dm:') &&
                         (wasRead ? (

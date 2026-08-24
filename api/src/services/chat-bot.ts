@@ -155,6 +155,96 @@ export async function handleBotMention(
   }
 }
 
+// ── Extension bot tools (#247): extensions register tools the bot may call.
+// Handlers receive the ASKER — extension code decides its own permission
+// posture, same trust level as any extension route.
+export interface BotToolDef {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  handler: (asker: User, input: Record<string, unknown>) => Promise<unknown>
+}
+const extensionBotTools = new Map<string, BotToolDef>()
+export function registerBotTool(def: BotToolDef): void {
+  if (!/^[a-z][a-z0-9_]{2,40}$/.test(def.name)) return
+  extensionBotTools.set(def.name, def)
+}
+
+/** Watch command (#223): "@bot watch CR26-76773" — subscribes the asker via
+ *  the entity-room registry (token → collection/record), same per-record
+ *  subscription shape as the record bell. */
+const WATCH_TOOL: Anthropic.Tool = {
+  name: 'watch_record',
+  description:
+    'Subscribe the asking user to a record so every change notifies them. Use when they say "watch <record id>" or "follow <record id>". Pass the human record id exactly as they wrote it (e.g. CR26-76773).',
+  input_schema: {
+    type: 'object',
+    properties: { record_token: { type: 'string', description: 'The record id/token to watch' } },
+    required: ['record_token']
+  }
+}
+
+async function executeWatch(asker: User, token: string): Promise<string> {
+  const types = (await db('nivaro_chat_room_types')
+    .where({ is_active: true })
+    .select('prefix', 'collection', 'match_field')) as Array<{
+    prefix: string
+    collection: string
+    match_field: string
+  }>
+  for (const t of types) {
+    try {
+      const row = (await db(t.collection)
+        .where({ [t.match_field || 'id']: token })
+        .first('id')) as { id?: unknown } | undefined
+      if (!row?.id) continue
+      const existing = await db('nivaro_notification_subscriptions')
+        .where({ user: asker.id, collection: t.collection, filter_field: 'id', filter_value: String(row.id) })
+        .first('id')
+      if (existing) return `You're already watching ${token}.`
+      await db('nivaro_notification_subscriptions').insert({
+        user: asker.id,
+        collection: t.collection,
+        event_type: 'all',
+        filter_field: 'id',
+        filter_value: String(row.id),
+        label: `Watch ${token} (chat)`,
+        is_active: true,
+        digest_frequency: 'instant',
+        created_at: new Date()
+      })
+      return `Watching ${token} — every change will notify you. Unsubscribe from the record's bell.`
+    } catch {
+      /* next registry entry */
+    }
+  }
+  return `I couldn't find a record matching "${token}".`
+}
+
+/** Help topics (#224): "how do I…" answers, curated — the doc site isn't
+ *  reachable from the server, so this table IS the bot's product knowledge. */
+const HELP_TOPICS: Array<{ match: RegExp; answer: string }> = [
+  { match: /subscri|watch|follow.*record|notif.*record/i, answer: 'Open the record and click the bell in its header — "State changes only" or "All changes". You can also tell me "watch <record id>". Mute a record from the same dialog.' },
+  { match: /saved view|save.*filter|default view/i, answer: 'Set your filters/columns in the collection browser, then Columns → "Save as preset…". Admins can star one view as the collection-wide default.' },
+  { match: /import|upload.*csv|spreadsheet/i, answer: 'Imports live under Monitoring → Imports. The CSV wizard maps columns (with an AI "Suggest mapping" button), previews changes, and failed rows can be repaired inline afterward.' },
+  { match: /export|excel|csv/i, answer: 'Any collection browser exports CSV from the Export menu (current filters apply). Admins can define server export presets (xlsx, with child sheets) in the same menu.' },
+  { match: /delegate|out of office|ooo|vacation/i, answer: 'Profile → delegation card: set your delegate and OOO window. Owned work routes to the delegate while you\u2019re out; open tasks move to them automatically.' },
+  { match: /queue|worklist|claim/i, answer: 'Queues (left nav) are cross-collection worklists. "Work Next" claims and opens the highest-priority unclaimed item; saved views keep your scope/filters.' },
+  { match: /report|dashboard|chart/i, answer: 'Report Studio (Reports nav) builds widget grids over any collection — filters, snapshots, alerts, subscriptions. "Build with AI" drafts one from a sentence.' },
+  { match: /digest|too many email|email.*settings/i, answer: 'Profile → Email delivery: switch to the daily action digest (pick your hour — it follows your timezone), or compact layout. Notification rules on the same page control quiet hours and sounds.' }
+]
+
+const HELP_TOOL: Anthropic.Tool = {
+  name: 'product_help',
+  description:
+    'Answer "how do I…" questions about using this application (subscriptions, views, imports, exports, delegation, queues, reports, digests). Pass the user\u2019s question.',
+  input_schema: {
+    type: 'object',
+    properties: { question: { type: 'string' } },
+    required: ['question']
+  }
+}
+
 /** The bot-only reminder tool — extracts the WHEN so "remind me Friday at 9
  *  about the CR26-76773 PO" needs no date-picker UI. */
 const SET_REMINDER_TOOL: Anthropic.Tool = {
@@ -199,7 +289,17 @@ async function answerQuestion(
       model,
       max_tokens: 700,
       system: CHAT_SYSTEM_PROMPT,
-      tools: [...CHAT_TOOLS, SET_REMINDER_TOOL],
+      tools: [
+        ...CHAT_TOOLS,
+        SET_REMINDER_TOOL,
+        WATCH_TOOL,
+        HELP_TOOL,
+        ...[...extensionBotTools.values()].map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.input_schema as Anthropic.Tool['input_schema']
+        }))
+      ],
       messages: convo
     })
     if (response.stop_reason !== 'tool_use') {
@@ -231,6 +331,33 @@ async function answerQuestion(
             type: 'tool_result',
             tool_use_id: block.id,
             content: JSON.stringify({ scheduled_for: when.toISOString(), note })
+          })
+          continue
+        }
+        if (block.name === 'watch_record') {
+          const msg = await executeWatch(asker, String(input.record_token ?? '').trim())
+          results.push({ type: 'tool_result', tool_use_id: block.id, content: msg })
+          continue
+        }
+        if (block.name === 'product_help') {
+          const q = String(input.question ?? '')
+          const hit = HELP_TOPICS.find((h) => h.match.test(q))
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: hit
+              ? hit.answer
+              : 'No curated answer for that — suggest they check the in-app Docs page (left nav).'
+          })
+          continue
+        }
+        const extTool = extensionBotTools.get(block.name)
+        if (extTool) {
+          const out = await extTool.handler(asker, input)
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(out ?? null).slice(0, 30_000)
           })
           continue
         }

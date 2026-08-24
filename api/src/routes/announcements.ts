@@ -678,6 +678,15 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const url = String(req.query.url ?? '')
       if (!/^https:\/\//.test(url)) return reply.code(400).send({ error: 'Invalid link' })
+      // Open-redirect guard: only links that actually appear in THIS
+      // announcement's message may be bounced through — a crafted url param
+      // against a real announcement id must not become a redirector.
+      const row = (await db('nivaro_announcements')
+        .where('id', Number(req.params.id))
+        .first('message')) as { message?: string | null } | undefined
+      if (!row?.message?.includes(url)) {
+        return reply.code(400).send({ error: 'Link is not part of this announcement' })
+      }
       await db('nivaro_announcements')
         .where('id', Number(req.params.id))
         .increment('click_count', 1)

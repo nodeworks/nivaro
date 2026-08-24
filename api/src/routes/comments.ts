@@ -879,6 +879,11 @@ export async function commentsRoutes(app: FastifyInstance) {
       // Auto-watch (#400): commenting subscribes the commenter when their
       // preference says so — fire-and-forget.
       void ensureAutoWatch(userId, body.collection, body.item, 'commented')
+      // Live comments (#280): co-viewers' threads update the moment this
+      // lands — record-room broadcast, clients invalidate the comments query.
+      app.io
+        ?.to(`record:${body.collection}:${body.item}`)
+        .emit('record:comment', { collection: body.collection, item: body.item, user: userId })
 
       // Resolve and persist mentions. "@owners" expands to the record's
       // current pipeline owners (resolved server-side, so the set is always

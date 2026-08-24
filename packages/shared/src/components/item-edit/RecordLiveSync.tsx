@@ -67,6 +67,23 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
       })
     }
     const unsub = realtime.on('record:uploading', applyRemote)
+    // Live comments (#280) + typing (#263): comment broadcasts refresh the
+    // thread instantly; typing pings surface via a window event CommentPanel
+    // listens for. Outbound typing rides the same record-room socket.
+    const unsubComment = realtime.on('record:comment', (p: any) => {
+      if (p?.collection !== collection || String(p?.item) !== String(itemId)) return
+      void qc.invalidateQueries({ queryKey: ['comments', collection, itemId] })
+      void qc.invalidateQueries({ queryKey: ['comments-related', collection, itemId] })
+    })
+    const unsubTyping = realtime.on('record:comment-typing', (p: any) => {
+      if (p?.collection !== collection || String(p?.item) !== String(itemId)) return
+      window.dispatchEvent(new CustomEvent('nvr:comment-typing', { detail: p }))
+    })
+    const onTypingOut = (e: Event) => {
+      const d = (e as CustomEvent).detail as { user_name?: string }
+      realtime.emit('comment:typing', { collection, item: String(itemId), user_name: d?.user_name })
+    }
+    window.addEventListener('nvr:comment-typing-out', onTypingOut)
     // Hosts whose record-room socket is separate from the feed socket (admin
     // presence v2) relay inbound announcements as this window event instead.
     const onRelayed = (e: Event) => applyRemote((e as CustomEvent).detail)
@@ -75,6 +92,9 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
       window.removeEventListener('nvr:upload-state', onLocal)
       window.removeEventListener('nvr:record-uploading', onRelayed)
       unsub()
+          unsubComment()
+      unsubTyping()
+      window.removeEventListener('nvr:comment-typing-out', onTypingOut)
     }
   }, [realtime, collection, itemId])
 

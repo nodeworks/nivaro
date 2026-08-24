@@ -14,7 +14,7 @@ import { get } from '../../lib/commands'
  * Plus #399 deep record search: find-in-record across fields.
  */
 
-type Tab = 'audience' | 'integrations' | 'owners' | 'mail'
+type Tab = 'audience' | 'integrations' | 'owners' | 'mail' | 'chat'
 
 export function RecordInsightsButton({
   collection,
@@ -53,7 +53,8 @@ export function RecordInsightsButton({
                 ['audience', 'Audience'],
                 ['integrations', 'Integrations'],
                 ['owners', 'Owner history'],
-                ['mail', 'Mail']
+                ['mail', 'Mail'],
+                ['chat', 'Chat']
               ] as Array<[Tab, string]>
             ).map(([key, label]) => (
               <button
@@ -74,6 +75,7 @@ export function RecordInsightsButton({
           {tab === 'integrations' && <IntegrationsTab collection={collection} itemId={itemId} />}
           {tab === 'owners' && <OwnerHistoryTab collection={collection} itemId={itemId} />}
           {tab === 'mail' && <MailTab collection={collection} itemId={itemId} />}
+          {tab === 'chat' && <ChatMentionsTab collection={collection} itemId={itemId} />}
         </div>
       )}
     </div>
@@ -294,6 +296,46 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
           <p className='ml-3.5 truncate text-[10.5px] text-slate-400'>
             to {m.to} · {m.status} · {new Date(m.created_at).toLocaleString()}
           </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+// ─── Chat mentions (#132): messages naming this record beyond its own room ──
+function ChatMentionsTab({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useNivaroClient()
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['record-chat-mentions', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; room: string; message: string; sender_name: string | null; date_created: string }> }>(
+          get(`/chat/record-mentions/${collection}/${itemId}`)
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  if (isLoading) return <p className='p-3 text-[12px] text-slate-400'>Loading…</p>
+  if (rows.length === 0)
+    return (
+      <p className='p-3 text-[12px] text-slate-400'>
+        No chat messages mention this record outside its own room.
+      </p>
+    )
+  const roomLabel = (r: string) =>
+    r === 'global' ? '#global' : r.startsWith('ch:') ? `#${r.slice(3)}` : r.startsWith('dm:') ? 'a direct message' : r
+  return (
+    <div className='max-h-72 overflow-y-auto'>
+      {rows.map((m) => (
+        <div key={m.id} className='border-b border-slate-100 px-3 py-1.5 last:border-b-0 dark:border-border/50'>
+          <p className='text-[12px] text-slate-700 dark:text-slate-200'>
+            <span className='font-medium'>{m.sender_name ?? 'Someone'}</span>{' '}
+            <span className='text-slate-400'>in {roomLabel(m.room)}</span>
+          </p>
+          <p className='truncate text-[11.5px] text-slate-500'>{m.message.slice(0, 160)}</p>
+          <p className='text-[10px] text-slate-400'>{new Date(m.date_created).toLocaleString()}</p>
         </div>
       ))}
     </div>
