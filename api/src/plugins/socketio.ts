@@ -166,6 +166,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       reconnects: 0,
       app: null
     })
+    // Zombie socket reaper (#310): a connection that never authenticates is
+    // holding a slot for nothing — drop it after 45s. Legit clients auth
+    // within the first second of connecting.
+    const zombieTimer = setTimeout(() => {
+      if (socket.connected && !socketMeta.get(socket.id)?.user) {
+        app.log.debug({ socketId: socket.id }, 'Dropping unauthenticated socket')
+        socket.disconnect(true)
+      }
+    }, 45_000)
+    zombieTimer.unref?.()
+    socket.once('disconnect', () => clearTimeout(zombieTimer))
+
     // RTT sampling for the diagnostics page (#270): app-level ping so we
     // measure the full path our own events travel.
     const rttTimer = setInterval(() => {

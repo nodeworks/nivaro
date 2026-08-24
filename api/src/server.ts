@@ -158,6 +158,16 @@ export async function buildServer() {
     setJournalRedis(app.redis)
   }
 
+  // ── Ops observability wiring (batch A) ───────────────────────────────────
+  {
+    const { startRuntimeMonitor } = await import('./services/runtime-monitor.js')
+    startRuntimeMonitor()
+    const { registerKnownCaches } = await import('./services/cache-registrations.js')
+    registerKnownCaches()
+    const { startInstanceRoster } = await import('./services/instance-roster.js')
+    startInstanceRoster(app.redis)
+  }
+
   // ── Resiliency sprint wiring ─────────────────────────────────────────────
   {
     // DB outage posture (#329): probe loop + fast honest 503s while down.
@@ -575,6 +585,117 @@ export async function buildServer() {
       app.cron.schedule('scheduled-broadcasts', '* * * * *', async () => {
         const { deliverScheduledAnnouncements } = await import('./routes/announcements.js')
         await deliverScheduledAnnouncements(app)
+      })
+
+      // Storage snapshots (#291/#155): one row per day of DB + uploads size,
+      // feeding the runway projection on /db-health.
+      app.cron.schedule('storage-snapshot', '45 3 * * *', async () => {
+        const { db } = await import('./db/index.js')
+        const today = new Date().toISOString().slice(0, 10)
+        const exists = await db('nivaro_storage_snapshots')
+          .where({ snapshot_date: today })
+          .first('id')
+          .catch(() => null)
+        if (exists) return
+        let dbMb: number | null = null
+        let topTables: unknown[] = []
+        try {
+          const size = (await db.raw(`
+            SELECT SUM(CAST(FILEPROPERTY(name, 'SpaceUsed') AS bigint)) * 8 / 1024 AS used_mb
+            FROM sys.database_files WHERE type = 0
+          `)) as Array<{ used_mb: number }>
+          dbMb = Number(size[0]?.used_mb) || null
+          topTables = (await db.raw(`
+            SELECT TOP 20 OBJECT_NAME(object_id) AS table_name,
+                   SUM(row_count) AS row_count, SUM(used_page_count) * 8 / 1024 AS mb
+            FROM sys.dm_db_partition_stats
+            WHERE OBJECTPROPERTY(object_id, 'IsUserTable') = 1
+            GROUP BY object_id ORDER BY SUM(used_page_count) DESC
+          `)) as unknown[]
+        } catch {
+          /* no VIEW SERVER STATE — snapshot rows stay null-sized */
+        }
+        let uploadsMb: number | null = null
+        try {
+          const { readdir, stat } = await import('node:fs/promises')
+          const { join } = await import('node:path')
+          const dir = process.env.UPLOAD_DIR || './uploads'
+          let total = 0
+          const walk = async (d: string, depth: number): Promise<void> => {
+            if (depth > 4) return
+            for (const e of await readdir(d, { withFileTypes: true })) {
+              const p = join(d, e.name)
+              if (e.isDirectory()) await walk(p, depth + 1)
+              else total += (await stat(p)).size
+            }
+          }
+          await walk(dir, 0)
+          uploadsMb = Math.round(total / 1_048_576)
+        } catch {
+          /* uploads dir absent */
+        }
+        await db('nivaro_storage_snapshots')
+          .insert({
+            snapshot_date: today,
+            db_mb: dbMb,
+            uploads_mb: uploadsMb,
+            top_tables: JSON.stringify(topTables),
+            created_at: new Date()
+          })
+          .catch(() => {})
+      })
+
+      // Deadlock reporter (#100): hourly sweep of the system_health ring
+      // buffer — a fresh deadlock raises ONE deduped issue naming the victim.
+      app.cron.schedule('deadlock-sweep', '35 * * * *', async () => {
+        const { db } = await import('./db/index.js')
+        const { trackError } = await import('./services/error-tracking.js')
+        try {
+          const rows = (await db.raw(`
+            SELECT TOP 3 xed.value('@timestamp', 'datetime2') AS occurred_at,
+                   xed.query('.') AS graph
+            FROM (
+              SELECT CAST(target_data AS XML) AS target_data
+              FROM sys.dm_xe_session_targets st
+              JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
+              WHERE s.name = 'system_health' AND st.target_name = 'ring_buffer'
+            ) AS tab
+            CROSS APPLY target_data.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(xed)
+            ORDER BY occurred_at DESC
+          `)) as Array<{ occurred_at: Date; graph: string }>
+          const fresh = rows.filter(
+            (r) => Date.now() - new Date(r.occurred_at).getTime() < 65 * 60_000
+          )
+          for (const r of fresh) {
+            const xml = String(r.graph ?? '')
+            const stmt = xml.match(/<inputbuf>([\s\S]*?)<\/inputbuf>/)?.[1]?.trim().slice(0, 200)
+            await trackError({
+              source: 'server',
+              route: 'deadlock-sweep',
+              severity: 'high',
+              message: `SQL deadlock at ${new Date(r.occurred_at).toISOString()}${stmt ? ` — victim statement: ${stmt}` : ''}`,
+              stack: xml.slice(0, 8000)
+            })
+          }
+        } catch {
+          /* no VIEW SERVER STATE — sweep silently inert */
+        }
+      })
+
+      // Pool monitor (#114): sustained pending acquires = saturation, which
+      // reads as "randomly slow" everywhere else.
+      app.cron.schedule('pool-monitor', '*/5 * * * *', async () => {
+        const { poolStats } = await import('./routes/ops-db.js')
+        const { trackError } = await import('./services/error-tracking.js')
+        const p = poolStats()
+        if (p.pending_acquires >= 5 && p.free === 0) {
+          await trackError({
+            source: 'server',
+            route: 'pool-monitor',
+            severity: 'high',
+            message: `DB connection pool saturated: ${p.used}/${p.max} in use, ${p.pending_acquires} requests waiting`
+          })
+        }
       })
 
       // Scheduled DQ runs (#170): every collection's active quality rules,
