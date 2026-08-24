@@ -98,6 +98,8 @@ import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { RecordInsightsButton } from './item-edit/RecordInsights'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { setFormulaConstants } from '../lib/expression'
+import { extSlotKey } from '../lib/layout-slots'
+import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 
 let formulaCtxHydrated = false
 import { FindInRecordButton, type FindableField } from './item-edit/FindInRecord'
@@ -3856,6 +3858,13 @@ export function ItemEditForm({
       entries.push({ item: '__pdf__', sort: pdfSlot.sort, tie: 6 })
     // Widget slots never render as standalone panels — they appear in groups (GroupSection)
     // or in the page header (__header__ group_key). Skip all of them here.
+    // Extension layout slots (#425): __ext_<key>__ assignments render as
+    // standalone sections via the window-registered slot plugins.
+    for (const a of assignments) {
+      if (extSlotKey(a.field) && isVisible(a)) {
+        entries.push({ item: a.field, sort: a.sort, tie: 8 })
+      }
+    }
     return entries.sort((a, b) => a.sort - b.sort || a.tie - b.tie).map((e) => e.item)
   }, [
     sectionGroups,
@@ -3876,7 +3885,8 @@ export function ItemEditForm({
     subtitleFieldSet,
     colMeta?.addendums_enabled,
     ungroupedFields,
-    ownersGroupKey
+    ownersGroupKey,
+    assignments
   ])
 
   // ── Client-side validation ─────────────────────────────────────────────────
@@ -4794,6 +4804,20 @@ export function ItemEditForm({
           defaultExpanded={slot.default_expanded ?? true}
         />
       )
+    }
+    {
+      const extKey = extSlotKey(key)
+      if (extKey) {
+        return (
+          <ExtLayoutSlot
+            key={key}
+            slotKey={extKey}
+            collection={collection}
+            itemId={isNew ? null : String(itemId)}
+            draft={draft}
+          />
+        )
+      }
     }
     if (key === '__pdf__') {
       const layoutId = activeLayoutData?.layout?.id
@@ -5873,6 +5897,52 @@ export function ItemEditForm({
     )
   }
 
+  // Formula constants + fiscal calendar (#244/#343): hydrate the shared
+  // expression engine from instance settings once per session. HOOKS-ORDER
+  // RULE: this (and the tab-title effect) must sit ABOVE every early return
+  // below — a hook below a conditional return crashes React the moment the
+  // condition flips ("Rendered fewer hooks than expected", hit live).
+  useEffect(() => {
+    if (formulaCtxHydrated) return
+    formulaCtxHydrated = true
+    client
+      .request<{ data?: { formula_constants?: string | null; fiscal_year_start_month?: number } }>({
+        _method: 'GET',
+        _path: '/settings'
+      })
+      .then((r) => {
+        const row = r?.data
+        if (!row) return
+        try {
+          const parsed = row.formula_constants ? JSON.parse(row.formula_constants) : null
+          if (parsed && typeof parsed === 'object') setFormulaConstants(parsed)
+        } catch {
+          // malformed constants JSON — engine runs without them
+        }
+        setFiscalStartMonth(row.fiscal_year_start_month)
+      })
+      .catch(() => {
+        formulaCtxHydrated = false
+      })
+  }, [client])
+
+  // Tab titles with context (#145): the browser tab names the record.
+  // Title derivation is duplicated inline (the display consts are declared
+  // after the early returns) — same hooks-order constraint.
+  useEffect(() => {
+    if (isNew) return
+    const t =
+      itemData && colMeta?.display_template
+        ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
+        : (colMeta?.display_name ?? titleCase(collection ?? ''))
+    if (!t) return
+    const prev = document.title
+    document.title = `${t} · ${document.title.split(' · ').pop() ?? 'Nivaro'}`
+    return () => {
+      document.title = prev
+    }
+  }, [itemData, colMeta, collection, isNew])
+
   // ── Access denied / not found ──────────────────────────────────────────────
   // A 403/404 on the record load used to leave a silently empty form —
   // explain WHY (role permission, RLS, or which User Scope excludes it).
@@ -5917,43 +5987,6 @@ export function ItemEditForm({
       ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
       : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
-
-  // Formula constants + fiscal calendar (#244/#343): hydrate the shared
-  // expression engine from instance settings once per session — module-level
-  // singletons, so every mounted form/grid shares one fetch.
-  useEffect(() => {
-    if (formulaCtxHydrated) return
-    formulaCtxHydrated = true
-    client
-      .request<{ data?: { formula_constants?: string | null; fiscal_year_start_month?: number } }>({
-        _method: 'GET',
-        _path: '/settings'
-      })
-      .then((r) => {
-        const row = r?.data
-        if (!row) return
-        try {
-          const parsed = row.formula_constants ? JSON.parse(row.formula_constants) : null
-          if (parsed && typeof parsed === 'object') setFormulaConstants(parsed)
-        } catch {
-          // malformed constants JSON — engine runs without them
-        }
-        setFiscalStartMonth(row.fiscal_year_start_month)
-      })
-      .catch(() => {
-        formulaCtxHydrated = false
-      })
-  }, [client])
-
-  // Tab titles with context (#145): the browser tab names the record.
-  useEffect(() => {
-    if (isNew || !itemTitle) return
-    const prev = document.title
-    document.title = `${itemTitle} · ${document.title.split(' · ').pop() ?? 'Nivaro'}`
-    return () => {
-      document.title = prev
-    }
-  }, [itemTitle, isNew])
 
   return (
     <ReimportHandlerContext.Provider
