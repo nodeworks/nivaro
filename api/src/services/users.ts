@@ -82,6 +82,27 @@ export async function findOrCreateFromOIDC(profile: {
     })
     .returning('id')) as unknown as [string]
 
+  // Welcome auto-broadcast (#389): a configured message greets brand-new
+  // users on first login — in-app row, fire-and-forget.
+  const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  if (newId) {
+    void db('nivaro_settings')
+      .first('welcome_message')
+      .then(async (settings) => {
+        const msg = (settings as { welcome_message?: string | null } | undefined)?.welcome_message
+        if (!msg?.trim()) return
+        await db('nivaro_notifications').insert({
+          recipient: newId,
+          subject: 'Welcome!',
+          status: 'inbox',
+          timestamp: new Date(),
+          sender: null,
+          message: msg.trim().slice(0, 500)
+        })
+      })
+      .catch(() => {})
+  }
+
   return db<User>('nivaro_users').where({ id }).first() as Promise<User>
 }
 

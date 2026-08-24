@@ -45,6 +45,7 @@ interface Broadcast {
   ack_count: number
   scheduled_send_at?: string | null
   sent_at?: string | null
+  click_count?: number
 }
 
 const SEVERITY_DOT: Record<string, string> = {
@@ -171,6 +172,62 @@ export function BroadcastView({ className }: { className?: string }) {
   })
 
   const canSend = message.trim().length > 0 && channels.length > 0 && !send.isPending
+
+  // Broadcast templates (#104): reusable compose snapshots.
+  const { data: bTemplates = [] } = useQuery<
+    Array<{ id: number; name: string; snapshot: Record<string, unknown> | null }>
+  >({
+    queryKey: ['broadcast-templates'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string; snapshot: Record<string, unknown> | null }> }>(
+          get('/announcements/templates')
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  const saveTemplate = useMutation({
+    mutationFn: (name: string) =>
+      client.request(
+        post('/announcements/templates', {
+          name,
+          snapshot: { subject, message, severity, channels, require_ack: requireAck, audience: fullAudience }
+        })
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['broadcast-templates'] })
+  })
+  const applyTemplate = (t: { snapshot: Record<string, unknown> | null }) => {
+    const sn = t.snapshot ?? {}
+    if (typeof sn.subject === 'string') setSubject(sn.subject)
+    if (typeof sn.message === 'string') setMessage(sn.message)
+  }
+  const [templateName, setTemplateName] = useState('')
+  const [savingTemplate, setSavingTemplate] = useState(false)
+
+  // Test-send (#429): the compose delivered to YOU across the picked channels.
+  const testSend = useMutation({
+    mutationFn: () =>
+      client.request<{ data: Record<string, string> }>(
+        post('/announcements/test-send', {
+          subject: subject.trim() || undefined,
+          message: message.trim(),
+          channels: channels.filter((c) => c !== 'banner')
+        })
+      ),
+    onSuccess: (r) =>
+      setResult(
+        `Test sent to you — ${Object.entries(r.data ?? {})
+          .map(([c, st]) => `${c}: ${st}`)
+          .join(', ')}`
+      ),
+    onError: (err: Error) => setResult(err.message)
+  })
+
+  // Out-of-hours guard (#246): sending immediately during most recipients'
+  // night suggests scheduling for morning instead.
+  const localHour = new Date().getHours()
+  const outOfHours = !sendAt && (localHour >= 21 || localHour < 7)
 
   const patchRow = useMutation({
     mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
@@ -393,6 +450,20 @@ export function BroadcastView({ className }: { className?: string }) {
               className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
             />
           </label>
+          {channels.some((c) => c !== 'banner') && (
+            <button
+              type='button'
+              disabled={!canSend || testSend.isPending}
+              onClick={() => {
+                setResult(null)
+                testSend.mutate()
+              }}
+              data-tip='Send this compose to YOURSELF over the picked channels first (#429)'
+              className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-muted disabled:opacity-50 dark:border-border dark:text-slate-300'
+            >
+              {testSend.isPending ? 'Testing…' : 'Test on me'}
+            </button>
+          )}
           <button
             type='button'
             disabled={!canSend}
@@ -404,6 +475,38 @@ export function BroadcastView({ className }: { className?: string }) {
           >
             {send.isPending ? 'Sending…' : 'Send'}
           </button>
+          {savingTemplate ? (
+            <span className='flex items-center gap-1'>
+              <input
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder='Template name…'
+                className='h-7 w-40 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+              />
+              <button
+                type='button'
+                disabled={!templateName.trim() || saveTemplate.isPending}
+                onClick={() => {
+                  saveTemplate.mutate(templateName.trim())
+                  setSavingTemplate(false)
+                  setTemplateName('')
+                }}
+                className='h-7 rounded-md border border-slate-200 px-2 text-[11.5px] hover:bg-muted dark:border-border'
+              >
+                Save
+              </button>
+            </span>
+          ) : (
+            <button
+              type='button'
+              disabled={!message.trim()}
+              onClick={() => setSavingTemplate(true)}
+              data-tip='Save this compose (audience + channels + text) as a reusable template (#104)'
+              className='h-8 rounded-md border border-dashed border-slate-300 px-2.5 text-[11.5px] text-slate-500 hover:text-slate-700 disabled:opacity-40 dark:border-border'
+            >
+              ☆ Save template
+            </button>
+          )}
           {!canSend && !send.isPending && (
             <span className='text-[11.5px] text-slate-400'>
               A message and at least one channel are required.
@@ -415,6 +518,43 @@ export function BroadcastView({ className }: { className?: string }) {
             </span>
           )}
         </div>
+        {outOfHours && canSend && (
+          <p className='mt-2 rounded-md bg-amber-50 px-3 py-1.5 text-[12px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
+            It's {localHour >= 21 ? 'late' : 'early'} for most recipients — consider the schedule
+            field so this lands in the morning instead of overnight.{' '}
+            <button
+              type='button'
+              className='font-medium underline underline-offset-2'
+              onClick={() => {
+                const d = new Date()
+                if (localHour >= 21) d.setDate(d.getDate() + 1)
+                d.setHours(8, 0, 0, 0)
+                const pad = (n: number) => String(n).padStart(2, '0')
+                setSendAt(
+                  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+                )
+              }}
+            >
+              Schedule for 8:00 AM
+            </button>
+          </p>
+        )}
+        {bTemplates.length > 0 && (
+          <div className='mt-2 flex flex-wrap items-center gap-1.5'>
+            <span className='text-[11px] text-slate-400'>Templates:</span>
+            {bTemplates.map((t) => (
+              <span key={t.id} className='inline-flex items-center overflow-hidden rounded-full border border-slate-200 dark:border-border'>
+                <button
+                  type='button'
+                  onClick={() => applyTemplate(t)}
+                  className='px-2 py-0.5 text-[11.5px] text-slate-600 hover:bg-muted dark:text-slate-300'
+                >
+                  {t.name}
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── History ────────────────────────────────────────────────────── */}
@@ -462,7 +602,11 @@ function HistoryRow({
         .request<{ data: never }>(get(`/announcements/${a.id}/receipts`))
         .then((r) => r.data),
     enabled: open,
-    staleTime: 30_000
+    staleTime: 5_000,
+    // Live ticker (#265): a freshly-sent broadcast's counts climb in real
+    // time while the fan-out runs — fast poll for the first 10 minutes.
+    refetchInterval:
+      open && a.sent_at && Date.now() - new Date(a.sent_at).getTime() < 10 * 60_000 ? 4000 : false
   })
 
   return (
@@ -505,6 +649,11 @@ function HistoryRow({
               className='underline decoration-dotted underline-offset-2 hover:text-slate-600 dark:hover:text-muted-foreground'
             >
               {open ? 'hide receipts' : 'who saw this?'}
+              {(a.click_count ?? 0) > 0 && (
+                <span className='ml-1.5 rounded bg-[#00ceff14] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
+                  {a.click_count} link click{a.click_count === 1 ? '' : 's'}
+                </span>
+              )}
             </button>
           </p>
         </div>

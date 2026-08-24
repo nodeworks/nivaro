@@ -577,6 +577,13 @@ export async function buildServer() {
         await deliverScheduledAnnouncements(app)
       })
 
+      // Ack chasers (#385): must-ack broadcasts remind non-ackers at 24h,
+      // escalate to the sender at 48h — each exactly once.
+      app.cron.schedule('broadcast-ack-chasers', '15 * * * *', async () => {
+        const { runAckChasers } = await import('./routes/announcements.js')
+        await runAckChasers(app)
+      })
+
       // Blocking-session monitor (#88): DB sessions blocked >15s form chains
       // that read as "everything is slow" with no visible cause. Every 5 min,
       // chains land as ONE deduped issue naming the head blocker + statement.

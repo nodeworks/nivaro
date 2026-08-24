@@ -89,6 +89,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       'brand_logo',
       'brand_login_title',
       'brand_login_message',
+      'welcome_message',
       'login_links',
       'formula_constants',
       'fiscal_year_start_month'

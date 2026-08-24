@@ -282,9 +282,22 @@ async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<nu
   const needsSend = channels.some((c) => c !== 'banner')
   if (needsSend) {
     const users = await resolveAudienceUsers(aud)
-    const html = `<p style="margin:0 0 12px;white-space:pre-wrap;">${message
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')}</p>`
+    // Personalization (#245): {{first_name}} / {{name}} tokens render per
+    // recipient; unknown tokens render empty rather than leaking braces.
+    const personalize = (text: string, u: { first_name: string | null; last_name?: string | null }) =>
+      text
+        .replace(/\{\{\s*first_name\s*\}\}/g, u.first_name ?? '')
+        .replace(
+          /\{\{\s*name\s*\}\}/g,
+          [u.first_name, (u as { last_name?: string | null }).last_name].filter(Boolean).join(' ')
+        )
+    // Link tracking (#222): email links route through the click redirect so
+    // receipts can show engagement. https links only.
+    const wrapLinks = (text: string) =>
+      text.replace(/https:\/\/[^\s<>"']+/g, (url) => {
+        const base = process.env.PUBLIC_URL || ''
+        return base ? `${base}/api/announcements/${id}/click?url=${encodeURIComponent(url)}` : url
+      })
     const receipts: Array<{
       announcement: number
       user: string
@@ -296,10 +309,15 @@ async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<nu
       receipts.push({ announcement: id, user: userId, channel, status, delivered_at: new Date() })
     for (const u of users) {
       let reached = false
+      const pSubject = personalize(subject, u)
+      const pMessage = personalize(message, u)
+      const pHtml = `<p style="margin:0 0 12px;white-space:pre-wrap;">${wrapLinks(
+        pMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      )}</p>`
       if (channels.includes('message')) {
         await notifyUser(app, u.id, {
-          subject,
-          message: message.slice(0, 500),
+          subject: pSubject,
+          message: pMessage.slice(0, 500),
           sender: senderId
         })
           .then(() => {
@@ -311,7 +329,7 @@ async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<nu
       if (channels.includes('email')) {
         if (!u.email) record(u.id, 'email', 'skipped')
         else {
-          await sendRawMail({ to: u.email, subject, html })
+          await sendRawMail({ to: u.email, subject: pSubject, html: pHtml })
             .then(() => {
               reached = true
               record(u.id, 'email', 'sent')
@@ -322,7 +340,7 @@ async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<nu
       if (channels.includes('sms')) {
         if (!u.phone) record(u.id, 'sms', 'skipped')
         else {
-          await sendSms(String(u.phone), `${subject}: ${message}`.slice(0, 500))
+          await sendSms(String(u.phone), `${pSubject}: ${pMessage}`.slice(0, 500))
             .then(() => {
               reached = true
               record(u.id, 'sms', 'sent')
@@ -348,6 +366,69 @@ async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<nu
       updated_at: new Date()
     })
   return delivered
+}
+
+/** Ack chasers (#385): must-ack banners older than 24h re-remind non-ackers
+ *  ONCE (in-app), and at 48h escalate ONCE to the sender with the laggard
+ *  count. State rides chased_at / escalated_at so a chaser can never repeat. */
+export async function runAckChasers(app: FastifyInstance): Promise<{ chased: number; escalated: number }> {
+  const rows = (await db('nivaro_announcements')
+    .where('require_ack', 1)
+    .where('is_active', 1)
+    .whereNotNull('sent_at')
+    .select('id', 'subject', 'message', 'audience', 'created_by', 'sent_at', 'chased_at', 'escalated_at')) as Array<
+    Record<string, unknown>
+  >
+  let chased = 0
+  let escalated = 0
+  const now = Date.now()
+  for (const row of rows) {
+    const sentAt = new Date(row.sent_at as string).getTime()
+    const ageH = (now - sentAt) / 3600e3
+    try {
+      if (!row.chased_at && ageH >= 24) {
+        const aud = parseJsonSafe<Audience>(row.audience) ?? {}
+        const users = await resolveAudienceUsers(aud)
+        const acked = new Set(
+          (
+            (await db('nivaro_announcement_acks')
+              .where('announcement', Number(row.id))
+              .select('user')) as Array<{ user: string }>
+          ).map((a) => a.user)
+        )
+        const laggards = users.filter((u) => !acked.has(u.id))
+        for (const u of laggards.slice(0, 500)) {
+          await notifyUser(app, u.id, {
+            subject: `Reminder: acknowledge "${String(row.subject ?? '').slice(0, 120)}"`,
+            message: 'This announcement requires your acknowledgement.',
+            sender: (row.created_by as string) ?? null
+          }).catch(() => {})
+        }
+        await db('nivaro_announcements').where('id', Number(row.id)).update({ chased_at: new Date() })
+        chased++
+      } else if (row.chased_at && !row.escalated_at && ageH >= 48) {
+        const aud = parseJsonSafe<Audience>(row.audience) ?? {}
+        const users = await resolveAudienceUsers(aud)
+        const ackCount = Number(
+          ((await db('nivaro_announcement_acks').where('announcement', Number(row.id)).count({ n: '*' }).first()) as
+            | { n?: number | string }
+            | undefined)?.n ?? 0
+        )
+        const missing = Math.max(0, users.length - ackCount)
+        if (missing > 0 && row.created_by) {
+          await notifyUser(app, String(row.created_by), {
+            subject: `${missing} of ${users.length} still haven't acknowledged "${String(row.subject ?? '').slice(0, 100)}"`,
+            message: 'Open the broadcast receipts to see who is outstanding.'
+          }).catch(() => {})
+        }
+        await db('nivaro_announcements').where('id', Number(row.id)).update({ escalated_at: new Date() })
+        escalated++
+      }
+    } catch {
+      // one broken broadcast never blocks the sweep
+    }
+  }
+  return { chased, escalated }
 }
 
 /** Scheduler tick (#94): deliver every due scheduled broadcast. Called by the
@@ -588,6 +669,115 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   /** Live audience resolution for the compose form: how many unique people a
    *  (partial or full) audience reaches, and who they are. Same resolver as
    *  the real send, so the number can't lie. */
+  // Link tracking redirect (#222): counts the click, bounces to the real URL.
+  // Auth'd (links land in employee email; the redirect target is validated
+  // https so this can't become an open redirector for arbitrary schemes).
+  app.get<{ Params: { id: string }; Querystring: { url?: string } }>(
+    '/:id/click',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const url = String(req.query.url ?? '')
+      if (!/^https:\/\//.test(url)) return reply.code(400).send({ error: 'Invalid link' })
+      await db('nivaro_announcements')
+        .where('id', Number(req.params.id))
+        .increment('click_count', 1)
+        .catch(() => {})
+      return reply.redirect(url)
+    }
+  )
+
+  // Test-send (#429): the compose payload delivered to the CALLER only, over
+  // the chosen channels — nothing persisted, no announcement row.
+  app.post('/test-send', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body as { subject?: string; message?: string; channels?: Channel[] }
+    const subject = String(b?.subject ?? '').slice(0, 500)
+    const message = String(b?.message ?? '')
+    if (!subject && !message) return reply.code(400).send({ error: 'subject or message required' })
+    const channels = (Array.isArray(b?.channels) ? b.channels : ['message']).filter((c) =>
+      ['message', 'email', 'sms'].includes(c)
+    )
+    const me = (await db('nivaro_users')
+      .where({ id: req.user!.id })
+      .first('id', 'email', 'phone', 'first_name', 'last_name')) as {
+      id: string
+      email: string | null
+      phone: string | null
+      first_name: string | null
+      last_name: string | null
+    }
+    const personalize = (text: string) =>
+      text
+        .replace(/\{\{\s*first_name\s*\}\}/g, me.first_name ?? '')
+        .replace(/\{\{\s*name\s*\}\}/g, [me.first_name, me.last_name].filter(Boolean).join(' '))
+    const results: Record<string, string> = {}
+    const ps = personalize(subject || message.slice(0, 120))
+    const pm = personalize(message)
+    if (channels.includes('message')) {
+      await notifyUser(app, me.id, { subject: `[TEST] ${ps}`, message: pm.slice(0, 500) })
+        .then(() => {
+          results.message = 'sent'
+        })
+        .catch(() => {
+          results.message = 'failed'
+        })
+    }
+    if (channels.includes('email')) {
+      if (!me.email) results.email = 'no address'
+      else
+        await sendRawMail({
+          to: me.email,
+          subject: `[TEST] ${ps}`,
+          html: `<p style="margin:0 0 12px;white-space:pre-wrap;">${pm.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`
+        })
+          .then(() => {
+            results.email = 'sent'
+          })
+          .catch(() => {
+            results.email = 'failed'
+          })
+    }
+    if (channels.includes('sms')) {
+      if (!me.phone) results.sms = 'no number'
+      else
+        await sendSms(String(me.phone), `[TEST] ${ps}: ${pm}`.slice(0, 500))
+          .then(() => {
+            results.sms = 'sent'
+          })
+          .catch(() => {
+            results.sms = 'failed'
+          })
+    }
+    return reply.send({ data: results })
+  })
+
+  // Broadcast templates (#104): reusable compose snapshots.
+  app.get('/templates', { preHandler: requireAdmin }, async () => {
+    const rows = await db('nivaro_broadcast_templates').orderBy('name').select('*')
+    return { data: rows.map((r) => ({ ...r, snapshot: parseJsonSafe(r.snapshot) })) }
+  })
+  app.post('/templates', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body as { name?: string; snapshot?: unknown }
+    if (!b?.name?.trim() || !b.snapshot) {
+      return reply.code(400).send({ error: 'name and snapshot are required' })
+    }
+    await db('nivaro_broadcast_templates').insert({
+      name: b.name.trim().slice(0, 200),
+      snapshot: JSON.stringify(b.snapshot),
+      created_by: req.user!.id,
+      created_at: new Date()
+    })
+    await logActivity({ action: 'broadcast-template-create', user: req.user!.id, comment: b.name, req })
+    return reply.send({ data: { ok: true } })
+  })
+  app.delete<{ Params: { tid: string } }>(
+    '/templates/:tid',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      await db('nivaro_broadcast_templates').where('id', Number(req.params.tid)).del()
+      return reply.send({ data: { ok: true } })
+    }
+  )
+
   app.post('/preview-audience', { preHandler: requireAdmin }, async (req) => {
     const b = req.body as { audience?: Audience }
     const users = await resolveAudienceUsers(b.audience ?? {})
