@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T22:20:25.991Z",
+  "generated_at": "2026-08-24T23:06:42.852Z",
   "releases": [
+    {
+      "version": "0.1.122",
+      "tag": "v0.1.122",
+      "date": "2026-08-24T19:06:39-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Preferences/Files/AI/Hygiene sprint + lock idle release, action feedback, layout-scoped completion, per-instance settings",
+              "hash": "f7f9d53a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.121",
       "tag": "v0.1.121",
-      "date": "2026-08-24T18:20:22-04:00",
+      "date": "2026-08-24T18:20:26-04:00",
       "sections": [
         {
           "label": "Added",
