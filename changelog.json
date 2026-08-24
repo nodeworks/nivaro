@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T19:38:37.300Z",
+  "generated_at": "2026-08-24T20:12:07.874Z",
   "releases": [
+    {
+      "version": "0.1.114",
+      "tag": "v0.1.114",
+      "date": "2026-08-24T16:12:04-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Reports, Dashboards & Pages sprint (#149 #150 #160 #167 #168 #173 #182 #203 #211 #225 #226 #227 #248 #249 #250 #251 #363 #364 #381 #382 #383 #404 #418 #419 #420)",
+              "hash": "a937c0e2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.113",
       "tag": "v0.1.113",
-      "date": "2026-08-24T15:38:33-04:00",
+      "date": "2026-08-24T15:38:37-04:00",
       "sections": [
         {
           "label": "Added",
