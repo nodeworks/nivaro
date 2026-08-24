@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T15:28:08.307Z",
+  "generated_at": "2026-08-24T15:54:18.250Z",
   "releases": [
+    {
+      "version": "0.1.108",
+      "tag": "v0.1.108",
+      "date": "2026-08-24T11:54:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "resiliency",
+              "text": "resiliency sprint — 10 features (backlog 326-335, migration 252)",
+              "hash": "518d2e5c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.107",
       "tag": "v0.1.107",
-      "date": "2026-08-24T11:28:05-04:00",
+      "date": "2026-08-24T11:28:08-04:00",
       "sections": [
         {
           "label": "Added",
