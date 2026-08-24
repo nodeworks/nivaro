@@ -1176,7 +1176,15 @@ function FieldsTab({
     }
   })
 
-  const columns = tableData.columns
+  // Field filter (#228): search over the column list — 100-column tables
+  // made "where is vendor" a scroll hunt.
+  const [fieldFilter, setFieldFilter] = useState('')
+  const columns = fieldFilter.trim()
+    ? tableData.columns.filter((c) => {
+        const q = fieldFilter.trim().toLowerCase()
+        return c.name.toLowerCase().includes(q) || (c.data_type ?? '').toLowerCase().includes(q)
+      })
+    : tableData.columns
 
   return (
     <div className='space-y-3'>
@@ -1191,6 +1199,14 @@ function FieldsTab({
               {extendMode
                 ? 'Extend mode active. You can add columns and modify columns you created.'
                 : 'Original columns are protected. Enable extend mode to add new columns.'}
+            </p>
+            <input
+              value={fieldFilter}
+              onChange={(e) => setFieldFilter(e.target.value)}
+              placeholder='Find a field… (name, label, or type)'
+              className='mt-2 h-8 w-72 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] outline-none focus:border-[#00ceff80]'
+            />
+            <p className='hidden'>{''}
             </p>
           </div>
           <button
@@ -3933,6 +3949,7 @@ function RelationsTab({
                           {formatRelSummary(rel)}
                         </span>
                         <div className='ml-auto flex items-center gap-1'>
+                          <RelationUsageChip relId={rel.id} />
                           <button
                             type='button'
                             onClick={() => startEdit(rel)}
@@ -3963,6 +3980,47 @@ function RelationsTab({
         ) : null}
       </div>
     </div>
+  )
+}
+
+// ─── Relation usage (#357): rows actually using it, on demand ────────────────
+
+function RelationUsageChip({ relId }: { relId: number }) {
+  const [wanted, setWanted] = useState(false)
+  const { data, isLoading } = useQuery<{ used: number; total: number }>({
+    queryKey: ['relation-usage', relId],
+    queryFn: () =>
+      api
+        .get<{ data: { used: number; total: number } }>(`/data-model/relations/${relId}/usage`)
+        .then((r) => r.data.data),
+    enabled: wanted,
+    staleTime: 5 * 60_000
+  })
+  if (!wanted) {
+    return (
+      <button
+        type='button'
+        onClick={() => setWanted(true)}
+        title='Count rows actually using this relation'
+        className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-400 hover:text-slate-600'
+      >
+        usage?
+      </button>
+    )
+  }
+  if (isLoading) return <span className='text-[10.5px] text-slate-400'>counting…</span>
+  if (!data) return <span className='text-[10.5px] text-slate-400'>n/a</span>
+  const pct = data.total > 0 ? Math.round((data.used / data.total) * 100) : 0
+  return (
+    <span
+      className={cn(
+        'rounded px-1.5 py-0.5 text-[10.5px] font-medium tabular-nums',
+        data.used === 0 ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
+      )}
+      title={`${data.used.toLocaleString()} of ${data.total.toLocaleString()} rows carry a value`}
+    >
+      {data.used === 0 ? 'unused' : `${pct}%`}
+    </span>
   )
 }
 
@@ -4122,10 +4180,13 @@ function SettingsTab({
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
+      <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
           <DataProtectionSection tableName={tableName} />
+      <CastCheckSection tableName={tableName} />
       <FieldUsageSection tableName={tableName} />
+      <EditFrequencySection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <CustomActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
@@ -4873,6 +4934,258 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
           disabled={saveMut.isPending || meta === undefined}
         />
       </div>
+    </div>
+  )
+}
+
+// ─── Safe collection rename (#154) ───────────────────────────────────────────
+
+function RenameCollectionSection({ tableName }: { tableName: string }) {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [report, setReport] = useState<Array<{ surface: string; hits: unknown[] }> | null>(null)
+  const rename = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { renamed: boolean; new_name: string; remaining_references: Array<{ surface: string; hits: unknown[] }> } }>(
+          `/data-model/${tableName}/rename`,
+          { new_name: newName.trim() }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(`Renamed to ${d.new_name}`)
+      setReport(d.remaining_references)
+      setConfirming(false)
+      // Registry rows repointed — land on the renamed editor.
+      setTimeout(() => navigate(`/data-model/${d.new_name}`), 1500)
+    },
+    onError: (e: unknown) =>
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Rename failed')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-amber-200 bg-white'>
+      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-3 text-left'>
+        <div>
+          <p className='text-[13px] font-medium text-amber-700'>Rename collection</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Renames the table and repoints layouts, queues, policies, views, relations and registry
+            rows. Free-text references (formulas, filter JSON) are REPORTED, not rewritten.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='space-y-2 border-t border-amber-100 px-4 py-3'>
+          <div className='flex items-center gap-2'>
+            <Input
+              value={newName}
+              onChange={(e) => {
+                setNewName(e.target.value)
+                setConfirming(false)
+              }}
+              placeholder='new_table_name'
+              className='h-8 w-64 font-mono text-[12.5px]'
+            />
+            {confirming ? (
+              <>
+                <Button type='button' size='sm' variant='destructive' className='h-8 text-[12px]' disabled={rename.isPending} onClick={() => rename.mutate()}>
+                  {rename.isPending ? 'Renaming…' : `Yes — rename to ${newName.trim()}`}
+                </Button>
+                <Button type='button' size='sm' variant='outline' className='h-8 text-[12px]' onClick={() => setConfirming(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                className='h-8 border-amber-300 text-[12px] text-amber-700'
+                disabled={!/^[a-z_][a-z0-9_]*$/.test(newName.trim()) || newName.trim() === tableName}
+                onClick={() => setConfirming(true)}
+              >
+                Rename…
+              </Button>
+            )}
+          </div>
+          {report && report.length > 0 && (
+            <div className='rounded border border-amber-200 bg-amber-50/50 p-2 text-[11.5px] text-amber-800'>
+              <p className='font-medium'>Remaining references to review:</p>
+              {report.map((g) => (
+                <p key={g.surface}>
+                  {g.surface}: {g.hits.length} hit{g.hits.length === 1 ? '' : 's'}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Type-change dry-run (#153) ──────────────────────────────────────────────
+
+function CastCheckSection({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const [col, setCol] = useState('')
+  const [toType, setToType] = useState('integer')
+  const [result, setResult] = useState<{
+    total: number
+    failures: number
+    samples: Array<{ id: unknown; value: string }>
+  } | null>(null)
+  const { data: table } = useQuery({
+    queryKey: ['data-model-table', tableName],
+    queryFn: () => schemaApi.getTable(tableName).then((r) => r.data),
+    enabled: open && !!tableName
+  })
+  const run = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { total: number; failures: number; samples: Array<{ id: unknown; value: string }> } }>(
+          `/data-model/${tableName}/columns/${col}/cast-check`,
+          { to_type: toType }
+        )
+        .then((r) => r.data.data),
+    onSuccess: setResult,
+    onError: (e: unknown) =>
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Check failed')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-3 text-left'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Type-change dry-run</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Which values would NOT survive a cast — check before changing a column's type.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='space-y-2 border-t border-slate-100 px-4 py-3'>
+          <div className='flex items-center gap-2'>
+            <Combobox
+              value={col}
+              onChange={(v) => {
+                setCol(v)
+                setResult(null)
+              }}
+              options={(table?.columns ?? []).map((c) => ({ value: c.name, label: c.name }))}
+              placeholder='Column…'
+            />
+            <Combobox
+              value={toType}
+              onChange={(v) => {
+                setToType(v)
+                setResult(null)
+              }}
+              options={['integer', 'bigInteger', 'decimal', 'float', 'boolean', 'date', 'datetime', 'uuid', 'string'].map(
+                (t) => ({ value: t, label: t })
+              )}
+            />
+            <Button type='button' size='sm' className='h-7 text-[11.5px]' disabled={!col || run.isPending} onClick={() => run.mutate()}>
+              {run.isPending ? 'Scanning…' : 'Check'}
+            </Button>
+          </div>
+          {result && (
+            <div className='text-[12px]'>
+              {result.failures === 0 ? (
+                <p className='text-emerald-600'>
+                  All {result.total.toLocaleString()} non-null values survive the cast to {toType}.
+                </p>
+              ) : (
+                <>
+                  <p className='font-medium text-red-600'>
+                    {result.failures.toLocaleString()} of {result.total.toLocaleString()} values would
+                    NOT survive — the alter would fail or null them.
+                  </p>
+                  <div className='mt-1 max-h-32 overflow-y-auto rounded border border-red-100 bg-red-50/40 p-2 font-mono text-[11px] text-slate-600'>
+                    {result.samples.map((sm) => (
+                      <p key={String(sm.id)}>
+                        #{String(sm.id)}: {sm.value}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Field edit-frequency (#405) ─────────────────────────────────────────────
+
+function EditFrequencySection({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery<{
+    days: number
+    sampled_revisions: number
+    fields: Array<{ field: string; edits: number }>
+  }>({
+    queryKey: ['edit-frequency', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { days: number; sampled_revisions: number; fields: Array<{ field: string; edits: number }> } }>(
+          `/data-model/${tableName}/edit-frequency`
+        )
+        .then((r) => r.data.data),
+    enabled: open && !!tableName,
+    staleTime: 5 * 60_000
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Edit frequency</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Which fields people actually EDIT (revision deltas, last 90 days) — the behavioral
+            layer over fill rates.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 px-4 py-3'>
+          {isLoading ? (
+            <p className='text-[12px] text-slate-400'>Scanning revisions…</p>
+          ) : !data || data.fields.length === 0 ? (
+            <p className='text-[12px] text-slate-400'>No edits recorded in the window.</p>
+          ) : (
+            <>
+              <p className='mb-2 text-[11px] text-slate-400'>
+                {data.sampled_revisions.toLocaleString()} revisions sampled over {data.days} days
+              </p>
+              <div className='max-h-64 overflow-y-auto'>
+                {data.fields.slice(0, 40).map((f) => (
+                  <div key={f.field} className='flex items-center gap-2 border-b border-slate-50 py-1 last:border-b-0'>
+                    <span className='w-48 truncate font-mono text-[11.5px] text-slate-600'>{f.field}</span>
+                    <span className='relative h-2 flex-1 overflow-hidden rounded-full bg-slate-100'>
+                      <span
+                        className='absolute inset-y-0 left-0 rounded-full bg-[#00a5cc]'
+                        style={{ width: `${Math.min(100, (f.edits / data.fields[0].edits) * 100)}%` }}
+                      />
+                    </span>
+                    <span className='w-14 text-right text-[11px] tabular-nums text-slate-500'>
+                      {f.edits.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -14015,6 +14328,7 @@ interface CollectionLayout {
   slug?: string | null
   create_label?: string | null
   create_hidden?: boolean | number
+  parent_layout_id?: number | null
   is_active: boolean | number
   sort: number
   disable_comments?: boolean | number
@@ -14544,6 +14858,7 @@ function LayoutsTab({
           | 'slug'
           | 'create_label'
           | 'create_hidden'
+          | 'parent_layout_id'
           | 'disable_comments'
           | 'disable_tasks'
           | 'disable_revisions'
@@ -15041,6 +15356,38 @@ function LayoutsTab({
                     className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                   />
                 </label>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                      Inherit from layout
+                    </span>
+                    <p className='max-w-[220px] text-[10px] text-slate-400 dark:text-slate-500'>
+                      Parent assignments fill in wherever this layout has none (#424 — one level,
+                      same collection)
+                    </p>
+                  </div>
+                  <Combobox
+                    value={selected?.parent_layout_id ? String(selected.parent_layout_id) : ''}
+                    onChange={(v) => {
+                      if (selected)
+                        patchLayoutMut.mutate({
+                          id: selected.id,
+                          parent_layout_id: v ? Number(v) : null
+                        })
+                    }}
+                    options={[
+                      { value: '', label: '— none —' },
+                      ...layouts
+                        .filter(
+                          (l) =>
+                            l.id !== selected?.id &&
+                            !(l as { parent_layout_id?: number | null }).parent_layout_id
+                        )
+                        .map((l) => ({ value: String(l.id), label: l.name }))
+                    ]}
+                    placeholder='— none —'
+                  />
+                </div>
                 <div className='flex items-center justify-between border-t border-slate-200 pt-2 dark:border-border'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
                     Layout type
@@ -17914,6 +18261,7 @@ function FieldGroupsTab({
 
   // Add a relation-path field ('purchase_order.workflow.workflow_id') to the
   // Ungrouped zone — rendered read-only by the form, draggable into any group.
+  const [extSlotDraft, setExtSlotDraft] = useState('')
   const handleAddRelationPath = useCallback((picked: PickedField) => {
     const path = picked.path.join('.')
     if (picked.path.length < 2) {
@@ -18662,6 +19010,34 @@ function FieldGroupsTab({
                     onChange={handleAddRelationPath}
                     placeholder='＋ Related field…'
                   />
+                </div>
+                {/* Extension slot (#425): __ext_<key>__ sentinel — extensions
+                    registered via window.__nvrRegisterLayoutSlot render there */}
+                <div className='mt-1.5 flex items-center gap-1'>
+                  <input
+                    value={extSlotDraft}
+                    onChange={(e) => setExtSlotDraft(e.target.value.toLowerCase())}
+                    placeholder='＋ Extension slot key…'
+                    className='h-7 flex-1 rounded-md border border-dashed border-slate-300 bg-white px-2 font-mono text-[11px] outline-none focus:border-[#00ceff80]'
+                  />
+                  <button
+                    type='button'
+                    disabled={!/^[a-z][a-z0-9-]{1,60}$/.test(extSlotDraft)}
+                    onClick={() => {
+                      const key = `__ext_${extSlotDraft}__`
+                      setLocalFieldOrder((prev) => {
+                        if ((prev.__unassigned__ ?? []).includes(key)) return prev
+                        return { ...prev, __unassigned__: [...(prev.__unassigned__ ?? []), key] }
+                      })
+                      setLocalAssignments((a) => ({ ...a, [key]: null }))
+                      hasLocalChangeRef.current = true
+                      changeSeqRef.current++
+                      setExtSlotDraft('')
+                    }}
+                    className='h-7 rounded-md border border-slate-200 px-2 text-[11px] hover:bg-muted disabled:opacity-40'
+                  >
+                    Add
+                  </button>
                 </div>
                 {/* Category filter pills */}
                 {(() => {

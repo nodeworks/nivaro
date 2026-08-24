@@ -296,6 +296,110 @@ async function lintFindings(): Promise<Finding[]> {
     }
   }
 
+
+  // Unregistered junctions (#119): tables SHAPED like junctions (exactly two
+  // resolvable *_id legs, few other columns) with zero nivaro_relations rows —
+  // invisible to pickers, scopes and the ERD until registered.
+  try {
+    const relTables = new Set(
+      (
+        (await db('nivaro_relations').whereNotNull('many_collection').distinct('many_collection')) as Array<{
+          many_collection: string
+        }>
+      ).map((r) => r.many_collection.toLowerCase())
+    )
+    const allCols = (await db('information_schema.columns')
+      .whereNotIn('table_name', ['sysdiagrams'])
+      .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
+    const byTable = new Map<string, string[]>()
+    for (const c of allCols) {
+      if (/^nivaro_/i.test(c.table_name) || /^directus_/i.test(c.table_name)) continue
+      const arr = byTable.get(c.table_name) ?? []
+      arr.push(c.column_name)
+      byTable.set(c.table_name, arr)
+    }
+    let emitted = 0
+    for (const [tbl, colsList] of byTable) {
+      if (relTables.has(tbl.toLowerCase()) || emitted >= 15) continue
+      const fkLegs = colsList.filter((c) => /_id$/i.test(c) && c.toLowerCase() !== 'id')
+      // Junction shape: two legs, and little else beyond id/sort/audit.
+      if (fkLegs.length !== 2 || colsList.length > 6) continue
+      const targetsExist = fkLegs.every((leg) => byTable.has(leg.replace(/_id$/i, '')))
+      if (!targetsExist) continue
+      emitted++
+      out.push({
+        family: 'lint',
+        code: 'junction-unregistered',
+        subject: `table:${tbl}`,
+        title: `"${tbl}" looks like an M2M junction but has no registered relations`,
+        detail: `Legs: ${fkLegs.join(', ')} — one click registers the collection, both legs, and the alias.`,
+        severity: 'warning'
+      })
+    }
+  } catch {
+    /* contributes zero on error */
+  }
+
+  // Label lint (#360): naming consistency over collection display names and
+  // field labels — lowercase starts, trailing whitespace, raw snake_case
+  // labels, duplicate display names.
+  try {
+    const cols = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection', 'display_name')) as Array<{ collection: string; display_name: string | null }>
+    const seenNames = new Map<string, string>()
+    for (const c of cols) {
+      const dn = c.display_name?.trim()
+      if (!dn) continue
+      if (c.display_name !== dn) {
+        out.push({
+          family: 'lint',
+          code: 'label-whitespace',
+          subject: `collection:${c.collection}`,
+          title: `"${c.display_name}" has leading/trailing whitespace`,
+          severity: 'info',
+          href: `/data-model/${c.collection}`
+        })
+      }
+      const key = dn.toLowerCase()
+      if (seenNames.has(key) && seenNames.get(key) !== c.collection) {
+        out.push({
+          family: 'lint',
+          code: 'label-duplicate',
+          subject: `collection:${c.collection}`,
+          title: `Display name "${dn}" is also used by ${seenNames.get(key)}`,
+          severity: 'warning',
+          href: `/data-model/${c.collection}`
+        })
+      } else {
+        seenNames.set(key, c.collection)
+      }
+    }
+    const fields = (await db('nivaro_fields')
+      .whereNotNull('label')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection', 'field', 'label')
+      .limit(5000)) as Array<{ collection: string; field: string; label: string }>
+    let snakeCount = 0
+    for (const f of fields) {
+      const l = f.label?.trim()
+      if (!l) continue
+      if (/^[a-z0-9_]+$/.test(l) && l.includes('_') && snakeCount < 25) {
+        snakeCount++
+        out.push({
+          family: 'lint',
+          code: 'label-snake-case',
+          subject: `field:${f.collection}.${f.field}`,
+          title: `Label "${l}" reads as a column name, not a label`,
+          severity: 'info',
+          href: `/data-model/${f.collection}`
+        })
+      }
+    }
+  } catch {
+    /* label lint contributes zero on error */
+  }
+
   return out
 }
 

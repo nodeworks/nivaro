@@ -66,6 +66,24 @@ export default function ConfigHealth() {
     },
     onError: () => toast.error('Sweep failed')
   })
+  // One-click junction registration (#119): the finding's fix.
+  const fixJunction = useMutation({
+    mutationFn: (table: string) =>
+      api
+        .post<{ data: { registered: boolean; alias: string; alias_on: string } }>(
+          '/config-health/fix-junction',
+          { table }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(`Registered — alias "${d.alias}" added on ${d.alias_on}`)
+      void qc.invalidateQueries({ queryKey: ['config-health'] })
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Registration failed'
+      )
+  })
   const dismiss = useMutation({
     mutationFn: (id: number) => api.post(`/config-health/${id}/dismiss`),
     onSuccess: invalidate
@@ -213,6 +231,16 @@ export default function ConfigHealth() {
                   first seen {new Date(f.first_seen).toLocaleDateString()}
                 </p>
               </div>
+              {f.code === 'junction-unregistered' && f.status === 'open' && (
+                <button
+                  type='button'
+                  disabled={fixJunction.isPending}
+                  onClick={() => fixJunction.mutate(f.subject.replace(/^table:/, ''))}
+                  className='shrink-0 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-2 py-1 text-[11.5px] font-medium text-[#007a99] disabled:opacity-50 dark:text-nvr-cyan'
+                >
+                  {fixJunction.isPending ? 'Registering…' : 'Register junction'}
+                </button>
+              )}
               <button
                 type='button'
                 onClick={() => dismiss.mutate(f.id)}

@@ -304,6 +304,84 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // List templates with state/transition counts
   /** Owner-gap advisor: why records resolve no owners, clustered by their
    *  dimension values, with the closest owner-group repair suggested. */
+  // AI config reviewer (#361): deterministic structure analysis + AI critique
+  // of a workflow template — unreachable states, dead ends, missing
+  // send-backs, states with no owner coverage.
+  app.post<{ Params: { id: string } }>('/:id/ai-review', { preHandler: requireAdmin }, async (req, reply) => {
+    const tid = req.params.id
+    const [states, transitions, groups] = await Promise.all([
+      db('nivaro_workflow_states').where({ template: tid }).orderBy('sort').select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort'),
+      db('nivaro_workflow_transitions').where({ template: tid }).select('id', 'from_state', 'to_state', 'label', 'condition_rules', 'auto_trigger'),
+      db('nivaro_pipeline_owner_groups').where({ template: tid }).select('state').catch(() => [] as Array<{ state: string }>)
+    ])
+    if (states.length === 0) return reply.code(404).send({ error: 'Template has no states' })
+    // Deterministic findings first — the AI never has to discover graph facts.
+    const byId = new Map(states.map((st) => [String(st.id), st]))
+    const inbound = new Map<string, number>()
+    const outbound = new Map<string, number>()
+    for (const t of transitions) {
+      if (t.to_state) inbound.set(String(t.to_state), (inbound.get(String(t.to_state)) ?? 0) + 1)
+      if (t.from_state) outbound.set(String(t.from_state), (outbound.get(String(t.from_state)) ?? 0) + 1)
+    }
+    const anyFrom = transitions.some((t) => !t.from_state)
+    const ownered = new Set((groups as Array<{ state: string }>).map((g) => String(g.state)))
+    const structural: string[] = []
+    for (const st of states) {
+      const sid = String(st.id)
+      if (!st.is_initial && !anyFrom && !(inbound.get(sid) ?? 0)) {
+        structural.push(`State "${st.label}" is unreachable (no inbound transition).`)
+      }
+      if (!st.is_terminal && !(outbound.get(sid) ?? 0)) {
+        structural.push(`State "${st.label}" is a dead end (non-terminal, no outbound transition).`)
+      }
+      if (!st.is_initial && !st.is_terminal && !ownered.has(sid)) {
+        structural.push(`State "${st.label}" has no owner groups — records there resolve nobody.`)
+      }
+    }
+    const sendBacks = transitions.filter((t) => {
+      const from = byId.get(String(t.from_state))
+      const to = byId.get(String(t.to_state))
+      return from && to && Number(to.sort) < Number(from.sort)
+    })
+    if (sendBacks.length === 0 && states.length > 2) {
+      structural.push('No send-back transitions exist — a rejected record has no path backward.')
+    }
+    // AI critique over the summarized graph.
+    let critique: string | null = null
+    try {
+      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+      const aiClient = await getAiClient()
+      if (aiClient) {
+        const { model } = await getAiModelSettings()
+        const graph = states
+          .map((st) => {
+            const outs = transitions
+              .filter((t) => String(t.from_state) === String(st.id))
+              .map((t) => `${t.auto_trigger ? '[auto] ' : ''}${t.label} → ${byId.get(String(t.to_state))?.label ?? '?'}`)
+            return `${st.label}${st.is_initial ? ' (initial)' : ''}${st.is_terminal ? ' (terminal)' : ''}: ${outs.join('; ') || 'no outbound'}`
+          })
+          .join('\n')
+        const resp = await aiClient.messages.create({
+          model,
+          max_tokens: 500,
+          system:
+            'You review workflow state machines for a business process tool. Given the state graph, point out design risks in 3-6 short bullets: approval loops without escape, missing rejection paths, states that trap records, redundant states. Be concrete, reference state names. No preamble.',
+          messages: [
+            {
+              role: 'user',
+              content: `State graph:\n${graph}\n\nKnown structural findings:\n${structural.join('\n') || '(none)'}`
+            }
+          ]
+        })
+        critique = resp.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim() || null
+      }
+    } catch {
+      /* critique degrades to structural-only */
+    }
+    await logActivity({ action: 'pipeline-ai-review', user: req.user?.id, item: tid, req })
+    return reply.send({ data: { structural, critique } })
+  })
+
   app.get('/:id/owner-gaps', { preHandler: requireAdmin }, async (req, reply) => {
     const { analyzeOwnerGaps } = await import('../services/pipeline-engine.js')
     const data = await analyzeOwnerGaps((req.params as { id: string }).id)

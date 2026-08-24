@@ -154,4 +154,35 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
       return reply.send({ valid: false, error: String(err) })
     }
   })
+
+  // Virtual materialization (#169): snapshot the SQL view into a REAL table
+  // (`<name>_snapshot`, dropped + rebuilt) so heavy view queries can be read
+  // as plain rows. Manual trigger; schedule by calling this from a flow/cron.
+  app.post<{ Params: { name: string } }>('/:name/materialize', { preHandler: requireAdmin }, async (req, reply) => {
+    const { name } = req.params
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return reply.code(400).send({ error: 'Invalid name' })
+    const col = (await db('nivaro_collections')
+      .where({ collection: name, is_virtual: true })
+      .first('virtual_sql')) as { virtual_sql?: string | null } | undefined
+    if (!col?.virtual_sql) return reply.code(404).send({ error: 'Virtual collection not found' })
+    const target = `${name}_snapshot`.slice(0, 110)
+    try {
+      await db.raw(`IF OBJECT_ID(?, 'U') IS NOT NULL DROP TABLE [${target}]`, [target])
+      // SELECT INTO snapshots the view's current shape + rows in one pass.
+      await db.raw(`SELECT * INTO [${target}] FROM (${col.virtual_sql}) _v`)
+      const n = (await db(target).count({ n: '*' }).first()) as { n?: number | string } | undefined
+      await logActivity({
+        action: 'virtual-materialize',
+        user: req.user?.id,
+        collection: name,
+        comment: `${target}: ${Number(n?.n ?? 0)} rows`,
+        req
+      })
+      return reply.send({ data: { table: target, rows: Number(n?.n ?? 0) } })
+    } catch (err) {
+      return reply
+        .code(400)
+        .send({ error: err instanceof Error ? err.message.slice(0, 300) : 'Materialization failed' })
+    }
+  })
 }

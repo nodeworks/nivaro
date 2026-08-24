@@ -245,6 +245,178 @@ export async function dataModelRoutes(app: FastifyInstance) {
     })
   })
 
+  // Type-change dry-run (#153): which values won't survive the cast.
+  app.post<{ Params: { table: string; col: string }; Body: { to_type?: string } }>(
+    '/:table/columns/:col/cast-check',
+    async (req, reply) => {
+      const { table, col } = req.params
+      const toType = String(req.body?.to_type ?? '')
+      const SQL_TYPES: Record<string, string> = {
+        integer: 'INT',
+        bigInteger: 'BIGINT',
+        decimal: 'DECIMAL(18,4)',
+        float: 'FLOAT',
+        boolean: 'BIT',
+        date: 'DATE',
+        datetime: 'DATETIME2',
+        uuid: 'UNIQUEIDENTIFIER',
+        string: 'NVARCHAR(255)',
+        text: 'NVARCHAR(MAX)'
+      }
+      const sqlType = SQL_TYPES[toType]
+      if (!sqlType) return reply.code(400).send({ error: `Unknown target type "${toType}"` })
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) {
+        return reply.code(400).send({ error: 'Invalid identifier' })
+      }
+      try {
+        const summary = (await db(table)
+          .whereNotNull(col)
+          .select(
+            db.raw('COUNT(*) as total'),
+            db.raw(`SUM(CASE WHEN TRY_CAST(?? AS ${sqlType}) IS NULL THEN 1 ELSE 0 END) as failures`, [col])
+          )
+          .first()) as { total: number; failures: number } | undefined
+        const samples =
+          Number(summary?.failures ?? 0) > 0
+            ? ((await db(table)
+                .whereNotNull(col)
+                .whereRaw(`TRY_CAST(?? AS ${sqlType}) IS NULL`, [col])
+                .limit(20)
+                .select('id', col)) as Array<Record<string, unknown>>)
+            : []
+        return reply.send({
+          data: {
+            total: Number(summary?.total ?? 0),
+            failures: Number(summary?.failures ?? 0),
+            samples: samples.map((r) => ({ id: r.id, value: String(r[col]).slice(0, 100) }))
+          }
+        })
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: err instanceof Error ? err.message.slice(0, 300) : 'Cast check failed' })
+      }
+    }
+  )
+
+  // Safe collection rename (#154): sp_rename the table, then repoint every
+  // registry surface that stores the name as DATA. Layout/queue/policy rows
+  // update; free-text references (formulas, filters JSON) are REPORTED via
+  // the same surfaces /config-search scans rather than blindly rewritten.
+  app.post<{ Params: { table: string }; Body: { new_name?: string } }>(
+    '/:table/rename',
+    async (req, reply) => {
+      const { table } = req.params
+      const newName = String(req.body?.new_name ?? '').trim()
+      if (!/^[a-z_][a-z0-9_]*$/.test(newName) || /^nivaro_/i.test(newName) || newName.length > 100) {
+        return reply
+          .code(400)
+          .send({ error: 'New name must be a lowercase identifier (not nivaro_*)' })
+      }
+      if (/^nivaro_/i.test(table)) return reply.code(403).send({ error: 'System table' })
+      const exists = await db('information_schema.tables').where({ table_name: newName }).first()
+      if (exists) return reply.code(409).send({ error: `A table named "${newName}" already exists` })
+      const src = await db('information_schema.tables').where({ table_name: table }).first()
+      if (!src) return reply.code(404).send({ error: 'Table not found' })
+
+      await db.raw('EXEC sp_rename ?, ?', [table, newName])
+      // Registry repoints — each best-effort; a missing table contributes zero.
+      const repoint = async (tbl: string, col: string) => {
+        try {
+          await db(tbl).where(col, table).update({ [col]: newName })
+        } catch {
+          /* surface absent */
+        }
+      }
+      await repoint('nivaro_collections', 'collection')
+      await repoint('nivaro_fields', 'collection')
+      await repoint('nivaro_relations', 'one_collection')
+      await repoint('nivaro_relations', 'many_collection')
+      await repoint('nivaro_collection_layouts', 'collection')
+      await repoint('nivaro_field_groups', 'collection')
+      await repoint('nivaro_policies', 'collection')
+      await repoint('nivaro_queue_sources', 'collection')
+      await repoint('nivaro_saved_views', 'collection')
+      await repoint('nivaro_record_templates', 'collection')
+      await repoint('nivaro_import_templates', 'collection')
+      await repoint('nivaro_submission_forms', 'collection')
+      await repoint('nivaro_field_rules', 'collection')
+      await repoint('nivaro_at_risk_rules', 'collection')
+
+      clearMetadataCache()
+      await logActivity({
+        action: 'schema-collection-rename',
+        user: req.user?.id,
+        collection: newName,
+        comment: `${table} → ${newName}`,
+        req
+      })
+      // Remaining references (free-text config): reuse the config-search scan.
+      let remaining: unknown[] = []
+      try {
+        const { searchConfigSurfaces } = await import('./config-search.js')
+        remaining = await searchConfigSurfaces(table)
+      } catch {
+        /* report degrades to empty */
+      }
+      return reply.send({ data: { renamed: true, new_name: newName, remaining_references: remaining } })
+    }
+  )
+
+  // Relation usage counts (#357): rows actually USING a relation.
+  app.get<{ Params: { id: string } }>('/relations/:id/usage', async (req, reply) => {
+    const rel = (await db('nivaro_relations').where({ id: Number(req.params.id) }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!rel) return reply.code(404).send({ error: 'Relation not found' })
+    const mc = String(rel.many_collection ?? '')
+    const mf = String(rel.many_field ?? '')
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(mc) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(mf)) {
+      return reply.code(400).send({ error: 'Relation has no physical column' })
+    }
+    try {
+      const row = (await db(mc)
+        .whereNotNull(mf)
+        .count({ n: '*' })
+        .first()) as { n?: number | string } | undefined
+      const total = (await db(mc).count({ n: '*' }).first()) as { n?: number | string } | undefined
+      return reply.send({ data: { used: Number(row?.n ?? 0), total: Number(total?.n ?? 0) } })
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message.slice(0, 200) : 'failed' })
+    }
+  })
+
+  // Field edit-frequency (#405): which fields people actually EDIT — mined
+  // from revision deltas (behavioral layer over field-usage's fill rates).
+  app.get<{ Params: { table: string } }>('/:table/edit-frequency', async (req, reply) => {
+    const { table } = req.params
+    const days = Math.max(7, Math.min(365, Number((req.query as { days?: string }).days) || 90))
+    const rows = (await db('nivaro_revisions as r')
+      .join('nivaro_activity as a', 'r.activity', 'a.id')
+      .where('r.collection', table)
+      .where('a.action', 'update')
+      .where('a.timestamp', '>=', db.raw('DATEADD(day, ?, GETUTCDATE())', [-days]))
+      .orderBy('r.id', 'desc')
+      .limit(5000)
+      .select('r.delta')) as Array<{ delta: string | null }>
+    const counts = new Map<string, number>()
+    for (const r of rows) {
+      try {
+        const delta = r.delta ? (JSON.parse(r.delta) as Record<string, unknown>) : {}
+        for (const k of Object.keys(delta)) {
+          if (k.startsWith('_') || k === 'updated_at' || k === 'date_updated') continue
+          counts.set(k, (counts.get(k) ?? 0) + 1)
+        }
+      } catch {
+        /* skip unparseable */
+      }
+    }
+    const out = [...counts.entries()]
+      .map(([field, edits]) => ({ field, edits }))
+      .sort((a, b) => b.edits - a.edits)
+    return reply.send({ data: { days, sampled_revisions: rows.length, fields: out } })
+  })
+
   app.get<{ Params: { table: string } }>('/:table/field-usage', async (req, reply) => {
     const { table } = req.params
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table)) {
@@ -1505,6 +1677,29 @@ export async function dataModelRoutes(app: FastifyInstance) {
         req,
         comment: `${body.many_collection}.${body.many_field}`
       })
+      // Auto-index policy (#358): when the settings bit is on, a new relation
+      // creates its FK index immediately — the index advisor exists because
+      // these get forgotten. Best-effort; identifier-checked by the guards
+      // above (many_collection/many_field already validated).
+      try {
+        const settings = await db('nivaro_settings').first('auto_index_fk')
+        if (
+          (settings as { auto_index_fk?: boolean | number } | undefined)?.auto_index_fk &&
+          body.many_collection &&
+          body.many_field &&
+          /^[A-Za-z_][A-Za-z0-9_]*$/.test(body.many_collection) &&
+          /^[A-Za-z_][A-Za-z0-9_]*$/.test(body.many_field)
+        ) {
+          const idxName = `idx_${body.many_collection}_${body.many_field}`.slice(0, 120)
+          await db.raw(
+            `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
+             CREATE INDEX ${idxName.replace(/[^A-Za-z0-9_]/g, '')} ON [${body.many_collection}] ([${body.many_field}])`,
+            [idxName, body.many_collection]
+          )
+        }
+      } catch {
+        /* index creation is additive — a failure never fails the relation */
+      }
       return reply.code(201).send({ data: relation })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

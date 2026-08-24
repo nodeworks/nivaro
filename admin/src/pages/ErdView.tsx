@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ArrowLeft, Key, Link2, Maximize2, Search, Share2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -112,6 +113,45 @@ export function ErdViewPage() {
   const [search, setSearch] = useState('')
   const [focused, setFocused] = useState<string | null>(null)
   const [stack, setStack] = useState<string[]>([])
+  // ERD edit mode (#355): pick "Draw relation", click a neighbor (or use the
+  // focused table as the many side) → dialog picks/creates the FK column.
+  const [drawMode, setDrawMode] = useState(false)
+  const [drawTarget, setDrawTarget] = useState<string | null>(null)
+  const [fkName, setFkName] = useState('')
+  const qcErd = useQueryClient()
+  const createRel = useMutation({
+    mutationFn: async () => {
+      if (!focused || !drawTarget) throw new Error('no target')
+      const name = fkName.trim() || drawTarget
+      // Column may not exist — create it (integer FK) then the relation.
+      const cols = await api
+        .get<{ data: { columns: Array<{ name: string }> } }>(`/data-model/${focused}`)
+        .then((r) => r.data.data.columns.map((c) => c.name))
+      if (!cols.includes(name)) {
+        await api.post(`/data-model/tables/${focused}/columns`, {
+          name,
+          type: 'integer',
+          nullable: true
+        })
+      }
+      await api.post('/data-model/relations', {
+        many_collection: focused,
+        many_field: name,
+        one_collection: drawTarget
+      })
+    },
+    onSuccess: () => {
+      toast.success(`Relation drawn: ${focused}.${fkName.trim() || drawTarget} → ${drawTarget}`)
+      setDrawTarget(null)
+      setDrawMode(false)
+      setFkName('')
+      void qcErd.invalidateQueries()
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to draw relation'
+      )
+  })
   const canvasRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 600 })
 
@@ -344,7 +384,14 @@ export function ErdViewPage() {
                 <button
                   key={n.name}
                   type='button'
-                  onClick={() => focus(n.name)}
+                  onClick={() => {
+                    if (drawMode) {
+                      setDrawTarget(n.name)
+                      setFkName(n.name)
+                      return
+                    }
+                    focus(n.name)
+                  }}
                   onDoubleClick={() => navigate(`/data-model/${n.name}`)}
                   className='absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-start rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left shadow-sm transition-colors hover:border-nvr-cyan dark:border-border dark:bg-card'
                   style={{ left: n.x, top: n.y, width: NEIGHBOR_W }}
@@ -375,6 +422,20 @@ export function ErdViewPage() {
                   <span className='truncate text-[13px] font-semibold text-white'>{focused}</span>
                   <button
                     type='button'
+                    title={drawMode ? 'Cancel drawing' : 'Draw a relation (#355): click a neighbor card to link it'}
+                    onClick={() => {
+                      setDrawMode((v) => !v)
+                      setDrawTarget(null)
+                    }}
+                    className={cn(
+                      'rounded p-0.5',
+                      drawMode ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'
+                    )}
+                  >
+                    <Link2 className='h-3.5 w-3.5' />
+                  </button>
+                  <button
+                    type='button'
                     title='Open table editor'
                     onClick={() => navigate(`/data-model/${focused}`)}
                     className='rounded p-0.5 text-white/60 hover:bg-white/10 hover:text-white'
@@ -382,6 +443,44 @@ export function ErdViewPage() {
                     <Maximize2 className='h-3.5 w-3.5' />
                   </button>
                 </div>
+                {drawMode && !drawTarget && (
+                  <p className='border-b border-[#00ceff40] bg-[#00ceff0d] px-3 py-1.5 text-[11px] text-[#007a99]'>
+                    Click a neighbor card — a new M2O FK on <b>{focused}</b> will point at it.
+                  </p>
+                )}
+                {drawTarget && (
+                  <div className='space-y-1.5 border-b border-[#00ceff40] bg-[#00ceff0d] px-3 py-2'>
+                    <p className='text-[11.5px] text-slate-600'>
+                      {focused}.<b>{fkName || drawTarget}</b> → {drawTarget}
+                    </p>
+                    <div className='flex items-center gap-1.5'>
+                      <input
+                        value={fkName}
+                        onChange={(e) => setFkName(e.target.value)}
+                        placeholder='fk column name'
+                        className='h-7 w-36 rounded border border-slate-200 bg-white px-1.5 font-mono text-[11.5px]'
+                      />
+                      <button
+                        type='button'
+                        disabled={createRel.isPending}
+                        onClick={() => createRel.mutate()}
+                        className='h-7 rounded bg-[#00ceff] px-2 text-[11.5px] font-medium text-white disabled:opacity-50'
+                      >
+                        {createRel.isPending ? 'Creating…' : 'Create'}
+                      </button>
+                      <button
+                        type='button'
+                        onClick={() => setDrawTarget(null)}
+                        className='text-[11px] text-slate-400 hover:text-slate-600'
+                      >
+                        cancel
+                      </button>
+                    </div>
+                    <p className='text-[10px] text-slate-400'>
+                      Missing columns are created as nullable integers.
+                    </p>
+                  </div>
+                )}
                 <div className='overflow-y-auto' style={{ maxHeight: size.h - 130 }}>
                   {(detail?.columns ?? []).map((c) => {
                     const fk = detail?.relations?.find((r) => r.column_name === c.name)

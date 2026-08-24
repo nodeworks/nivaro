@@ -92,7 +92,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       'welcome_message',
       'login_links',
       'formula_constants',
-      'fiscal_year_start_month'
+      'fiscal_year_start_month',
+      'auto_index_fk'
     ]
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))

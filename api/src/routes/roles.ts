@@ -128,6 +128,40 @@ export async function rolesRoutes(app: FastifyInstance) {
     return reply.send({ data: role })
   })
 
+  // Role deletion impact (#113): everything referencing the role, so a delete
+  // is an informed decision instead of a surprise.
+  app.get<{ Params: { id: string } }>('/:id/deletion-impact', async (req, reply) => {
+    const { id } = req.params
+    const count = async (q: Promise<Array<{ n?: number | string }>> | any) =>
+      Number(((await q) as { n?: number | string } | undefined)?.n ?? 0)
+    const [members, policies, views, queues, templates, importTemplates, layouts, pages] =
+      await Promise.all([
+        count(db('nivaro_users').where({ role: id }).count({ n: '*' }).first()),
+        count(db('nivaro_policies').where({ role: id }).count({ n: '*' }).first()),
+        count(db('nivaro_saved_views').where({ role: id }).count({ n: '*' }).first().catch(() => undefined)),
+        count(db('nivaro_queues').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
+        count(db('nivaro_record_templates').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
+        count(db('nivaro_import_templates').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
+        count(
+          db('nivaro_collection_layouts')
+            .where('conditions', 'like', `%${id}%`)
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        ),
+        count(
+          db('nivaro_pages')
+            .where((qb) => qb.where({ role: id }).orWhere('allowed_roles', 'like', `%${id}%`))
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        )
+      ])
+    return reply.send({
+      data: { members, policies, saved_views: views, queues, record_templates: templates, import_templates: importTemplates, conditional_layouts: layouts, pages }
+    })
+  })
+
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const users = await db('nivaro_users').where({ role: id }).count('id as count').first()

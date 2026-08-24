@@ -153,41 +153,47 @@ function snippet(row: Record<string, unknown>, cols: string[], q: string): strin
   return ''
 }
 
+export async function searchConfigSurfaces(q: string): Promise<
+  Array<{ surface: string; hits: Array<{ id: unknown; name: string; snippet: string; link: string }> }>
+> {
+  const like = `%${q.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+  const groups: Array<{
+    surface: string
+    hits: Array<{ id: unknown; name: string; snippet: string; link: string }>
+  }> = []
+  for (const s of SURFACES) {
+    try {
+      const rows = (await db(s.table)
+        .where((qb) => {
+          for (const c of s.cols) void qb.orWhere(c, 'like', like)
+        })
+        .limit(25)
+        .select('*')) as Array<Record<string, unknown>>
+      if (rows.length === 0) continue
+      groups.push({
+        surface: s.label,
+        hits: rows.map((r) => ({
+          id: r.id,
+          name: String(r[s.nameCol] ?? r.id),
+          snippet: snippet(r, s.cols, q),
+          link: s.link(r)
+        }))
+      })
+    } catch {
+      // Table or column absent on this deployment — surface contributes
+      // nothing rather than killing the whole search.
+    }
+  }
+  return groups
+}
+
 export async function configSearchRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
   app.get<{ Querystring: { q?: string } }>('/', async (req, reply) => {
     const q = String(req.query.q ?? '').trim()
     if (q.length < 2) return reply.code(400).send({ error: 'q must be at least 2 characters' })
-    const like = `%${q.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-
-    const groups: Array<{
-      surface: string
-      hits: Array<{ id: unknown; name: string; snippet: string; link: string }>
-    }> = []
-    for (const s of SURFACES) {
-      try {
-        const rows = (await db(s.table)
-          .where((qb) => {
-            for (const c of s.cols) void qb.orWhere(c, 'like', like)
-          })
-          .limit(25)
-          .select('*')) as Array<Record<string, unknown>>
-        if (rows.length === 0) continue
-        groups.push({
-          surface: s.label,
-          hits: rows.map((r) => ({
-            id: r.id,
-            name: String(r[s.nameCol] ?? r.id),
-            snippet: snippet(r, s.cols, q),
-            link: s.link(r)
-          }))
-        })
-      } catch {
-        // Table or column absent on this deployment — surface contributes
-        // nothing rather than killing the whole search.
-      }
-    }
+    const groups = await searchConfigSurfaces(q)
     return { data: { query: q, groups, total: groups.reduce((a, g) => a + g.hits.length, 0) } }
   })
 }

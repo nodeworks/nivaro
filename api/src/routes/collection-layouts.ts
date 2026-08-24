@@ -278,13 +278,44 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
     layout.default_values = parseDefaultValues(layout.default_values)
 
-    const [groupsRaw, assignments] = await Promise.all([
+    let [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
         .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
         .orderBy('sort', 'asc')
     ])
+
+    // Layout inheritance (#424): a child layout EXTENDS its parent — parent
+    // assignments fill in wherever the child has none for that field, parent
+    // groups ride along unless the child defines the same key. One level
+    // deep, deliberately (chains would make "where does this field come from"
+    // unanswerable).
+    if (layout.parent_layout_id) {
+      try {
+        const [pGroups, pAssignments] = await Promise.all([
+          db('nivaro_field_groups')
+            .where({ layout_id: Number(layout.parent_layout_id) })
+            .orderBy('sort', 'asc'),
+          db('nivaro_layout_field_assignments')
+            .where({ layout_id: Number(layout.parent_layout_id) })
+            .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
+            .orderBy('sort', 'asc')
+        ])
+        const childFields = new Set(assignments.map((a: { field: string }) => a.field))
+        const childGroupKeys = new Set(groupsRaw.map((g: { key: string }) => g.key))
+        assignments = [
+          ...assignments,
+          ...pAssignments.filter((a: { field: string }) => !childFields.has(a.field))
+        ]
+        groupsRaw = [
+          ...groupsRaw,
+          ...pGroups.filter((g: { key: string }) => !childGroupKeys.has(g.key))
+        ]
+      } catch {
+        // broken parent reference — the child stands alone
+      }
+    }
 
     // Group-level role visibility (#390): groups listing this caller's role
     // in hidden_for_roles are dropped server-side. Admins see everything —
@@ -421,7 +452,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
-    const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null; parent_layout_id: number | null }>
 
     if (body.record_conditions !== undefined && body.record_conditions !== null) {
       const err = validateRecordConditions(body.record_conditions)
@@ -442,6 +473,27 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
     if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
     if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
+    if (body.parent_layout_id !== undefined) {
+      // Layout inheritance (#424): one level only, same collection, never self.
+      if (body.parent_layout_id === null) patch.parent_layout_id = null
+      else {
+        const parent = await db('nivaro_collection_layouts')
+          .where({ id: Number(body.parent_layout_id) })
+          .first('id', 'collection', 'parent_layout_id')
+        const self = await db('nivaro_collection_layouts').where({ id: Number(id) }).first('collection')
+        if (
+          !parent ||
+          parent.collection !== self?.collection ||
+          Number(parent.id) === Number(id) ||
+          parent.parent_layout_id
+        ) {
+          return reply
+            .code(400)
+            .send({ error: 'Parent must be a same-collection layout with no parent of its own' })
+        }
+        patch.parent_layout_id = Number(body.parent_layout_id)
+      }
+    }
     if (body.layout_type !== undefined) patch.layout_type = body.layout_type
     if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0

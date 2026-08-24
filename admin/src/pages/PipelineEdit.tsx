@@ -3502,10 +3502,67 @@ export function PipelineEditPage() {
         <OwnerGapsCard templateId={id!} />
         <OwnerLintCard templateId={id!} />
 
+        {/* AI config reviewer (#361) */}
+        <AiReviewCard templateId={id!} />
+
         {/* Config versions */}
         <PipelineVersionsCard templateId={id!} />
       </div>
     </>
+  )
+}
+
+// ─── AI config reviewer (#361) ───────────────────────────────────────────────
+
+function AiReviewCard({ templateId }: { templateId: string }) {
+  const [result, setResult] = useState<{ structural: string[]; critique: string | null } | null>(null)
+  const run = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { structural: string[]; critique: string | null } }>(
+          `/pipelines/${templateId}/ai-review`
+        )
+        .then((r) => r.data.data),
+    onSuccess: setResult,
+    onError: (e: unknown) =>
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Review failed')
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <h2 className='text-[13px] font-semibold text-slate-800'>Template review</h2>
+          <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500'>
+            Structure analysis (unreachable states, dead ends, missing send-backs, unowned states)
+            plus an AI critique of the state graph.
+          </p>
+        </div>
+        <Button type='button' size='sm' variant='outline' className='h-7 text-[12px]' disabled={run.isPending} onClick={() => run.mutate()}>
+          {run.isPending ? 'Reviewing…' : 'Run review'}
+        </Button>
+      </div>
+      {result && (
+        <div className='mt-3 space-y-2'>
+          {result.structural.length === 0 ? (
+            <p className='text-[12px] text-emerald-600'>No structural problems found.</p>
+          ) : (
+            <ul className='space-y-1'>
+              {result.structural.map((f) => (
+                <li key={f} className='flex items-start gap-1.5 text-[12.5px] text-amber-700'>
+                  <span className='mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
+                  {f}
+                </li>
+              ))}
+            </ul>
+          )}
+          {result.critique && (
+            <div className='whitespace-pre-wrap rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-3 py-2 text-[12.5px] leading-snug text-slate-600'>
+              {result.critique}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -109,6 +109,7 @@ function VirtualCollectionForm({
   const [preview, setPreview] = useState<Record<string, unknown>[] | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [materializing, setMaterializing] = useState(false)
 
   function set<K extends keyof FormData>(key: K, value: FormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -267,6 +268,38 @@ function VirtualCollectionForm({
             <Eye className='h-4 w-4' />
             {previewing ? 'Loading…' : 'Preview Results'}
           </Button>
+          {isEdit && collectionKey && (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='ml-2 gap-1.5 text-[13px]'
+              disabled={materializing}
+              onClick={async () => {
+                // Materialization (#169): snapshot the view into a real
+                // <name>_snapshot table (dropped + rebuilt).
+                setMaterializing(true)
+                try {
+                  const res = await api.post<{ data: { table: string; rows: number } }>(
+                    `/virtual-collections/${collectionKey}/materialize`
+                  )
+                  toast.success(
+                    `Materialized ${res.data.data.rows.toLocaleString()} rows into ${res.data.data.table}`
+                  )
+                } catch (err) {
+                  toast.error(
+                    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+                      'Materialization failed'
+                  )
+                } finally {
+                  setMaterializing(false)
+                }
+              }}
+            >
+              <Database className='h-4 w-4' />
+              {materializing ? 'Materializing…' : 'Materialize snapshot'}
+            </Button>
+          )}
           {preview !== null && <PreviewTable rows={preview} />}
         </div>
       </div>

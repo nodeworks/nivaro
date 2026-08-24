@@ -936,7 +936,9 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
         )}
         <span className='flex-1' />
         {confirmDelete ? (
-          <div className='flex items-center gap-2 text-[13px]'>
+          <div className='flex flex-col items-end gap-1.5 text-[13px]'>
+            <RoleDeletionImpact roleId={role.id} />
+            <div className='flex items-center gap-2'>
             <span className='text-slate-600 dark:text-slate-400'>Delete this role?</span>
             <Button
               size='sm'
@@ -949,6 +951,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
             <Button size='sm' variant='outline' onClick={() => setConfirmDelete(false)}>
               Cancel
             </Button>
+            </div>
           </div>
         ) : (
           <Button
@@ -1375,5 +1378,30 @@ export function RolesPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+
+// ─── Role deletion impact (#113) ─────────────────────────────────────────────
+// Everything referencing the role, shown BEFORE the confirm click lands.
+function RoleDeletionImpact({ roleId }: { roleId: string }) {
+  const { data } = useQuery<Record<string, number>>({
+    queryKey: ['role-deletion-impact', roleId],
+    queryFn: () =>
+      api
+        .get<{ data: Record<string, number> }>(`/roles/${roleId}/deletion-impact`)
+        .then((r) => r.data.data),
+    staleTime: 30_000
+  })
+  if (!data) return <p className='text-[11.5px] text-slate-400'>Checking references…</p>
+  const parts = Object.entries(data)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k.replace(/_/g, ' ')}`)
+  if (parts.length === 0)
+    return <p className='text-[11.5px] text-emerald-600'>Nothing references this role.</p>
+  return (
+    <p className='max-w-[420px] text-right text-[11.5px] text-amber-600'>
+      Referenced by {parts.join(', ')} — members lose the role; role-scoped shares stop matching.
+    </p>
   )
 }
