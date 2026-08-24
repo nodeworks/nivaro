@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T23:06:42.852Z",
+  "generated_at": "2026-08-24T23:33:25.649Z",
   "releases": [
+    {
+      "version": "0.1.123",
+      "tag": "v0.1.123",
+      "date": "2026-08-24T19:33:21-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "People, Tasks & Personal sprint (#134 #174 #175 #201 #209 #259 #368 #388 #410)",
+              "hash": "6f1654ce"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.122",
       "tag": "v0.1.122",
-      "date": "2026-08-24T19:06:39-04:00",
+      "date": "2026-08-24T19:06:42-04:00",
       "sections": [
         {
           "label": "Added",
