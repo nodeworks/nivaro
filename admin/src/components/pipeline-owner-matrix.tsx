@@ -203,6 +203,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         .then((r) => r.data.data)
   })
 
+  const [bulkOpen, setBulkOpen] = useState(false)
   const firstCollection = bindings[0]?.collection ?? ''
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', firstCollection],
@@ -680,6 +681,28 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
 
   return (
     <div className='space-y-4'>
+      {/* Bulk matrix membership (#387) */}
+      <div className='flex justify-end'>
+        <button
+          type='button'
+          onClick={() => setBulkOpen((v) => !v)}
+          className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[12px] text-slate-500 hover:bg-slate-50 dark:border-border'
+        >
+          ＋ Add a user to many cells…
+        </button>
+      </div>
+      {bulkOpen && (
+        <BulkMembershipPanel
+          templateId={templateId}
+          groupsMap={groupsMap ?? {}}
+          states={states}
+          onClose={() => setBulkOpen(false)}
+          onDone={() => {
+            setBulkOpen(false)
+            void qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
+          }}
+        />
+      )}
       {colFilterDims.length > 0 && (
         <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5'>
           <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0'>
@@ -841,10 +864,25 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                       }
                       const { group, isInherited } = getCellResult(s.id, row.value)
                       const users = group?.users ?? []
+                      // Matrix OOO heat (#337): tint by out-of-office share.
+                      const oooCount = users.filter(
+                        (u) => (u as { is_out_of_office?: boolean | number }).is_out_of_office
+                      ).length
+                      const oooClass =
+                        users.length > 0 && oooCount === users.length
+                          ? 'bg-amber-100/80 dark:bg-amber-500/15'
+                          : oooCount > 0
+                            ? 'bg-amber-50/70 dark:bg-amber-500/8'
+                            : 'bg-nvr-cyan/5'
                       return (
                         <td
                           key={s.id}
-                          className='border-b border-r border-slate-200 px-3 py-2 last:border-r-0 bg-nvr-cyan/5'
+                          data-tip={
+                            oooCount > 0
+                              ? `${oooCount}/${users.length} member(s) out of office`
+                              : undefined
+                          }
+                          className={`border-b border-r border-slate-200 px-3 py-2 last:border-r-0 ${oooClass}`}
                           onClick={(e) => e.stopPropagation()}
                           onKeyDown={(e) => e.stopPropagation()}
                         >
@@ -888,6 +926,12 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                   <span className='flex-1 text-[12px] text-slate-700'>
                                     {[u.first_name, u.last_name].filter(Boolean).join(' ') ||
                                       u.email}
+                                    {(u as { is_out_of_office?: boolean | number })
+                                      .is_out_of_office && (
+                                      <span className='ml-1 rounded bg-amber-100 px-1 py-px text-[9.5px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'>
+                                        OOO
+                                      </span>
+                                    )}
                                   </span>
                                   <button
                                     type='button'
@@ -1244,6 +1288,152 @@ function InlineM2OPicker({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+
+// ─── Bulk matrix membership (#387) ───────────────────────────────────────────
+function BulkMembershipPanel({
+  templateId,
+  groupsMap,
+  states,
+  onClose,
+  onDone
+}: {
+  templateId: string
+  groupsMap: PipelineOwnerGroupsMap
+  states: Array<{ id: string; label: string }>
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [userQuery, setUserQuery] = useState('')
+  const [userId, setUserId] = useState('')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const { data: users = [] } = useQuery<
+    Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
+  >({
+    queryKey: ['bulk-matrix-users'],
+    queryFn: () => api.get('/users?limit=500').then((r) => r.data.data)
+  })
+  const filteredUsers = users
+    .filter((u) =>
+      `${u.first_name ?? ''} ${u.last_name ?? ''} ${u.email}`
+        .toLowerCase()
+        .includes(userQuery.toLowerCase())
+    )
+    .slice(0, 8)
+  const submit = () => {
+    setBusy(true)
+    void api
+      .post(`/pipelines/${templateId}/owner-groups/bulk-add`, {
+        user_id: userId,
+        group_ids: [...selected]
+      })
+      .then((r) => {
+        toast.success(`Added to ${r.data.data.added} group(s)`)
+        onDone()
+      })
+      .catch(() => toast.error('Bulk add failed'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className='space-y-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-border dark:bg-muted/30'>
+      <p className='text-[12.5px] font-medium'>Add one user to many owner-matrix cells</p>
+      {!userId ? (
+        <div>
+          <input
+            value={userQuery}
+            onChange={(e) => setUserQuery(e.target.value)}
+            placeholder='Search people…'
+            className='h-8 w-[280px] rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+          />
+          <div className='mt-1 flex flex-wrap gap-1.5'>
+            {userQuery &&
+              filteredUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type='button'
+                  onClick={() => setUserId(u.id)}
+                  className='rounded-full border border-slate-200 px-2.5 py-0.5 text-[12px] hover:border-nvr-cyan/60 dark:border-border'
+                >
+                  {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className='text-[12px] text-slate-500'>
+            Adding{' '}
+            <b>
+              {(() => {
+                const u = users.find((x) => x.id === userId)
+                return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email : userId
+              })()}
+            </b>{' '}
+            — pick the groups:
+          </p>
+          <div className='max-h-64 space-y-2 overflow-y-auto'>
+            {states.map((st) => {
+              const groups = groupsMap[st.id] ?? []
+              if (groups.length === 0) return null
+              return (
+                <div key={st.id}>
+                  <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                    {st.label}
+                  </p>
+                  <div className='mt-0.5 flex flex-wrap gap-1'>
+                    {groups.slice(0, 60).map((g) => {
+                      const gid = Number((g as unknown as { id: number | string }).id)
+                      const on = selected.has(gid)
+                      return (
+                        <button
+                          key={gid}
+                          type='button'
+                          onClick={() =>
+                            setSelected((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(gid)) next.delete(gid)
+                              else next.add(gid)
+                              return next
+                            })
+                          }
+                          className={
+                            on
+                              ? 'rounded-full bg-nvr-cyan/15 px-2 py-0.5 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                              : 'rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:border-nvr-cyan/50 dark:border-border'
+                          }
+                        >
+                          {(g as { name?: string | null }).name ?? `group ${gid}`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+      <div className='flex justify-end gap-2'>
+        <button
+          type='button'
+          onClick={onClose}
+          className='rounded-md px-2.5 py-1 text-[12px] text-slate-500 hover:bg-white dark:hover:bg-muted'
+        >
+          Cancel
+        </button>
+        <button
+          type='button'
+          onClick={submit}
+          disabled={busy || !userId || selected.size === 0}
+          className='rounded-md bg-nvr-cyan px-3 py-1 text-[12px] font-semibold text-white disabled:opacity-50'
+        >
+          {busy ? 'Adding…' : `Add to ${selected.size} group(s)`}
+        </button>
+      </div>
     </div>
   )
 }

@@ -130,6 +130,12 @@ function SlaRuleForm({
   saving: boolean
 }) {
   const [form, setForm] = useState<SlaRuleFormValues>(initial ?? FORM_DEFAULTS)
+  const [previewing, setPreviewing] = useState(false)
+  const [whatIf, setWhatIf] = useState<{
+    total: number
+    proposed: { ok: number; warning: number; breached: number }
+    flips: Array<{ collection: string; item: string; from: string; to: string }>
+  } | null>(null)
   const [statesOpen, setStatesOpen] = useState(false)
 
   function set<K extends keyof SlaRuleFormValues>(key: K, value: SlaRuleFormValues[K]) {
@@ -412,7 +418,47 @@ function SlaRuleForm({
         </div>
       </div>
 
+      {/* SLA what-if simulator (#99) */}
+      {whatIf && (
+        <div className='rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted/40'>
+          <p>
+            <b>{whatIf.total}</b> open record(s) in this state right now. Under the proposed rule:{' '}
+            <span className='text-emerald-600'>{whatIf.proposed.ok} ok</span> ·{' '}
+            <span className='text-amber-600'>{whatIf.proposed.warning} warning</span> ·{' '}
+            <span className='text-red-600'>{whatIf.proposed.breached} breached</span>
+          </p>
+          {whatIf.flips.length > 0 && (
+            <p className='mt-1 text-slate-500'>
+              {whatIf.flips.length} record(s) flip status — e.g.{' '}
+              {whatIf.flips
+                .slice(0, 3)
+                .map((f) => `${f.collection}/${f.item} (${f.from}→${f.to})`)
+                .join(', ')}
+            </p>
+          )}
+        </div>
+      )}
       <DialogFooter>
+        <Button
+          variant='outline'
+          disabled={!isValid || previewing}
+          onClick={() => {
+            setPreviewing(true)
+            void api
+              .post('/sla/what-if', {
+                workflow_template: form.workflow_template,
+                state_key: Array.isArray(form.state_keys) ? form.state_keys[0] : form.state_keys,
+                duration_hours: form.duration_hours,
+                warning_threshold_pct: form.warning_threshold_pct,
+                business_hours_only: form.business_hours_only
+              })
+              .then((r) => setWhatIf(r.data.data))
+              .catch(() => toast.error('Preview failed'))
+              .finally(() => setPreviewing(false))
+          }}
+        >
+          {previewing ? 'Previewing…' : 'Preview impact'}
+        </Button>
         <Button variant='outline' onClick={onCancel} disabled={saving}>
           Cancel
         </Button>

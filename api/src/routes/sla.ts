@@ -365,6 +365,103 @@ export async function slaRoutes(app: FastifyInstance) {
     }
   }
 
+  // ── SLA what-if simulator (#99) ───────────────────────────────────────────
+  // Preview how many CURRENT records flip status under proposed rule params
+  // BEFORE saving — the impact-preview family.
+  app.post('/what-if', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = req.body as {
+      workflow_template?: string
+      state_key?: string
+      duration_hours?: number
+      warning_threshold_pct?: number
+      business_hours_only?: boolean
+    }
+    const template = String(body?.workflow_template ?? '')
+    const stateKey = String(body?.state_key ?? '')
+    const duration = Number(body?.duration_hours)
+    if (!template || !stateKey || !Number.isFinite(duration) || duration <= 0)
+      return reply
+        .code(400)
+        .send({ error: 'workflow_template, state_key and duration_hours are required' })
+    const warnPct = Number.isFinite(Number(body?.warning_threshold_pct))
+      ? Number(body?.warning_threshold_pct)
+      : 80
+    const businessOnly = body?.business_hours_only === true
+
+    const state = (await db('nivaro_workflow_states')
+      .where({ template, key: stateKey })
+      .first('id')) as { id: string } | undefined
+    if (!state) return reply.code(404).send({ error: 'State not found' })
+    const instances = (await db('nivaro_workflow_instances')
+      .where({ template, current_state: state.id })
+      .whereNull('completed_at')
+      .limit(5000)
+      .select('id', 'collection', 'item', 'current_state')) as Array<{
+      id: string
+      collection: string
+      item: string
+      current_state: string
+    }>
+    if (instances.length === 0)
+      return reply.send({ data: { total: 0, current: {}, proposed: {}, flips: [] } })
+
+    const history = await selectInChunks(
+      instances.map((i) => i.id),
+      2000,
+      (chunk) =>
+        db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
+    )
+    const enteredAt = new Map<string, Date>()
+    for (const h of history as Array<{ instance: string; to_state: string; timestamp: Date }>) {
+      const key = `${h.instance}::${h.to_state}`
+      if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
+    }
+    const currentRule = (await db('nivaro_sla_rules')
+      .where({ workflow_template: template, state_key: stateKey, is_active: true })
+      .first()) as
+      | { duration_hours: number; warning_threshold_pct: number; business_hours_only: boolean }
+      | undefined
+    const schedule = await getSlaSchedule()
+    const now = new Date()
+    const statusOf = (
+      elapsed: number,
+      dur: number,
+      warn: number
+    ): 'ok' | 'warning' | 'breached' => {
+      const pct = (elapsed / dur) * 100
+      return pct >= 100 ? 'breached' : pct >= warn ? 'warning' : 'ok'
+    }
+    const currentCounts = { ok: 0, warning: 0, breached: 0, unruled: 0 }
+    const proposedCounts = { ok: 0, warning: 0, breached: 0 }
+    const flips: Array<{ collection: string; item: string; from: string; to: string }> = []
+    for (const inst of instances) {
+      const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
+      if (!entered) continue
+      const calElapsed = (now.getTime() - entered.getTime()) / 3_600_000
+      const bizElapsed = businessHoursElapsed(entered, now, schedule)
+      const proposedElapsed = businessOnly ? bizElapsed : calElapsed
+      const proposed = statusOf(proposedElapsed, duration, warnPct)
+      proposedCounts[proposed]++
+      let current: string = 'unruled'
+      if (currentRule) {
+        const curElapsed = currentRule.business_hours_only ? bizElapsed : calElapsed
+        current = statusOf(
+          curElapsed,
+          currentRule.duration_hours,
+          currentRule.warning_threshold_pct ?? 80
+        )
+        currentCounts[current as 'ok' | 'warning' | 'breached']++
+      } else {
+        currentCounts.unruled++
+      }
+      if (current !== proposed && flips.length < 50)
+        flips.push({ collection: inst.collection, item: String(inst.item), from: current, to: proposed })
+    }
+    return reply.send({
+      data: { total: instances.length, current: currentCounts, proposed: proposedCounts, flips }
+    })
+  })
+
   app.post('/rules', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as {
       workflow_template: string

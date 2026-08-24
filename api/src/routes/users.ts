@@ -334,6 +334,18 @@ export async function usersRoutes(app: FastifyInstance) {
   // ─── Self-service delegation ──────────────────────────────────────────────
   // POST /users/me/delegate — lets any authenticated user set their own
   // out-of-office delegation without admin access.
+  // Delegation preview (#414): "Dan would inherit ~N approvals" BEFORE saving.
+  app.get('/me/delegate-preview', { preHandler: authenticate }, async (req, reply) => {
+    const { countOwnedApprovals, computeCoverageWarnings } = await import(
+      '../services/delegate-coverage.js'
+    )
+    const [count, warnings] = await Promise.all([
+      countOwnedApprovals(req.user!.id),
+      computeCoverageWarnings(req.user!.id)
+    ])
+    return reply.send({ data: { approx_open_approvals: count, coverage_warnings: warnings } })
+  })
+
   app.post('/me/delegate', { preHandler: authenticate }, async (req, reply) => {
     const body = req.body as {
       delegate_id?: string | null
@@ -376,6 +388,27 @@ export async function usersRoutes(app: FastifyInstance) {
     if (updates.is_out_of_office && updates.delegate_id) {
       const { delegateOpenTasks } = await import('../services/task-delegation.js')
       void delegateOpenTasks(userId, app)
+      // Delegate briefing (#415): the delegate gets a coverage summary the
+      // moment coverage starts. Best-effort; mail test mode applies.
+      void (async () => {
+        try {
+          const { sendDelegateBriefing } = await import('../services/delegate-coverage.js')
+          await sendDelegateBriefing(userId, updates.delegate_id as string)
+        } catch {
+          /* briefing must never block the save */
+        }
+      })()
+    }
+    // OOO conflict warnings (#338): does this OOO window leave any of the
+    // user's owner groups with NO working member?
+    let coverageWarnings: string[] = []
+    if (updates.is_out_of_office || (oooStart && oooEnd)) {
+      try {
+        const { computeCoverageWarnings } = await import('../services/delegate-coverage.js')
+        coverageWarnings = await computeCoverageWarnings(userId)
+      } catch {
+        coverageWarnings = []
+      }
     }
     const activityId = await logActivity({
       action: 'update',
@@ -402,7 +435,7 @@ export async function usersRoutes(app: FastifyInstance) {
         delta
       })
     }
-    return reply.send({ data: user })
+    return reply.send({ data: user, warnings: coverageWarnings })
   })
 
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {

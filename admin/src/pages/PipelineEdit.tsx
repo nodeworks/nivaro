@@ -4546,6 +4546,22 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
     .filter((r) => String(r.state_id) === fromState)
     .reduce((sum, r) => sum + r.count, 0)
 
+  const { data: bindingsForStart } = useQuery<{ data: Array<{ collection: string }> }>({
+    queryKey: ['pipeline-bindings-start', templateId],
+    queryFn: () => api.get(`/pipelines/${templateId}/bindings`).then((r) => r.data)
+  })
+  const boundCollections = (bindingsForStart?.data ?? []).map((b) => b.collection)
+  const startMissing = useMutation({
+    mutationFn: (collection: string) =>
+      api.post(`/pipelines/${templateId}/start-missing`, { collection }),
+    onSuccess: (r) => {
+      toast.success(`${r.data.data.started} instance(s) started`)
+      void qc.invalidateQueries({ queryKey: ['instance-distribution', templateId] })
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Start failed')
+  })
+
   const migrate = useMutation({
     mutationFn: () =>
       api.post(`/pipelines/${templateId}/migrate-instances`, {
@@ -4579,6 +4595,21 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
           until migrated.
         </p>
       )}
+      {/* Start missing instances (#108): records created before the binding. */}
+      <div className='mt-2 flex flex-wrap items-center gap-2'>
+        {boundCollections.map((c) => (
+          <button
+            key={c}
+            type='button'
+            disabled={startMissing.isPending}
+            onClick={() => startMissing.mutate(c)}
+            className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[11.5px] text-slate-500 hover:bg-slate-50 disabled:opacity-50 dark:border-border'
+            data-tip='Records created before this binding have no instance and cannot transition — start them in the initial state'
+          >
+            {startMissing.isPending ? 'Starting…' : `Start missing instances (${c})`}
+          </button>
+        ))}
+      </div>
       <div className='mt-3 flex flex-wrap gap-1.5'>
         {rows.map((r) => (
           <button
@@ -4743,12 +4774,42 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
 
   const posOf = (sid: string) => positions[sid] ?? layout.pos.get(sid) ?? { x: 20, y: 20 }
 
+  // Canvas edit mode (#135): hold Shift and drag from one state to another to
+  // CREATE a transition (additive — the list editor stays authoritative).
+  const [linkFrom, setLinkFrom] = useState<string | null>(null)
+  const [linkPos, setLinkPos] = useState<{ x: number; y: number } | null>(null)
+  const qcCanvas = useQueryClient()
+  const createTransition = useMutation({
+    mutationFn: (v: { from: string; to: string }) =>
+      api.post(`/pipelines/${templateId}/transitions`, {
+        from_state: v.from,
+        to_state: v.to,
+        label: 'New transition'
+      }),
+    onSuccess: () => {
+      toast.success('Transition created — configure it in the Transitions list')
+      void qcCanvas.invalidateQueries({ queryKey: ['pipeline-canvas', templateId] })
+      void qcCanvas.invalidateQueries({ queryKey: ['pipeline', templateId] })
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Create failed')
+  })
+
   const onNodePointerDown = (sid: string, e: React.PointerEvent) => {
+    if (e.shiftKey) {
+      setLinkFrom(sid)
+      return
+    }
     const p = posOf(sid)
     dragRef.current = { id: sid, startX: e.clientX, startY: e.clientY, origX: p.x, origY: p.y }
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    if (linkFrom) {
+      const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
+      setLinkPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+      return
+    }
     const d = dragRef.current
     if (!d) return
     setPositions((prev) => ({
@@ -4757,6 +4818,26 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
     }))
   }
   const onPointerUp = () => {
+    if (linkFrom) {
+      // Node under the pointer at release?
+      if (linkPos) {
+        const hit = states.find((st) => {
+          const sid = String(st.id).toUpperCase()
+          const p = posOf(sid)
+          return (
+            linkPos.x >= p.x &&
+            linkPos.x <= p.x + layout.NODE_W &&
+            linkPos.y >= p.y &&
+            linkPos.y <= p.y + layout.NODE_H &&
+            sid !== linkFrom
+          )
+        })
+        if (hit) createTransition.mutate({ from: linkFrom, to: String(hit.id) })
+      }
+      setLinkFrom(null)
+      setLinkPos(null)
+      return
+    }
     if (dragRef.current) {
       dragRef.current = null
       setPositions((prev) => {
@@ -4782,7 +4863,8 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
       <h3 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>Canvas</h3>
       <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
         The state machine as a graph — another way to see it (editing stays in the lists above).
-        Drag states to arrange; click a state or an edge to inspect it. ⚡ automatic · ◆ conditional.
+        Drag states to arrange; click a state or an edge to inspect it. Shift-drag between two
+        states to CREATE a transition. ⚡ automatic · ◆ conditional.
       </p>
       <div className='mt-3 overflow-x-auto rounded-md border border-slate-100 bg-slate-50/50 dark:border-border dark:bg-muted/20'>
         <svg
@@ -4847,6 +4929,17 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
               </g>
             )
           })}
+          {linkFrom && linkPos && (
+            <line
+              x1={posOf(linkFrom).x + layout.NODE_W / 2}
+              y1={posOf(linkFrom).y + layout.NODE_H / 2}
+              x2={linkPos.x}
+              y2={linkPos.y}
+              stroke='#00ceff'
+              strokeWidth={2}
+              strokeDasharray='5 4'
+            />
+          )}
           {states.map((st) => {
             const sid = String(st.id).toUpperCase()
             const p = posOf(sid)

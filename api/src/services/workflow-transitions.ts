@@ -545,7 +545,7 @@ export async function applyTransition(opts: {
     from_state: previousState,
     to_state: newState,
     user: opts.userId ?? null,
-    comment: opts.comment ?? null,
+    comment: await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
     timestamp: new Date()
   })
 
@@ -713,5 +713,37 @@ export async function sweepAutoTransitions(): Promise<void> {
     }
   } catch (err) {
     console.error({ err }, 'sweepAutoTransitions failed')
+  }
+}
+
+
+/**
+ * Delegate transparency (#102): when the acting user is currently covering
+ * for someone (their id sits in another user's delegate_id while that user is
+ * OOO), the history comment records "as delegate for X" — audits can tell who
+ * was supposed to sign. Best-effort; never blocks the transition.
+ */
+async function annotateDelegateComment(
+  userId: string | null,
+  comment: string | null
+): Promise<string | null> {
+  if (!userId) return comment
+  try {
+    const principals = (await db('nivaro_users')
+      .where({ delegate_id: userId, is_out_of_office: true })
+      .limit(3)
+      .select('first_name', 'last_name', 'email')) as Array<{
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    if (principals.length === 0) return comment
+    const names = principals
+      .map((p) => [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || '?')
+      .join(', ')
+    const note = `(as delegate for ${names})`
+    return comment ? `${comment} ${note}` : note
+  } catch {
+    return comment
   }
 }

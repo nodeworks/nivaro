@@ -313,6 +313,126 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   /** Instance distribution for a template — every current_state with counts,
    *  including ORPHANS (states no longer in the template config: the debris a
    *  workflow redesign leaves behind). Feeds the migration wizard. */
+  // ── Start missing instances (#108) ───────────────────────────────────────
+  // Records created BEFORE a binding have no instance and can never
+  // transition. Bulk-start them into the binding's initial state.
+  app.post('/:id/start-missing', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = req.body as { collection?: string; limit?: number }
+    const collection = String(body?.collection ?? '')
+    if (!collection || !/^[a-z][a-z0-9_]*$/i.test(collection) || /^nivaro_/i.test(collection))
+      return reply.code(400).send({ error: 'collection is required' })
+    const binding = (await db('nivaro_workflow_bindings')
+      .where({ template: id, collection })
+      .first()) as { auto_start_state?: string | null } | undefined
+    if (!binding) return reply.code(404).send({ error: 'No binding for that collection' })
+    const initial = binding.auto_start_state
+      ? await db('nivaro_workflow_states').where({ id: binding.auto_start_state }).first('id')
+      : await db('nivaro_workflow_states')
+          .where({ template: id, is_initial: true })
+          .orderBy('sort')
+          .first('id')
+    if (!initial) return reply.code(422).send({ error: 'Template has no initial state' })
+    const cap = Math.min(5000, Math.max(1, Number(body?.limit) || 2000))
+    // Records with NO instance for this template.
+    const orphans = (await db(collection)
+      .whereNotIn(
+        'id',
+        db('nivaro_workflow_instances').where({ template: id, collection }).select('item')
+      )
+      .limit(cap)
+      .select('id')) as Array<{ id: string | number }>
+    const { randomUUID } = await import('node:crypto')
+    let started = 0
+    for (const row of orphans) {
+      try {
+        const instId = randomUUID()
+        await db('nivaro_workflow_instances').insert({
+          id: instId,
+          template: id,
+          collection,
+          item: String(row.id),
+          current_state: initial.id,
+          started_at: new Date()
+        })
+        await db('nivaro_workflow_history').insert({
+          instance: instId,
+          from_state: null,
+          to_state: initial.id,
+          user: req.user?.id ?? null,
+          comment: 'bulk-start (missing instance)',
+          timestamp: new Date()
+        })
+        started++
+      } catch {
+        /* per-record failures don't stop the sweep */
+      }
+    }
+    await logActivity({
+      action: 'pipeline-start-missing',
+      user: req.user?.id,
+      collection,
+      comment: `${started} instance(s) started on template ${id}`,
+      req
+    })
+    return reply.send({ data: { started, remaining_estimate: orphans.length === cap } })
+  })
+
+  // ── My matrix seats (#122): every owner-group cell I sit in ─────────────
+  app.get('/my-seats', { preHandler: requireAuth }, async (req, reply) => {
+    const rows = (await db('nivaro_pipeline_owner_group_users as gu')
+      .join('nivaro_pipeline_owner_groups as g', 'gu.group', 'g.id')
+      .join('nivaro_workflow_states as s', 'g.state', 's.id')
+      .join('nivaro_workflow_templates as t', 's.template', 't.id')
+      .where('gu.user', req.user!.id)
+      .limit(500)
+      .select(
+        'g.id as group_id',
+        'g.name as group_name',
+        'g.filters',
+        'g.is_default',
+        's.label as state_label',
+        's.key as state_key',
+        't.id as template_id',
+        't.name as template_name'
+      )) as Array<Record<string, unknown>>
+    return reply.send({
+      data: rows.map((r) => ({
+        ...r,
+        filters: parseJson(r.filters as string | null)
+      }))
+    })
+  })
+
+  // ── Bulk matrix membership (#387) ────────────────────────────────────────
+  app.post('/:id/owner-groups/bulk-add', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = req.body as { user_id?: string; group_ids?: number[] }
+    const userId = String(body?.user_id ?? '')
+    const groupIds = Array.isArray(body?.group_ids)
+      ? body.group_ids.map(Number).filter(Number.isFinite)
+      : []
+    if (!userId || groupIds.length === 0)
+      return reply.code(400).send({ error: 'user_id and group_ids are required' })
+    if (groupIds.length > 500) return reply.code(422).send({ error: 'cap is 500 groups per call' })
+    let added = 0
+    for (const gid of groupIds) {
+      const exists = await db('nivaro_pipeline_owner_group_users')
+        .where({ group: gid, user: userId })
+        .first('id')
+      if (exists) continue
+      await db('nivaro_pipeline_owner_group_users').insert({ group: gid, user: userId })
+      added++
+    }
+    bustOwnerGroupCache()
+    await logActivity({
+      action: 'owner-group-bulk-add',
+      user: req.user?.id,
+      comment: `${userId} added to ${added} group(s)`,
+      req
+    })
+    return reply.send({ data: { added, skipped: groupIds.length - added } })
+  })
+
   app.get('/:id/instance-distribution', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const states = (await db('nivaro_workflow_states')
@@ -1923,7 +2043,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           'u.id',
           'u.email',
           'u.first_name',
-          'u.last_name'
+          'u.last_name',
+          // Matrix OOO heat (#337): cells tint when members are out.
+          'u.is_out_of_office'
         )
     )
 

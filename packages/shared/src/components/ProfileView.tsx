@@ -1190,6 +1190,24 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
     }
   }, [goingOooUncovered, client])
 
+  // Delegation preview (#414): what the delegate would inherit, fetched when
+  // a delegate is picked while going OOO.
+  const { data: delegatePreview } = useQuery<{
+    approx_open_approvals: number
+    coverage_warnings: string[]
+  }>({
+    queryKey: ['delegate-preview'],
+    queryFn: () =>
+      client
+        .request<{ data: { approx_open_approvals: number; coverage_warnings: string[] } }>(
+          get('/users/me/delegate-preview')
+        )
+        .then((r) => r.data),
+    enabled: !!delegate && (ooo || (!!oooStart && !!oooEnd)),
+    staleTime: 60_000
+  })
+  const [saveWarnings, setSaveWarnings] = useState<string[]>([])
+
   const save = useMutation({
     mutationFn: () =>
       client.request(
@@ -1203,7 +1221,12 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
           ooo_end: oooEnd ? new Date(`${oooEnd}T23:59:59`).toISOString() : null
         })
       ),
-    onSuccess: onSaved
+    onSuccess: (res) => {
+      // OOO conflict warnings (#338): the save reports teams this window guts.
+      const warnings = (res as { warnings?: string[] })?.warnings ?? []
+      setSaveWarnings(warnings)
+      onSaved()
+    }
   })
 
   const reset = () => {
@@ -1290,6 +1313,25 @@ function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => v
           </div>
         )}
 
+      {/* Delegation preview (#414) */}
+      {delegate && delegatePreview && (
+        <div className='mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
+          Your delegate would inherit roughly{' '}
+          <b className='tabular-nums'>{delegatePreview.approx_open_approvals}</b> open approval
+          {delegatePreview.approx_open_approvals === 1 ? '' : 's'} while you're out.
+        </div>
+      )}
+      {/* OOO conflict warnings (#338) — reported by the save */}
+      {saveWarnings.length > 0 && (
+        <div className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+          <p className='font-semibold'>Coverage warning{saveWarnings.length === 1 ? '' : 's'}:</p>
+          <ul className='mt-0.5 list-disc pl-4'>
+            {saveWarnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className='mt-3 grid gap-3 border-t border-slate-100 pt-3 dark:border-border/60 sm:grid-cols-2'>
         <div>
           <span className='mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
@@ -1647,6 +1689,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <TimezoneCard />
             <EmailDeliveryCard />
         <NotificationRulesCard />
+        <MyMatrixSeatsCard />
           </div>
           <div className='space-y-4'>
             {/* The full picture — every notification source in the app,
@@ -1695,6 +1738,103 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
           </SectionCard>
         </div>
       )}
+    </div>
+  )
+}
+
+
+// ─── My matrix seats (#122): why am I getting these approvals? ───────────────
+function MyMatrixSeatsCard() {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const { data: seats = [], isLoading } = useQuery<
+    Array<{
+      group_id: number
+      group_name: string | null
+      filters: Array<{ field: string; value: unknown }> | null
+      is_default: boolean | number
+      state_label: string
+      template_name: string
+      template_id: string
+    }>
+  >({
+    queryKey: ['my-matrix-seats'],
+    queryFn: () =>
+      client
+        .request<{ data: never[] }>(get('/pipelines/my-seats'))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled: open,
+    staleTime: 60_000
+  })
+  const byTemplate = new Map<string, typeof seats>()
+  for (const seat of seats) {
+    const list = byTemplate.get(seat.template_name) ?? []
+    list.push(seat)
+    byTemplate.set(seat.template_name, list)
+  }
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between text-left'
+      >
+        <div>
+          <h3 className='text-[14px] font-semibold'>My approval seats</h3>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Every owner-matrix cell you sit in — why records land in your queue.
+          </p>
+        </div>
+        <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
+      </button>
+      {open &&
+        (isLoading ? (
+          <p className='mt-3 text-[12.5px] text-slate-400'>Loading…</p>
+        ) : seats.length === 0 ? (
+          <p className='mt-3 text-[12.5px] text-slate-400'>
+            You're not in any owner groups — approvals never route to you automatically.
+          </p>
+        ) : (
+          <div className='mt-3 space-y-3'>
+            {[...byTemplate.entries()].map(([template, list]) => (
+              <div key={template}>
+                <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                  {template}
+                </p>
+                <ul className='mt-1 space-y-0.5'>
+                  {list.slice(0, 40).map((seat) => (
+                    <li key={seat.group_id} className='text-[12.5px]'>
+                      <span className='font-medium'>{seat.state_label}</span>
+                      {seat.group_name && (
+                        <span className='text-slate-500 dark:text-muted-foreground'>
+                          {' '}
+                          — {seat.group_name}
+                        </span>
+                      )}
+                      {Array.isArray(seat.filters) && seat.filters.length > 0 && (
+                        <span className='ml-1.5 font-mono text-[10.5px] text-slate-400'>
+                          {seat.filters
+                            .slice(0, 3)
+                            .map((f) => `${f.field}=${String(f.value)}`)
+                            .join(' · ')}
+                        </span>
+                      )}
+                      {(seat.is_default === true || seat.is_default === 1) && (
+                        <span className='ml-1.5 rounded bg-slate-100 px-1 py-px text-[9.5px] text-slate-500 dark:bg-muted'>
+                          default
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                  {list.length > 40 && (
+                    <li className='text-[11.5px] text-slate-400'>…and {list.length - 40} more</li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   )
 }
