@@ -46,12 +46,27 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
       ) {
         return reply.code(400).send({ error: 'Invalid collection' })
       }
-      const user = req.user!
+      // Admin access explain (#120): ?user_id= evaluates AS another user —
+      // "why can't Beth see this record" without masquerading. Admin-only;
+      // the impersonated evaluation is read-only by construction.
+      const asUserId = (req.query as { user_id?: string } | undefined)?.user_id
+      let user = req.user!
+      let actingAdmin = req.isAdmin
+      if (asUserId && String(asUserId) !== String(req.user!.id)) {
+        if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+        const target = await db('nivaro_users').where({ id: asUserId }).first()
+        if (!target) return reply.code(404).send({ error: 'User not found' })
+        user = target as typeof user
+        const targetRole = target.role
+          ? await db('nivaro_roles').where({ id: target.role }).first('admin_access')
+          : null
+        actingAdmin = !!(targetRole as { admin_access?: boolean } | null)?.admin_access
+      }
       const reasons: AccessReason[] = []
 
       // 1. Role permission — checked first; without read access nothing else
       //    about the record should be disclosed (not even existence).
-      const permitted = req.isAdmin || (await can(user, 'read', collection))
+      const permitted = actingAdmin || (await can(user, 'read', collection))
       if (!permitted) {
         reasons.push({
           type: 'permission',
@@ -88,7 +103,7 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
               message: `This record was deleted ${new Date(trashed.deleted_at).toLocaleDateString()}${
                 trashed.deleted_by_name?.trim() ? ` by ${trashed.deleted_by_name.trim()}` : ''
               }. It sits in the trash for 30 days and can be restored.`,
-              ...(req.isAdmin ? { trash_id: trashed.trash_id } : {})
+              ...(actingAdmin ? { trash_id: trashed.trash_id } : {})
             } as never)
             return reply.send({ data: { access: false, reasons } })
           }
@@ -103,7 +118,7 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // 3. Row-level security (nivaro_policies.row_filter on the user's role).
-      if (!req.isAdmin) {
+      if (!actingAdmin) {
         const rowFilter = await getRowFilter(user, 'read', collection)
         if (rowFilter) {
           const q = db(collection).where(`${collection}.id`, id)
@@ -121,7 +136,7 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
       // 4. User Scopes — evaluate each restrict dimension SEPARATELY so the
       //    response can name the one that excludes the record. Mirrors
       //    getUserScopeEnforcement's rules (reference-table skip, strict deny).
-      if (!req.isAdmin) {
+      if (!actingAdmin) {
         const scopes = (await getUserScopes(user.id)).filter(
           (s) => s.mode === 'restrict' && s.values.length > 0
         )

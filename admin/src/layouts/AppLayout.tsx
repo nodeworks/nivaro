@@ -738,6 +738,7 @@ export function AppLayout() {
         {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
         <ApiUpdateBanner appName='Nivaro' />
+        <SessionExpiryWatcher />
         <OfflineBanner />
         <DbOutageBanner />
         <NivaroProvider client={announcementsClient}>
@@ -1120,4 +1121,55 @@ function ForceRefreshBanner() {
       </button>
     </div>
   )
+}
+
+
+// ─── Session-expiry warning (#199) ───────────────────────────────────────────
+// Sessions are ROLLING, so any request refreshes them — including a TTL poll,
+// which would keep an idle tab alive forever. Instead: read the TTL ONCE at
+// mount (that single refresh is fine), then count down locally from the last
+// real user interaction; a toast at <5 min offers Extend (one fetch resets
+// the server clock, and we restart the local one).
+function SessionExpiryWatcher() {
+  const warnedRef = useRef(false)
+  useEffect(() => {
+    let ttlSeconds: number | null = null
+    let lastActivity = Date.now()
+    const onActivity = () => {
+      lastActivity = Date.now()
+      warnedRef.current = false
+    }
+    for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, onActivity, { passive: true })
+    void api
+      .get<{ data: { ttl_seconds: number | null } }>('/security/my/session-ttl')
+      .then((r) => {
+        ttlSeconds = r.data.data.ttl_seconds
+      })
+      .catch(() => {})
+    const timer = setInterval(() => {
+      if (!ttlSeconds || warnedRef.current) return
+      const remaining = ttlSeconds * 1000 - (Date.now() - lastActivity)
+      if (remaining > 0 && remaining < 5 * 60_000) {
+        warnedRef.current = true
+        toast.warning('Your session expires in about 5 minutes.', {
+          duration: 30_000,
+          action: {
+            label: 'Extend',
+            onClick: () => {
+              void api.get('/auth/me').then(() => {
+                lastActivity = Date.now()
+                warnedRef.current = false
+                toast.success('Session extended')
+              })
+            }
+          }
+        })
+      }
+    }, 30_000)
+    return () => {
+      clearInterval(timer)
+      for (const ev of ['pointerdown', 'keydown']) window.removeEventListener(ev, onActivity)
+    }
+  }, [])
+  return null
 }

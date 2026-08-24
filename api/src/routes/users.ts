@@ -196,6 +196,50 @@ export async function usersRoutes(app: FastifyInstance) {
   })
 
   // ─── Self-service preferences ─────────────────────────────────────────────
+  // Inactive-user report (#118): last login per active user (login events ∪
+  // last_access), 90-days-quiet flagged — suspend from the existing PATCH.
+  app.get('/inactive-report', { preHandler: requireAdmin }, async () => {
+    const users = (await db('nivaro_users')
+      .where('status', 'active')
+      .where('is_redacted', 0)
+      .select('id', 'first_name', 'last_name', 'email', 'last_access', 'role')) as Array<
+      Record<string, unknown>
+    >
+    let lastLogin = new Map<string, Date>()
+    try {
+      const rows = (await db('nivaro_login_events')
+        .select('user')
+        .max({ last: 'created_at' })
+        .groupBy('user')) as Array<{ user: string; last: Date }>
+      lastLogin = new Map(rows.map((r) => [String(r.user).toUpperCase(), new Date(r.last)]))
+    } catch {
+      /* login events optional */
+    }
+    const now = Date.now()
+    const out = users
+      .map((u) => {
+        const fromEvents = lastLogin.get(String(u.id).toUpperCase())
+        const fromAccess = u.last_access ? new Date(u.last_access as string) : null
+        const last =
+          fromEvents && fromAccess
+            ? fromEvents > fromAccess
+              ? fromEvents
+              : fromAccess
+            : (fromEvents ?? fromAccess)
+        const days = last ? Math.floor((now - last.getTime()) / 86400e3) : null
+        return {
+          id: u.id,
+          name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email,
+          email: u.email,
+          last_seen: last ? last.toISOString() : null,
+          days_quiet: days,
+          flagged: days === null || days >= 90
+        }
+      })
+      .sort((a, b) => (b.days_quiet ?? 9999) - (a.days_quiet ?? 9999))
+    return { data: out }
+  })
+
   // PATCH /users/me/preferences — allowlisted keys only; merges into the
   // existing preferences JSON. email_digest drives daily-vs-instant emails
   // (see applyDigestDeferral in services/mail.ts + the daily-action-digest cron).

@@ -621,6 +621,8 @@ export function ApiKeysPage() {
                 </div>
               )}
 
+              <KeyPreviewSection keyId={selected.id} collections={collections} />
+
               <div className='border-t border-slate-200 pt-4 dark:border-border'>
                 {confirm ? (
                   <div className='flex items-center gap-3'>
@@ -688,6 +690,73 @@ export function ApiKeysPage() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+
+// ─── Key visibility tester (#110): "what would this key see" ─────────────────
+
+function KeyPreviewSection({
+  keyId,
+  collections
+}: {
+  keyId: string | number
+  collections: string[]
+}) {
+  const [picked, setPicked] = useState<string>('')
+  const [rows, setRows] = useState<Array<{ collection: string; visible: number | null; error: string | null }>>([])
+  const preview = useMutation({
+    mutationFn: (cols: string[]) =>
+      api
+        .post<{ data: Array<{ collection: string; visible: number | null; error: string | null }> }>(
+          `/api-keys/${keyId}/preview`,
+          { collections: cols }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => setRows((prev) => [...d, ...prev.filter((p) => !d.some((x) => x.collection === p.collection))]),
+    onError: () => toast.error('Preview failed')
+  })
+  return (
+    <div>
+      <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+        Preview as this key
+      </h3>
+      <p className='mb-2 text-[12px] text-slate-500'>
+        Row counts through the key's own scope restrictions — the enforcement path answers, not a
+        guess.
+      </p>
+      <div className='flex items-center gap-2'>
+        <div className='w-64'>
+          <CollectionCombobox value={picked} onChange={setPicked} options={collections} />
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='text-[12px]'
+          disabled={!picked || picked === ALL_COLLECTIONS || preview.isPending}
+          onClick={() => preview.mutate([picked])}
+        >
+          {preview.isPending ? 'Checking…' : 'Check visibility'}
+        </Button>
+      </div>
+      {rows.length > 0 && (
+        <div className='mt-2 space-y-1'>
+          {rows.map((r) => (
+            <p key={r.collection} className='flex items-center gap-2 text-[12.5px]'>
+              <code className='font-mono text-slate-600 dark:text-slate-300'>{r.collection}</code>
+              {r.error ? (
+                <span className='text-red-500'>{r.error}</span>
+              ) : (
+                <span className='tabular-nums text-slate-700 dark:text-slate-200'>
+                  {r.visible?.toLocaleString()} visible rows
+                </span>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

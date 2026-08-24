@@ -376,7 +376,92 @@ export default function SecurityCenter() {
           )}
         </div>
         <EditLocksCard />
+        <MasqueradeHistoryCard />
+        <LoginAnomaliesCard />
       </div>
+    </div>
+  )
+}
+
+// ─── Masquerade history (#233) ───────────────────────────────────────────────
+
+function MasqueradeHistoryCard() {
+  const { data: rows = [] } = useQuery<
+    Array<{ id: number; action: string; admin: string; target: string; at: string }>
+  >({
+    queryKey: ['masquerade-history'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; action: string; admin: string; target: string; at: string }> }>(
+          '/security/masquerades'
+        )
+        .then((r) => r.data.data)
+        .catch(() => []),
+    staleTime: 60_000
+  })
+  if (rows.length === 0) return null
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <h2 className='text-[13px] font-medium'>Masquerade history</h2>
+        <p className='text-[11px] text-muted-foreground'>Who impersonated whom, and when.</p>
+      </div>
+      <div className='max-h-64 divide-y divide-slate-50 overflow-y-auto dark:divide-border/40'>
+        {rows.map((r) => (
+          <p key={r.id} className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'>
+            <span className='font-medium text-slate-700 dark:text-slate-200'>{r.admin}</span>
+            <span className='text-slate-400'>{r.action === 'masquerade-start' ? '→ became' : '← ended'}</span>
+            <span className='text-slate-700 dark:text-slate-200'>{r.target}</span>
+            <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
+              {new Date(r.at).toLocaleString()}
+            </span>
+          </p>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Login anomalies (#255, honest scope: multi-IP windows, no geo db) ───────
+
+function LoginAnomaliesCard() {
+  const { data: rows = [] } = useQuery<
+    Array<{ user: string; name: string; ips: string[]; window_start: string }>
+  >({
+    queryKey: ['login-anomalies'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ user: string; name: string; ips: string[]; window_start: string }> }>(
+          '/security/login-anomalies'
+        )
+        .then((r) => r.data.data)
+        .catch(() => []),
+    staleTime: 5 * 60_000
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <h2 className='text-[13px] font-medium'>Login anomalies (7d)</h2>
+        <p className='text-[11px] text-muted-foreground'>
+          Sign-ins from multiple IPs within an hour — the impossible-travel signal (a location map
+          needs a geo provider this instance doesn't have).
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <p className='px-4 py-3 text-[12px] text-emerald-600'>No multi-IP windows detected.</p>
+      ) : (
+        <div className='divide-y divide-slate-50 dark:divide-border/40'>
+          {rows.map((r) => (
+            <p key={`${r.user}-${r.window_start}`} className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'>
+              <span className='font-medium text-amber-700 dark:text-amber-400'>{r.name}</span>
+              <span className='font-mono text-[11px] text-slate-500'>{r.ips.join(' · ')}</span>
+              <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
+                {new Date(r.window_start).toLocaleString()}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

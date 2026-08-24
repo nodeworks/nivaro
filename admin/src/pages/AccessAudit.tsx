@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
@@ -270,6 +271,8 @@ export default function AccessAuditPage() {
           rerun an audit any time and each finding names the exact rule that hides the record.
         </p>
       </header>
+
+      <ExplainAccessBar />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* ── Audit list ──────────────────────────────────────────────────── */}
@@ -709,6 +712,112 @@ export default function AccessAuditPage() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+
+// ─── Admin access explain (#120): any user × any record, gate by gate ────────
+
+function ExplainAccessBar() {
+  const [userQ, setUserQ] = useState('')
+  const [userId, setUserId] = useState<string | null>(null)
+  const [collection, setCollection] = useState('')
+  const [recordId, setRecordId] = useState('')
+  const [result, setResult] = useState<{ access: boolean; reasons: Array<{ type: string; message: string }> } | null>(null)
+  const { data: users = [] } = useQuery<Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>>({
+    queryKey: ['explain-user-search', userQ],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string }> }>(
+          '/users',
+          { params: { limit: 8, search: userQ } }
+        )
+        .then((r) => r.data.data),
+    enabled: userQ.length >= 2,
+    staleTime: 30_000
+  })
+  const explain = useMutation({
+    mutationFn: () =>
+      api
+        .get<{ data: { access: boolean; reasons: Array<{ type: string; message: string }> } }>(
+          `/access-explain/${collection.trim()}/${recordId.trim()}`,
+          { params: { user_id: userId } }
+        )
+        .then((r) => r.data.data),
+    onSuccess: setResult,
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Explain failed')
+  })
+  const pickedUser = users.find((u) => u.id === userId)
+  return (
+    <div className='shrink-0 border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <span className='text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+          Explain access:
+        </span>
+        <div className='relative'>
+          <Input
+            value={pickedUser ? `${pickedUser.first_name ?? ''} ${pickedUser.last_name ?? ''}`.trim() || pickedUser.email : userQ}
+            onChange={(e) => {
+              setUserQ(e.target.value)
+              setUserId(null)
+            }}
+            placeholder='user…'
+            className='h-8 w-48 text-[12.5px]'
+          />
+          {!userId && users.length > 0 && userQ.length >= 2 && (
+            <div className='absolute left-0 top-full z-40 mt-1 w-64 rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
+              {users.map((u) => (
+                <button
+                  key={u.id}
+                  type='button'
+                  onClick={() => setUserId(u.id)}
+                  className='block w-full px-2.5 py-1 text-left text-[12.5px] hover:bg-muted'
+                >
+                  {`${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email}
+                  <span className='ml-1.5 text-[10.5px] text-slate-400'>{u.email}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <Input
+          value={collection}
+          onChange={(e) => setCollection(e.target.value)}
+          placeholder='collection'
+          className='h-8 w-40 font-mono text-[12px]'
+        />
+        <Input
+          value={recordId}
+          onChange={(e) => setRecordId(e.target.value)}
+          placeholder='record id'
+          className='h-8 w-32 font-mono text-[12px]'
+        />
+        <Button
+          type='button'
+          size='sm'
+          className='h-8 text-[12px]'
+          disabled={!userId || !collection.trim() || !recordId.trim() || explain.isPending}
+          onClick={() => explain.mutate()}
+        >
+          {explain.isPending ? 'Checking…' : 'Explain'}
+        </Button>
+        {result && (
+          <span className={cn('text-[12.5px] font-medium', result.access ? 'text-emerald-600' : 'text-red-600')}>
+            {result.access ? 'CAN see it' : 'CANNOT see it'}
+          </span>
+        )}
+      </div>
+      {result && result.reasons.length > 0 && (
+        <ul className='mt-1.5 space-y-0.5'>
+          {result.reasons.map((r) => (
+            <li key={r.message} className='text-[12px] text-slate-600 dark:text-slate-300'>
+              · {r.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

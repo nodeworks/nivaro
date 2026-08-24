@@ -179,6 +179,50 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   })
 
   // Revoke (soft) — keeps the row for auditing
+  // Key visibility tester (#110): "what would THIS key see" — resolves the
+  // key's owner identity + its scope_restrictions (the same attachment
+  // authenticate performs) and counts rows per requested collection through
+  // readItems, so the answer is the enforcement path's own answer.
+  app.post<{ Params: { id: string }; Body: { collections?: string[] } }>(
+    '/:id/preview',
+    async (req, reply) => {
+      const key = (await db('nivaro_api_keys').where({ id: Number(req.params.id) }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!key) return reply.code(404).send({ error: 'Key not found' })
+      const owner = (await db('nivaro_users').where({ id: key.user }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!owner) return reply.code(422).send({ error: 'Key owner no longer exists' })
+      let restrictions: unknown = null
+      try {
+        restrictions = key.scope_restrictions ? JSON.parse(String(key.scope_restrictions)) : null
+      } catch {
+        restrictions = null
+      }
+      const synthetic = { ...owner, api_key_scope_restrictions: restrictions } as never
+      const wanted = (Array.isArray(req.body?.collections) ? req.body.collections : [])
+        .filter((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(c)) && !/^nivaro_/i.test(String(c)))
+        .slice(0, 10)
+      if (wanted.length === 0) return reply.code(400).send({ error: 'collections[] required' })
+      const { readItems } = await import('../services/items.js')
+      const out: Array<{ collection: string; visible: number | null; error: string | null }> = []
+      for (const c of wanted) {
+        try {
+          const res = await readItems(synthetic, String(c), { limit: 1 })
+          out.push({ collection: String(c), visible: Number((res as { total?: number }).total ?? 0), error: null })
+        } catch (err) {
+          out.push({
+            collection: String(c),
+            visible: null,
+            error: err instanceof Error ? err.message.slice(0, 120) : 'failed'
+          })
+        }
+      }
+      return reply.send({ data: out })
+    }
+  )
+
   app.post('/:id/revoke', async (req, reply) => {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_api_keys').where({ id }).first()

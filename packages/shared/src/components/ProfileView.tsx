@@ -1769,6 +1769,8 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <TimezoneCard />
             <EmailDeliveryCard />
         <NotificationRulesCard />
+        <MySecurityCard />
+        <MyPermissionsCard />
         <MyMatrixSeatsCard />
           </div>
           <div className='space-y-4'>
@@ -1915,6 +1917,161 @@ function MyMatrixSeatsCard() {
             ))}
           </div>
         ))}
+    </div>
+  )
+}
+
+
+// ─── My security (#103): my sessions, sign-out-others, login history ─────────
+
+function MySecurityCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data } = useQuery<{
+    sessions: Array<{ sid_prefix: string; ttl_seconds: number; current: boolean }>
+    logins: Array<{ ip: string | null; user_agent: string | null; created_at: string; new_ip?: boolean }>
+  }>({
+    queryKey: ['my-security'],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get('/security/my/sessions'))
+        .then((r) => r.data)
+        .catch(() => ({ sessions: [], logins: [] }) as never),
+    staleTime: 30_000
+  })
+  const signOutOthers = useMutation({
+    mutationFn: () =>
+      client
+        .request<{ data: { revoked: number } }>(post('/security/my/sessions/sign-out-others', {}))
+        .then((r) => r.data),
+    onSuccess: (d) => {
+      void qc.invalidateQueries({ queryKey: ['my-security'] })
+      alertToast(`Signed out ${d?.revoked ?? 0} other session(s)`)
+    }
+  })
+  const alertToast = (msg: string) => {
+    try {
+      // Sonner when the host mounts it; silent otherwise.
+      void import('sonner').then(({ toast }) => toast.success(msg))
+    } catch {
+      /* no toaster */
+    }
+  }
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <div>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Security</h3>
+          <p className='mt-0.5 text-[11px] text-slate-400'>
+            Your active sessions and recent sign-ins.
+          </p>
+        </div>
+        {(data?.sessions.length ?? 0) > 1 && (
+          <button
+            type='button'
+            disabled={signOutOthers.isPending}
+            onClick={() => signOutOthers.mutate()}
+            className='rounded-md border border-red-200 px-2 py-1 text-[11.5px] text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30'
+          >
+            Sign out everywhere else
+          </button>
+        )}
+      </header>
+      <div className='space-y-2 p-4'>
+        <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+          Active sessions ({data?.sessions.length ?? 0})
+        </p>
+        {(data?.sessions ?? []).map((sn) => (
+          <p key={sn.sid_prefix} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+            <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
+            {sn.current && (
+              <span className='rounded bg-[#00ceff14] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
+                this session
+              </span>
+            )}
+            <span className='ml-auto text-[11px] text-slate-400'>
+              expires in {Math.round(sn.ttl_seconds / 3600)}h
+            </span>
+          </p>
+        ))}
+        {(data?.logins ?? []).length > 0 && (
+          <>
+            <p className='pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+              Recent sign-ins
+            </p>
+            {(data?.logins ?? []).slice(0, 8).map((l, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: log rows
+              <p key={i} className='flex items-center gap-2 text-[11.5px] text-slate-500'>
+                <span className='font-mono'>{l.ip ?? '—'}</span>
+                {l.new_ip && (
+                  <span className='rounded bg-amber-100 px-1 text-[9.5px] font-semibold text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'>
+                    new IP
+                  </span>
+                )}
+                <span className='ml-auto text-slate-400'>{new Date(l.created_at).toLocaleString()}</span>
+              </p>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── My permissions (#197): plain-language access self-view ──────────────────
+
+function MyPermissionsCard() {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery<{
+    role: string | null
+    is_admin: boolean
+    collections: Array<{ collection: string; actions: string[] }>
+    scopes: Array<{ dimension: string; values: string[] }>
+  }>({
+    queryKey: ['my-permissions'],
+    queryFn: () => client.request<{ data: never }>(get('/security/my/permissions')).then((r) => r.data),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-2.5 text-left'>
+        <div>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>What can I access?</h3>
+          <p className='mt-0.5 text-[11px] text-slate-400'>Your role, collections, and data limits in plain language.</p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && data && (
+        <div className='space-y-2 border-t border-slate-100 px-4 py-3 text-[12.5px] text-slate-600 dark:border-border/60 dark:text-slate-300'>
+          <p>
+            Your role is <b>{data.role ?? 'unassigned'}</b>
+            {data.is_admin && ' — an administrator role with access to everything'}.
+          </p>
+          {data.scopes.length > 0 && (
+            <p>
+              Your data is limited to:{' '}
+              {data.scopes.map((sc) => `${sc.dimension}: ${sc.values.join(', ')}`).join(' · ')}
+            </p>
+          )}
+          {!data.is_admin && (
+            <div>
+              <p className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                Collections ({data.collections.length})
+              </p>
+              <div className='max-h-48 overflow-y-auto'>
+                {data.collections.map((c) => (
+                  <p key={c.collection} className='flex items-center gap-2 border-b border-slate-50 py-0.5 text-[12px] last:border-b-0 dark:border-border/40'>
+                    <span className='font-mono'>{c.collection}</span>
+                    <span className='ml-auto text-[10.5px] text-slate-400'>{[...new Set(c.actions)].join(' · ')}</span>
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

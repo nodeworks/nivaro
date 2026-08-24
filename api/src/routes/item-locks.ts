@@ -239,6 +239,65 @@ export async function itemLocksRoutes(app: FastifyInstance) {
   )
 
   // POST /:collection/:item/heartbeat — extend own lock (no-op when disabled)
+  // Takeover permission (#256): roles listed in settings.lock_takeover_roles
+  // may FORCE-take a lock (delete + re-acquire) — the holder finds out on
+  // their next heartbeat (the existing 404-with-holder path) and via an
+  // in-app notification. Admins always may.
+  app.post<{ Params: { collection: string; item: string } }>(
+    '/:collection/:item/lock/force',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      if (!(await isLockingEnabled(collection))) {
+        return reply.send({ data: null, locking_disabled: true })
+      }
+      if (!req.isAdmin) {
+        let allowed: string[] = []
+        try {
+          const settings = (await db('nivaro_settings').first('lock_takeover_roles')) as
+            | { lock_takeover_roles?: string | null }
+            | undefined
+          allowed = settings?.lock_takeover_roles
+            ? (JSON.parse(settings.lock_takeover_roles) as string[])
+            : []
+        } catch {
+          allowed = []
+        }
+        const mine = String(req.user?.role ?? '').toUpperCase()
+        if (!allowed.some((r) => String(r).toUpperCase() === mine)) {
+          return reply.code(403).send({ error: 'Your role may not take over locks' })
+        }
+      }
+      const existing = await getCurrentLock(collection, item)
+      if (existing && existing.user !== req.user!.id) {
+        await db('nivaro_item_locks').where({ collection, item }).del()
+        const { notifyUser } = await import('../services/notification-channels.js')
+        void notifyUser(app, existing.user, {
+          subject: 'Your edit lock was taken over',
+          message: `${[req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') || 'An authorized user'} took over editing ${collection}/${item}. Unsaved changes there may conflict.`,
+          collection,
+          item,
+          sender: req.user?.id ?? null
+        }).catch(() => {})
+      }
+      await db('nivaro_item_locks').insert({
+        collection,
+        item,
+        user: req.user!.id,
+        acquired_at: new Date(),
+        expires_at: new Date(Date.now() + 5 * 60_000)
+      })
+      await logActivity({
+        action: 'lock-force-take',
+        user: req.user!.id,
+        collection,
+        item,
+        req
+      })
+      return reply.send({ data: { taken: true } })
+    }
+  )
+
   app.post<{ Params: { collection: string; item: string } }>(
     '/:collection/:item/heartbeat',
     { preHandler: [requireAuth] },

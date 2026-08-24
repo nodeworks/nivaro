@@ -54,6 +54,7 @@ export function UsersPage() {
   const limit = 25
 
   const [showCreate, setShowCreate] = useState(false)
+  const [showInactive, setShowInactive] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
@@ -231,14 +232,20 @@ export function UsersPage() {
               </span>
             )}
           </div>
-          <Button size='sm' onClick={() => setShowCreate(true)}>
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> Add User
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button size='sm' variant='outline' onClick={() => setShowInactive((v) => !v)}>
+              {showInactive ? 'Hide' : 'Inactive report'}
+            </Button>
+            <Button size='sm' onClick={() => setShowCreate(true)}>
+              <Plus className='mr-1.5 h-3.5 w-3.5' /> Add User
+            </Button>
+          </div>
         </div>
       </div>
 
       {/* Content */}
       <div className='p-8'>
+        {showInactive && <InactiveUserReport />}
         <DataTable
           columns={columns}
           rows={users}
@@ -343,5 +350,72 @@ export function UsersPage() {
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+
+// ─── Inactive-user report (#118) ─────────────────────────────────────────────
+
+function InactiveUserReport() {
+  const qc = useQueryClient()
+  const { data: rows = [], isLoading } = useQuery<
+    Array<{ id: string; name: string; email: string; last_seen: string | null; days_quiet: number | null; flagged: boolean }>
+  >({
+    queryKey: ['inactive-user-report'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; name: string; email: string; last_seen: string | null; days_quiet: number | null; flagged: boolean }> }>(
+          '/users/inactive-report'
+        )
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const suspend = useMutation({
+    mutationFn: (id: string) => api.patch(`/users/${id}`, { status: 'suspended' }),
+    onSuccess: () => {
+      toast.success('User suspended')
+      void qc.invalidateQueries({ queryKey: ['inactive-user-report'] })
+      void qc.invalidateQueries({ queryKey: ['users'] })
+    }
+  })
+  const flagged = rows.filter((r) => r.flagged)
+  return (
+    <div className='mb-6 rounded-lg border border-amber-200 bg-white dark:border-amber-500/30 dark:bg-card'>
+      <div className='border-b border-amber-100 px-4 py-3 dark:border-amber-500/20'>
+        <h2 className='text-[13px] font-medium text-amber-800 dark:text-amber-400'>
+          Inactive users — {flagged.length} quiet 90+ days
+        </h2>
+        <p className='text-[11px] text-slate-400'>
+          Last seen = newest of login events and last_access. Suspend removes sign-in without
+          deleting anything.
+        </p>
+      </div>
+      {isLoading ? (
+        <p className='px-4 py-3 text-[12px] text-slate-400'>Scanning…</p>
+      ) : (
+        <div className='max-h-72 divide-y divide-slate-50 overflow-y-auto dark:divide-border/40'>
+          {flagged.map((r) => (
+            <p key={r.id} className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'>
+              <span className='font-medium text-slate-700 dark:text-slate-200'>{r.name}</span>
+              <span className='text-[11px] text-slate-400'>{r.email}</span>
+              <span className='ml-auto text-[11px] tabular-nums text-amber-600'>
+                {r.days_quiet === null ? 'never seen' : `${r.days_quiet}d quiet`}
+              </span>
+              <button
+                type='button'
+                disabled={suspend.isPending}
+                onClick={() => suspend.mutate(r.id)}
+                className='rounded border border-red-200 px-1.5 py-0.5 text-[11px] text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30'
+              >
+                Suspend
+              </button>
+            </p>
+          ))}
+          {flagged.length === 0 && (
+            <p className='px-4 py-3 text-[12px] text-emerald-600'>Everyone has been active.</p>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

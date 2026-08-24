@@ -188,16 +188,19 @@ export function useItemLock(
     if (!collection || !item) return
     setTakingOver(true)
     try {
-      await client.request(del(`/item-locks/${collection}/${item}/lock?force=1`))
-      const ok = await acquire()
-      if (ok) toast.success('You now hold the edit lock')
-      else toast.error('Failed to take over the lock')
-    } catch {
-      toast.error('Failed to take over the lock')
+      // Takeover permission (#256): the force route enforces WHO may — admins
+      // always, plus roles in settings.lock_takeover_roles. A 403 explains.
+      await client.request(post(`/item-locks/${collection}/${item}/lock/force`, {}))
+      toast.success('You now hold the edit lock')
+    } catch (err) {
+      const msg =
+        (err as { response?: { error?: string }; message?: string })?.response?.error ??
+        'Failed to take over the lock'
+      toast.error(msg)
     } finally {
       setTakingOver(false)
     }
-  }, [client, collection, item, acquire])
+  }, [client, collection, item])
 
   return {
     lockHolder,
@@ -246,11 +249,13 @@ export function ItemLockBanner({
           {requesting ? 'Asking…' : 'Request lock'}
         </Button>
       )}
-      {isAdmin && (
+      {(
+        // Admins always; other roles attempt — the server's takeover-role
+        // allowlist (#256) is the gate, and its 403 names the reason.
         <Button
           size='sm'
           variant='outline'
-          className='h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100'
+          className={isAdmin ? 'h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100' : 'h-7 shrink-0 border-amber-200 bg-white/60 text-[12px] text-amber-700/80 hover:bg-amber-100'}
           onClick={onTakeOver}
           disabled={takingOver}
         >

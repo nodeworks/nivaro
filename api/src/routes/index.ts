@@ -40,7 +40,7 @@ import { monitorRoutes } from './monitors.js'
 import { integrationContractRoutes } from './integration-contracts.js'
 import { rumRoutes } from './rum.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
-import { securityRoutes } from './security.js'
+import { securityRoutes, securitySelfRoutes } from './security.js'
 import { configHealthRoutes } from './config-health.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { automationTestRoutes } from './automation-tests.js'
@@ -241,6 +241,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(rumRoutes, { prefix: '/rum' })
   await app.register(indexAdvisorRoutes, { prefix: '/index-advisor' })
   await app.register(securityRoutes, { prefix: '/security' })
+  await app.register(securitySelfRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })
   await app.register(legalHoldRoutes, { prefix: '/legal-holds' })
   await app.register(automationTestRoutes, { prefix: '/automation-tests' })

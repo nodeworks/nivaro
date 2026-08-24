@@ -221,6 +221,18 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       app.log.error({ err }, 'OIDC callback error')
+      // OIDC failure log (#158): callback/claim errors land as deduped issues
+      // — "logins are broken" gets a browsable cause instead of a log grep.
+      void import('../services/error-tracking.js')
+        .then(({ trackError }) =>
+          trackError({
+            source: 'server',
+            route: 'oidc-callback',
+            message: `OIDC callback failed: ${err instanceof Error ? err.message : String(err)}`,
+            severity: 'high'
+          })
+        )
+        .catch(() => {})
       return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
     }
   })

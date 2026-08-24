@@ -297,6 +297,57 @@ async function lintFindings(): Promise<Finding[]> {
   }
 
 
+  // Scope coverage (#177): a STRICT dimension denies everything on a
+  // collection it can't route to — a new collection silently going dark is
+  // exactly the drift this surfaces.
+  try {
+    const strictDims = (await db('nivaro_scope_dimensions')
+      .where({ is_active: true, strict: true })
+      .select('name', 'target_collection', 'exclusions')) as Array<{
+      name: string
+      target_collection: string
+      exclusions: string | null
+    }>
+    if (strictDims.length > 0) {
+      const { resolveScopeHops } = await import('./user-scopes.js')
+      const cols = (await db('nivaro_collections')
+        .whereNot('collection', 'like', 'nivaro_%')
+        .where((qb) => qb.where('hidden', 0).orWhereNull('hidden'))
+        .limit(150)
+        .pluck('collection')) as string[]
+      for (const dim of strictDims) {
+        let excluded: string[] = []
+        try {
+          excluded = dim.exclusions ? (JSON.parse(dim.exclusions) as string[]) : []
+        } catch {
+          excluded = []
+        }
+        let emitted = 0
+        for (const c of cols) {
+          if (c === dim.target_collection || excluded.includes(c) || emitted >= 10) continue
+          try {
+            const hops = await resolveScopeHops(c, dim.target_collection)
+            if (!hops) {
+              emitted++
+              out.push({
+                family: 'lint',
+                code: 'scope-unreachable-strict',
+                subject: `scope:${dim.name}:${c}`,
+                title: `"${c}" is unreachable for strict dimension "${dim.name}" — restricted users see NOTHING there`,
+                severity: 'warning',
+                href: '/scope-dimensions'
+              })
+            }
+          } catch {
+            /* resolution error — skip */
+          }
+        }
+      }
+    }
+  } catch {
+    /* scope check contributes zero */
+  }
+
   // Unregistered junctions (#119): tables SHAPED like junctions (exactly two
   // resolvable *_id legs, few other columns) with zero nivaro_relations rows —
   // invisible to pickers, scopes and the ERD until registered.

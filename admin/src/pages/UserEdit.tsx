@@ -353,6 +353,7 @@ export function UserEditPage() {
             {/* Delegation (own save, outside the profile form) */}
             <DelegationCard user={user} mode='admin' />
             <UserScopesCard userId={user.id} />
+            <UserSessionsCard userId={user.id} />
             <UserOffboardingCard userId={user.id} />
             <UserMergeCard userId={user.id} />
 
@@ -362,5 +363,56 @@ export function UserEditPage() {
         )}
       </div>
     </>
+  )
+}
+
+
+// ─── Active sessions (#431): this user's live sessions, revocable ────────────
+
+function UserSessionsCard({ userId }: { userId: string }) {
+  const qc = useQueryClient()
+  const { data: sessions = [] } = useQuery<
+    Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }>
+  >({
+    queryKey: ['user-sessions', userId],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }> }>(
+          '/security/sessions',
+          { params: { user_id: userId } }
+        )
+        .then((r) => r.data.data)
+        .catch(() => []),
+    staleTime: 30_000
+  })
+  const revoke = useMutation({
+    mutationFn: (prefix: string) => api.delete(`/security/sessions/${prefix}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['user-sessions', userId] })
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+        Active sessions ({sessions.length})
+      </h3>
+      {sessions.length === 0 ? (
+        <p className='mt-1 text-[12px] text-slate-400'>No live sessions.</p>
+      ) : (
+        <div className='mt-2 space-y-1.5'>
+          {sessions.map((sn) => (
+            <p key={sn.sid_prefix} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+              <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
+              <span className='text-[11px] text-slate-400'>expires in {Math.round(sn.ttl_seconds / 3600)}h</span>
+              <button
+                type='button'
+                onClick={() => revoke.mutate(sn.sid_prefix)}
+                className='ml-auto text-[11px] text-red-500 underline decoration-dotted hover:text-red-600'
+              >
+                Revoke
+              </button>
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
