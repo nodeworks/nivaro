@@ -1463,6 +1463,103 @@ async function applyConditions(
       })
       continue
     }
+    // Content-presence virtual paths (#397/#398): $has_comments / $has_tasks /
+    // $has_failed_push / $missing_required. Value truthiness picks the side —
+    // {_eq: true} = has, {_eq: false} = does not have.
+    if (cond.path.length === 1 && cond.path[0].startsWith('$has_')) {
+      const wantHas = cond.value !== false && cond.value !== 'false' && cond.value !== 0
+      const kind = cond.path[0]
+      const exists = (cb: (this: QB) => void) => (wantHas ? q.whereExists(cb) : q.whereNotExists(cb))
+      if (kind === '$has_comments') {
+        exists(function () {
+          this.select(db.raw('1'))
+            .from('nivaro_comments as cmt')
+            .where('cmt.collection', collection)
+            .whereRaw('cmt.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+        })
+        continue
+      }
+      if (kind === '$has_tasks') {
+        exists(function () {
+          this.select(db.raw('1'))
+            .from('nivaro_tasks as tsk')
+            .where('tsk.collection', collection)
+            .whereRaw('tsk.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+        })
+        continue
+      }
+      if (kind === '$has_failed_push') {
+        exists(function () {
+          this.select(db.raw('1'))
+            .from('nivaro_erp_submissions as erp')
+            .where('erp.collection', collection)
+            .where('erp.status', 'failed')
+            .whereRaw('erp.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+        })
+        continue
+      }
+      if (kind === '$has_files') {
+        // Attachments live behind a per-collection junction to nivaro_files —
+        // resolve the first registered file M2M (e.g. workflows_files).
+        const rels2 = await getRelsForCollection(collection)
+        const fileAlias = rels2.find(
+          (r) =>
+            r.one_collection === collection &&
+            r.junction_field &&
+            r.many_collection &&
+            /_files$/.test(r.many_collection)
+        )
+        if (!fileAlias?.many_collection || !fileAlias.junction_field) continue
+        const junction = fileAlias.many_collection
+        const parentFk = fileAlias.many_field
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(junction) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(parentFk))
+          continue
+        exists(function () {
+          this.select(db.raw('1'))
+            .from(`${junction} as jf`)
+            .whereRaw(`jf.?? = ??.??`, [parentFk, collection, 'id'])
+        })
+        continue
+      }
+      continue
+    }
+    if (cond.path[0] === '$missing_required' && cond.path.length === 1) {
+      // Records missing any required physical field (#398). Alias/computed
+      // required fields are out of scope here — they have no column to test.
+      try {
+        const reqFields = (await db('nivaro_fields')
+          .where({ collection, required: true })
+          .select('field', 'type')) as Array<{ field: string; type: string }>
+        const physical = new Set<string>(
+          (
+            (await db('information_schema.columns')
+              .where({ table_name: collection })
+              .select('column_name')) as Array<{ column_name: string }>
+          ).map((c) => c.column_name.toLowerCase())
+        )
+        const cols = reqFields.filter(
+          (f) => physical.has(f.field.toLowerCase()) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(f.field)
+        )
+        if (!cols.length) {
+          // No testable required fields — "missing required" matches nothing.
+          q.whereRaw('1 = 0')
+          continue
+        }
+        q.where(function () {
+          for (const c of cols) {
+            this.orWhereNull(`${collection}.${c.field}`)
+            // Empty-string only counts as missing on string columns — MSSQL
+            // coerces '' to 0 against int columns, which would flag every 0.
+            if (c.type === 'string' || c.type === 'text') {
+              this.orWhere(`${collection}.${c.field}`, '')
+            }
+          }
+        })
+      } catch {
+        q.whereRaw('1 = 0')
+      }
+      continue
+    }
     const plan = await planConditionPath(collection, cond.path)
     if (!plan) continue
     applyPlannedCondition(q, collection, plan, cond.op, cond.value)

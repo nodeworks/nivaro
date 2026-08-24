@@ -15,7 +15,7 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { del, get, patch, post } from '../lib/commands'
 import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
-import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../lib/format-value'
+import { countFromResolved, type ColumnFormatConfig, formatMultiValue, formatValue } from '../lib/format-value'
 import { rowHighlightClass } from '../lib/row-highlight'
 import { cn } from '../lib/utils'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
@@ -67,6 +67,9 @@ export interface CollectionBrowserConfig {
   /** Quick-filter facet bar — same shape as the quickFilters prop; the prop
    *  wins when both are set. */
   quick_filters?: QuickFilterDef[]
+  /** Default sort (#395), e.g. '-created' — applied when the viewer hasn't
+   *  picked a sort, a view, or an initialSort prop. */
+  default_sort?: string
 }
 
 interface CMSRelation {
@@ -102,6 +105,7 @@ function labelFieldFor(meta: CollectionMeta | undefined): string {
 interface CollectionMeta {
   browser_config?: CollectionBrowserConfig | null
   collection: string
+  color?: string | null
   display_name: string | null
   display_template: string | null
   singleton?: boolean
@@ -125,6 +129,8 @@ export interface ActiveFilter {
   /** Target collection of a relation filter — lets chip-editing reopen the
    *  record checklist. */
   relTarget?: string
+  /** Filter negation (#339): invert the operator at query-build time. */
+  not?: boolean
 }
 
 type SavedViewColumn =
@@ -135,6 +141,7 @@ type SavedViewColumn =
       format?: ColumnFormatConfig
       pin?: 'left' | 'right'
       tint?: TintRule[]
+      width?: number
     }
 
 interface SavedView {
@@ -205,7 +212,8 @@ const FORMAT_PRESETS: Array<{ label: string; cfg: ColumnFormatConfig | null }> =
   { label: 'Date', cfg: { type: 'datetime', template: 'MM/DD/YYYY' } },
   { label: 'Date + time', cfg: { type: 'datetime', template: 'MM/DD/YYYY hh:mm A' } },
   { label: 'Relative time', cfg: { type: 'datetime', template: 'relative' } },
-  { label: 'Yes / No', cfg: { type: 'boolean', true_label: 'Yes', false_label: 'No' } }
+  { label: 'Yes / No', cfg: { type: 'boolean', true_label: 'Yes', false_label: 'No' } },
+  { label: 'Count (related)', cfg: { type: 'count' } }
 ]
 
 export interface QuickFilterDef {
@@ -1366,6 +1374,24 @@ const DATE_PRESETS = [
   { value: '90d', label: '90 days' },
   { value: 'year', label: 'This year' }
 ]
+// Filter negation (#339): each operator's inverse. Ops without an inverse
+// (presets resolved earlier) stay as-is — the NOT chip simply has no effect,
+// which is visible rather than silently wrong.
+const NEGATED_OPS: Record<string, string> = {
+  _eq: '_neq',
+  _neq: '_eq',
+  _in: '_nin',
+  _nin: '_in',
+  _contains: '_ncontains',
+  _ncontains: '_contains',
+  _null: '_nnull',
+  _nnull: '_null',
+  _gt: '_lte',
+  _gte: '_lt',
+  _lt: '_gte',
+  _lte: '_gt'
+}
+
 function dateRangeFor(preset: string): { from: string; to: string } | null {
   const now = new Date()
   const iso = (d: Date) => d.toISOString().slice(0, 10)
@@ -1930,6 +1956,13 @@ function filterChipText(f: ActiveFilter): { field: string; op: string; value: st
     const [a, b] = String(f.value).split('..')
     return { field, op: 'between', value: `${a} – ${b}` }
   }
+  if (f.op === '_preset') {
+    const label = DATE_PRESETS.find((d) => d.value === f.value)?.label ?? String(f.value)
+    return { field, op: 'in the', value: `${label} (rolling)` }
+  }
+  if (f.path[0]?.startsWith('$has_') || f.path[0] === '$missing_required') {
+    return { field, op: '', value: '' }
+  }
   return { field, op: opLabel(f.op).toLowerCase(), value: String(f.value ?? '') }
 }
 
@@ -2094,6 +2127,20 @@ function FilterBar({
             key={f.id}
             className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-[#00ceff66] dark:border-slate-700 dark:bg-slate-900'
           >
+            <button
+              type='button'
+              onClick={() =>
+                onFiltersChange(filters.map((x) => (x.id === f.id ? { ...x, not: !x.not } : x)))
+              }
+              data-tip={f.not ? 'Negated — click to restore' : 'Click to negate (NOT)'}
+              className={
+                f.not
+                  ? 'rounded bg-amber-100 px-1 text-[10.5px] font-bold text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'
+                  : 'rounded px-1 text-[10.5px] font-bold text-slate-300 hover:text-slate-500'
+              }
+            >
+              NOT
+            </button>
             <button type='button' onClick={() => editChip(f)} className='inline-flex items-center gap-1.5'>
               <span className='text-slate-500'>{chip.field}</span>
               <span className='font-semibold text-slate-700 dark:text-slate-200'>{chip.op}</span>
@@ -2143,6 +2190,42 @@ function FilterBar({
                   />
                 </div>
                 <div className='max-h-80 overflow-y-auto py-1'>
+                  {level.path.length === 0 && !fieldFilter && (
+                    <div className='mb-1 border-b border-slate-100 pb-1 dark:border-slate-800'>
+                      {(
+                        [
+                          ['$has_files', 'Has attachments'],
+                          ['$has_comments', 'Has comments'],
+                          ['$has_tasks', 'Has open tasks'],
+                          ['$has_failed_push', 'Has a failed integration push'],
+                          ['$missing_required', 'Missing required fields']
+                        ] as Array<[string, string]>
+                      ).map(([pathKey, label]) => (
+                        <button
+                          key={pathKey}
+                          type='button'
+                          onClick={() => {
+                            onFiltersChange([
+                              ...filters.filter((x) => x.path[0] !== pathKey),
+                              {
+                                id: `${pathKey}-${Date.now()}`,
+                                path: [pathKey],
+                                pathLabels: [label],
+                                fieldType: 'boolean',
+                                op: '_eq',
+                                value: 'true'
+                              }
+                            ])
+                            setOpen(false)
+                          }}
+                          className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                        >
+                          <span className='text-[#00a5cc] dark:text-nvr-cyan'>◈</span>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <FieldLevel
                     collection={level.collection}
                     path={level.path}
@@ -2230,8 +2313,10 @@ function FilterBar({
                           key={d.value}
                           type='button'
                           onClick={() => {
-                            const r = dateRangeFor(d.value)
-                            if (r) applyScalar('_between', `${r.from}..${r.to}`)
+                            // Rolling (#196): the TOKEN is stored, resolved at
+                            // query time — a saved view's "last 30 days" keeps
+                            // rolling instead of freezing the pick-day range.
+                            applyScalar('_preset', d.value)
                           }}
                           className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-600 hover:border-[#00ceff66] hover:bg-[#00ceff0d] dark:border-slate-700 dark:text-slate-300'
                         >
@@ -3077,6 +3162,8 @@ export function CollectionBrowserView({
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
+  // Column widths (#131): drag the header's right edge; persisted per view.
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnTints, setColumnTints] = useState<Record<string, TintRule[]>>({})
   const [formattingCol, setFormattingCol] = useState<string | null>(null)
   const [presetOpen, setPresetOpen] = useState(false)
@@ -3217,6 +3304,7 @@ export function CollectionBrowserView({
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [copiedTable, setCopiedTable] = useState(false)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -3290,6 +3378,15 @@ export function CollectionBrowserView({
   // Per-collection browser settings (nivaro_collections.browser_config) —
   // editable via PATCH /collections/:collection {browser_config: {...}}.
   const bc = meta?.browser_config ?? {}
+  // Default sort (#395): one-shot seed once meta lands, only when nothing
+  // else has claimed the sort (view application and user clicks both win).
+  const defaultSortSeededRef = useRef(false)
+  useEffect(() => {
+    if (defaultSortSeededRef.current || !meta) return
+    defaultSortSeededRef.current = true
+    if (!initialSort && !sort && bc.default_sort) setSort(bc.default_sort)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta])
   const enableCheckboxes = bc.checkbox_selection !== false
   const enableActions = bc.show_actions !== false
   const canCreate = showCreate && bc.allow_create !== false
@@ -3504,13 +3601,44 @@ export function CollectionBrowserView({
       const isDateType = f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
       if (f.op === '_between') {
         const [a, b] = String(f.value).split('..')
+        if (f.not) {
+          const branches: Array<{ path: string[]; op: string; value: unknown }> = []
+          if (a) branches.push({ path: f.path, op: '_lt', value: a })
+          if (b) branches.push({ path: f.path, op: '_gt', value: isDateType ? `${b}T23:59:59` : b })
+          if (branches.length) (conds as unknown[]).push({ or: branches })
+          continue
+        }
         if (a) conds.push({ path: f.path, op: '_gte', value: a })
         if (b) conds.push({ path: f.path, op: '_lte', value: isDateType ? `${b}T23:59:59` : b })
         continue
       }
-      const op = f.op.includes(':') ? f.op.split(':')[0] : f.op
+      if (f.path[0]?.startsWith('$has_') || f.path[0] === '$missing_required') {
+        // Presence filters (#397/#398): the server reads the VALUE's
+        // truthiness, so NOT flips the value rather than the operator.
+        conds.push({ path: f.path, op: '_eq', value: !f.not })
+        continue
+      }
+      if (f.op === '_preset') {
+        const r = dateRangeFor(String(f.value))
+        if (r) {
+          if (f.not) {
+            ;(conds as unknown[]).push({
+              or: [
+                { path: f.path, op: '_lt', value: r.from },
+                { path: f.path, op: '_gt', value: `${r.to}T23:59:59` }
+              ]
+            })
+          } else {
+            conds.push({ path: f.path, op: '_gte', value: r.from })
+            conds.push({ path: f.path, op: '_lte', value: `${r.to}T23:59:59` })
+          }
+        }
+        continue
+      }
+      let op = f.op.includes(':') ? f.op.split(':')[0] : f.op
       let value: unknown = f.op.includes(':') ? f.op.split(':')[1] : f.value || null
       if (f.fieldType === 'boolean' && (value === 'true' || value === 'false')) value = value === 'true'
+      if (f.not) op = NEGATED_OPS[op] ?? op
       conds.push({ path: f.path, op, value })
     }
     for (const qf of effQuickFilters) {
@@ -3627,16 +3755,13 @@ export function CollectionBrowserView({
     groupBy ? 500 : effPageSize,
     conditionsParam
   ]
+  // Live pill (#240): off-page/create/delete changes count into a pill the
+  // viewer clicks to refresh — a paging table that silently reshuffles rows
+  // under the cursor reads as a glitch, not freshness.
+  const [pendingLive, setPendingLive] = useState(0)
   useEffect(() => {
     if (!realtime || !collection) return
-    let invalidateTimer: ReturnType<typeof setTimeout> | null = null
-    const scheduleInvalidate = () => {
-      if (invalidateTimer) return
-      invalidateTimer = setTimeout(() => {
-        invalidateTimer = null
-        void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
-      }, 2000)
-    }
+    const scheduleInvalidate = () => setPendingLive((n) => n + 1)
     const unsub = realtime.subscribeCollections([collection], (ev) => {
       const id = String(ev.item)
       if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) {
@@ -3665,7 +3790,6 @@ export function CollectionBrowserView({
     })
     return () => {
       unsub()
-      if (invalidateTimer) clearTimeout(invalidateTimer)
     }
   }, [realtime, collection, qc, client])
 
@@ -4018,9 +4142,22 @@ export function CollectionBrowserView({
   }
   /** Apply a column's ColumnFormatConfig to a resolved display string
    *  (multi-value aware — preserves ', ' joins and '+N more'). */
-  const fmtCell = (val: string, key: string) => {
+  const fmtCell = (val: string, key: string, rowId?: unknown) => {
     const cfg = columnFormats[key]
+    if (cfg?.type === 'count') {
+      // Relation-count column (#142): count the related records, not their labels.
+      const path = key.includes('.') ? key : aliasPathByField[key]
+      const ids = rowId != null && path ? resolvedData?.rows?.[String(rowId)]?.[path]?.ids : undefined
+      const n = countFromResolved(val === '—' ? '' : val, ids)
+      return String(n)
+    }
     return cfg && val && val !== '—' ? formatMultiValue(val, cfg) : val
+  }
+  /** Attachment columns (#193): a count column whose drill target is the
+   *  files junction renders with a paperclip. */
+  const isFilesCol = (key: string) => {
+    const t = resolvedTargetFor(key)
+    return !!t && (t === 'nivaro_files' || /_files$/.test(t))
   }
 
   // ── Saved views ───────────────────────────────────────────────────────────
@@ -4043,15 +4180,18 @@ export function CollectionBrowserView({
       const formats: Record<string, ColumnFormatConfig> = {}
       const pins: Record<string, 'left' | 'right'> = {}
       const tints: Record<string, TintRule[]> = {}
+      const widths: Record<string, number> = {}
       for (const c of v.columns) {
         if (typeof c !== 'string' && c.label) labels[c.key] = c.label
         if (typeof c !== 'string' && c.format) formats[c.key] = c.format
         if (typeof c !== 'string' && c.pin) pins[c.key] = c.pin
         if (typeof c !== 'string' && c.tint?.length) tints[c.key] = c.tint
+        if (typeof c !== 'string' && c.width) widths[c.key] = c.width
       }
       setColumnLabels(labels)
       setColumnFormats(formats)
       setColumnTints(tints)
+      setColumnWidths(widths)
       setColumnPins(Object.keys(pins).length ? pins : null)
     } else {
       setColumnPins(null)
@@ -4084,13 +4224,15 @@ export function CollectionBrowserView({
         const format = columnFormats[k]
         const pin = effectivePins[k]
         const tint = columnTints[k]
-        if (!label && !format && !pin && !tint?.length) return k
+        const width = columnWidths[k]
+        if (!label && !format && !pin && !tint?.length && !width) return k
         return {
           key: k,
           ...(label ? { label } : {}),
           ...(format ? { format } : {}),
           ...(pin ? { pin } : {}),
-          ...(tint?.length ? { tint } : {})
+          ...(tint?.length ? { tint } : {}),
+          ...(width ? { width } : {})
         }
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
@@ -4298,16 +4440,66 @@ export function CollectionBrowserView({
     }
   }
 
+  // Hover prefetch (#210): warm ItemEditForm's record query so opening the
+  // row paints instantly. 250ms debounce so sweeping the cursor down the
+  // table doesn't fire a request per row.
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prefetchRecord = (id: unknown) => {
+    if (prefetchTimer.current) clearTimeout(prefetchTimer.current)
+    prefetchTimer.current = setTimeout(() => {
+      void qc.prefetchQuery({
+        queryKey: ['item', collection, String(id)],
+        queryFn: () =>
+          client
+            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+            .then((r) => r.data),
+        staleTime: 30_000
+      })
+    }, 250)
+  }
   const openRow = (id: string | number) => {
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
   }
 
   const nextSort = (field: string) => {
-    if (sort === field) setSort(`-${field}`)
-    else if (sort === `-${field}`) setSort('')
-    else setSort(field)
-    setPage(1)
+    // Sort by label (#396): an M2O column sorts by the TARGET's display label
+    // (server LEFT-JOIN dotted sort), never the raw FK id — ordering by id is
+    // meaningless to a reader. Falls back to the FK when no label resolves.
+    const rel = isM2OField(relations, collection, field)
+    const applyCycle = (key: string) => {
+      if (sort === key) setSort(`-${key}`)
+      else if (sort === `-${key}`) setSort('')
+      else setSort(key)
+      setPage(1)
+    }
+    if (rel?.one_collection && !isSystemCol(rel.one_collection)) {
+      const target = rel.one_collection
+      void qc
+        .fetchQuery({
+          queryKey: ['collection-meta', target],
+          queryFn: () =>
+            client
+              .request<{ data: { display_template?: string | null; fields?: Array<{ field: string; type?: string }> } }>(
+                get(`/collections/${target}`)
+              )
+              .then((r) => r.data),
+          staleTime: 60_000
+        })
+        .then((meta2) => {
+          const tmpl = meta2?.display_template ?? ''
+          const plain = tmpl.match(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/)?.[1]
+          const names = (meta2?.fields ?? []).map((f) => f.field)
+          const labelField =
+            (plain && names.includes(plain) ? plain : null) ??
+            names.find((n) => ['name', 'title', 'label', 'short_name', 'subject'].includes(n.toLowerCase())) ??
+            null
+          applyCycle(labelField ? `${field}.${labelField}` : field)
+        })
+        .catch(() => applyCycle(field))
+      return
+    }
+    applyCycle(field)
   }
 
   const allSelected = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id as string))
@@ -4495,6 +4687,60 @@ export function CollectionBrowserView({
     right: 'Pinned right — click to unpin',
     none: 'Pin column left'
   }
+  // Column resize (#131) + auto-fit on double-click (#143). Widths live in
+  // component state and persist through saved views; drag writes on pointerup.
+  const resizeRef = useRef<{ key: string; startX: number; startW: number } | null>(null)
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const r = resizeRef.current
+      if (!r) return
+      const w = Math.max(60, Math.min(640, r.startW + (e.clientX - r.startX)))
+      setColumnWidths((prev) => ({ ...prev, [r.key]: w }))
+    }
+    const onUp = () => {
+      resizeRef.current = null
+      document.body.style.cursor = ''
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [])
+  const autoFit = (key: string) => {
+    // Content-width heuristic: longest visible value at ~6.6px/char + padding.
+    let maxLen = columnLabel(key).length
+    for (const r of rows) {
+      const v = isResolvedCol(key)
+        ? (resolvedFor(r.id, key) ?? '')
+        : fmtCell(String(r[key] ?? ''), key, r.id)
+      if (v.length > maxLen) maxLen = Math.min(v.length, 90)
+    }
+    setColumnWidths((prev) => ({ ...prev, [key]: Math.max(60, Math.round(maxLen * 6.6) + 28) }))
+  }
+  const resizeHandle = (key: string) => (
+    <span
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        resizeRef.current = { key, startX: e.clientX, startW: columnWidths[key] ?? 140 }
+        document.body.style.cursor = 'col-resize'
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        autoFit(key)
+      }}
+      onClick={(e) => e.stopPropagation()}
+      title='Drag to resize · double-click to fit content'
+      className='absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 transition-opacity hover:bg-[#00ceff66] hover:opacity-100 group-hover/hcell:opacity-60'
+    />
+  )
+  const widthStyle = (key: string): React.CSSProperties | undefined =>
+    columnWidths[key]
+      ? { width: columnWidths[key], minWidth: columnWidths[key], maxWidth: columnWidths[key] }
+      : undefined
+
   const pinButton = (key: string) => {
     const pin = pinOf(key)
     return (
@@ -4705,6 +4951,21 @@ export function CollectionBrowserView({
       )}
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
+        {meta?.color && /^#[0-9a-fA-F]{3,8}$/.test(meta.color) && (
+          // Collection accent (#195): the collection's configured color as an
+          // identity chip, so multi-tab work reads at a glance.
+          <span
+            className='inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-semibold'
+            style={{
+              borderColor: `${meta.color}55`,
+              backgroundColor: `${meta.color}14`,
+              color: meta.color
+            }}
+          >
+            <span className='h-2 w-2 rounded-full' style={{ backgroundColor: meta.color }} />
+            {meta.display_name || collection}
+          </span>
+        )}
         <FilterBar
           collection={collection}
           meta={meta}
@@ -4719,9 +4980,24 @@ export function CollectionBrowserView({
             setPage(1)
           }}
         />
+        {pendingLive > 0 && (
+          <button
+            type='button'
+            onClick={() => {
+              setPendingLive(0)
+              void refetch()
+            }}
+            className='flex h-8 items-center gap-1 rounded-full border border-[#00ceff66] bg-[#00ceff14] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
+          >
+            {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
+          </button>
+        )}
         <button
           type='button'
-          onClick={() => void refetch()}
+          onClick={() => {
+            setPendingLive(0)
+            void refetch()
+          }}
           aria-label='Refresh'
           title='Refresh'
           className='flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
@@ -5232,6 +5508,35 @@ export function CollectionBrowserView({
               >
                 CSV — visible columns
               </button>
+              <button
+                type='button'
+                onClick={() => {
+                  setExportMenuOpen(false)
+                  // Copy to clipboard (#202): current page, visible columns,
+                  // TSV — pastes straight into Excel/Sheets as cells.
+                  const cols = effectiveColumns
+                  const header = cols.map((c) => columnLabel(c)).join('\t')
+                  const body = rows
+                    .map((r) =>
+                      cols
+                        .map((c) => {
+                          const v = isResolvedCol(c)
+                            ? fmtCell(resolvedFor(r.id, c) ?? '', c, r.id)
+                            : fmtCell(String(r[c] ?? ''), c, r.id)
+                          return String(v ?? '').replace(/[\t\n]/g, ' ')
+                        })
+                        .join('\t')
+                    )
+                    .join('\n')
+                  void navigator.clipboard?.writeText(`${header}\n${body}`).then(() => {
+                    setCopiedTable(true)
+                    setTimeout(() => setCopiedTable(false), 2000)
+                  })
+                }}
+                className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+              >
+                {copiedTable ? 'Copied ✓' : 'Copy table to clipboard'}
+              </button>
               {exportPresets.length > 0 && (
                 <p className='border-t border-slate-100 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border/60'>
                   Presets (server, current filters apply)
@@ -5622,19 +5927,21 @@ export function CollectionBrowserView({
                     const f0 = fieldByName.get(key)
                     const resolved =
                       isResolvedCol(key) || !!(f0?.computed_formula && !f0.computed_store)
-                    const active = !resolved && (sort === key || sort === `-${key}`)
-                    const desc = sort === `-${key}`
+                    const active =
+                      !resolved &&
+                      (sort === key || sort === `-${key}` || sort.replace(/^-/, '').startsWith(`${key}.`))
+                    const desc = sort.startsWith('-')  && active
                     const f = fieldByName.get(key)
                     const label = columnLabel(key)
                     return (
                       <th
                         key={key}
                         ref={pinned ? pinRef(key) : undefined}
-                        style={pinStyle(key)}
+                        style={{ ...widthStyle(key), ...pinStyle(key) }}
                         onClick={() => {
                           if (!resolved) nextSort(key)
                         }}
-                        className={`${baseTh} ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600'} ${pinPart}`}
+                        className={`${baseTh} relative ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600'} ${pinPart}`}
                       >
                         {label}
                         {f?.computed_formula && (
@@ -5648,6 +5955,7 @@ export function CollectionBrowserView({
                           </span>
                         )}
                         {pinButton(key)}
+                        {resizeHandle(key)}
                       </th>
                     )
                   })}
@@ -5802,6 +6110,7 @@ export function CollectionBrowserView({
                       <tr
                         key={String(id)}
                         onClick={() => openRow(id)}
+                        onMouseEnter={() => prefetchRecord(id)}
                         title={risk ? `At risk — ${risk.rule}` : undefined}
                         className={`group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-75 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
                           isSelected ? 'bg-[#00ceff14]' : (riskTint ?? '')
@@ -5948,7 +6257,8 @@ export function CollectionBrowserView({
                                     data-tip={resolvedFor(id, key) ?? undefined}
                                     className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
                                   >
-                                    {fmtCell(resolvedFor(id, key) ?? '', key)}
+                                    {columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}
+                                    {fmtCell(resolvedFor(id, key) ?? '', key, id)}
                                   </button>
                                 ) : (
                                   <span
@@ -5956,7 +6266,7 @@ export function CollectionBrowserView({
                                     data-tip={resolvedFor(id, key) ?? undefined}
                                   >
                                     {resolvedFor(id, key) != null ? (
-                                      fmtCell(resolvedFor(id, key) ?? '', key)
+                                      `${columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}${fmtCell(resolvedFor(id, key) ?? '', key, id)}`
                                     ) : (
                                       <span className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
                                     )}

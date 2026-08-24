@@ -5594,6 +5594,7 @@ interface BrowserConfig {
   allow_create?: boolean
   page_size?: number
   quick_filters?: unknown[]
+  default_sort?: string
 }
 
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
@@ -5602,19 +5603,23 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { browser_config: BrowserConfig | null } }>(`/collections/${tableName}`)
+        .get<{ data: { browser_config: BrowserConfig | null; color?: string | null } }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
   })
   const cfg = col?.browser_config ?? {}
   const [pageSize, setPageSize] = useState('')
+  const [defaultSort, setDefaultSort] = useState('')
+  const [accentColor, setAccentColor] = useState('')
   const [qfRows, setQfRows] = useState<QuickFilterDef[]>([])
   const [qfDirty, setQfDirty] = useState(false)
   const [initialised, setInitialised] = useState(false)
   useEffect(() => {
     if (col !== undefined && !initialised) {
       setPageSize(cfg.page_size ? String(cfg.page_size) : '')
+      setDefaultSort(cfg.default_sort ?? '')
+      setAccentColor((col as { color?: string | null } | undefined)?.color ?? '')
       setQfRows((cfg.quick_filters ?? []) as QuickFilterDef[])
       setInitialised(true)
     }
@@ -5629,6 +5634,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.allow_create === false) clean.allow_create = false
     if (next.page_size && next.page_size > 0) clean.page_size = next.page_size
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
+    if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -5685,6 +5691,69 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             placeholder='25'
             className='h-7 w-20 text-[12px]'
           />
+        </div>
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Default sort</p>
+            <p className='text-[11.5px] text-slate-500'>
+              Field name, '-' prefix for descending (e.g. <code>-created</code>) — applied when the
+              viewer has no view or sort of their own
+            </p>
+          </div>
+          <Input
+            value={defaultSort}
+            onChange={(e) => setDefaultSort(e.target.value)}
+            onBlur={() => void patch({ default_sort: defaultSort.trim() || undefined })}
+            placeholder='-created'
+            className='h-7 w-36 font-mono text-[12px]'
+          />
+        </div>
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Accent color</p>
+            <p className='text-[11.5px] text-slate-500'>
+              Identity chip in the browser toolbar — tells this collection's tabs apart at a glance
+            </p>
+          </div>
+          <div className='flex items-center gap-1.5'>
+            <input
+              type='color'
+              value={/^#[0-9a-fA-F]{6}$/.test(accentColor) ? accentColor : '#00ceff'}
+              onChange={(e) => setAccentColor(e.target.value)}
+              className='h-7 w-9 cursor-pointer rounded border border-slate-200 bg-white p-0.5'
+              aria-label='Accent color'
+            />
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='h-7 text-[11.5px]'
+              onClick={() => {
+                void api
+                  .patch(`/collections/${tableName}`, { color: accentColor || null })
+                  .then(() => {
+                    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+                    toast.success('Accent color saved')
+                  })
+              }}
+            >
+              Save
+            </Button>
+            {accentColor && (
+              <button
+                type='button'
+                onClick={() => {
+                  setAccentColor('')
+                  void api.patch(`/collections/${tableName}`, { color: null }).then(() => {
+                    qc.invalidateQueries({ queryKey: ['collection-meta', tableName] })
+                  })
+                }}
+                className='text-[11px] text-slate-400 hover:text-red-500'
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
         <div>
           <p className='text-[12.5px] font-medium text-slate-700'>Quick filters</p>

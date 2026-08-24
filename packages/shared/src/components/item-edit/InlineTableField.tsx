@@ -2019,6 +2019,24 @@ export function InlineTableField({
   // existing invalidation call site (incl. NestedRelationEditor's outerGridInvalidateKey)
   // refreshes it for free — staleness matches the grid's own o2m-rows refetch behavior.
   const visibleRowIds = useMemo(() => rows.map(r => String(r.id)), [rows])
+  // Grid virtualization (#205): grids past 150 rows render incrementally — a
+  // sentinel row extends the window as it scrolls into view, so a 1,000-row
+  // child set never mounts 1,000 rows of inputs at once. Editing/summing are
+  // unaffected (they read `rows`, not the DOM).
+  const [renderCap, setRenderCap] = useState(150)
+  const renderSentinelRef = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    const el = renderSentinelRef.current
+    if (!el || rows.length <= renderCap) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setRenderCap((c) => c + 150)
+      },
+      { rootMargin: '400px' }
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [rows.length, renderCap])
   const rowIdsHash = visibleRowIds.join(',')
   const rowCommentCounts = useRowCommentCounts(relatedCollection, visibleRowIds, !!rowComments && !isNew)
   const summaryMembersQueries = useQueries({
@@ -2912,7 +2930,19 @@ export function InlineTableField({
         'en-US',
         numericIntlOptions(colOpts, colOpts.format as string | undefined)
       )
-      return <span className='tabular-nums'>{formatted}</span>
+      // Formula tooltip (#204): the formula with each token replaced by its
+      // current value, so the reader can check the math without hunting.
+      const substituted = formula.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_m, ref: string) => {
+        const v = ref.includes('.')
+          ? (rowId ? resolvedPathData?.rows[rowId]?.[ref]?.value : undefined)
+          : (row as Record<string, unknown>)[ref]
+        return v == null || v === '' ? '0' : String(v)
+      })
+      return (
+        <span className='tabular-nums' data-tip={`${formula} = ${substituted} = ${formatted}`}>
+          {formatted}
+        </span>
+      )
     }
 
     // Matched-aggregate column
@@ -3751,7 +3781,7 @@ export function InlineTableField({
           )}
 
           {/* Saved rows */}
-          {!isNew && activeView === 'original' && rows.map((row, ri) => {
+          {!isNew && activeView === 'original' && rows.slice(0, renderCap).map((row, ri) => {
             const id = String(row.id)
             const section = sectionsActive ? sectionOf(row) : null
             const isSectionStart = section !== null && (ri === 0 || sectionOf(rows[ri - 1]) !== section)
@@ -4187,6 +4217,13 @@ export function InlineTableField({
               existing record belongs at the end of the list, not above
               lines that already exist. */}
           {/* Pending rows (new parent OR pending-save mode) */}
+          {!isNew && activeView === 'original' && rows.length > renderCap && (
+            <tr ref={renderSentinelRef}>
+              <td colSpan={99} className='px-3 py-2 text-center text-[11px] text-slate-400'>
+                Showing {renderCap} of {rows.length} rows — scroll to load more
+              </td>
+            </tr>
+          )}
           {pendingRows.length > 0 && pendingRows.map((row, ri) => {
             const pendingRowId = `pending:${ri}`
             const isEditing = editState?.rowId === pendingRowId

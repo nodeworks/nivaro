@@ -7,6 +7,7 @@ export type ColumnFormatConfig =
   | { type: 'datetime'; template: string }
   | { type: 'number'; decimals?: number; thousands?: boolean; prefix?: string; suffix?: string }
   | { type: 'boolean'; true_label: string; false_label: string }
+  | { type: 'count' }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -60,6 +61,10 @@ function formatDateTemplate(raw: string, template: string): string {
 
 // Garbage in, raw out: never throws, never blanks a non-empty value.
 export function formatValue(raw: string, cfg: ColumnFormatConfig): string {
+  // 'count' needs the resolved id list, which only the relation cell has —
+  // callers handle it (countFromResolved); a plain value passes through.
+  if (cfg.type === 'count') return raw
+
   if (cfg.type === 'datetime') return formatDateTemplate(raw, cfg.template)
   if (cfg.type === 'number') {
     const n = Number(raw)
@@ -136,4 +141,21 @@ export function numericIntlOptions(
     }
   }
   return { maximumFractionDigits: digits }
+}
+
+
+/**
+ * Relation-count columns (#142/#193): the count behind a resolved multi-value
+ * cell. ids are server-capped at 50, but the rendered string carries the true
+ * total as "+N more" — parse it back out when the cap was hit.
+ */
+export function countFromResolved(value: string | null, ids: string[] | undefined): number {
+  if (ids && ids.length > 0 && ids.length < 50) return ids.length
+  if (!value || value === '—') return ids?.length ?? 0
+  const m = value.match(/\+(\d+) more$/)
+  if (m) {
+    const shown = value.replace(/ \+\d+ more$/, '').split(', ').filter(Boolean).length
+    return shown + Number(m[1])
+  }
+  return value.split(', ').filter(Boolean).length
 }
