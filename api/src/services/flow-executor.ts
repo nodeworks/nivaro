@@ -658,6 +658,31 @@ async function runOperation(
   data: FlowData,
   ctx: ExecutionContext
 ): Promise<{ status: 'resolve' | 'reject'; output: FlowData }> {
+  emitFirehose('flow-op', {
+    flow_id: ctx.flowId,
+    flow: ctx.flowName,
+    op: op.key ?? op.id,
+    type: op.type,
+    trigger: ctx.trigger
+  })
+  const started = Date.now()
+  const result = await runOperationInner(op, data, ctx)
+  // Live flow runs (#287): watchers of the flows room see steps as they land.
+  emitWatch('flows', 'flow:step', {
+    flow_id: ctx.flowId,
+    op: op.key ?? op.id,
+    type: op.type,
+    status: result.status,
+    ms: Date.now() - started
+  })
+  return result
+}
+
+async function runOperationInner(
+  op: FlowOperation,
+  data: FlowData,
+  ctx: ExecutionContext
+): Promise<{ status: 'resolve' | 'reject'; output: FlowData }> {
   switch (op.type) {
     case 'log':
       return runLog(op, data, ctx)
@@ -714,6 +739,21 @@ async function runOperation(
 // ─── Main executor ────────────────────────────────────────────────────────────
 
 export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
+  // Flow shadow mode (#354): a flow flagged shadow_mode runs its FULL logic
+  // dry (side-effect ops render but never send/write) and records the run
+  // with a 'shadow:' trigger prefix — a trial period before it acts for real.
+  if (!ctx.dryRun) {
+    try {
+      const flowRow = (await db('nivaro_flows')
+        .where({ id: ctx.flowId })
+        .first('shadow_mode')) as { shadow_mode?: boolean | number } | undefined
+      if (flowRow?.shadow_mode === true || flowRow?.shadow_mode === 1) {
+        ctx = { ...ctx, dryRun: true, trace: ctx.trace ?? [], trigger: `shadow:${ctx.trigger}` }
+      }
+    } catch {
+      /* shadow lookup failure = run normally */
+    }
+  }
   const operations = await db<FlowOperation>('nivaro_flow_operations')
     .where({ flow: ctx.flowId })
     .orderBy('position_y')
@@ -844,4 +884,24 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       )
     throw err
   }
+}
+
+
+// ── Hook firehose / watch-room emits (#283/#287) ────────────────────────────
+// Zero cost unless someone has the room open (same posture as the traffic
+// feed): membership is checked before anything serializes.
+function emitWatch(room: string, event: string, payload: Record<string, unknown>): void {
+  void import('./io-holder.js')
+    .then(({ getIo }) => {
+      const io = getIo()
+      if (!io) return
+      const r = io.sockets?.adapter?.rooms?.get(`watch:${room}`)
+      if (!r || r.size === 0) return
+      io.to(`watch:${room}`).emit(event, { ...payload, at: new Date().toISOString() })
+    })
+    .catch(() => {})
+}
+
+export function emitFirehose(kind: string, payload: Record<string, unknown>): void {
+  emitWatch('firehose', 'firehose:event', { kind, ...payload })
 }

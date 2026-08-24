@@ -99,6 +99,7 @@ const inputCls =
 export default function AutomationTests() {
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
+  const [generating, setGenerating] = useState(false)
   const [name, setName] = useState('')
   const [flowId, setFlowId] = useState('')
   const [payloadText, setPayloadText] = useState('{}')
@@ -237,6 +238,40 @@ export default function AutomationTests() {
                 placeholder='Pick a flow…'
               />
             </div>
+            {/* AI test generator (#362) */}
+            {flowId && (
+              <button
+                type='button'
+                disabled={generating}
+                onClick={() => {
+                  setGenerating(true)
+                  void api
+                    .post<{ data: Array<{ name: string; payload: unknown; expectations: unknown }> }>(
+                      '/automation-tests/generate',
+                      { flow_id: flowId }
+                    )
+                    .then(async (r) => {
+                      const cases = r.data.data
+                      for (const c of cases) {
+                        await api.post('/automation-tests', {
+                          name: c.name,
+                          flow_id: flowId,
+                          payload: c.payload,
+                          expectations: c.expectations
+                        })
+                      }
+                      toast.success(`${cases.length} test case(s) generated — review before trusting them`)
+                      invalidate()
+                      setShowCreate(false)
+                    })
+                    .catch((e) => toast.error(e?.response?.data?.error ?? 'Generation failed'))
+                    .finally(() => setGenerating(false))
+                }}
+                className='mt-2 inline-flex items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1 text-[12px] font-medium text-violet-700 disabled:opacity-50 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300'
+              >
+                {generating ? 'Generating…' : '✨ Generate test cases with AI'}
+              </button>
+            )}
             <p className='mt-2 text-[11px] text-slate-400'>Trigger payload (what the flow receives):</p>
             <textarea
               value={payloadText}

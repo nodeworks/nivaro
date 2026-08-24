@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
  * per-API-node observability — the stats route says so in its payload.
  */
 
-type Tab = 'sockets' | 'traffic' | 'editing' | 'concurrency'
+type Tab = 'sockets' | 'traffic' | 'editing' | 'concurrency' | 'firehose'
 
 interface SocketRow {
   id: string
@@ -50,7 +50,8 @@ export default function Realtime() {
               ['sockets', 'Sockets & rooms'],
               ['traffic', 'Live traffic'],
               ['editing', 'Now editing'],
-              ['concurrency', 'Concurrency']
+              ['concurrency', 'Concurrency'],
+              ['firehose', 'Firehose']
             ] as Array<[Tab, string]>
           ).map(([key, label]) => (
             <button
@@ -74,6 +75,7 @@ export default function Realtime() {
         {tab === 'traffic' && <TrafficTab />}
         {tab === 'editing' && <EditingTab />}
         {tab === 'concurrency' && <ConcurrencyTab />}
+        {tab === 'firehose' && <FirehoseTab />}
       </div>
     </div>
   )
@@ -462,4 +464,75 @@ function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`
   return `${(seconds / 3600).toFixed(1)}h`
+}
+
+
+// ─── Hook firehose (#283): hooks/flows/transition actions as they fire ───────
+function FirehoseTab() {
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
+  const [paused, setPaused] = useState(false)
+  const pausedRef = useRef(false)
+  pausedRef.current = paused
+  useEffect(() => {
+    const leave = joinWatchRoom('firehose')
+    const off = adminRealtime.on('firehose:event', (p: Record<string, unknown>) => {
+      if (pausedRef.current) return
+      setRows((prev) => [p, ...prev].slice(0, 300))
+    })
+    return () => {
+      off()
+      leave()
+    }
+  }, [])
+  return (
+    <div className='space-y-3'>
+      <div className='flex items-center justify-between'>
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+          Hooks, flow operations and transition actions as they fire — payload KEY names only,
+          never values. Streamed only while this tab is open.
+        </p>
+        <button
+          type='button'
+          onClick={() => setPaused((p) => !p)}
+          className='rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-muted dark:border-border'
+        >
+          {paused ? 'Resume' : 'Pause'}
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <p className='text-[13px] text-slate-400'>
+          Waiting for activity — save a record or run a flow to see events.
+        </p>
+      ) : (
+        <div className='space-y-0.5 font-mono text-[11px]'>
+          {rows.map((r, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: streaming log
+            <p key={i} className='break-words'>
+              <span className='text-slate-400'>
+                {String(r.at ?? '').slice(11, 19)}
+              </span>{' '}
+              <span
+                className={
+                  r.kind === 'hook'
+                    ? 'text-nvr-cyan'
+                    : r.kind === 'flow-op'
+                      ? 'text-violet-500'
+                      : 'text-amber-500'
+                }
+              >
+                {String(r.kind)}
+              </span>{' '}
+              <span className='text-slate-700 dark:text-slate-200'>
+                {r.kind === 'hook'
+                  ? `${r.timing}:${r.action} ${r.collection} [${(r.payload_keys as string[])?.join(', ') ?? ''}]`
+                  : r.kind === 'flow-op'
+                    ? `${r.flow} → ${r.op} (${r.type})`
+                    : `${r.collection}/${r.item} "${r.transition}" ${r.action_type}${r.endpoint ? ` → ${r.endpoint}` : ''}`}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CronBuilder } from '@nivaro/shared'
 import {
   Check,
   ChevronsUpDown,
@@ -279,13 +280,9 @@ export function ScheduledReportsPage() {
                   />
                 </div>
                 <div>
-                  <p className='mb-1 text-[11px] font-medium text-slate-500'>Schedule (cron)</p>
-                  <div className='flex items-center gap-1.5'>
-                    <Input
-                      value={cron}
-                      onChange={(e) => setCron(e.target.value)}
-                      className='h-8 w-32 font-mono text-[12px]'
-                    />
+                  <p className='mb-1 text-[11px] font-medium text-slate-500'>Schedule</p>
+                  <CronBuilder value={cron} onChange={setCron} />
+                  <div className='mt-1.5 flex items-center gap-1.5'>
                     {CRON_PRESETS.map((p) => (
                       <button
                         key={p.value}

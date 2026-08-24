@@ -165,6 +165,7 @@ export {
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { useOnlineUsers } from './lib/use-online-users'
 export { TickerNumber } from './components/TickerNumber'
+export { CronBuilder, describeCron } from './components/CronBuilder'
 export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { OfflineBanner } from './components/OfflineBanner'

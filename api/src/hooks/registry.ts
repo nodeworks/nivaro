@@ -66,6 +66,19 @@ class HookRegistry {
   }
 
   async trigger(timing: HookTiming, ctx: HookContext) {
+    // Hook firehose (#283): dev observability — a payload PEEK (key names,
+    // never values) streams to watchers of the firehose room. Zero cost when
+    // nobody watches (membership checked inside emitFirehose).
+    void import('../services/flow-executor.js')
+      .then(({ emitFirehose }) =>
+        emitFirehose('hook', {
+          timing,
+          collection: ctx.collection,
+          action: ctx.action,
+          payload_keys: Object.keys(ctx.payload ?? {}).slice(0, 30)
+        })
+      )
+      .catch(() => {})
     const list = timing === 'before' ? this.beforeHooks : this.afterHooks
     for (const entry of list) {
       if (entry.disabled) continue

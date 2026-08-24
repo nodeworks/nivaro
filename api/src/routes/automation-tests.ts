@@ -129,6 +129,53 @@ export async function automationTestRoutes(app: FastifyInstance): Promise<void> 
     }
   })
 
+  // ── AI test generator (#362) ──────────────────────────────────────────────
+  // Reads a flow's trigger + operation configs and proposes test cases
+  // (payload + expectations) — the admin reviews and saves the ones worth
+  // keeping through the normal create route.
+  app.post<{ Body: { flow_id?: string } }>('/generate', async (req, reply) => {
+    const flowId = String(req.body?.flow_id ?? '')
+    if (!flowId) return reply.code(400).send({ error: 'flow_id is required' })
+    const flow = await db('nivaro_flows').where({ id: flowId }).first()
+    if (!flow) return reply.code(404).send({ error: 'Flow not found' })
+    const ops = await db('nivaro_flow_operations').where({ flow: flowId }).select('*')
+    const { getAiClient } = await import('../services/ai-client.js')
+    const client = await getAiClient()
+    if (!client) return reply.code(503).send({ error: 'No AI key configured' })
+    const prompt = `You are generating dry-run test cases for a workflow automation "flow".
+Flow: ${JSON.stringify({ name: flow.name, trigger: flow.trigger, trigger_options: flow.trigger_options })}
+Operations: ${JSON.stringify(ops.map((o) => ({ key: o.key, name: o.name, type: o.type, options: String(o.options ?? '').slice(0, 800) })))}
+
+Produce 2-4 test cases as a JSON array. Each: {"name": string, "payload": object (the trigger payload a real event would carry — infer realistic field names from the operation templates), "expectations": array of {"type": "no_errors"} | {"type": "min_steps", "value": number} | {"type": "preview_contains", "value": string}}.
+Cover: the happy path, a condition-filtered path (payload that should NOT pass conditions), and an edge case. Respond with ONLY the JSON array.`
+    try {
+      const res = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      const text = res.content
+        .filter((c) => c.type === 'text')
+        .map((c) => (c as { text: string }).text)
+        .join('')
+      const jsonMatch = text.match(/\[[\s\S]*\]/)
+      const cases = jsonMatch ? JSON.parse(jsonMatch[0]) : []
+      if (!Array.isArray(cases) || cases.length === 0)
+        return reply.code(422).send({ error: 'The model returned no usable cases' })
+      await logActivity({
+        action: 'automation-test-generate',
+        user: req.user?.id,
+        comment: `flow ${flowId}: ${cases.length} case(s)`,
+        req
+      })
+      return reply.send({ data: cases.slice(0, 6) })
+    } catch (err) {
+      return reply
+        .code(502)
+        .send({ error: err instanceof Error ? err.message : 'generation failed' })
+    }
+  })
+
   app.post('/', async (req, reply) => {
     const b = req.body as {
       name?: string

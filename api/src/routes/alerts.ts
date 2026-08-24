@@ -379,6 +379,54 @@ export async function alertsRoutes(app: FastifyInstance) {
 
   // ── Manual Evaluation (admin) ──────────────────────────────────────────────
 
+  // ── Alert what-if (#342) ──────────────────────────────────────────────────
+  // "Would this alert fire right now?" — evaluates a PROPOSED definition
+  // against live data before it is saved. Threshold detections only (an
+  // anomaly needs history the unsaved definition doesn't have yet).
+  app.post('/what-if', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = req.body as {
+      collection?: string
+      field?: string
+      operator?: string
+      threshold?: number
+    }
+    const collection = String(body?.collection ?? '')
+    const field = String(body?.field ?? '')
+    const operator = String(body?.operator ?? 'gt')
+    const threshold = Number(body?.threshold)
+    if (
+      !/^[a-z][a-z0-9_]*$/i.test(collection) ||
+      /^nivaro_/i.test(collection) ||
+      !/^[a-z][a-z0-9_]*$/i.test(field) ||
+      !Number.isFinite(threshold)
+    )
+      return reply.code(400).send({ error: 'collection, field and numeric threshold required' })
+    const OPS: Record<string, string> = { gt: '>', gte: '>=', lt: '<', lte: '<=', eq: '=' }
+    const sqlOp = OPS[operator]
+    if (!sqlOp) return reply.code(400).send({ error: 'operator must be gt/gte/lt/lte/eq' })
+    try {
+      const count = (await db(collection)
+        .whereRaw(`?? ${sqlOp} ?`, [field, threshold])
+        .count('* as c')
+        .first()) as { c?: number | string } | undefined
+      const sample = (await db(collection)
+        .whereRaw(`?? ${sqlOp} ?`, [field, threshold])
+        .orderBy('id', 'desc')
+        .limit(5)
+        .select('id', field)) as Array<Record<string, unknown>>
+      return reply.send({
+        data: {
+          matching_now: Number(count?.c ?? 0),
+          sample: sample.map((r) => ({ id: r.id, value: r[field] }))
+        }
+      })
+    } catch (err) {
+      return reply
+        .code(422)
+        .send({ error: err instanceof Error ? err.message : 'evaluation failed' })
+    }
+  })
+
   app.post('/evaluate', { preHandler: requireAdmin }, async (_req, reply) => {
     const triggered = await evaluateAlerts()
     return reply.send({ data: { triggered } })

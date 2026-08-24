@@ -490,6 +490,17 @@ export async function runTransitionActions(opts: {
   const responses: unknown[] = []
   for (const action of actions) {
     if (action.type !== 'erp_submit' && action.type !== 'create_record') continue
+    void import('./flow-executor.js')
+      .then(({ emitFirehose }) =>
+        emitFirehose('transition-action', {
+          collection,
+          item: String(item),
+          transition: opts.transition.label,
+          action_type: action.type,
+          endpoint: (action as { endpoint_path?: string }).endpoint_path ?? null
+        })
+      )
+      .catch(() => {})
 
     // Refetch per action so guards/templates see prior actions' writebacks
     let record: Record<string, unknown> = {}

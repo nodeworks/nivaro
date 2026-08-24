@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CronBuilder } from '@nivaro/shared'
 import {
   ArrowDown,
   ArrowLeft,
@@ -730,6 +731,8 @@ function CronEditor({
           ))}
         </div>
       </div>
+      {/* Visual schedule builder (#376) */}
+      <CronBuilder value={value} onChange={onChange} />
       <div className='space-y-1.5'>
         <Label htmlFor='cron-expression'>Cron Expression</Label>
         <div className='flex items-center gap-2'>
@@ -3333,6 +3336,33 @@ export function FlowEditPage() {
                   )}
                 />
                 {(form.status ?? flow.status) === 'active' ? 'Active' : 'Inactive'}
+              </button>
+            )}
+            {/* Flow shadow mode (#354): full logic runs DRY — side-effect ops
+                render but never send; runs log with a 'shadow:' trigger. */}
+            {flow && (
+              <button
+                type='button'
+                onClick={() =>
+                  setForm((p) => ({
+                    ...p,
+                    shadow_mode: !((p as { shadow_mode?: boolean }).shadow_mode ??
+                      (flow as { shadow_mode?: boolean }).shadow_mode)
+                  }))
+                }
+                data-tip='Shadow mode: the flow runs log-only (dry) — a trial period before it acts for real'
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors',
+                  ((form as { shadow_mode?: boolean }).shadow_mode ??
+                    (flow as { shadow_mode?: boolean }).shadow_mode)
+                    ? 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-border dark:bg-muted dark:text-slate-400'
+                )}
+              >
+                {((form as { shadow_mode?: boolean }).shadow_mode ??
+                  (flow as { shadow_mode?: boolean }).shadow_mode)
+                  ? 'Shadow (dry)'
+                  : 'Shadow off'}
               </button>
             )}
             {status === 'active' && trigger === 'manual' && flow && (

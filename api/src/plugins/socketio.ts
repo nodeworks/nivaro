@@ -98,7 +98,7 @@ export function getRecordViewerSnapshot(): Array<{
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
-const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors'])
+const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows'])
 
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const io = new SocketIOServer(app.server, {

@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { ChevronDown, ChevronRight, History } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -54,6 +55,7 @@ function formatTimestamp(ts: string): string {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function FlowRunsPanel({ flowId }: { flowId: string }) {
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
 
@@ -63,6 +65,22 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
     refetchInterval: 10000,
     enabled: open
   })
+
+  // Live flow runs (#287): watchers see steps land as the flow executes.
+  const [liveStep, setLiveStep] = useState<string | null>(null)
+  useEffect(() => {
+    const leave = joinWatchRoom('flows')
+    const off = adminRealtime.on('flow:step', (p: { flow_id?: string; op?: string; status?: string }) => {
+      if (p?.flow_id !== flowId) return
+      setLiveStep(`${p.op} — ${p.status}`)
+      void qc.invalidateQueries({ queryKey: ['flow-runs', flowId] })
+      setTimeout(() => setLiveStep(null), 5000)
+    })
+    return () => {
+      off()
+      leave()
+    }
+  }, [flowId])
 
   const runs: FlowRun[] = data?.data ?? []
 
@@ -76,6 +94,12 @@ export function FlowRunsPanel({ flowId }: { flowId: string }) {
         <div className='flex items-center gap-2'>
           <History className='h-4 w-4 text-slate-400' />
           <h2 className='text-[13px] font-semibold text-slate-900'>Run History</h2>
+          {liveStep && (
+            <span className='inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10.5px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
+              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500' />
+              {liveStep}
+            </span>
+          )}
           {open && data && (
             <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500'>
               {runs.length}

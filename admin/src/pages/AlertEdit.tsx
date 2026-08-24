@@ -98,6 +98,11 @@ export function AlertEditPage() {
   const [threshold, setThreshold] = useState<number>(0)
   const [unit, setUnit] = useState('count')
   const [detectionType, setDetectionType] = useState<'threshold' | 'anomaly'>('threshold')
+  const [whatIf, setWhatIf] = useState<{
+    matching_now: number
+    sample: Array<{ id: unknown; value: unknown }>
+  } | null>(null)
+  const [whatIfBusy, setWhatIfBusy] = useState(false)
   const [sensitivity, setSensitivity] = useState<number>(2.0)
   const [cooldownMinutes, setCooldownMinutes] = useState<number>(60)
   const [isActive, setIsActive] = useState(true)
@@ -548,8 +553,37 @@ export function AlertEditPage() {
           )}
         </div>
 
+        {/* Alert what-if (#342) */}
+        {whatIf && (
+          <div className='rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted/40'>
+            <b className='tabular-nums'>{whatIf.matching_now.toLocaleString()}</b> record(s) would
+            match this condition right now.
+            {whatIf.sample.length > 0 && (
+              <span className='ml-1 text-slate-500'>
+                e.g. {whatIf.sample.map((r) => `#${r.id} (${String(r.value)})`).join(', ')}
+              </span>
+            )}
+          </div>
+        )}
         {/* Actions */}
         <div className='flex items-center gap-2 pt-2 border-t'>
+          {detectionType === 'threshold' && (
+            <Button
+              type='button'
+              variant='outline'
+              disabled={whatIfBusy || !collection || !field}
+              onClick={() => {
+                setWhatIfBusy(true)
+                void api
+                  .post('/alerts/what-if', { collection, field, operator, threshold })
+                  .then((r) => setWhatIf(r.data.data))
+                  .catch((e) => toast.error(e?.response?.data?.error ?? 'Preview failed'))
+                  .finally(() => setWhatIfBusy(false))
+              }}
+            >
+              {whatIfBusy ? 'Checking…' : 'Would it fire now?'}
+            </Button>
+          )}
           <Button type='submit' disabled={saveMutation.isPending}>
             {saveMutation.isPending ? 'Saving…' : isNew ? 'Create Alert' : 'Save Changes'}
           </Button>
