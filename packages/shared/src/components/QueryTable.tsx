@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
 
 // Generic tabular renderer for custom-query rows (widget slots + page builder).
@@ -38,6 +38,11 @@ export interface QueryTableColumn {
   stack?: string
   stack_color?: string
   stack_color_dark?: string
+  /** Sparkline column (#248): mini trend from these row fields, in order
+   *  (e.g. the twelve month columns). Renders instead of a value. */
+  sparkline_fields?: string[]
+  /** Percent-of-total (#249): append this row's share of the column sum. */
+  percent_of_total?: boolean
 }
 
 export interface QueryTableConfig {
@@ -362,6 +367,19 @@ export function QueryTable({
   const cellValue = (row: Record<string, unknown>, c: QueryTableColumn): unknown =>
     c.formula ? evalRowFormula(c.formula, row) : c.field ? row[c.field] : null
 
+  // Percent-of-total (#249): per-column sums, computed once per data change.
+  const colTotals = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of config?.columns ?? []) {
+      if (!c.percent_of_total || !c.field) continue
+      m.set(
+        c.field,
+        rows.reduce((a, r) => a + (Number(r[c.field as string]) || 0), 0)
+      )
+    }
+    return m
+  }, [rows, config])
+
   const progressCell = (row: Record<string, unknown>, c: QueryTableColumn) => {
     const value = Number(cellValue(row, c))
     const max = c.progress_max
@@ -428,6 +446,40 @@ export function QueryTable({
 
   /** Value-cell body: progress bar, stacked Fcst/Act pair, or plain value. */
   const cellBody = (src: Record<string, unknown>, c: QueryTableColumn): ReactNode => {
+    if (c.sparkline_fields?.length) {
+      // Sparkline column (#248): a 60×18 polyline over the named row fields.
+      const vals = c.sparkline_fields.map((f) => Number(src[f]) || 0)
+      const maxV = Math.max(...vals, 1)
+      const minV = Math.min(...vals, 0)
+      const span = Math.max(maxV - minV, 1)
+      const pts = vals
+        .map((v, i) => `${(i / Math.max(vals.length - 1, 1)) * 60},${17 - ((v - minV) / span) * 15}`)
+        .join(' ')
+      return (
+        <svg
+          viewBox='0 0 60 18'
+          className='inline-block h-[18px] w-[60px]'
+          data-tip={vals.map((v) => fmt(v, c.format)).join(' · ')}
+        >
+          <polyline points={pts} fill='none' stroke='#00a5cc' strokeWidth='1.5' vectorEffect='non-scaling-stroke' />
+        </svg>
+      )
+    }
+    if (c.percent_of_total && c.field) {
+      const v = Number(cellValue(src, c))
+      const total = colTotals.get(c.field) ?? 0
+      const share = total > 0 && Number.isFinite(v) ? (v / total) * 100 : null
+      return (
+        <span className='inline-flex items-baseline gap-1'>
+          {fmtCell(cellValue(src, c), c.format)}
+          {share != null && (
+            <span className='text-[9.5px] text-slate-400'>
+              {share.toLocaleString('en-US', { maximumFractionDigits: 1 })}%
+            </span>
+          )}
+        </span>
+      )
+    }
     if (c.display === 'progress') return progressCell(src, c)
     if (c.stack) {
       return (

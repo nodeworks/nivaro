@@ -866,6 +866,92 @@ export async function aiRoutes(app: FastifyInstance) {
 
   // POST /ai/review — pre-submission record review: findings list over the
   // record + its O2M children, guided by the collection's AI rules when set.
+  // Revision summarizer (#160): AI prose over a record's change history in a
+  // window — deltas only (small), read-permission gated.
+  app.post('/summarize-changes', { preHandler: authenticate }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const b = req.body as { collection?: string; item?: string | number; days?: number }
+    const collection = String(b.collection ?? '')
+    const item = String(b.item ?? '')
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^nivaro_/i.test(collection) || !item) {
+      return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    const { can } = await import('../services/permissions.js')
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const days = Math.max(1, Math.min(365, Number(b.days) || 30))
+    const revs = (await db('nivaro_revisions')
+      .join('nivaro_activity', 'nivaro_revisions.activity', 'nivaro_activity.id')
+      .where('nivaro_revisions.collection', collection)
+      .where('nivaro_revisions.item', item)
+      .where('nivaro_activity.timestamp', '>=', db.raw('DATEADD(day, ?, GETUTCDATE())', [-days]))
+      .orderBy('nivaro_activity.timestamp', 'asc')
+      .limit(120)
+      .select(
+        'nivaro_revisions.delta',
+        'nivaro_activity.timestamp',
+        'nivaro_activity.action',
+        'nivaro_activity.user'
+      )) as Array<{ delta: string | null; timestamp: Date; action: string; user: string | null }>
+    if (revs.length === 0) {
+      return { data: { summary: `No recorded changes in the last ${days} days.`, changes: 0 } }
+    }
+    // Attribute changes by name (batched)
+    const userIds = [...new Set(revs.map((r) => r.user).filter(Boolean))] as string[]
+    const users = userIds.length
+      ? ((await db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('id', 'first_name', 'last_name')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+        }>)
+      : []
+    const nameOf = new Map(users.map((u) => [u.id, `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim()]))
+    const lines = revs
+      .map((r) => {
+        let delta: Record<string, unknown> = {}
+        try {
+          delta = r.delta ? JSON.parse(r.delta) : {}
+        } catch {
+          delta = {}
+        }
+        const who = (r.user && nameOf.get(r.user)) || 'system'
+        const when = new Date(r.timestamp).toISOString().slice(0, 10)
+        const fields = Object.entries(delta)
+          .slice(0, 12)
+          .map(([k, v]) => `${k} → ${String(v).slice(0, 60)}`)
+          .join('; ')
+        return `${when} ${who} (${r.action}): ${fields || '(no field delta)'}`
+      })
+      .join('\n')
+      .slice(0, 12000)
+    const { model } = await getAiSettings()
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 400,
+        system:
+          'You summarize a database record\u2019s change history for a business reader. 2-5 sentences of plain prose: what changed, the overall direction, and who drove it. Note reversals or churn. Never invent changes not in the log.',
+        messages: [{ role: 'user', content: `Changes to ${collection}/${item} over the last ${days} days:\n${lines}` }]
+      })
+      const text = msg.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('\n')
+        .trim()
+      await logActivity({ action: 'ai-summarize-changes', user: req.user?.id, collection, item, req })
+      return { data: { summary: text, changes: revs.length } }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err)
+      return reply.code(502).send({ error: `AI call failed: ${m.slice(0, 300)}` })
+    }
+  })
+
   app.post('/review', { preHandler: authenticate }, async (req, reply) => {
     const client = await getClient()
     if (!client) {

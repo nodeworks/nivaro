@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { NivaroProvider, QueryWidgetBody } from '@nivaro/shared'
+import { createNivaro } from '@nivaro/sdk'
 import { adminRealtime } from '@/lib/socket'
 import { ArrowLeft, BarChart2, LineChart, Loader2, Plus, Trash2, TrendingUp } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -35,7 +37,7 @@ import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type WidgetType = DashboardWidget['type']
+type WidgetType = DashboardWidget['type'] | 'report_preset'
 
 interface WidgetData {
   value?: number | null
@@ -61,7 +63,8 @@ const TYPE_CONFIG: Record<WidgetType, { label: string; color: string }> = {
   avg: { label: 'Average', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   latest: { label: 'Latest', color: 'bg-orange-50 text-orange-700 border-orange-200' },
   bar_chart: { label: 'Bar Chart', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  line_chart: { label: 'Line Chart', color: 'bg-pink-50 text-pink-700 border-pink-200' }
+  line_chart: { label: 'Line Chart', color: 'bg-pink-50 text-pink-700 border-pink-200' },
+  report_preset: { label: 'Prebuilt', color: 'bg-amber-50 text-amber-700 border-amber-200' }
 }
 
 // ─── Widget card ──────────────────────────────────────────────────────────────
@@ -132,6 +135,11 @@ function WidgetCard({ widget, onDelete }: { widget: DashboardWidget; onDelete: (
       </div>
 
       {/* Body */}
+      {widget.type === 'report_preset' ? (
+        <div className='min-h-0 flex-1'>
+          <PresetWidgetBody presetId={widget.field} />
+        </div>
+      ) : (
       <div className='flex flex-1 items-center justify-center'>
         {isLoading ? (
           <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
@@ -151,6 +159,7 @@ function WidgetCard({ widget, onDelete }: { widget: DashboardWidget; onDelete: (
           <ChartWrapper data={data.rows ?? []} type='line' />
         ) : null}
       </div>
+      )}
     </div>
   )
 }
@@ -261,6 +270,92 @@ function ChartWrapper({
   )
 }
 
+// ─── Prebuilt widget renderer (#227): catalog presets on dashboards ─────────
+
+const presetClient = createNivaro(window.location.origin)
+
+function PresetWidgetBody({ presetId }: { presetId: string | null }) {
+  const { data: presets = [] } = useQuery({
+    queryKey: ['report-widget-presets'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string; widget_type: string; config: Record<string, unknown> | null }> }>(
+          '/report-studio/widget-presets'
+        )
+        .then((r) => r.data.data)
+  })
+  const preset = presets.find((p) => String(p.id) === String(presetId))
+  if (!preset) return <p className='text-[12px] text-slate-400'>Preset not found.</p>
+  if (preset.widget_type !== 'query' || !preset.config?.query) {
+    return (
+      <p className='text-[12px] text-slate-400'>
+        "{preset.name}" is a {preset.widget_type} widget — open it in Report Studio.
+      </p>
+    )
+  }
+  return (
+    <NivaroProvider client={presetClient}>
+      <QueryWidgetBody
+        cfg={preset.config.query as Parameters<typeof QueryWidgetBody>[0]['cfg']}
+        dateRange={null}
+        entityFilters={[]}
+      />
+    </NivaroProvider>
+  )
+}
+
+// ─── Prebuilt catalog picker (#227) ──────────────────────────────────────────
+
+function PresetPicker({
+  value,
+  onPick
+}: {
+  value: string
+  onPick: (id: string, name: string) => void
+}) {
+  const [q, setQ] = useState('')
+  const { data: presets = [] } = useQuery({
+    queryKey: ['report-widget-presets'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string; category: string; description?: string }> }>(
+          '/report-studio/widget-presets'
+        )
+        .then((r) => r.data.data)
+  })
+  const needle = q.trim().toLowerCase()
+  const hits = needle
+    ? presets.filter(
+        (p) => p.name.toLowerCase().includes(needle) || p.category.toLowerCase().includes(needle)
+      )
+    : presets
+  return (
+    <div className='space-y-1.5'>
+      <Label>Catalog widget</Label>
+      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder='Search the catalog…' />
+      <div className='max-h-52 overflow-y-auto rounded-md border border-slate-200'>
+        {hits.length === 0 ? (
+          <p className='p-2 text-[12px] text-slate-400'>No presets match.</p>
+        ) : (
+          hits.map((p) => (
+            <button
+              key={p.id}
+              type='button'
+              onClick={() => onPick(String(p.id), p.name)}
+              className={`block w-full px-2.5 py-1.5 text-left text-[12.5px] hover:bg-slate-50 ${
+                value === String(p.id) ? 'bg-nvr-cyan/10 font-medium' : ''
+              }`}
+            >
+              {p.name}
+              <span className='ml-1.5 text-[10.5px] text-slate-400'>{p.category}</span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Add widget sheet ─────────────────────────────────────────────────────────
 
 function AddWidgetSheet({
@@ -363,9 +458,20 @@ function AddWidgetSheet({
                 <SelectItem value='latest'>Latest — most recent records</SelectItem>
                 <SelectItem value='bar_chart'>Bar Chart — last 30 days</SelectItem>
                 <SelectItem value='line_chart'>Line Chart — last 30 days</SelectItem>
+                <SelectItem value='report_preset'>Prebuilt — widget catalog</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {/* Prebuilt catalog picker (#227): field carries the preset id */}
+          {form.type === 'report_preset' && (
+            <PresetPicker
+              value={form.field}
+              onPick={(id, name) =>
+                setForm((p) => ({ ...p, field: id, title: p.title || name, width: 2, height: 2 }))
+              }
+            />
+          )}
 
           {/* Collection */}
           <div className='space-y-1.5'>

@@ -54,6 +54,7 @@ export interface CmsPage {
   layout: PageLayout
   is_shared: boolean
   role: string | null
+  allowed_roles: string[]
   sort: number
   created_by: string
   created_at: string
@@ -71,6 +72,7 @@ interface PageForm {
   icon: string
   is_shared: boolean
   role: string | null
+  allowed_roles: string[]
   sort: number
 }
 
@@ -80,6 +82,7 @@ const FORM_DEFAULTS: PageForm = {
   icon: '',
   is_shared: true,
   role: null,
+  allowed_roles: [],
   sort: 0
 }
 
@@ -272,8 +275,34 @@ function PageMetaForm({
 
       {form.is_shared && (
         <div className='space-y-1.5'>
-          <Label>Restrict to role (optional)</Label>
-          <RoleCombobox roles={roles} value={form.role} onChange={(r) => set('role', r)} />
+          <Label>Restrict to roles (optional)</Label>
+          <p className='text-[11px] text-slate-400'>
+            Check one or more roles — only those roles (and admins) can open the page. Nothing
+            checked = everyone.
+          </p>
+          <div className='max-h-40 overflow-y-auto rounded-md border border-slate-200 p-1 dark:border-border'>
+            {roles.map((r) => (
+              <label
+                key={r.id}
+                className='flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[12.5px] hover:bg-muted'
+              >
+                <input
+                  type='checkbox'
+                  checked={form.allowed_roles.includes(r.id)}
+                  onChange={(e) =>
+                    set(
+                      'allowed_roles',
+                      e.target.checked
+                        ? [...form.allowed_roles, r.id]
+                        : form.allowed_roles.filter((x) => x !== r.id)
+                    )
+                  }
+                  className='rounded'
+                />
+                {r.name}
+              </label>
+            ))}
+          </div>
         </div>
       )}
 
@@ -543,6 +572,7 @@ export function PagesAdminPage() {
                     icon: selected.icon ?? '',
                     is_shared: selected.is_shared,
                     role: selected.role,
+                    allowed_roles: (selected as { allowed_roles?: string[] }).allowed_roles ?? [],
                     sort: selected.sort
                   }}
                   roles={roles}

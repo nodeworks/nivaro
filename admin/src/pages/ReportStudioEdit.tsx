@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
+import { BookmarkPlus,
   ArrowLeft,
   BarChart3,
   Bell,
@@ -72,7 +72,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  */
 
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative' | 'pareto' | 'stats' | 'scatter' | 'hot_records' | 'metric'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
@@ -354,6 +354,11 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'heatmap', label: 'Heatmap' },
   { id: 'waterfall', label: 'Waterfall' },
   { id: 'narrative', label: 'Narrative' },
+  { id: 'pareto', label: 'Pareto' },
+  { id: 'stats', label: 'Stats' },
+  { id: 'scatter', label: 'Scatter' },
+  { id: 'hot_records', label: 'Hot records' },
+  { id: 'metric', label: 'Metric (catalog)' },
   { id: 'divider', label: 'Divider' }
 ]
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'null', 'nnull']
@@ -1038,6 +1043,67 @@ function WidgetBody({
 
 // ── Widget config sheet ───────────────────────────────────────────────────────
 
+function AdvancedConfigEditor({
+  cfg,
+  onCommit
+}: {
+  cfg: WidgetConfig
+  onCommit: (next: WidgetConfig) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    if (open) setText(JSON.stringify(cfg ?? {}, null, 2))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+  return (
+    <div className='space-y-1.5 border-t border-slate-100 pt-3'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='text-[11.5px] font-medium text-slate-500 hover:text-slate-700'
+      >
+        {open ? '▾' : '▸'} Advanced (raw config)
+      </button>
+      {open && (
+        <>
+          <p className='text-[10.5px] text-slate-400'>
+            Extra keys: thresholds [{'{'}gte,color{'}'}], footnote, rolling_avg (buckets),
+            drill_levels [fields], refresh_secs, suppress_zero, grand_total,
+            dimension.ranges [{'{'}to,label{'}'}], metric_key, x_field/y_field, hot_days
+          </p>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={10}
+            spellCheck={false}
+            className={`w-full rounded border bg-background p-2 font-mono text-[11px] ${err ? 'border-red-400' : 'border-slate-200'}`}
+          />
+          {err && <p className='text-[11px] text-red-500'>{err}</p>}
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='h-7 text-[11.5px]'
+            onClick={() => {
+              try {
+                const parsed = JSON.parse(text)
+                setErr(null)
+                onCommit(parsed as WidgetConfig)
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'Invalid JSON')
+              }
+            }}
+          >
+            Apply config
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ConfigSheet({
   widget,
   onChange,
@@ -1566,6 +1632,13 @@ function ConfigSheet({
               )}
             </>
           )}
+
+          {/* Advanced config — the long tail of widget options (thresholds,
+              footnotes, rolling averages, drill hierarchies, per-widget
+              refresh, table options, range buckets, metric_key, scatter axes)
+              edits as raw JSON merged over the structured fields above. */}
+          <AdvancedConfigEditor cfg={cfg} onCommit={(next) => set({ config: next })} />
+
         </div>
       </SheetContent>
     </Sheet>
@@ -3949,6 +4022,31 @@ export function ReportStudioEditPage() {
                               }
                             >
                               <Copy className='h-3.5 w-3.5' />
+                            </button>
+                            <button
+                              type='button'
+                              title='Save to widget catalog — reusable in any report AND on dashboards (Prebuilt tab)'
+                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-[#00a5cc] dark:hover:bg-muted'
+                              onClick={() => {
+                                void api
+                                  .post('/report-studio/widget-presets', {
+                                    name: `${w.title || w.type} (${new Date().toISOString().slice(0, 10)})`,
+                                    category: 'Custom',
+                                    description: `Saved from a report on ${new Date().toLocaleDateString()}`,
+                                    widget_type: w.type,
+                                    config: { ...w.config, collection: w.collection },
+                                    w: w.w,
+                                    h: w.h
+                                  })
+                                  .then(() => toast.success('Saved to the widget catalog'))
+                                  .catch((e) =>
+                                    toast.error(
+                                      e?.response?.data?.error ?? 'Only admins can save catalog presets'
+                                    )
+                                  )
+                              }}
+                            >
+                              <BookmarkPlus className='h-3.5 w-3.5' />
                             </button>
                             <button
                               type='button'

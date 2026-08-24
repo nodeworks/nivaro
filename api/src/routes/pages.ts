@@ -36,6 +36,7 @@ interface PageRow {
   created_by: string
   created_at: Date
   updated_at: Date
+  allowed_roles?: string | null
 }
 
 type FilterOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'null' | 'nnull'
@@ -69,6 +70,14 @@ function serialize(row: PageRow) {
     layout: parseJson<PageLayout>(row.layout) ?? EMPTY_LAYOUT,
     is_shared: !!row.is_shared,
     role: row.role,
+    allowed_roles: (() => {
+      try {
+        const r = row.allowed_roles ? (JSON.parse(row.allowed_roles) as string[]) : []
+        return Array.isArray(r) ? r : []
+      } catch {
+        return []
+      }
+    })(),
     sort: row.sort,
     created_by: row.created_by,
     created_at: row.created_at,
@@ -90,7 +99,16 @@ function canAccessPage(user: User, isAdmin: boolean, page: PageRow): boolean {
   if (isAdmin) return true
   if (page.created_by === user.id) return true
   if (!page.is_shared) return false
-  // Shared — optional role restriction
+  // Shared — role restriction: allowed_roles (#167, JSON list) wins over the
+  // legacy single-role column; unparseable config falls back to that column.
+  if (page.allowed_roles) {
+    try {
+      const roles = JSON.parse(page.allowed_roles) as string[]
+      if (Array.isArray(roles) && roles.length > 0) return roles.includes(user.role ?? '')
+    } catch {
+      /* fall through to the single-role check */
+    }
+  }
   if (page.role) return page.role === user.role
   return true
 }
@@ -317,6 +335,11 @@ export async function pagesRoutes(app: FastifyInstance) {
     }
     if (body.is_shared !== undefined) patch.is_shared = body.is_shared
     if (body.role !== undefined) patch.role = body.role
+    if ((body as { allowed_roles?: unknown }).allowed_roles !== undefined) {
+      const raw = (body as { allowed_roles?: unknown }).allowed_roles
+      const roles = Array.isArray(raw) ? raw.filter((r) => typeof r === 'string' && r) : []
+      patch.allowed_roles = roles.length > 0 ? JSON.stringify(roles) : null
+    }
     if (body.sort !== undefined) patch.sort = body.sort
 
     await db('nivaro_pages').where({ id }).update(patch)

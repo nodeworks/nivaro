@@ -27,7 +27,7 @@ import {
   toggleReportAlert
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Camera, Check, ChevronsUpDown, Download, Info, Plus, RefreshCw, Sigma, Sparkles, StickyNote, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
+import { Bell, Camera, Check, ChevronsUpDown, Download, Info, Plus, RefreshCw, Sigma, Sparkles, StickyNote, Table as TableIcon, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Area,
@@ -42,11 +42,51 @@ import {
   Pie,
   PieChart,
   ReferenceLine,
+  Scatter,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
 } from 'recharts'
+
+// Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
+// a canvas over a white ground, and hand the PNG to the clipboard. Fails to a
+// silent no-op where the Clipboard API (or the SVG) is unavailable.
+async function copyChartImage(container: HTMLElement | null, title: string): Promise<void> {
+  const svg = container?.querySelector('svg')
+  if (!svg || typeof ClipboardItem === 'undefined') return
+  try {
+    const rect = svg.getBoundingClientRect()
+    const clone = svg.cloneNode(true) as SVGElement
+    clone.setAttribute('width', String(rect.width))
+    clone.setAttribute('height', String(rect.height))
+    const xml = new XMLSerializer().serializeToString(clone)
+    const blobUrl = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }))
+    const img = new Image()
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('svg load failed'))
+      img.src = blobUrl
+    })
+    const scale = 2
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(rect.width * scale))
+    canvas.height = Math.max(1, Math.round(rect.height * scale) + 28 * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = '#172940'
+    ctx.font = `${12 * scale}px system-ui, sans-serif`
+    ctx.fillText(title || 'Chart', 8 * scale, 18 * scale)
+    ctx.drawImage(img, 0, 28 * scale, rect.width * scale, rect.height * scale)
+    URL.revokeObjectURL(blobUrl)
+    const png: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (png) await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+  } catch {
+    /* clipboard image copy is best-effort */
+  }
+}
 
 // Compact axis ticks — 8-digit dollar values overflow the tight chart margins.
 const compactTick = (v: number) =>
@@ -1694,6 +1734,7 @@ const WidgetCard = memo(function WidgetCard({
   filterBar = [],
   onDrill,
   snapshot,
+  asOf,
   annotations,
   onAddAnnotation,
   onDeleteAnnotation,
@@ -1709,6 +1750,8 @@ const WidgetCard = memo(function WidgetCard({
   filterBar?: Array<{ field: string; label: string; options?: FilterOptionSource }>
   onDrill?: (t: { collection: string; itemId: string; title?: string }) => void
   snapshot?: { name: string; value: number | null } | null
+  /** Time machine (#404): render the snapshot value AS the number. */
+  asOf?: boolean
   annotations?: WidgetAnnotation[]
   onAddAnnotation?: (widgetId: string, note: string, anchorDate: string | null) => void
   onDeleteAnnotation?: (annId: number) => void
@@ -1730,10 +1773,14 @@ const WidgetCard = memo(function WidgetCard({
   const [noteText, setNoteText] = useState('')
   const [noteDate, setNoteDate] = useState('')
   const [cumulative, setCumulative] = useState(false)
+  // View-as-table (#383) + drill hierarchy (#418) viewer state.
+  const [asTable, setAsTable] = useState(false)
+  const [drillPath, setDrillPath] = useState<Array<{ field: string; value: string }>>([])
+  const cardRef = useRef<HTMLDivElement>(null)
   const [explainOpen, setExplainOpen] = useState(false)
   const [explainText, setExplainText] = useState<string | null>(null)
   const [explainBusy, setExplainBusy] = useState(false)
-  const { data, isLoading, error, refetch, isFetching } = useQuery<ReportWidgetData>({
+  const { data: baseData, isLoading, error, refetch, isFetching } = useQuery<ReportWidgetData>({
     queryKey: ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
     queryFn: () =>
       client
@@ -1749,9 +1796,39 @@ const WidgetCard = memo(function WidgetCard({
     // number the snapshot stored) is fetched so the delta badge can render.
     enabled: widget.type !== 'divider' && (widget.type !== 'query' || !!snapshot),
     staleTime: 60_000,
-    refetchInterval,
+    // Per-widget auto-refresh (#168) overrides the report-level interval.
+    refetchInterval:
+      Number((widget.config as { refresh_secs?: number })?.refresh_secs) >= 10
+        ? Number((widget.config as { refresh_secs?: number }).refresh_secs) * 1000
+        : refetchInterval,
     retry: false
   })
+  // Drill hierarchies (#418): drill state re-fetches with the next level's
+  // dimension + the clicked values as entity filters.
+  const drillLevels = ((widget.config as { drill_levels?: string[] })?.drill_levels ?? []).filter(
+    (f) => typeof f === 'string' && f
+  )
+  const { data: drillData } = useQuery<ReportWidgetData>({
+    queryKey: ['nvr-report-drill', reportId, widget.id, drillPath, dateRange, entityFilters],
+    queryFn: () =>
+      client
+        .request(
+          readReportWidgetData(reportId, widget.id, {
+            date_range: dateRange,
+            entity_filters: [
+              ...entityFilters,
+              ...drillPath.map((d) => ({ field: d.field, values: [d.value] }))
+            ],
+            dimension_override: drillLevels[drillPath.length - 1]
+          })
+        )
+        .then((r) => (r as { data: ReportWidgetData }).data),
+    enabled: drillPath.length > 0 && drillLevels.length > 0,
+    staleTime: 60_000,
+    retry: false
+  })
+  // Drilled view substitutes the re-dimensioned data for the widget's own.
+  const data = drillPath.length > 0 && drillData ? drillData : baseData
 
   const format = widget.config?.format as WidgetFormat | undefined
   // Reproduce the builder's 12-col × 72px-row placement exactly.
@@ -1831,7 +1908,23 @@ const WidgetCard = memo(function WidgetCard({
           <p
             className={cn(
               'text-[28px] font-semibold leading-none tracking-tight text-slate-900 dark:text-foreground',
-              widget.collection && 'cursor-pointer decoration-dotted underline-offset-4 hover:underline'
+              widget.collection && 'cursor-pointer decoration-dotted underline-offset-4 hover:underline',
+              // KPI threshold colors (#211): first matching gte-descending rule wins.
+              (() => {
+                const th = (widget.config as { thresholds?: Array<{ gte: number; color: string }> })?.thresholds
+                if (!th?.length || data.value == null) return null
+                const hit = [...th]
+                  .filter((t) => Number.isFinite(t.gte))
+                  .sort((a, b) => b.gte - a.gte)
+                  .find((t) => (data.value as number) >= t.gte)
+                return hit?.color === 'red'
+                  ? '!text-red-600 dark:!text-red-400'
+                  : hit?.color === 'amber'
+                    ? '!text-amber-600 dark:!text-amber-400'
+                    : hit?.color === 'green'
+                      ? '!text-emerald-600 dark:!text-emerald-400'
+                      : null
+              })()
             )}
             title={widget.collection ? 'See the records behind this number' : undefined}
             onClick={() => {
@@ -1998,6 +2091,124 @@ const WidgetCard = memo(function WidgetCard({
           )
         })()
       )
+    } else if (widget.type === 'stats') {
+      // Stats (#150): distribution summary rows.
+      const rows = (data.rows ?? []) as Array<{ stat: string; value: number | null }>
+      body =
+        rows.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          <div className='grid min-h-0 flex-1 grid-cols-2 content-start gap-x-4 gap-y-1.5 overflow-auto px-1'>
+            {rows.map((r) => (
+              <div key={r.stat} className='flex items-baseline justify-between border-b border-slate-100 pb-1 dark:border-border/50'>
+                <span className='text-[11px] text-slate-500'>{r.stat}</span>
+                <span className='text-[13px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
+                  {r.value == null ? '—' : fmt(r.value, format)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
+    } else if (widget.type === 'hot_records') {
+      // Hot records (#226): most-viewed in the window; rows open the record.
+      const rows = (data.rows ?? []) as Array<{ id: string; label: string; views: number }>
+      const maxViews = Math.max(1, ...rows.map((r) => r.views))
+      body =
+        rows.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No views recorded in the window.</p>
+        ) : (
+          <div className='min-h-0 flex-1 space-y-1 overflow-auto px-1'>
+            {rows.map((r) => (
+              <button
+                key={r.id}
+                type='button'
+                onClick={() =>
+                  widget.collection && onDrill?.({ collection: widget.collection, itemId: String(r.id), title: r.label })
+                }
+                className='group flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-muted'
+              >
+                <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 group-hover:text-[#0284c7] dark:text-slate-200'>
+                  {r.label}
+                </span>
+                <span className='relative h-2 w-20 overflow-hidden rounded-full bg-slate-100 dark:bg-white/10'>
+                  <span
+                    className='absolute inset-y-0 left-0 rounded-full bg-[#00a5cc]'
+                    style={{ width: `${(r.views / maxViews) * 100}%` }}
+                  />
+                </span>
+                <span className='w-8 text-right text-[11px] tabular-nums text-slate-400'>{r.views}</span>
+              </button>
+            ))}
+          </div>
+        )
+    } else if (widget.type === 'scatter') {
+      // Scatter + trendline (#173): least-squares regression client-side.
+      const pts = (data.rows ?? []) as Array<{ x: number; y: number }>
+      body =
+        pts.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          (() => {
+            const n = pts.length
+            const sx = pts.reduce((a, p) => a + p.x, 0)
+            const sy = pts.reduce((a, p) => a + p.y, 0)
+            const sxx = pts.reduce((a, p) => a + p.x * p.x, 0)
+            const sxy = pts.reduce((a, p) => a + p.x * p.y, 0)
+            const denom = n * sxx - sx * sx
+            const slope = denom !== 0 ? (n * sxy - sx * sy) / denom : 0
+            const intercept = n > 0 ? (sy - slope * sx) / n : 0
+            const xs = pts.map((p) => p.x)
+            const minX = Math.min(...xs)
+            const maxX = Math.max(...xs)
+            const trend = [
+              { x: minX, y: intercept + slope * minX },
+              { x: maxX, y: intercept + slope * maxX }
+            ]
+            return (
+              <div className='min-h-0 flex-1'>
+                <ResponsiveContainer width='100%' height='100%'>
+                  <ComposedChart data={pts} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
+                    <XAxis dataKey='x' type='number' tick={{ fontSize: 10 }} tickFormatter={compactTick} domain={['dataMin', 'dataMax']} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactTick} />
+                    <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} />
+                    <Scatter data={pts} dataKey='y' fill='#00a5cc' opacity={0.7} />
+                    <Line data={trend} dataKey='y' stroke='#f59e0b' strokeWidth={2} dot={false} isAnimationActive={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )
+          })()
+        )
+    } else if (widget.type === 'pareto') {
+      // Pareto (#149): ranked bars + cumulative-% line on a second axis.
+      const series = (data.series ?? []) as Array<{ dim: string; value: number; cum_pct?: number }>
+      body =
+        series.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          <div className='min-h-0 flex-1'>
+            <ResponsiveContainer width='100%' height='100%'>
+              <ComposedChart data={series} margin={{ top: 6, right: 4, left: -10, bottom: 0 }}>
+                <XAxis dataKey='dim' tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor='end' height={42} />
+                <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={compactTick} />
+                <YAxis yAxisId='pct' orientation='right' domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${v}%`} />
+                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} />
+                <Bar yAxisId='v' dataKey='value' fill='#00a5cc' radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                <Line yAxisId='pct' dataKey='cum_pct' stroke='#f59e0b' strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )
+    } else if (widget.type === 'metric') {
+      // Metric catalog widget (#250): a KPI off a metric definition.
+      body = (
+        <div className='flex min-h-0 flex-1 flex-col justify-center px-1'>
+          <p className='text-[26px] font-bold tabular-nums text-slate-900 dark:text-slate-50'>
+            {data.value == null ? '—' : fmt(data.value, format)}
+          </p>
+          <p className='text-[11px] text-slate-400'>{String((widget.config as { metric_key?: string })?.metric_key ?? '')}</p>
+        </div>
+      )
     } else if (widget.type === 'movers') {
       const rows = (data.rows ?? []) as Array<{
         dim: string
@@ -2068,9 +2279,19 @@ const WidgetCard = memo(function WidgetCard({
         return null
       }
       const q = tableSearch.trim().toLowerCase()
-      const searched = q
-        ? rows.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+      // Table options (#420): suppress rows whose numeric columns are all zero.
+      const tblOpts = widget.config as { suppress_zero?: boolean; grand_total?: boolean } | null
+      const preFiltered = tblOpts?.suppress_zero
+        ? rows.filter((r) =>
+            cols.some((c) => {
+              const v = Number(r[c])
+              return Number.isFinite(v) && v !== 0
+            })
+          )
         : rows
+      const searched = q
+        ? preFiltered.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+        : preFiltered
       const PAGE = 12
       const pages = Math.max(1, Math.ceil(searched.length / PAGE))
       const page = Math.min(tablePage, pages - 1)
@@ -2143,6 +2364,28 @@ const WidgetCard = memo(function WidgetCard({
                   </tr>
                 ))}
               </tbody>
+              {tblOpts?.grand_total && searched.length > 1 && (
+                <tfoot>
+                  <tr className='border-t border-slate-200 font-semibold dark:border-border'>
+                    {cols.map((c, i) => {
+                      const nums = searched.map((r) => Number(r[c])).filter((v) => Number.isFinite(v))
+                      const isNum = nums.length > searched.length / 2
+                      const total = nums.reduce((a, v) => a + v, 0)
+                      return (
+                        <td key={c} className={cn('px-1.5 py-1 text-slate-800 dark:text-slate-100', isNum && 'text-right tabular-nums')}>
+                          {i === 0 && !isNum
+                            ? 'Total'
+                            : isNum
+                              ? defFor(c)?.format
+                                ? fmtCell(total, defFor(c)?.format, defFor(c)?.decimals)
+                                : total.toLocaleString()
+                              : ''}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
           </div>
@@ -2150,6 +2393,17 @@ const WidgetCard = memo(function WidgetCard({
     } else {
       let series = data.series ?? []
       const bucketed = !!(widget.config?.dimension as { bucket?: string } | undefined)?.bucket
+      // Rolling average (#419): k-bucket trailing mean as a second line. The
+      // window is in BUCKETS (7 daily buckets = 7 days), suppressed under
+      // cumulative where a moving mean of a running total means nothing.
+      const rollingK = Number((widget.config as { rolling_avg?: number })?.rolling_avg) || 0
+      if (rollingK >= 2 && bucketed && !cumulative && series.length >= rollingK) {
+        series = series.map((pt, i) => {
+          if (i < rollingK - 1) return pt
+          const win = series.slice(i - rollingK + 1, i + 1)
+          return { ...pt, ma: win.reduce((a, w) => a + w.value, 0) / rollingK }
+        })
+      }
       if (cumulative && bucketed) {
         let acc = 0
         let accPrev = 0
@@ -2203,6 +2457,21 @@ const WidgetCard = memo(function WidgetCard({
                       if (!widget.collection) return
                       const seg = entry?.payload
                       if (seg?.other) return
+                      // Drill hierarchy (#418): a configured next level descends
+                      // instead of opening the records modal.
+                      if (drillLevels.length > drillPath.length) {
+                        const curField =
+                          drillPath.length === 0
+                            ? (widget.config?.dimension as { field?: string } | undefined)?.field
+                            : drillLevels[drillPath.length - 1]
+                        if (curField) {
+                          setDrillPath((prev) => [
+                            ...prev,
+                            { field: curField, value: String(seg?.raw ?? seg?.dim ?? '') }
+                          ])
+                          return
+                        }
+                      }
                       const dimField = (widget.config?.dimension as { field?: string } | undefined)?.field
                       setRecordsFor({
                         conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
@@ -2332,6 +2601,18 @@ const WidgetCard = memo(function WidgetCard({
                     name={metric2Label}
                   />
                 )}
+                {rollingK >= 2 && (
+                  <Line
+                    type='monotone'
+                    dataKey='ma'
+                    stroke='#f59e0b'
+                    strokeWidth={1.5}
+                    strokeDasharray='5 3'
+                    dot={false}
+                    name={`${rollingK}-bucket avg`}
+                    isAnimationActive={false}
+                  />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -2434,6 +2715,20 @@ const WidgetCard = memo(function WidgetCard({
     }
   }
 
+  // Time machine (#404): the snapshot stored ONE derived metric per widget —
+  // render it as the number with an honest note; full chart data isn't stored.
+  if (asOf && snapshot) {
+    body = (
+      <div className='flex min-h-0 flex-1 flex-col justify-center px-1'>
+        <p className='text-[26px] font-bold tabular-nums text-amber-700 dark:text-amber-400'>
+          {snapshot.value == null ? '—' : fmt(snapshot.value, format)}
+        </p>
+        <p className='text-[10.5px] text-slate-400'>
+          As of {snapshot.name}{snapshot.value == null ? ' — no metric stored for this widget' : ''}
+        </p>
+      </div>
+    )
+  }
   return (
     <div
       className='flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
@@ -2476,6 +2771,26 @@ const WidgetCard = memo(function WidgetCard({
           <Info className='h-3 w-3' />
         </span>
         <span className='ml-auto flex items-center gap-0.5'>
+          {['bar', 'line', 'donut', 'pareto'].includes(widget.type) && (
+            <button
+              type='button'
+              title={asTable ? 'Back to the chart' : 'View as table (#383)'}
+              className={cn('rounded p-0.5', asTable ? 'text-[#00a5cc]' : 'text-slate-300 hover:text-[#00a5cc]')}
+              onClick={() => setAsTable((v) => !v)}
+            >
+              <TableIcon className='h-3 w-3' />
+            </button>
+          )}
+          {['bar', 'line', 'donut', 'pareto', 'scatter', 'heatmap', 'waterfall'].includes(widget.type) && (
+            <button
+              type='button'
+              title='Copy chart as image'
+              className='rounded p-0.5 text-slate-300 hover:text-[#00a5cc]'
+              onClick={() => void copyChartImage(cardRef.current, widget.title)}
+            >
+              <Camera className='h-3 w-3' />
+            </button>
+          )}
           {(
             <button
               type='button'
@@ -2519,7 +2834,9 @@ const WidgetCard = memo(function WidgetCard({
                       post('/ai/brief', {
                         context: JSON.stringify(context),
                         instructions:
-                          'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
+                          d?.prev_value != null || (d?.series ?? []).some((sv) => sv.prev != null)
+                            ? 'Compare the current period against the previous one in 2-4 plain sentences: overall direction, the biggest movers up and down, and anything anomalous. No preamble.'
+                            : 'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
                       })
                     )
                   })
@@ -2664,7 +2981,56 @@ const WidgetCard = memo(function WidgetCard({
           {explainBusy ? 'Thinking…' : explainText}
         </div>
       )}
-      <div className='flex min-h-0 flex-1 flex-col'>{body}</div>
+      {drillPath.length > 0 && (
+        <div className='mb-1 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-500'>
+          <button type='button' onClick={() => setDrillPath([])} className='rounded px-1 hover:bg-muted'>
+            ⌂ All
+          </button>
+          {drillPath.map((d, i) => (
+            <span key={`${d.field}-${i}`} className='flex items-center gap-1'>
+              <span className='text-slate-300'>›</span>
+              <button
+                type='button'
+                onClick={() => setDrillPath(drillPath.slice(0, i + 1))}
+                className='rounded bg-[#00ceff14] px-1.5 py-0.5 font-medium text-[#007a99] dark:text-nvr-cyan'
+              >
+                {d.value}
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div ref={cardRef} className='flex min-h-0 flex-1 flex-col'>
+        {asTable && data?.series?.length ? (
+          <div className='min-h-0 flex-1 overflow-auto'>
+            <table className='w-full text-[11.5px]'>
+              <thead>
+                <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+                  <th className='px-1.5 pb-1'>Dimension</th>
+                  <th className='px-1.5 pb-1 text-right'>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.series ?? []).map((sv) => (
+                  <tr key={sv.dim} className='border-b border-slate-50 dark:border-border/40'>
+                    <td className='max-w-[220px] truncate px-1.5 py-1 text-slate-700 dark:text-slate-300'>{sv.dim}</td>
+                    <td className='px-1.5 py-1 text-right tabular-nums text-slate-800 dark:text-slate-100'>
+                      {fmt(sv.value, format)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          body
+        )}
+      </div>
+      {(widget.config as { footnote?: string })?.footnote && (
+        <p className='mt-1 border-t border-slate-100 pt-1 text-[10.5px] leading-snug text-slate-400 dark:border-border/50'>
+          {(widget.config as { footnote?: string }).footnote}
+        </p>
+      )}
       {recordsFor && (
         <WidgetRecordsModal
           collection={widget.collection ?? ''}
@@ -2783,6 +3149,7 @@ export function ReportView({
   const [savingPreset, setSavingPreset] = useState(false)
   // Point-in-time snapshots — pick one and every widget shows a delta badge.
   const [snapId, setSnapId] = useState<number | null>(null)
+  const [asOf, setAsOf] = useState(false)
   const { data: snapshots = [] } = useQuery({
     queryKey: ['nvr-report-snaps', reportId],
     queryFn: () =>
@@ -3201,6 +3568,21 @@ export function ReportView({
                 {snapId === sn.id && <X className='h-2.5 w-2.5' />}
               </button>
             ))}
+            {snapId != null && (
+              <button
+                type='button'
+                title='Time machine (#404): show the snapshot values AS the numbers, not as delta badges'
+                onClick={() => setAsOf((v) => !v)}
+                className={cn(
+                  'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
+                  asOf
+                    ? 'border-amber-400 bg-amber-50 font-medium text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'
+                    : 'border-dashed border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                )}
+              >
+                As of
+              </button>
+            )}
 
             <span className='mx-1 h-4 w-px bg-slate-200 dark:bg-border' />
             <span className='inline-flex h-7 min-w-[240px] flex-1 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 dark:border-border dark:bg-card sm:max-w-[420px]'>
@@ -3452,6 +3834,7 @@ export function ReportView({
                     ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
                     : null
                 }
+                asOf={asOf}
                 annotations={allAnnotations.filter((a) => a.widget === w.id)}
                 onAddAnnotation={(widgetId, note, anchorDate) =>
                   addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })

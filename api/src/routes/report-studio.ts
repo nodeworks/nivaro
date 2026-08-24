@@ -11,6 +11,7 @@ import {
   isRegisteredBusinessCollection,
   parseJson,
   physicalColumns,
+  renderReportEmailHtml,
   resolveWidgetData,
   resolveWidgetDataFull,
   type WidgetQueryConfig,
@@ -374,7 +375,12 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       'movers',
       'heatmap',
       'waterfall',
-      'narrative'
+      'narrative',
+      'pareto',
+      'stats',
+      'scatter',
+      'hot_records',
+      'metric'
     ])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
@@ -419,6 +425,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       .where({ id: req.params.widgetId, report: report.id })
       .first()) as WidgetRow | undefined
     if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+    // Drill hierarchies (#418): the viewer may override the widget's dimension
+    // to the next configured drill level — field validated inside the resolver
+    // like any config dimension, so an invalid override just 400s.
+    const dimOverride = (req.body as { dimension_override?: string } | undefined)?.dimension_override
+    let cfg = parseJson<WidgetQueryConfig>(widget.config)
+    if (dimOverride && typeof dimOverride === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(dimOverride)) {
+      cfg = { ...(cfg ?? {}), dimension: { field: dimOverride } }
+    }
     try {
       const data = await resolveWidgetDataFull(
         req.user!,
@@ -427,7 +441,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           id: widget.id,
           type: widget.type,
           collection: widget.collection,
-          config: parseJson(widget.config)
+          config: cfg
         },
         req.body?.date_range ??
           parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ??
@@ -577,7 +591,17 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         ? { deliver_room: bodyRoom ? String(bodyRoom).slice(0, 200) : null }
         : {}),
       ...(bodyPdf !== undefined ? { attach_pdf: !!bodyPdf } : {}),
-      ...(bodyTeams !== undefined ? { deliver_teams: !!bodyTeams } : {})
+      ...(bodyTeams !== undefined ? { deliver_teams: !!bodyTeams } : {}),
+      // Widget-level subscription (#381): scope the digest to one widget.
+      // UNIQUE(report,user) means this REPLACES any whole-report subscription
+      // — the UI says so. Explicit null clears back to whole-report.
+      ...((req.body as { widget_id?: string | null }).widget_id !== undefined
+        ? {
+            widget_id: (req.body as { widget_id?: string | null }).widget_id
+              ? String((req.body as { widget_id?: string | null }).widget_id).slice(0, 36)
+              : null
+          }
+        : {})
     }
     if (existing) {
       await db('nivaro_report_subscriptions').where({ id: existing.id }).update(values)
@@ -602,6 +626,68 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       .first()
     return reply.send({ data: sub })
   })
+
+  // Email report now (#363): one-off render-and-send to any address — no
+  // subscription row, no schedule. Resolves as the CALLER (their scopes bind
+  // the data), mail test mode applies like any other send.
+  app.post<{ Params: { id: string }; Body: { to?: string; widget_id?: string } }>(
+    '/:id/email',
+    async (req, reply) => {
+      const report = (await db('nivaro_report_defs')
+        .where({ id: req.params.id })
+        .first()) as ReportRow | undefined
+      if (!report) return reply.code(404).send({ error: 'Report not found' })
+      if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+      const to = String(req.body?.to ?? '').trim()
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+        return reply.code(400).send({ error: 'A valid recipient email is required' })
+      }
+      let widgets = (await db('nivaro_report_widgets')
+        .where({ report: report.id })
+        .orderBy('sort')) as WidgetRow[]
+      if (req.body?.widget_id) {
+        const scoped = widgets.filter((w) => w.id === req.body.widget_id)
+        if (scoped.length === 0) return reply.code(400).send({ error: 'Unknown widget' })
+        widgets = scoped
+      }
+      if (widgets.length === 0) return reply.code(400).send({ error: 'Report has no widgets' })
+      const dateRange =
+        parseJson<{ date_range?: DateRange }>(report.global_filters as string)?.date_range ?? null
+      const resolved: Array<{ widget: WidgetRow; data: Awaited<ReturnType<typeof resolveWidgetDataFull>> | { error: string } }> = []
+      for (const w of widgets) {
+        try {
+          resolved.push({
+            widget: w,
+            data: await resolveWidgetDataFull(
+              req.user!,
+              report.id,
+              { id: w.id, type: w.type, collection: w.collection, config: parseJson(w.config as string) },
+              dateRange
+            )
+          })
+        } catch (err) {
+          resolved.push({ widget: w, data: { error: err instanceof Error ? err.message : 'failed' } })
+        }
+      }
+      const { sendRawMail } = await import('../services/mail.js')
+      const { config: appConfig } = await import('../config.js')
+      const html = renderReportEmailHtml(String(report.name), resolved as never, appConfig.ADMIN_URL, report.id)
+      await sendRawMail({
+        to,
+        subject: `${report.name} — report snapshot`,
+        html
+      })
+      await logActivity({
+        action: 'report-email-now',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user!.id,
+        req,
+        comment: to
+      })
+      return reply.send({ data: { sent: true } })
+    }
+  )
 
   // ── Alerts ──────────────────────────────────────────────────────────────────
 

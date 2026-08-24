@@ -832,6 +832,11 @@ export type ReportWidgetType =
   | 'heatmap'
   | 'waterfall'
   | 'narrative'
+  | 'pareto'
+  | 'stats'
+  | 'scatter'
+  | 'hot_records'
+  | 'metric'
 
 export interface ReportWidget {
   id: UUID
@@ -978,7 +983,12 @@ export function saveReportWidgets(
 export function readReportWidgetData(
   id: UUID,
   widgetId: UUID,
-  body?: { date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
+  body?: {
+    date_range?: ReportDateRange | null
+    entity_filters?: ReportEntityFilter[]
+    /** Drill hierarchies (#418): override the widget's dimension for this fetch. */
+    dimension_override?: string
+  }
 ): Command<{ data: ReportWidgetData }> {
   return cmd('POST', `/report-studio/${id}/widgets/${widgetId}/data`, undefined, body ?? {})
 }

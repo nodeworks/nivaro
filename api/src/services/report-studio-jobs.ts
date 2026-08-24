@@ -232,6 +232,7 @@ export async function runReportSubscriptions(
     deliver_room: string | null
     attach_pdf: boolean
     deliver_teams: boolean
+    widget_id: string | null
   }>
   let sent = 0
   for (const sub of subs) {
@@ -239,9 +240,16 @@ export async function runReportSubscriptions(
       const user = await loadUser(sub.user)
       const report = await db('nivaro_report_defs').where({ id: sub.report }).first()
       if (!user || !report) continue
-      const widgets = (await db('nivaro_report_widgets')
+      let widgets = (await db('nivaro_report_widgets')
         .where({ report: report.id })
         .orderBy('sort')) as WidgetRow[]
+      // Widget-scoped subscription (#381): digest just the one widget. A
+      // widget deleted since subscribing degrades to the whole report rather
+      // than a silent empty email.
+      if (sub.widget_id) {
+        const scoped = widgets.filter((w) => w.id === sub.widget_id)
+        if (scoped.length > 0) widgets = scoped
+      }
       if (widgets.length === 0) continue
 
       const dateRange =

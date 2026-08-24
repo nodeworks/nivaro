@@ -623,7 +623,7 @@ export interface Dashboard {
 export interface DashboardWidget {
   id: string
   dashboard: string
-  type: 'count' | 'sum' | 'avg' | 'latest' | 'bar_chart' | 'line_chart'
+  type: 'count' | 'sum' | 'avg' | 'latest' | 'bar_chart' | 'line_chart' | 'report_preset'
   title: string
   collection: string | null
   field: string | null

@@ -47,7 +47,22 @@ export interface WidgetQueryConfig {
   /** Drill-to-report: clicking navigates to another report, carrying the value. */
   link_report?: { report_id: string; filter_field?: string } | null
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
-  dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  dimension?: {
+    field: string
+    bucket?: 'day' | 'week' | 'month'
+    /** Range bucketing (#225): numeric dimension folded into labeled ranges.
+     *  Ordered; each entry captures values < `to` not claimed by earlier
+     *  entries; a final entry without `to` is the catch-all. */
+    ranges?: Array<{ to?: number; label: string }>
+  } | null
+  /** Scatter (#173): the two axes. */
+  x_field?: string
+  y_field?: string
+  /** Stats (#150): the analyzed field rides cfg.metric.field. */
+  /** Hot records (#226): window in days (default 30). */
+  hot_days?: number
+  /** Metric catalog (#250): nivaro_metric_definitions.metric_key. */
+  metric_key?: string
   filters?: WidgetFilter[]
   date_field?: string | null
   limit?: number
@@ -567,6 +582,53 @@ export async function resolveWidgetData(
     return { rows, row_count: rows.length, value }
   }
 
+  // Metric catalog widget (#250): a nivaro_metric_definitions entry as a KPI.
+  if (widget.type === 'metric') {
+    const key = widget.config?.metric_key
+    if (!key) {
+      throw Object.assign(new Error('Metric widgets need metric_key'), { statusCode: 400 })
+    }
+    const def = (await db('nivaro_metric_definitions')
+      .where({ metric_key: key })
+      .select('metric_source', 'unit', 'name')
+      .first()) as { metric_source: string; unit: string | null; name: string } | undefined
+    if (!def) {
+      throw Object.assign(new Error(`Unknown metric "${key}"`), { statusCode: 400 })
+    }
+    const { resolveMetricValue } = await import('./metric-alerts.js')
+    let source: Parameters<typeof resolveMetricValue>[0] | null = null
+    try {
+      source = JSON.parse(def.metric_source)
+    } catch {
+      source = null
+    }
+    const filterMap: Record<string, unknown> = {}
+    for (const f of entityFilters) if (f.values.length) filterMap[f.field] = f.values
+    const value = source ? await resolveMetricValue(source, filterMap) : null
+    return { value, row_count: value != null ? 1 : 0 }
+  }
+
+  // Pareto (#149): ranked value-dimension bars + cumulative percent — resolve
+  // as a bar, then annotate. The client renders bars + the cumulative line.
+  if (widget.type === 'pareto') {
+    const chart = await resolveWidgetData(
+      user,
+      { type: 'bar', collection: widget.collection, config: { ...(widget.config ?? {}), compare: null } },
+      dateRange,
+      entityFilters
+    )
+    const series = (chart.series ?? [])
+      .filter((sv) => !(sv as { other?: boolean }).other)
+      .sort((a, b) => b.value - a.value)
+    const total = series.reduce((a, sv) => a + sv.value, 0)
+    let running = 0
+    const annotated = series.map((sv) => {
+      running += sv.value
+      return { ...sv, cum_pct: total > 0 ? Math.round((running / total) * 1000) / 10 : 0 }
+    })
+    return { series: annotated as never }
+  }
+
   const collection = widget.collection ?? ''
   if (!(await isRegisteredBusinessCollection(collection))) {
     throw Object.assign(new Error('Unknown collection'), { statusCode: 400 })
@@ -755,12 +817,165 @@ export async function resolveWidgetData(
     return { rows, row_count: rows.length }
   }
 
+  // Stats (#150): distribution summary of one numeric field.
+  if (widget.type === 'stats') {
+    if (!metricField) {
+      throw Object.assign(new Error('Stats widgets need a metric field'), { statusCode: 400 })
+    }
+    const row = (await base()
+      .whereNotNull(metricField)
+      .select(
+        db.raw('COUNT(*) as n'),
+        db.raw('MIN(??) as min_v', [metricField]),
+        db.raw('MAX(??) as max_v', [metricField]),
+        db.raw('AVG(CAST(?? AS FLOAT)) as mean_v', [metricField]),
+        db.raw('STDEV(CAST(?? AS FLOAT)) as stddev_v', [metricField])
+      )
+      .first()) as
+      | { n: number; min_v: number; max_v: number; mean_v: number; stddev_v: number }
+      | undefined
+    // Percentiles: PERCENTILE_CONT is a window function on MSSQL — DISTINCT
+    // over the windowed value collapses it to one row per percentile.
+    let p50: number | null = null
+    let p90: number | null = null
+    try {
+      const sub = base().whereNotNull(metricField)
+      const pRow = (await db
+        .from(sub.select(`${collection}.*`).as('_s'))
+        .select(
+          db.raw(
+            "DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p90",
+            [metricField, metricField]
+          )
+        )
+        .first()) as { p50: number; p90: number } | undefined
+      p50 = pRow?.p50 ?? null
+      p90 = pRow?.p90 ?? null
+    } catch {
+      /* percentiles are additive detail */
+    }
+    const rows = [
+      { stat: 'Count', value: Number(row?.n ?? 0) },
+      { stat: 'Min', value: row?.min_v != null ? Number(row.min_v) : null },
+      { stat: 'Max', value: row?.max_v != null ? Number(row.max_v) : null },
+      { stat: 'Mean', value: row?.mean_v != null ? Number(row.mean_v) : null },
+      { stat: 'Std dev', value: row?.stddev_v != null ? Number(row.stddev_v) : null },
+      { stat: 'Median (p50)', value: p50 },
+      { stat: 'p90', value: p90 }
+    ]
+    return { rows: rows as unknown as Array<Record<string, unknown>>, row_count: Number(row?.n ?? 0) }
+  }
+
+  // Scatter (#173): raw x/y points (capped); the client draws the trendline.
+  if (widget.type === 'scatter') {
+    const xf = cfg.x_field && valid.has(cfg.x_field) ? cfg.x_field : null
+    const yf = cfg.y_field && valid.has(cfg.y_field) ? cfg.y_field : null
+    if (!xf || !yf) {
+      throw Object.assign(new Error('Scatter widgets need valid x_field and y_field'), {
+        statusCode: 400
+      })
+    }
+    const rows = (await base()
+      .whereNotNull(xf)
+      .whereNotNull(yf)
+      .select({ x: xf, y: yf })
+      .limit(1000)) as Array<{ x: number; y: number }>
+    return {
+      rows: rows.map((r) => ({ x: Number(r.x), y: Number(r.y) })) as unknown as Array<
+        Record<string, unknown>
+      >,
+      row_count: rows.length
+    }
+  }
+
+  // Hot records (#226): most-viewed records in the window, from the per-user
+  // record-view watermarks. Labels resolve via display templates.
+  if (widget.type === 'hot_records') {
+    const days = Math.max(1, Math.min(365, cfg.hot_days ?? 30))
+    const views = (await db('nivaro_record_views')
+      .where('collection', collection)
+      .where('last_viewed_at', '>=', db.raw(`DATEADD(day, ?, GETUTCDATE())`, [-days]))
+      .select('item_id')
+      .count({ n: '*' })
+      .groupBy('item_id')
+      .orderBy('n', 'desc')
+      .limit(15)) as Array<{ item_id: string; n: number }>
+    // Visibility: only records the VIEWER can read make the list.
+    const visible = new Set(
+      (
+        (await base()
+          .whereIn(
+            'id',
+            views.map((v) => v.item_id).filter((v) => /^[\w-]+$/.test(String(v)))
+          )
+          .select('id')) as Array<{ id: unknown }>
+      ).map((r) => String(r.id))
+    )
+    const kept = views.filter((v) => visible.has(String(v.item_id)))
+    const { getLabels } = await import('./queues.js')
+    let labels: Record<string, string> = {}
+    try {
+      labels = await getLabels(
+        new Map([[collection, new Set(kept.map((v) => String(v.item_id)))]])
+      )
+    } catch {
+      /* ids stand in */
+    }
+    return {
+      rows: kept.map((v) => ({
+        id: v.item_id,
+        label: labels[`${collection}:${v.item_id}`] ?? String(v.item_id),
+        views: Number(v.n)
+      })) as unknown as Array<Record<string, unknown>>,
+      row_count: kept.length
+    }
+  }
+
   // bar | line | donut — dimensioned aggregate
   const dim = cfg.dimension
   if (!dim?.field || (!valid.has(dim.field) && !dim.bucket)) {
     throw Object.assign(new Error('Chart widgets need a valid dimension field'), {
       statusCode: 400
     })
+  }
+  // Range bucketing (#225): a numeric dimension folds into configured labeled
+  // ranges via a CASE expression — labels are bound as parameters, thresholds
+  // must be finite numbers.
+  if (Array.isArray(dim.ranges) && dim.ranges.length > 0 && valid.has(dim.field)) {
+    const entries = dim.ranges
+      .filter((r) => typeof r?.label === 'string' && (r.to === undefined || Number.isFinite(r.to)))
+      .slice(0, 20)
+    if (entries.length > 0) {
+      const parts: string[] = []
+      const bindings: Array<string | number> = []
+      for (const e of entries) {
+        if (e.to !== undefined) {
+          parts.push('WHEN ?? < ? THEN ?')
+          bindings.push(dim.field, e.to as number, e.label)
+        } else {
+          parts.push('ELSE ?')
+          bindings.push(e.label)
+        }
+      }
+      const hasElse = entries.some((e) => e.to === undefined)
+      const caseExpr = `CASE ${parts.join(' ')}${hasElse ? '' : " ELSE 'Other'"} END`
+      // MSSQL refuses a parameterized CASE repeated in SELECT + GROUP BY (the
+      // two parameter sets read as different expressions) — bucket in a
+      // subquery, aggregate over its alias.
+      const inner = base()
+        .whereNotNull(dim.field)
+        .select(db.raw(`${caseExpr} as dim`, bindings))
+      if (aggregate !== 'count' && metricField) inner.select(metricField)
+      const rows = (await aggSelect(
+        db.from(inner.as('_rb')).select('dim').groupBy('dim')
+      )) as unknown as Array<{ dim: unknown; value: number | string }>
+      const order = new Map(entries.map((e, i) => [e.label, i]))
+      const series = rows
+        .filter((r) => r.dim != null)
+        .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
+        .sort((a, b) => (order.get(a.dim) ?? 99) - (order.get(b.dim) ?? 99))
+      return { series }
+    }
   }
   if (dim.bucket) {
     if (!valid.has(dim.field)) {

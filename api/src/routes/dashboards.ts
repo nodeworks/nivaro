@@ -240,6 +240,100 @@ export async function dashboardsRoutes(app: FastifyInstance) {
   })
 
   // ── POST /:id/widgets — add widget ────────────────────────────────────────
+  // AI dashboard builder (#251): "build me a dashboard" — reports-AI-build
+  // parity for the simpler dashboard widget model. Creates the dashboard AND
+  // its widgets; a failed AI call deletes the shell.
+  app.post<{ Body: { prompt?: string; name?: string } }>('/ai-build', async (req, reply) => {
+    const prompt = String(req.body?.prompt ?? '').trim()
+    if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const aiClient = await getAiClient()
+    if (!aiClient) return reply.code(503).send({ error: 'AI is not configured' })
+    const { model } = await getAiModelSettings()
+
+    const collections = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection')
+      .limit(80)) as Array<{ collection: string }>
+    const fields = (await db('nivaro_fields')
+      .whereIn('collection', collections.map((c) => c.collection))
+      .whereIn('type', ['integer', 'decimal', 'float', 'number', 'string', 'date', 'datetime'])
+      .select('collection', 'field', 'type')) as Array<{ collection: string; field: string; type: string }>
+    const catalog = collections
+      .map((c) => {
+        const fs = fields.filter((f) => f.collection === c.collection).slice(0, 20)
+        return `${c.collection}: ${fs.map((f) => `${f.field}(${f.type})`).join(', ')}`
+      })
+      .join('\n')
+    const system = `You compose dashboard widgets. Types: count (record count), sum (sum of field), avg (avg of field), latest (newest records list), bar_chart (grouped by field), line_chart (over a date field). Grid: 4 columns; KPIs (count/sum/avg) width=1 height=1, charts width=2 height=2, latest width=2 height=2.
+Collections and fields:
+${catalog}
+Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","collection":"...","field":"<field or null>","col":0,"row":0,"width":1,"height":1}]}. Use ONLY listed collections/fields. 4-8 widgets, no overlaps.`
+
+    let parsed: { name?: string; widgets?: Array<Record<string, unknown>> } | null = null
+    try {
+      const msg = await aiClient.messages.create({
+        model,
+        max_tokens: 1800,
+        system,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      const text = msg.content.map((b) => (b.type === 'text' ? b.text : '')).join('')
+      const jm = text.match(/\{[\s\S]*\}/)
+      parsed = jm ? JSON.parse(jm[0]) : null
+    } catch (err) {
+      return reply
+        .code(502)
+        .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+    }
+    if (!parsed?.widgets?.length) return reply.code(422).send({ error: 'AI returned no widgets' })
+
+    const dashId = randomUUID()
+    await db('nivaro_dashboards').insert({
+      id: dashId,
+      name: String(req.body?.name ?? parsed.name ?? 'AI dashboard').slice(0, 200),
+      user: req.user!.id,
+      is_shared: false,
+      created_at: new Date()
+    })
+    const VALID = new Set(['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart'])
+    const known = new Set(collections.map((c) => c.collection))
+    let created = 0
+    for (const w of parsed.widgets.slice(0, 10)) {
+      const type = String(w.type ?? '')
+      const collection = String(w.collection ?? '')
+      if (!VALID.has(type) || !known.has(collection)) continue
+      await db('nivaro_dashboard_widgets').insert({
+        id: randomUUID(),
+        dashboard: dashId,
+        type,
+        title: String(w.title ?? type).slice(0, 200),
+        collection,
+        field: w.field ? String(w.field).slice(0, 200) : null,
+        filters: null,
+        col: Math.max(0, Math.min(3, Number(w.col) || 0)),
+        row: Math.max(0, Number(w.row) || 0),
+        width: Math.max(1, Math.min(4, Number(w.width) || 1)),
+        height: Math.max(1, Math.min(4, Number(w.height) || 1)),
+        created_at: new Date()
+      })
+      created++
+    }
+    if (created === 0) {
+      await db('nivaro_dashboards').where({ id: dashId }).del()
+      return reply.code(422).send({ error: 'AI produced no valid widgets' })
+    }
+    await logActivity({
+      action: 'dashboard-ai-build',
+      collection: 'nivaro_dashboards',
+      item: dashId,
+      user: req.user!.id,
+      req,
+      comment: prompt.slice(0, 200)
+    })
+    return reply.send({ data: { id: dashId, widgets_created: created } })
+  })
+
   app.post<{ Params: { id: string }; Body: CreateWidgetBody }>(
     '/:id/widgets',
     async (req, reply) => {
