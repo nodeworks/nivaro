@@ -22,7 +22,12 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         socket_count: stats.sockets.length,
         sockets: stats.sockets.map((s) => ({
           id: s.id,
-          user: s.user,
+          user:
+            s.user && typeof s.user === 'object'
+              ? ((s.user as { name?: string; id?: string }).name ??
+                (s.user as { id?: string }).id ??
+                null)
+              : ((s.user as string | null) ?? null),
           app: s.app,
           connected_seconds: Math.round((Date.now() - s.connectedAt) / 1000),
           rtt_ms: s.rtt,
@@ -57,7 +62,11 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
           editor: l.editor?.trim() || 'unknown',
           since: l.locked_at
         })),
-        viewing: getRecordViewerSnapshot()
+        viewing: getRecordViewerSnapshot().map((v) => ({
+          collection: v.collection,
+          item: v.item,
+          viewers: v.viewers.map((u) => u.name || u.id)
+        }))
       }
     }
   })
