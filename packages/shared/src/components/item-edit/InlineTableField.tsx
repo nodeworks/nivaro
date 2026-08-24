@@ -2769,6 +2769,35 @@ export function InlineTableField({
     finally { setApplying(false) }
   }
 
+  // Line generators (#336): N rows with a date column advancing one month per
+  // row — the "12 monthly lines" ask, without a bespoke dialog.
+  async function addPatternedRows(dateField: string) {
+    const n = Math.max(1, Math.min(24, bulkCount))
+    const base = new Date()
+    const rowsData = Array.from({ length: n }, (_, i) => {
+      const d = new Date(base.getFullYear(), base.getMonth() + 1 + i, 1)
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+      return { ...rowDefaultSeed, ...defaultValues, [dateField]: iso }
+    })
+    if ((isNew || isPendingMode) && staging) {
+      for (const rd of rowsData) staging.queueRow(relatedCollection, manyField, rd)
+      return
+    }
+    setBulkAdding(true)
+    try {
+      await Promise.all(
+        rowsData.map((rd) =>
+          client.request(post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId }))
+        )
+      )
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    } catch {
+      /* ignore */
+    } finally {
+      setBulkAdding(false)
+    }
+  }
+
   async function addBulkRows(useDefaults: boolean) {
     const n = Math.max(1, Math.min(100, bulkCount))
     const rowData = useDefaults ? { ...rowDefaultSeed, ...defaultValues } : { ...rowDefaultSeed }
@@ -3465,6 +3494,24 @@ export function InlineTableField({
         >
           blank {bulkCount === 1 ? 'row' : 'rows'}
         </button>
+        {/* Line generators (#336): patterned rows — monthly dates, {n} labels. */}
+        {(() => {
+          const dateCols = displayCols.filter(
+            (c) => !c.field.includes('.') && (c.type === 'date' || c.type === 'datetime')
+          )
+          if (dateCols.length === 0) return null
+          return (
+            <button
+              type='button'
+              disabled={bulkAdding}
+              onClick={() => addPatternedRows(dateCols[0].field)}
+              data-tip={`Generate ${bulkCount} rows with ${dateCols[0].field} advancing one month per row (starting next month)`}
+              className='h-6 px-2.5 rounded border border-dashed border-slate-300 text-slate-500 hover:border-nvr-cyan/60 hover:text-slate-700 disabled:opacity-40 transition-colors'
+            >
+              monthly {bulkCount === 1 ? 'row' : 'rows'}
+            </button>
+          )
+        })()}
         {allocateDrawer && (!isNew || staging) && (
           <AllocateDrawer
             config={allocateDrawer}

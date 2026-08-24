@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Clock, RotateCcw } from 'lucide-react'
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -465,6 +465,7 @@ function RevisionRow({
       </button>
       {expanded && (
         <div className='px-6 pb-3 space-y-2'>
+          <RevisionAnnotations revisionId={revision.id} />
           <div className='flex items-center justify-between'>
             <p className='text-[10px] font-medium text-slate-500'>
               {view === 'side'
@@ -787,6 +788,10 @@ function RevisionsList({
           )}
         </div>
       )}
+      {/* Record time-lapse (#373): play through the history, deltas as captions. */}
+      {(data?.length ?? 0) >= 3 && (
+        <TimeLapseBar revisions={data ?? []} />
+      )}
       {(data ?? []).map((rev, i) => (
         <RevisionRow
           key={rev.id}
@@ -923,6 +928,145 @@ function RevisionValueSearch({ collection, item }: { collection: string; item: s
             </>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+
+// ─── History annotations (#372): comment on a specific revision ──────────────
+function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [text, setText] = useState('')
+  const { data: notes = [] } = useQuery<
+    Array<{ id: string; text: string; created_at: string; user_name?: string | null }>
+  >({
+    queryKey: ['revision-notes', String(revisionId)],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; text: string; created_at: string; user_name?: string | null }> }>(
+          get('/comments', { collection: 'nivaro_revisions', item: String(revisionId) })
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    staleTime: 30_000
+  })
+  const add = useMutation({
+    mutationFn: () =>
+      client.request(
+        post('/comments', { collection: 'nivaro_revisions', item: String(revisionId), text })
+      ),
+    onSuccess: () => {
+      setText('')
+      void qc.invalidateQueries({ queryKey: ['revision-notes', String(revisionId)] })
+    },
+    onError: () => toast.error('Note failed')
+  })
+  return (
+    <div className='rounded-md border border-slate-100 bg-slate-50/60 p-2 dark:border-border/60 dark:bg-muted/30'>
+      {notes.map((n) => (
+        <p key={n.id} className='text-[11.5px] text-slate-600 dark:text-slate-300'>
+          {n.text}{' '}
+          <span className='text-[10px] text-slate-400'>
+            — {n.user_name ?? 'someone'} · {new Date(n.created_at).toLocaleDateString()}
+          </span>
+        </p>
+      ))}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (text.trim()) add.mutate()
+        }}
+        className='mt-1 flex gap-1.5'
+      >
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder='Annotate this revision…'
+          className='h-6 flex-1 rounded border border-slate-200 bg-transparent px-1.5 text-[11.5px] outline-none dark:border-border'
+        />
+        {text.trim() && (
+          <button
+            type='submit'
+            disabled={add.isPending}
+            className='rounded bg-nvr-cyan px-2 text-[11px] font-semibold text-white disabled:opacity-50'
+          >
+            Add
+          </button>
+        )}
+      </form>
+    </div>
+  )
+}
+
+
+// ─── Record time-lapse (#373) ────────────────────────────────────────────────
+function TimeLapseBar({
+  revisions
+}: {
+  revisions: Array<{
+    id: number | string
+    action: string | null
+    timestamp: string | null
+    user_name?: string | null
+    delta?: Record<string, unknown> | null
+  }>
+}) {
+  const ordered = [...revisions].reverse() // oldest → newest
+  const [playing, setPlaying] = useState(false)
+  const [idx, setIdx] = useState(0)
+  useEffect(() => {
+    if (!playing) return
+    if (idx >= ordered.length - 1) {
+      setPlaying(false)
+      return
+    }
+    const t = setTimeout(() => setIdx((i) => i + 1), 1600)
+    return () => clearTimeout(t)
+  }, [playing, idx, ordered.length])
+  const cur = ordered[idx]
+  const deltaKeys = cur?.delta ? Object.keys(cur.delta).slice(0, 6) : []
+  return (
+    <div className='mb-2 rounded-md border border-slate-200 bg-slate-50/70 p-2 dark:border-border dark:bg-muted/30'>
+      <div className='flex items-center gap-2'>
+        <button
+          type='button'
+          onClick={() => {
+            if (!playing && idx >= ordered.length - 1) setIdx(0)
+            setPlaying((v) => !v)
+          }}
+          className='rounded-md bg-nvr-cyan px-2.5 py-1 text-[11.5px] font-semibold text-white'
+        >
+          {playing ? 'Pause' : '▶ Time-lapse'}
+        </button>
+        <input
+          type='range'
+          min={0}
+          max={Math.max(0, ordered.length - 1)}
+          value={idx}
+          onChange={(e) => {
+            setPlaying(false)
+            setIdx(Number(e.target.value))
+          }}
+          className='flex-1 accent-[#00ceff]'
+          aria-label='History position'
+        />
+        <span className='shrink-0 tabular-nums text-[11px] text-slate-400'>
+          {idx + 1}/{ordered.length}
+        </span>
+      </div>
+      {cur && (
+        <p className='mt-1 text-[11.5px] text-slate-600 dark:text-slate-300'>
+          <span className='font-medium capitalize'>{cur.action ?? 'change'}</span>
+          {cur.timestamp ? ` · ${new Date(cur.timestamp).toLocaleString()}` : ''}
+          {cur.user_name ? ` · ${cur.user_name}` : ''}
+          {deltaKeys.length > 0 && (
+            <span className='ml-1 font-mono text-[10.5px] text-slate-400'>
+              changed: {deltaKeys.join(', ')}
+            </span>
+          )}
+        </p>
       )}
     </div>
   )

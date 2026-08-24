@@ -25,7 +25,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     let q = db('nivaro_field_groups')
       .where({ collection })
-      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields', 'summary_hide_empty', 'swap_config', 'skip_if_filled', 'content', 'content_tone')
+      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields', 'summary_hide_empty', 'swap_config', 'skip_if_filled', 'content', 'content_tone', 'visible_when', 'hidden_for_roles')
       .orderBy('sort', 'asc')
 
     if (targetLayoutId !== null) {
@@ -106,6 +106,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       summary_hide_empty: boolean
       swap_config: string | null
       skip_if_filled: string | null
+      visible_when?: string | null
+      hidden_for_roles?: string | null
     }>
 
     const patch: Record<string, unknown> = {}
@@ -125,6 +127,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if ('content' in body) patch.content = (body as Record<string, unknown>).content ?? null
     if ('content_tone' in body) patch.content_tone = (body as Record<string, unknown>).content_tone ?? null
     if ('skip_if_filled' in body) patch.skip_if_filled = body.skip_if_filled ?? null
+    if ('visible_when' in body) patch.visible_when = body.visible_when ?? null
+    if ('hidden_for_roles' in body) patch.hidden_for_roles = body.hidden_for_roles ?? null
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 

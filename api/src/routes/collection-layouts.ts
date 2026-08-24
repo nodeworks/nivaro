@@ -278,13 +278,31 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
     layout.default_values = parseDefaultValues(layout.default_values)
 
-    const [groups, assignments] = await Promise.all([
+    const [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
         .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
         .orderBy('sort', 'asc')
     ])
+
+    // Group-level role visibility (#390): groups listing this caller's role
+    // in hidden_for_roles are dropped server-side. Admins see everything —
+    // they configure the rule.
+    const groups = req.isAdmin
+      ? groupsRaw
+      : groupsRaw.filter((g: { hidden_for_roles?: string | null }) => {
+          try {
+            const hidden = JSON.parse(g.hidden_for_roles ?? '[]') as string[]
+            return !(
+              Array.isArray(hidden) &&
+              req.user?.role &&
+              hidden.map((r) => String(r).toUpperCase()).includes(String(req.user.role).toUpperCase())
+            )
+          } catch {
+            return true
+          }
+        })
 
     const ungroupedRow = assignments.find((a: { field: string; sort: number }) => a.field === '__ungrouped_pos__')
     const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null

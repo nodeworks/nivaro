@@ -847,8 +847,18 @@ export async function commentsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'collection, item and text are required' })
       }
 
-      // Gate on create permission for the parent collection.
-      if (!req.isAdmin && !(await can(req.user!, 'create', body.collection))) {
+      // Gate on create permission for the parent collection. History
+      // annotations (#372) comment ON a revision row — gated by READ access
+      // to the revision's own record collection instead (you can annotate
+      // history you're allowed to see).
+      if (body.collection === 'nivaro_revisions') {
+        const rev = (await db('nivaro_revisions')
+          .where({ id: Number(body.item) })
+          .first('collection')) as { collection?: string } | undefined
+        if (!rev) return reply.code(404).send({ error: 'Revision not found' })
+        if (!req.isAdmin && !(await can(req.user!, 'read', rev.collection ?? '')))
+          return reply.code(403).send({ error: 'Forbidden' })
+      } else if (!req.isAdmin && !(await can(req.user!, 'create', body.collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
 
@@ -871,6 +881,34 @@ export async function commentsRoutes(app: FastifyInstance) {
       // the live one — never a stale name list); resolution failures degrade
       // to no extra recipients rather than blocking the comment.
       const mentioned = await resolveMentions(body.text)
+      // @watchers (#374): one token notifying everyone watching the record —
+      // field-watch subscribers + notification subscribers on this collection.
+      if (/@\[?watchers\]?\b/i.test(body.text)) {
+        try {
+          const watcherRows = (await db('nivaro_field_watches as w')
+            .join('nivaro_field_watch_subscribers as ws', 'ws.watch', 'w.id')
+            .where('w.collection', body.collection)
+            .where((q) => q.where('w.item_id', body.item).orWhereNull('w.item_id'))
+            .distinct('ws.user')) as Array<{ user: string }>
+          const subRows = (await db('nivaro_notification_subscriptions')
+            .where({ collection: body.collection, is_active: true })
+            .where((q) =>
+              q
+                .whereNull('filter_field')
+                .orWhereNot('filter_field', 'id')
+                .orWhere('filter_value', String(body.item))
+            )
+            .distinct('user')) as Array<{ user: string }>
+          const seenW = new Set(mentioned.map((u) => u.id))
+          for (const r of [...watcherRows, ...subRows]) {
+            if (seenW.has(r.user)) continue
+            seenW.add(r.user)
+            mentioned.push({ id: r.user } as never)
+          }
+        } catch {
+          /* watcher expansion is best-effort */
+        }
+      }
       if (OWNERS_MENTION_RE.test(body.text)) {
         try {
           const owners = await resolveOwnerMentions(body.collection, body.item)

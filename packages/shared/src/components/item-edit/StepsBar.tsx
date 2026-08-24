@@ -50,6 +50,7 @@ export function StepsBar({
   active,
   completed,
   errorSteps,
+  dirtySteps,
   onStepClick,
   embedded = false
 }: {
@@ -57,6 +58,8 @@ export function StepsBar({
   active: string
   completed: Set<string>
   errorSteps?: Set<string>
+  /** Unsaved-edit dots (#190): steps holding dirty fields. */
+  dirtySteps?: Set<string>
   onStepClick: (k: string) => void
   embedded?: boolean
 }) {
@@ -161,6 +164,12 @@ export function StepsBar({
               >
                 {s.label}
               </span>
+              {dirtySteps?.has(s.key) && !isActive && (
+                <span
+                  className='absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-400'
+                  data-tip='Unsaved edits on this step'
+                />
+              )}
             </button>
           </div>
         )

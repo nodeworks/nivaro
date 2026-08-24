@@ -348,12 +348,15 @@ function FieldHistoryButton({
   collection,
   itemId,
   field,
-  formatValue
+  formatValue,
+  onRestore
 }: {
   collection: string
   itemId: string
   field: string
   formatValue?: (v: unknown) => string
+  /** Field-level revert (#140): restore a historical value into the draft. */
+  onRestore?: (value: unknown) => void
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -434,8 +437,22 @@ function FieldHistoryButton({
                   key={i}
                   className='rounded px-1 py-1 text-[11.5px] leading-snug hover:bg-slate-50 dark:hover:bg-muted'
                 >
-                  <span className='font-medium text-slate-700 dark:text-slate-200'>
-                    {fmt(e.value, e.display)}
+                  <span className='flex items-baseline justify-between gap-2'>
+                    <span className='font-medium text-slate-700 dark:text-slate-200'>
+                      {fmt(e.value, e.display)}
+                    </span>
+                    {onRestore && i > 0 && (
+                      <button
+                        type='button'
+                        onClick={() => {
+                          onRestore(e.value ?? null)
+                          setOpen(false)
+                        }}
+                        className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10px] text-slate-500 hover:border-nvr-cyan/60 hover:text-nvr-navy dark:border-border dark:hover:text-nvr-cyan'
+                      >
+                        Restore
+                      </button>
+                    )}
                   </span>
                   <span className='block text-[10.5px] text-slate-400'>
                     {e.action === 'create' ? 'initial value' : 'changed'}
@@ -825,7 +842,14 @@ export function FieldRow({
             </TooltipProvider>
           )}
           {itemId && itemId !== 'new' && (
-            <FieldHistoryButton collection={collection} itemId={itemId} field={field.field} />
+            <FieldHistoryButton
+              collection={collection}
+              itemId={itemId}
+              field={field.field}
+              onRestore={
+                field.readonly ? undefined : (v) => onChange(field.field, v)
+              }
+            />
           )}
           {itemId && itemId !== 'new' && (
             <FieldWatchButton collection={collection} itemId={itemId} field={field.field} />

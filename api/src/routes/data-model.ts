@@ -1236,6 +1236,60 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   // ─── POST /relations — create a CMS relation ─────────────────────────────
 
+  // ── Auto-ID backfill (#378) ──────────────────────────────────────────────
+  // Generate ids for pre-pattern rows where the field is NULL/empty —
+  // sequence-safe (each row consumes the real sequence, same as a create).
+  app.post<{ Params: { table: string; field: string }; Body: { limit?: number } }>(
+    '/:table/fields/:field/auto-id-backfill',
+    async (req, reply) => {
+      const { table, field } = req.params
+      if (!/^[a-z][a-z0-9_]*$/i.test(table) || /^nivaro_/i.test(table))
+        return reply.code(400).send({ error: 'bad table' })
+      const fieldRow = (await db('nivaro_fields')
+        .where({ collection: table, field })
+        .first('options')) as { options?: string | null } | undefined
+      const cfg = (() => {
+        try {
+          return (JSON.parse(fieldRow?.options ?? '{}') as { auto_id?: { pattern?: string } })
+            .auto_id
+        } catch {
+          return null
+        }
+      })()
+      if (!cfg?.pattern)
+        return reply.code(422).send({ error: 'Field has no auto_id pattern configured' })
+      const cap = Math.min(2000, Math.max(1, Number(req.body?.limit) || 500))
+      const rows = (await db(table)
+        .where((q) => q.whereNull(field).orWhere(field, ''))
+        .orderBy('id')
+        .limit(cap)
+        .select('*')) as Array<Record<string, unknown>>
+      const { applyAutoIdsExt } = await import('../services/auto-ids.js')
+      let filled = 0
+      for (const row of rows) {
+        try {
+          const payload: Record<string, unknown> = { ...row, [field]: null }
+          await applyAutoIdsExt(db, table, payload)
+          const generated = payload[field]
+          if (generated != null && generated !== '') {
+            await db(table).where({ id: row.id }).update({ [field]: generated })
+            filled++
+          }
+        } catch {
+          /* per-row failures don't stop the sweep */
+        }
+      }
+      await logActivity({
+        action: 'auto-id-backfill',
+        user: req.user?.id,
+        collection: table,
+        comment: `${field}: ${filled} row(s) filled`,
+        req
+      })
+      return reply.send({ data: { filled, scanned: rows.length, more: rows.length === cap } })
+    }
+  )
+
   // ── Multi-user field builder (#243) ──────────────────────────────────────
   // One call provisions the junction table (<collection>_<field>_users:
   // parent FK + user uuid), the relation pair, and the alias field metadata.

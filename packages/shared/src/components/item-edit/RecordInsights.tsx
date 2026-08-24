@@ -1,0 +1,346 @@
+import { useQuery } from '@tanstack/react-query'
+import { Info, Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useNivaroClient } from '../../context'
+import { get } from '../../lib/commands'
+
+/**
+ * Record insights (Record & Form UX sprint): one header popover answering
+ * three questions about a saved record —
+ * #123 audience: who hears about a change, and via which channel
+ * #241 integrations: every ERP push / webhook delivery about this record
+ * #144 owner history: who held the record when (approximation — owners are
+ *      resolved with TODAY's matrix config, labeled as such)
+ * Plus #399 deep record search: find-in-record across fields.
+ */
+
+type Tab = 'audience' | 'integrations' | 'owners'
+
+export function RecordInsightsButton({
+  collection,
+  itemId
+}: {
+  collection: string
+  itemId: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [tab, setTab] = useState<Tab>('audience')
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+  return (
+    <div ref={rootRef} className='relative'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        data-tip='Record insights — audience, integrations, owner history'
+        aria-label='Record insights'
+        className='flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+      >
+        <Info className='h-4 w-4' />
+      </button>
+      {open && (
+        <div className='absolute right-0 top-full z-[60] mt-1 w-[380px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
+          <div className='mb-2 flex gap-1'>
+            {(
+              [
+                ['audience', 'Audience'],
+                ['integrations', 'Integrations'],
+                ['owners', 'Owner history']
+              ] as Array<[Tab, string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type='button'
+                onClick={() => setTab(key)}
+                className={
+                  tab === key
+                    ? 'rounded-md bg-nvr-cyan/10 px-2 py-1 text-[11.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:bg-muted'
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tab === 'audience' && <AudienceTab collection={collection} itemId={itemId} />}
+          {tab === 'integrations' && <IntegrationsTab collection={collection} itemId={itemId} />}
+          {tab === 'owners' && <OwnerHistoryTab collection={collection} itemId={itemId} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AudienceTab({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useNivaroClient()
+  const { data, isLoading } = useQuery<{
+    watchers: Array<{ user: string; name: string; field: string }>
+    subscribers: Array<{ user: string; name: string; cadence: string; event_type: string }>
+    owners: Array<{ id: string; name: string }>
+  }>({
+    queryKey: ['record-audience', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/audience/${collection}/${itemId}`))
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
+  const total =
+    (data?.watchers.length ?? 0) + (data?.subscribers.length ?? 0) + (data?.owners.length ?? 0)
+  if (total === 0)
+    return (
+      <p className='text-[12px] text-slate-400'>
+        Nobody is watching or subscribed — a change here notifies no one automatically.
+      </p>
+    )
+  return (
+    <div className='max-h-72 space-y-2 overflow-y-auto text-[12px]'>
+      {(data?.owners.length ?? 0) > 0 && (
+        <section>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Current owners (in-app on transition)
+          </p>
+          {data?.owners.map((o) => (
+            <p key={o.id} className='text-slate-700 dark:text-slate-200'>
+              {o.name}
+            </p>
+          ))}
+        </section>
+      )}
+      {(data?.watchers.length ?? 0) > 0 && (
+        <section>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Field watchers (instant)
+          </p>
+          {data?.watchers.map((w, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: user+field pairs can repeat
+            <p key={i} className='text-slate-700 dark:text-slate-200'>
+              {w.name} <span className='font-mono text-[10.5px] text-slate-400'>{w.field}</span>
+            </p>
+          ))}
+        </section>
+      )}
+      {(data?.subscribers.length ?? 0) > 0 && (
+        <section>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Subscribers
+          </p>
+          {data?.subscribers.map((sub, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rows can repeat per event type
+            <p key={i} className='text-slate-700 dark:text-slate-200'>
+              {sub.name}{' '}
+              <span className='text-[10.5px] text-slate-400'>
+                {sub.event_type} · {sub.cadence}
+              </span>
+            </p>
+          ))}
+        </section>
+      )}
+    </div>
+  )
+}
+
+function IntegrationsTab({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useNivaroClient()
+  const { data, isLoading } = useQuery<{
+    erp: Array<{
+      id: number
+      target: string | null
+      endpoint_path: string | null
+      status: string
+      created_at: string
+      attempts: number
+    }>
+    webhooks: Array<{ id: number; webhook: string; response_status: number; created_at: string }>
+  }>({
+    queryKey: ['record-integrations', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/record-integrations/${collection}/${itemId}`))
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
+  if ((data?.erp.length ?? 0) + (data?.webhooks.length ?? 0) === 0)
+    return <p className='text-[12px] text-slate-400'>No integration activity for this record.</p>
+  return (
+    <div className='max-h-72 space-y-1 overflow-y-auto text-[12px]'>
+      {data?.erp.map((e) => (
+        <p key={`e${e.id}`} className='flex items-baseline justify-between gap-2'>
+          <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
+            {e.target ?? e.endpoint_path ?? 'ERP push'}
+          </span>
+          <span
+            className={
+              e.status === 'failed'
+                ? 'shrink-0 text-red-500'
+                : e.status === 'accepted'
+                  ? 'shrink-0 text-emerald-600'
+                  : 'shrink-0 text-slate-400'
+            }
+          >
+            {e.status} · {new Date(e.created_at).toLocaleDateString()}
+          </span>
+        </p>
+      ))}
+      {data?.webhooks.map((w) => (
+        <p key={`w${w.id}`} className='flex items-baseline justify-between gap-2'>
+          <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
+            webhook: {w.webhook}
+          </span>
+          <span className='shrink-0 text-slate-400'>
+            {w.response_status} · {new Date(w.created_at).toLocaleDateString()}
+          </span>
+        </p>
+      ))}
+    </div>
+  )
+}
+
+function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: string }) {
+  const client = useNivaroClient()
+  const { data = [], isLoading } = useQuery<
+    Array<{
+      state_label: string | null
+      entered_at: string
+      left_at: string | null
+      moved_by: string | null
+      owners: Array<{ id: string; name: string }>
+    }>
+  >({
+    queryKey: ['record-owner-history', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/owner-history/${collection}/${itemId}`))
+        .then((r) => r.data),
+    staleTime: 30_000
+  })
+  if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
+  if (data.length === 0)
+    return <p className='text-[12px] text-slate-400'>No workflow history on this record.</p>
+  return (
+    <div className='max-h-72 space-y-2 overflow-y-auto text-[12px]'>
+      <p className='text-[10.5px] text-amber-600 dark:text-amber-400'>
+        Owners shown are resolved with TODAY's matrix config — membership changes since then
+        aren't snapshotted.
+      </p>
+      {data.map((h, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: ordered stays
+        <div key={i}>
+          <p className='font-medium text-slate-700 dark:text-slate-200'>
+            {h.state_label ?? '—'}{' '}
+            <span className='font-normal text-[10.5px] text-slate-400'>
+              {new Date(h.entered_at).toLocaleDateString()} →{' '}
+              {h.left_at ? new Date(h.left_at).toLocaleDateString() : 'now'}
+              {h.moved_by ? ` · moved by ${h.moved_by}` : ''}
+            </span>
+          </p>
+          <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            {h.owners.length > 0 ? h.owners.map((o) => o.name).join(', ') : 'no resolved owners'}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Deep record search (#399) ───────────────────────────────────────────────
+// Find-in-record: matches field labels + current values; picking a hit jumps
+// to (and flashes) the field via the host's flashField.
+export function DeepRecordSearchButton({
+  fields,
+  draft,
+  onJump
+}: {
+  fields: Array<{ field: string; label?: string | null; hidden?: boolean }>
+  draft: Record<string, unknown>
+  onJump: (field: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+  const needle = q.trim().toLowerCase()
+  const hits =
+    needle.length >= 2
+      ? fields
+          .filter((f) => !f.hidden)
+          .map((f) => ({
+            field: f.field,
+            label: f.label ?? f.field,
+            value: String(draft[f.field] ?? '')
+          }))
+          .filter(
+            (f) =>
+              f.label.toLowerCase().includes(needle) ||
+              f.value.toLowerCase().includes(needle)
+          )
+          .slice(0, 12)
+      : []
+  return (
+    <div ref={rootRef} className='relative'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        data-tip='Find in record — search field names and values'
+        aria-label='Find in record'
+        className='flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+      >
+        <Search className='h-4 w-4' />
+      </button>
+      {open && (
+        <div className='absolute right-0 top-full z-[60] mt-1 w-[320px] rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'>
+          <input
+            // biome-ignore lint/a11y/noAutofocus: opened intentionally by click
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder='Find a field or value…'
+            className='h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+          />
+          {needle.length >= 2 && (
+            <div className='mt-1 max-h-64 overflow-y-auto'>
+              {hits.length === 0 ? (
+                <p className='px-1 py-2 text-[12px] text-slate-400'>No matching fields.</p>
+              ) : (
+                hits.map((h) => (
+                  <button
+                    key={h.field}
+                    type='button'
+                    onClick={() => {
+                      onJump(h.field)
+                      setOpen(false)
+                    }}
+                    className='block w-full rounded px-1.5 py-1 text-left hover:bg-muted'
+                  >
+                    <span className='text-[12.5px] font-medium'>{h.label}</span>
+                    {h.value && (
+                      <span className='ml-1.5 text-[11px] text-slate-400'>
+                        {h.value.length > 40 ? `${h.value.slice(0, 40)}…` : h.value}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

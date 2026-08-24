@@ -95,6 +95,7 @@ import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { DeepRecordSearchButton, RecordInsightsButton } from './item-edit/RecordInsights'
 import { FindInRecordButton, type FindableField } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -2884,9 +2885,52 @@ export function ItemEditForm({
 
   const containerGroups = useMemo(() => groups.filter((g) => g.type === 'container'), [groups])
   // Legacy orphan tabs (no container) — used for layout-level tabs/steps mode
+  // Conditional wizard steps (#139): a group's visible_when rules
+  // ([{field, op, value}], AND) hide the whole step until the record matches.
+  const stepVisible = useCallback(
+    (g: { visible_when?: string | null }) => {
+      if (!g.visible_when) return true
+      let rules: Array<{ field?: string; op?: string; value?: unknown }>
+      try {
+        rules = JSON.parse(g.visible_when)
+      } catch {
+        return true
+      }
+      if (!Array.isArray(rules) || rules.length === 0) return true
+      return rules.every((r) => {
+        if (!r?.field) return true
+        const v = draft[r.field]
+        const want = r.value
+        switch (r.op ?? 'eq') {
+          case 'eq':
+            return String(v ?? '') === String(want ?? '')
+          case 'neq':
+            return String(v ?? '') !== String(want ?? '')
+          case 'null':
+            return v == null || v === ''
+          case 'nnull':
+            return v != null && v !== ''
+          case 'in':
+            return String(want ?? '')
+              .split(',')
+              .map((x) => x.trim())
+              .includes(String(v ?? ''))
+          default:
+            return true
+        }
+      })
+    },
+    [draft]
+  )
   const tabGroups = useMemo(
-    () => groups.filter((g) => g.type === 'tab' && !g.container_id),
-    [groups]
+    () =>
+      groups.filter(
+        (g) =>
+          g.type === 'tab' &&
+          !g.container_id &&
+          stepVisible(g as { visible_when?: string | null })
+      ),
+    [groups, stepVisible]
   )
   // All tabs regardless of container — used for SummaryPanel coverage
   const allTabGroups = useMemo(
@@ -3157,8 +3201,19 @@ export function ItemEditForm({
     } catch {
       /* noop */
     }
+    // Step deep links (#129): the active step rides the URL so "look at the
+    // Deployments step" is a pasteable link.
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.set('step', k)
+      window.history.replaceState(window.history.state, '', url)
+    } catch {
+      /* noop */
+    }
     bodyRef.current?.scrollTo({ top: 0 })
   }
+
+
 
   const allSteps = useMemo<StepDef[]>(() => {
     if (!hasTabs) return []
@@ -3170,6 +3225,25 @@ export function ItemEditForm({
     for (const g of tabGroups) steps.push({ key: g.key, label: g.label })
     return steps
   }, [hasTabs, sectionGroups, tabGroups, isStepsMode, ungroupedFields])
+
+  // Consume ?step= once on mount (#129) — beats the persisted tab.
+  const stepParamConsumedRef = useRef(false)
+  useEffect(() => {
+    if (stepParamConsumedRef.current || !hasTabs) return
+    try {
+      const wanted = new URL(window.location.href).searchParams.get('step')
+      if (wanted && allSteps.some((st) => st.key === wanted)) {
+        stepParamConsumedRef.current = true
+        setActiveTabRaw(wanted)
+        setVisitedSteps((prev) => new Set([...prev, wanted]))
+      }
+    } catch {
+      /* noop */
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot consume
+  }, [hasTabs, allSteps])
+
+
 
   // Stale persisted tab key (layout/groups changed since last visit) would
   // leave steps/tabs rendering with no active entry — snap to the first one.
@@ -3233,6 +3307,18 @@ export function ItemEditForm({
     }
     // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot after data load
   }, [isNew, isStepsMode, itemData, allSteps, tabGroups, activeTab, groups, containerTabs])
+
+  // Unsaved-step dots (#190): steps containing fields the user touched.
+  const dirtySteps = useMemo(() => {
+    const out = new Set<string>()
+    if (!isDirty) return out
+    for (const st of allSteps) {
+      const fields = groupedMap[st.key] ?? []
+      if (fields.some((f) => userTouchedRef.current.has(f.field))) out.add(st.key)
+    }
+    return out
+    // biome-ignore lint/correctness/useExhaustiveDependencies: userTouchedRef mutates with draft
+  }, [isDirty, allSteps, groupedMap, draft])
 
   const completedSteps = useMemo(() => {
     const out = new Set<string>()
@@ -3829,6 +3915,9 @@ export function ItemEditForm({
       // Surface a rule message when the failure isn't a plain required miss.
       const ruleMsg = Object.values(errs).find((m) => m !== 'This field is required')
       toast.error(ruleMsg ?? 'Please fill in all required fields')
+      // Jump-to-error (#191): scroll + flash the first invalid field.
+      const firstBad = Object.keys(errs)[0]
+      if (firstBad) setTimeout(() => flashField(firstBad), 150)
       return false
     }
     return true
@@ -4848,6 +4937,15 @@ export function ItemEditForm({
             active={activeKey}
             completed={containerCompleted}
             errorSteps={containerErrors}
+            dirtySteps={
+              new Set(
+                children
+                  .filter((g) =>
+                    (groupedMap[g.key] ?? []).some((f) => userTouchedRef.current.has(f.field))
+                  )
+                  .map((g) => g.key)
+              )
+            }
             onStepClick={(k) => setContainerTab(c, k)}
             embedded
           />
@@ -5653,6 +5751,7 @@ export function ItemEditForm({
           steps={allSteps}
           active={activeTab}
           completed={completedSteps}
+          dirtySteps={dirtySteps}
           errorSteps={
             new Set(
               allSteps
@@ -5799,6 +5898,16 @@ export function ItemEditForm({
       ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
       : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
+
+  // Tab titles with context (#145): the browser tab names the record.
+  useEffect(() => {
+    if (isNew || !itemTitle) return
+    const prev = document.title
+    document.title = `${itemTitle} · ${document.title.split(' · ').pop() ?? 'Nivaro'}`
+    return () => {
+      document.title = prev
+    }
+  }, [itemTitle, isNew])
 
   return (
     <ReimportHandlerContext.Provider
@@ -6111,6 +6220,19 @@ export function ItemEditForm({
                                       <RecordSubscribeButton
                                         collection={collection}
                                         itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {!isNew && itemId && (
+                                      <RecordInsightsButton
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {!isNew && (
+                                      <DeepRecordSearchButton
+                                        fields={fieldConfig ?? []}
+                                        draft={draft}
+                                        onJump={flashField}
                                       />
                                     )}
                                     {!isNew && itemId && (

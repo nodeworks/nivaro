@@ -68,6 +68,33 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'Unknown collection' })
       }
       if (!exists) {
+        // Smart 404 (#219): the trash knows WHO deleted it and WHEN — say so,
+        // and tell the client whether a restore is on the table.
+        try {
+          const trashed = (await db('nivaro_trash as t')
+            .leftJoin('nivaro_users as u', 'u.id', 't.deleted_by')
+            .where({ 't.collection': collection, 't.item_id': String(id) })
+            .orderBy('t.id', 'desc')
+            .first(
+              't.id as trash_id',
+              't.deleted_at',
+              db.raw("CONCAT(u.first_name, ' ', u.last_name) as deleted_by_name")
+            )) as
+            | { trash_id: number; deleted_at: Date; deleted_by_name: string | null }
+            | undefined
+          if (trashed) {
+            reasons.push({
+              type: 'not_found',
+              message: `This record was deleted ${new Date(trashed.deleted_at).toLocaleDateString()}${
+                trashed.deleted_by_name?.trim() ? ` by ${trashed.deleted_by_name.trim()}` : ''
+              }. It sits in the trash for 30 days and can be restored.`,
+              ...(req.isAdmin ? { trash_id: trashed.trash_id } : {})
+            } as never)
+            return reply.send({ data: { access: false, reasons } })
+          }
+        } catch {
+          /* trash lookup is best-effort */
+        }
         reasons.push({
           type: 'not_found',
           message: 'This record does not exist — it may have been deleted.'

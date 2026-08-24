@@ -2354,6 +2354,26 @@ function FieldMetaEditor({
               />
             </div>
             {autoIdPattern && (
+              <button
+                type='button'
+                onClick={() => {
+                  void api
+                    .post(`/data-model/${tableName}/fields/${col.name}/auto-id-backfill`, {})
+                    .then((r) => {
+                      const d = r.data.data as { filled: number; scanned: number; more: boolean }
+                      toast.success(
+                        `${d.filled} of ${d.scanned} empty row(s) filled${d.more ? ' — run again for more' : ''}`
+                      )
+                    })
+                    .catch((e) => toast.error(e?.response?.data?.error ?? 'Backfill failed'))
+                }}
+                data-tip='Auto-ID backfill (#378): generate ids for pre-pattern rows where this field is empty — sequence-safe'
+                className='rounded-md border border-dashed border-slate-300 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50'
+              >
+                Backfill empty rows…
+              </button>
+            )}
+            {autoIdPattern && (
               <div className='grid grid-cols-2 gap-3'>
                 <div>
                   <Label className='mb-1 block text-[11px]'>Padding</Label>
@@ -13339,6 +13359,56 @@ function SortableGroupCard({
                       />
                     </div>
                   )}
+                  {group.type === 'tab' && (
+                    <div>
+                      <Label className='mb-1 block text-[11px]'>Visible when (JSON)</Label>
+                      <p className='mb-1.5 text-[10px] text-slate-400'>
+                        Conditional wizard steps (#139): hide this whole step until the record
+                        matches — [{'{'}"field":"workflow_type","op":"eq","value":"2"{'}'}] (AND;
+                        ops eq/neq/null/nnull/in)
+                      </p>
+                      <Input
+                        defaultValue={(group as { visible_when?: string | null }).visible_when ?? ''}
+                        placeholder='[{"field":"...","op":"eq","value":"..."}]'
+                        className='h-7 font-mono text-[11px]'
+                        onChange={(e) =>
+                          onGroupSettings(group.id, {
+                            visible_when: e.target.value.trim() || null
+                          } as never)
+                        }
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Hidden for roles</Label>
+                    <p className='mb-1.5 text-[10px] text-slate-400'>
+                      Group-level permissions (#390): comma-separated role ids that never see this
+                      section (admins always do)
+                    </p>
+                    <Input
+                      defaultValue={(() => {
+                        try {
+                          const p = JSON.parse(
+                            (group as { hidden_for_roles?: string | null }).hidden_for_roles ?? '[]'
+                          )
+                          return Array.isArray(p) ? p.join(', ') : ''
+                        } catch {
+                          return ''
+                        }
+                      })()}
+                      placeholder='role uuid, role uuid'
+                      className='h-7 font-mono text-[11px]'
+                      onChange={(e) => {
+                        const list = e.target.value
+                          .split(',')
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                        onGroupSettings(group.id, {
+                          hidden_for_roles: list.length ? JSON.stringify(list) : null
+                        } as never)
+                      }}
+                    />
+                  </div>
                   <div>
                     <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
                     <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>

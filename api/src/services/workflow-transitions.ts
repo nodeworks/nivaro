@@ -584,6 +584,21 @@ export async function applyTransition(opts: {
       ? await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
       : []
     const friendlyId = await resolveFriendlyId(instance.collection, instance.item)
+    // State timing tokens (#393): when the record ENTERED the state it just
+    // left, and how long it sat there — templated as {{entered_previous_state_at}}
+    // / {{hours_in_previous_state}} in flow mail/notification ops.
+    let enteredPrevAt: Date | null = null
+    if (previousState) {
+      try {
+        const entry = (await db('nivaro_workflow_history')
+          .where({ instance: instance.id, to_state: previousState })
+          .orderBy('timestamp', 'desc')
+          .first('timestamp')) as { timestamp?: Date } | undefined
+        enteredPrevAt = entry?.timestamp ? new Date(entry.timestamp) : null
+      } catch {
+        enteredPrevAt = null
+      }
+    }
     emitTrigger(
       'workflow-transition',
       {
@@ -602,7 +617,11 @@ export async function applyTransition(opts: {
         owner_emails: owners
           .map((o) => o.email)
           .filter(Boolean)
-          .join(',')
+          .join(','),
+        entered_previous_state_at: enteredPrevAt ? enteredPrevAt.toISOString() : null,
+        hours_in_previous_state: enteredPrevAt
+          ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10
+          : null
       },
       console as unknown as Parameters<typeof emitTrigger>[2],
       opts.userId ?? undefined
