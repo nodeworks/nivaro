@@ -14,7 +14,7 @@ import {
   Upload
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNivaroClient } from '../../context'
+import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
@@ -603,6 +603,8 @@ function ImportWizard({
 
   const [step, setStep] = useState(0)
   const [csv, setCsv] = useState('')
+  // Column cleanup presets (#212): per-column normalization sent with the job.
+  const [colTransforms, setColTransforms] = useState<Record<string, string>>({})
   const [fileName, setFileName] = useState('')
   const [url, setUrl] = useState('')
   const [collection, setCollection] = useState('')
@@ -781,6 +783,7 @@ function ImportWizard({
           collection,
           csv_data: csv,
           column_map: columnMap,
+          transforms: Object.fromEntries(Object.entries(colTransforms).filter(([, t]) => t)),
           duplicate_strategy: strategy,
           id_field: idField || undefined,
           file_name: fileName || 'import.csv'
@@ -807,6 +810,42 @@ function ImportWizard({
     setCsv(await file.text())
     setFileName(file.name)
   }
+
+  // Column profiling (#151): fill rate + type guess per sheet column, over up
+  // to 2,000 data rows — cheap enough to recompute per parse.
+  const colProfile = useMemo(() => {
+    const lines = csv.split(/\r?\n/).filter((l) => l.trim())
+    if (lines.length < 2) return {}
+    const hs = parseCsvLine(lines[0])
+    const sample = lines.slice(1, 2001).map(parseCsvLine)
+    const out: Record<string, { fill: number; guess: string }> = {}
+    hs.forEach((h, ci) => {
+      let filled = 0
+      let nums = 0
+      let dates = 0
+      let bools = 0
+      for (const r of sample) {
+        const v = (r[ci] ?? '').trim()
+        if (!v) continue
+        filled++
+        if (/^-?\$?[\d,]+(\.\d+)?$/.test(v)) nums++
+        else if (/^\d{4}-\d{2}-\d{2}/.test(v) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(v)) dates++
+        else if (/^(true|false|yes|no|y|n)$/i.test(v)) bools++
+      }
+      const guess =
+        filled === 0
+          ? 'empty'
+          : nums / filled > 0.9
+            ? 'number'
+            : dates / filled > 0.9
+              ? 'date'
+              : bools / filled > 0.9
+                ? 'boolean'
+                : 'text'
+      out[h] = { fill: Math.round((filled / sample.length) * 100), guess }
+    })
+    return out
+  }, [csv])
 
   const mappedCount = headers.filter((h) => columnMap[h]?.trim()).length
   const mappingNote = savedMappingNote
@@ -1016,6 +1055,19 @@ function ImportWizard({
                     >
                       <td className='px-3 py-1.5 font-mono text-[11.5px] text-slate-600 dark:text-muted-foreground'>
                         {h}
+                        {colProfile[h] && (
+                          <span
+                            className={cn(
+                              'ml-2 rounded px-1 py-0.5 font-sans text-[9.5px] font-medium',
+                              colProfile[h].fill < 50
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-400'
+                                : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'
+                            )}
+                            data-tip={`${colProfile[h].fill}% of rows have a value · looks like ${colProfile[h].guess}`}
+                          >
+                            {colProfile[h].guess} · {colProfile[h].fill}%
+                          </span>
+                        )}
                       </td>
                       <td className='px-3 py-1.5'>
                         <div className='flex items-center gap-2'>
@@ -1041,6 +1093,23 @@ function ImportWizard({
                           </div>
                           {aiConfidence[h] !== undefined && columnMap[h] && (
                             <ConfidenceBadge confidence={aiConfidence[h]} />
+                          )}
+                          {columnMap[h] && (
+                            <div className='w-[120px]'>
+                              <PickCombobox
+                                value={colTransforms[h] ?? ''}
+                                onChange={(v) => setColTransforms((m) => ({ ...m, [h]: v }))}
+                                options={[
+                                  { value: '', label: 'As-is' },
+                                  { value: 'trim', label: 'Trim' },
+                                  { value: 'upper', label: 'UPPERCASE' },
+                                  { value: 'lower', label: 'lowercase' },
+                                  { value: 'title', label: 'Title Case' },
+                                  { value: 'null_empty', label: 'Empty → null' }
+                                ]}
+                                placeholder='As-is'
+                              />
+                            </div>
                           )}
                         </div>
                       </td>
@@ -1309,6 +1378,7 @@ function PreviewTable({ headers, rows }: { headers: string[]; rows: string[][] }
 // ─── Job detail ─────────────────────────────────────────────────────────────
 
 function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () => void }) {
+  const nav = useNavigation()
   const client = useNivaroClient()
   const query = useQuery({
     queryKey: ['collection-import-job', jobId],
@@ -1445,30 +1515,154 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                 </section>
               )}
 
-              {errors.length > 0 && (
-                <section>
-                  <h3 className='mb-1.5 text-[11.5px] font-semibold text-red-700 dark:text-red-400'>
-                    Row errors ({errors.length})
-                  </h3>
-                  <div className='max-h-[240px] overflow-auto rounded-md border border-red-200 dark:border-red-900'>
-                    {errors.map((e) => (
-                      <div
-                        key={`${e.row}-${e.error}`}
-                        className='flex gap-3 border-b border-red-100 px-3 py-1.5 text-[11.5px] last:border-b-0 dark:border-red-900/60'
-                      >
-                        <span className='shrink-0 font-mono tabular-nums text-slate-400'>
-                          {e.row}
-                        </span>
-                        <span className='text-red-700 dark:text-red-400'>{e.error}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
+              {(job as { created_ids?: unknown[] }).created_ids &&
+                ((job as { created_ids?: unknown[] }).created_ids?.length ?? 0) > 0 && (
+                  <section>
+                    {/* Batch view (#128): the browser filtered to exactly this
+                        run's created records. */}
+                    <button
+                      type='button'
+                      onClick={() => {
+                        const ids = ((job as { created_ids?: unknown[] }).created_ids ?? [])
+                          .map(String)
+                          .join(',')
+                        nav.navigate(`/collections/${job.collection}?ids=${encodeURIComponent(ids)}`)
+                      }}
+                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
+                    >
+                      View the {((job as { created_ids?: unknown[] }).created_ids ?? []).length}{' '}
+                      created record
+                      {((job as { created_ids?: unknown[] }).created_ids ?? []).length === 1 ? '' : 's'} →
+                    </button>
+                  </section>
+                )}
+
+              {errors.length > 0 && <FailedRowRepair jobId={String(job.id)} errors={errors} />}
             </div>
           </div>
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+
+// ─── Failed-row repair (#152) ────────────────────────────────────────────────
+// Failed rows come back mapped through the job's column map; edit cells
+// inline and resubmit each through the items service (validation applies).
+function FailedRowRepair({
+  jobId,
+  errors
+}: {
+  jobId: string
+  errors: Array<{ row: number; error: string }>
+}) {
+  const client = useNivaroClient()
+  const [drafts, setDrafts] = useState<Record<number, Record<string, unknown>>>({})
+  const [done, setDone] = useState<Record<number, 'ok' | string>>({})
+  const { data } = useQuery({
+    queryKey: ['import-failed-rows', jobId],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ row: number; error: string; values: Record<string, unknown> }> }>(
+          get(`/imports/${jobId}/failed-rows`)
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 30_000
+  })
+  const rows = data ?? []
+  const fields = rows[0] ? Object.keys(rows[0].values) : []
+  const resubmit = useMutation({
+    mutationFn: ({ row, values }: { row: number; values: Record<string, unknown> }) =>
+      client.request(post(`/imports/${jobId}/repair-row`, { values })).then(() => row),
+    onSuccess: (row) => setDone((d) => ({ ...d, [row]: 'ok' })),
+    onError: (err: Error, vars) => setDone((d) => ({ ...d, [vars.row]: err.message }))
+  })
+  if (rows.length === 0) {
+    return (
+      <section>
+        <h3 className='mb-1.5 text-[11.5px] font-semibold text-red-700 dark:text-red-400'>
+          Row errors ({errors.length})
+        </h3>
+        <div className='max-h-[200px] overflow-auto rounded-md border border-red-200 dark:border-red-900'>
+          {errors.map((e) => (
+            <div
+              key={`${e.row}-${e.error}`}
+              className='flex gap-3 border-b border-red-100 px-3 py-1.5 text-[11.5px] last:border-b-0 dark:border-red-900/60'
+            >
+              <span className='shrink-0 font-mono tabular-nums text-slate-400'>{e.row}</span>
+              <span className='text-red-700 dark:text-red-400'>{e.error}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+  return (
+    <section>
+      <h3 className='mb-1.5 text-[11.5px] font-semibold text-red-700 dark:text-red-400'>
+        Failed rows ({rows.length}) — fix and resubmit
+      </h3>
+      <div className='max-h-[320px] overflow-auto rounded-md border border-red-200 dark:border-red-900'>
+        <table className='w-full text-[11.5px]'>
+          <thead>
+            <tr className='bg-red-50/60 text-left text-[10px] uppercase tracking-wide text-slate-400 dark:bg-red-950/30'>
+              <th className='px-2 py-1'>Row</th>
+              {fields.map((f) => (
+                <th key={f} className='px-2 py-1 font-mono normal-case'>
+                  {f}
+                </th>
+              ))}
+              <th className='px-2 py-1' />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const draft = drafts[r.row] ?? r.values
+              const state = done[r.row]
+              return (
+                <tr key={r.row} className='border-t border-red-100 align-top dark:border-red-900/50'>
+                  <td className='px-2 py-1 font-mono tabular-nums text-slate-400'>
+                    {r.row}
+                    <p className='max-w-[120px] whitespace-normal text-[10px] text-red-500'>{r.error}</p>
+                  </td>
+                  {fields.map((f) => (
+                    <td key={f} className='px-1 py-1'>
+                      <input
+                        value={String(draft[f] ?? '')}
+                        disabled={state === 'ok'}
+                        onChange={(e) =>
+                          setDrafts((d) => ({ ...d, [r.row]: { ...draft, [f]: e.target.value } }))
+                        }
+                        className='h-6 w-full min-w-[80px] rounded border border-slate-200 bg-background px-1 text-[11px] dark:border-border'
+                      />
+                    </td>
+                  ))}
+                  <td className='px-2 py-1'>
+                    {state === 'ok' ? (
+                      <span className='text-[10.5px] font-medium text-emerald-600'>✓ Created</span>
+                    ) : (
+                      <div>
+                        <button
+                          type='button'
+                          disabled={resubmit.isPending}
+                          onClick={() => resubmit.mutate({ row: r.row, values: draft })}
+                          className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] hover:bg-muted disabled:opacity-50 dark:border-border'
+                        >
+                          Resubmit
+                        </button>
+                        {state && state !== 'ok' && (
+                          <p className='max-w-[140px] whitespace-normal text-[9.5px] text-red-500'>{state}</p>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

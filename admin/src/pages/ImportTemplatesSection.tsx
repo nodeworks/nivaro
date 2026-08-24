@@ -2188,6 +2188,44 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
         </Section>
 
         <Section title='Header rules'>
+          {/* Draft from file (#371): a sample sheet seeds one rule per header
+              (source filled + trim step; targets picked by the author). */}
+          <label className='mb-2 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-slate-300 px-2.5 text-[11.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700'>
+            ⤒ Draft rules from a sample file…
+            <input
+              type='file'
+              accept='.xlsx,.xlsm,.xls,.csv'
+              className='hidden'
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (!f) return
+                const fd = new FormData()
+                fd.append('file', f)
+                void api
+                  .post<{ data: { headers: string[]; sample: Record<string, string> } }>(
+                    '/import-templates/draft',
+                    fd
+                  )
+                  .then((r) => {
+                    const headers = r.data.data.headers
+                    const existing = new Set(draft.header_map.map((rl) => rl.source))
+                    const added = headers
+                      .filter((h) => !existing.has(h))
+                      .map((h) => ({ target: '', source: h, steps: [{ type: 'trim' as const }] }))
+                    if (added.length === 0) {
+                      toast.info('Every sheet header already has a rule')
+                      return
+                    }
+                    patch({ header_map: [...draft.header_map, ...added] })
+                    toast.success(`Drafted ${added.length} rule${added.length === 1 ? '' : 's'} — pick their target fields`)
+                  })
+                  .catch((err) =>
+                    toast.error(err?.response?.data?.error ?? 'Could not read the sample file')
+                  )
+              }}
+            />
+          </label>
           <CollectionOptionsContext.Provider value={collectionOptions}>
             <RuleEditor
               rules={draft.header_map}

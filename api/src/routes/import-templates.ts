@@ -836,6 +836,39 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
   })
 
   // POST /import-templates/:id/parse — run a saved template against an uploaded file
+  // Draft from file (#371): upload a SAMPLE sheet, get its headers + one
+  // sample row back — the builder seeds the header map from them. Admin-only
+  // (template authoring surface), nothing is persisted.
+  app.post('/draft', { preHandler: requireAdmin }, async (req, reply) => {
+    let multipart: Awaited<ReturnType<typeof req.file>>
+    try {
+      multipart = await req.file()
+    } catch {
+      return reply.code(400).send({ error: 'No file provided' })
+    }
+    if (!multipart) return reply.code(400).send({ error: 'No file provided' })
+    const buffer = await multipart.toBuffer()
+    if (buffer.length > MAX_FILE_BYTES) {
+      return reply.code(413).send({ error: 'File exceeds 25MB limit' })
+    }
+    const read = readSpreadsheet(buffer, multipart.filename ?? 'sample.xlsx', {
+      sheet_match: null,
+      header_row: 1,
+      file_types: ['xlsx', 'xlsm', 'xls', 'csv']
+    })
+    const hardError = read.issues.find((i) => i.severity === 'error')
+    if (hardError) return reply.code(422).send({ error: hardError.message })
+    const first = read.rows[0] ?? {}
+    const headers = Object.keys(first)
+    return reply.send({
+      data: {
+        headers,
+        sample: Object.fromEntries(headers.map((h) => [h, String(first[h] ?? '').slice(0, 80)])),
+        row_count: read.rows.length
+      }
+    })
+  })
+
   app.post('/:id/parse', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const template = (await db('nivaro_import_templates').where({ id }).first()) as

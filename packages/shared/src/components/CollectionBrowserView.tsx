@@ -70,6 +70,8 @@ export interface CollectionBrowserConfig {
   /** Default sort (#395), e.g. '-created' — applied when the viewer hasn't
    *  picked a sort, a view, or an initialSort prop. */
   default_sort?: string
+  /** Export filename template (#412): {{collection}} / {{view}} / {{date}}. */
+  export_filename?: string
 }
 
 interface CMSRelation {
@@ -248,6 +250,8 @@ export interface CollectionBrowserViewProps {
   pageSize?: number
   /** Initial quick-search value (deep links). */
   initialSearch?: string
+  /** One-shot filter seed (e.g. an import batch's created ids — #128). */
+  initialFilters?: ActiveFilter[]
   /** Contextual deep-link conditions (e.g. a dashboard tile linking to "my
    *  drafts"): ANDed into every fetch until the user clears the context chip.
    *  `label` is what the chip displays for that condition. */
@@ -3144,6 +3148,7 @@ export function CollectionBrowserView({
   initialSort,
   pageSize = 25,
   initialSearch = '',
+  initialFilters,
   initialConditions,
   onOpenItem,
   showCreate = true,
@@ -3156,7 +3161,7 @@ export function CollectionBrowserView({
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState(initialSearch)
   const appliedSearch = useDebounced(search.trim(), 350)
-  const [filters, setFilters] = useState<ActiveFilter[]>([])
+  const [filters, setFilters] = useState<ActiveFilter[]>(initialFilters ?? [])
   const [sort, setSort] = useState<string>(initialSort ?? '')
   const [displayColumns, setDisplayColumns] = useState<string[] | null>(initialColumns ?? null)
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
@@ -4432,7 +4437,17 @@ export function CollectionBrowserView({
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${collection}.csv`
+      // Export filename templates (#412): browser_config.export_filename with
+      // {{collection}} / {{view}} / {{date}} tokens.
+      const tmpl = (bc as { export_filename?: string }).export_filename
+      const viewName = views.find((v) => v.id === activeViewId)?.name ?? 'all'
+      a.download = tmpl
+        ? `${tmpl
+            .replace(/\{\{\s*collection\s*\}\}/g, collection)
+            .replace(/\{\{\s*view\s*\}\}/g, viewName)
+            .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
+            .replace(/[^A-Za-z0-9 ._-]/g, '')}.csv`
+        : `${collection}.csv`
       a.click()
       URL.revokeObjectURL(url)
     } finally {

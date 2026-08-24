@@ -171,7 +171,15 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
       req
     })
 
-    const safeName = preset.name.replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'export'
+    // Export filename templates (#412): {{collection}} / {{preset}} / {{date}}.
+    const nameTemplate = (config as { filename_template?: string }).filename_template
+    const rawName = nameTemplate
+      ? nameTemplate
+          .replace(/\{\{\s*collection\s*\}\}/g, preset.collection)
+          .replace(/\{\{\s*preset\s*\}\}/g, preset.name)
+          .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
+      : preset.name
+    const safeName = rawName.replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'export'
     if (config.format === 'csv') {
       const esc = (v: unknown) => {
         const s = String(v ?? '')
@@ -185,8 +193,55 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     }
     const XLSX = await import('xlsx')
     const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows])
+    // Xlsx auto-fit (#161): column width from the longest cell (capped 60ch).
+    ws['!cols'] = header.map((h, ci) => ({
+      wch: Math.min(
+        60,
+        Math.max(String(h).length, ...dataRows.map((r) => String(r[ci] ?? '').length)) + 2
+      )
+    }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Export')
+    // Hierarchical export (#180): each configured O2M child relation lands on
+    // its own sheet, rows scoped to the exported parents.
+    const childRels = ((config as { child_relations?: string[] }).child_relations ?? [])
+      .filter((f) => typeof f === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(f))
+      .slice(0, 5)
+    if (childRels.length > 0 && rows.length > 0) {
+      const { db } = await import('../db/index.js')
+      const rels = (await db('nivaro_relations')
+        .where({ one_collection: preset.collection })
+        .whereIn('one_field', childRels)
+        .whereNull('junction_field')
+        .select('one_field', 'many_collection', 'many_field')) as Array<{
+        one_field: string
+        many_collection: string
+        many_field: string
+      }>
+      const parentIds = rows.map((r) => r.id).filter((v) => v != null)
+      for (const rel of rels) {
+        try {
+          const kids = (await db(rel.many_collection)
+            .whereIn(rel.many_field, parentIds as string[])
+            .limit(20000)) as Array<Record<string, unknown>>
+          if (kids.length === 0) continue
+          const kidCols = Object.keys(kids[0])
+          const kidRows = kids.map((k) =>
+            kidCols.map((c) => {
+              const v = k[c]
+              return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v
+            })
+          )
+          const kws = XLSX.utils.aoa_to_sheet([kidCols, ...kidRows])
+          kws['!cols'] = kidCols.map((h, ci) => ({
+            wch: Math.min(60, Math.max(h.length, ...kidRows.slice(0, 200).map((r) => String(r[ci] ?? '').length)) + 2)
+          }))
+          XLSX.utils.book_append_sheet(wb, kws, rel.one_field.slice(0, 31))
+        } catch {
+          // a broken child relation drops its sheet, never the export
+        }
+      }
+    }
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
     return reply
       .header(

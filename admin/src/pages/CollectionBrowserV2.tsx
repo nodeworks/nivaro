@@ -38,6 +38,22 @@ export function CollectionBrowserV2Page() {
               key={collection}
               collection={collection}
               initialSearch={searchParams.get('search') ?? ''}
+              initialFilters={
+                // Import batch view (#128): ?ids=1,2,3 opens the browser
+                // filtered to exactly those records.
+                searchParams.get('ids')
+                  ? [
+                      {
+                        id: 'batch-ids',
+                        path: ['id'],
+                        pathLabels: ['ID'],
+                        fieldType: 'integer',
+                        op: '_in',
+                        value: (searchParams.get('ids') ?? '').split(',').filter(Boolean).slice(0, 500)
+                      }
+                    ]
+                  : undefined
+              }
               onOpenItem={(id) => navigate(`/collections/${collection}/${id}`)}
             />
           </ItemEditAuthContext.Provider>
