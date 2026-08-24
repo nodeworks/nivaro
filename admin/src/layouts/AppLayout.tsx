@@ -221,6 +221,7 @@ export const navCategories: NavCategory[] = [
       { icon: SearchCode, label: 'Config Search', to: '/config-search' },
       { icon: ListOrdered, label: 'ID Sequences', to: '/sequences' },
       { icon: TerminalSquare, label: 'SQL Scratchpad', to: '/sql-scratchpad' },
+      { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog' },
       { icon: FileSearch, label: 'History Search', to: '/revision-search' },
       { icon: KeyRound, label: 'Access Requests', to: '/access-requests' },
       { icon: MailCheck, label: 'Mail Log', to: '/mail-log' },

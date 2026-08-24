@@ -168,6 +168,8 @@ const MailLog = lazy(() => import('@/pages/MailLog'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
+
+const QueryCatalogPage = lazy(() => import('@/pages/QueryCatalog'))
 const AutomationTests = lazy(() => import('@/pages/AutomationTests'))
 const ContentPromotionPage = lazy(() =>
   import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
@@ -491,6 +493,7 @@ export default function App() {
                   <Route path='mail-log' element={<MailLog />} />
                   <Route path='sequences' element={<Sequences />} />
                   <Route path='sql-scratchpad' element={<SqlScratchpad />} />
+                  <Route path='query-catalog' element={<QueryCatalogPage />} />
                   <Route path='revision-search' element={<RevisionSearch />} />
                   <Route path='automation-tests' element={<AutomationTests />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />

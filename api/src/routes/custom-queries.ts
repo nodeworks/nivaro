@@ -432,6 +432,51 @@ export async function customQueriesRoutes(app: FastifyInstance) {
   // Publish a query behind an unguessable token: GET with params in the
   // querystring — a URL you can hand to a spreadsheet or partner without
   // making the query public or minting an account.
+  // Per-query cache bust (#254): drop every cached result for the slug.
+  app.post<{ Params: { id: string } }>(
+    '/:id/bust-cache',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const query = await db('nivaro_custom_queries')
+        .where({ id: Number(req.params.id) })
+        .first('slug')
+      if (!query) return reply.code(404).send({ error: 'Not found' })
+      const n = await bustCustomQueryCache(app.redis, String(query.slug))
+      await logActivity({
+        action: 'custom-query-cache-bust',
+        user: req.user?.id,
+        collection: 'nivaro_custom_queries',
+        item: req.params.id,
+        comment: `${n} cached results dropped`,
+        req
+      })
+      return reply.send({ data: { dropped: n } })
+    }
+  )
+
+  // Query catalog (#238): the runnable queries a NON-admin may execute —
+  // enabled + access 'authenticated', with their param definitions so the
+  // catalog page can render forms. Never returns sql_text.
+  app.get('/catalog', { preHandler: authenticate }, async () => {
+    const rows = await db('nivaro_custom_queries')
+      .where({ enabled: true })
+      .where('access', 'authenticated')
+      .orderBy('name')
+      .select('id', 'slug', 'name', 'description', 'params')
+    return {
+      data: rows.map((r) => ({
+        ...r,
+        params: (() => {
+          try {
+            return r.params ? JSON.parse(r.params) : []
+          } catch {
+            return []
+          }
+        })()
+      }))
+    }
+  })
+
   app.post<{ Params: { id: string } }>(
     '/:id/publish-token',
     { preHandler: requireAdmin },

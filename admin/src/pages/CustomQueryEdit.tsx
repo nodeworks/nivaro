@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { formatSql } from '@/lib/format-sql'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,30 @@ export function CustomQueryEditPage() {
     scope_params: ''
   })
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+
+  // Scratchpad promotion (#115): a one-shot sessionStorage handoff prefills
+  // SQL, name, and detected :params on the NEW-query form.
+  const prefillConsumedRef = useRef(false)
+  useEffect(() => {
+    if (prefillConsumedRef.current || !isNew) return
+    prefillConsumedRef.current = true
+    try {
+      const raw = sessionStorage.getItem('nvr-cq-prefill')
+      if (!raw) return
+      sessionStorage.removeItem('nvr-cq-prefill')
+      const p = JSON.parse(raw) as { sql_text?: string; name?: string; params?: string[] }
+      setForm((prev) => ({
+        ...prev,
+        sql_text: p.sql_text ?? prev.sql_text,
+        name: p.name ?? prev.name,
+        slug: (p.name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+        params: (p.params ?? []).map((name) => ({ name, type: 'string' as ParamType, required: false, default: '' }))
+      }))
+    } catch {
+      /* malformed handoff — blank form */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // SQL copilot (#54)
   const [aiPrompt, setAiPrompt] = useState('')
@@ -411,6 +436,37 @@ export function CustomQueryEditPage() {
                     className='font-mono text-[12px]'
                     spellCheck={false}
                   />
+                  <div className='flex items-center gap-2'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='h-7 text-[11.5px]'
+                      disabled={!form.sql_text.trim()}
+                      onClick={() => setForm((p) => ({ ...p, sql_text: formatSql(p.sql_text) }))}
+                    >
+                      Prettify
+                    </Button>
+                    {!isNew && (form.cache_ttl ?? 0) > 0 && (
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        className='h-7 text-[11.5px]'
+                        onClick={() => {
+                          // Cache bust (#254): drop every cached result for
+                          // this slug — after a SQL edit, same-params runs
+                          // otherwise serve the stale shape until TTL expiry.
+                          void api
+                            .post<{ data: { dropped: number } }>(`/custom-queries/${id}/bust-cache`)
+                            .then((r) => toast.success(`${r.data.data.dropped} cached result(s) dropped`))
+                            .catch(() => toast.error('Cache bust failed'))
+                        }}
+                      >
+                        Bust cache
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 <div className='grid grid-cols-2 gap-3'>
