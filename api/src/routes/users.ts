@@ -243,6 +243,73 @@ export async function usersRoutes(app: FastifyInstance) {
   // PATCH /users/me/preferences — allowlisted keys only; merges into the
   // existing preferences JSON. email_digest drives daily-vs-instant emails
   // (see applyDigestDeferral in services/mail.ts + the daily-action-digest cron).
+  // GET /users/me/stats — personal week-by-week activity (#201): workflow
+  // transitions I made, tasks I completed, records I created, over the last 8
+  // weeks, plus a consecutive-active-day streak. Own data only — no admin gate.
+  app.get('/me/stats', { preHandler: authenticate }, async (req, reply) => {
+    const me = req.user!.id
+    const since = new Date(Date.now() - 56 * 24 * 3600 * 1000)
+    const [transitions, tasksDone, created] = await Promise.all([
+      db('nivaro_workflow_history')
+        .where('user', me)
+        .where('timestamp', '>', since)
+        .select('timestamp')
+        .then((rows) => rows.map((r) => new Date(r.timestamp as Date)))
+        .catch(() => [] as Date[]),
+      db('nivaro_tasks')
+        .where('completed_by', me)
+        .where('completed_at', '>', since)
+        .select('completed_at')
+        .then((rows) => rows.map((r) => new Date(r.completed_at as Date)))
+        .catch(() => [] as Date[]),
+      db('nivaro_activity')
+        .where('user', me)
+        .where('action', 'create')
+        .where('timestamp', '>', since)
+        .whereNot('collection', 'like', 'nivaro\\_%')
+        .select('timestamp')
+        .then((rows) => rows.map((r) => new Date(r.timestamp as Date)))
+        .catch(() => [] as Date[])
+    ])
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10)
+    const weekIndex = (d: Date) =>
+      Math.min(7, Math.max(0, 7 - Math.floor((Date.now() - d.getTime()) / (7 * 24 * 3600 * 1000))))
+    const weeks = Array.from({ length: 8 }, () => ({ transitions: 0, tasks_done: 0, created: 0 }))
+    const activeDays = new Set<string>()
+    for (const d of transitions) {
+      weeks[weekIndex(d)].transitions++
+      activeDays.add(dayKey(d))
+    }
+    for (const d of tasksDone) {
+      weeks[weekIndex(d)].tasks_done++
+      activeDays.add(dayKey(d))
+    }
+    for (const d of created) {
+      weeks[weekIndex(d)].created++
+      activeDays.add(dayKey(d))
+    }
+    // Streak: consecutive days with ANY activity ending today or yesterday
+    // (an in-progress day shouldn't break yesterday's streak at 9am).
+    let streak = 0
+    const cursor = new Date()
+    if (!activeDays.has(dayKey(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1)
+    while (activeDays.has(dayKey(cursor))) {
+      streak++
+      cursor.setUTCDate(cursor.getUTCDate() - 1)
+    }
+    return reply.send({
+      data: {
+        weeks,
+        streak_days: streak,
+        totals: {
+          transitions: transitions.length,
+          tasks_done: tasksDone.length,
+          created: created.length
+        }
+      }
+    })
+  })
+
   app.patch('/me/preferences', { preHandler: authenticate }, async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>
     const patch: Record<string, unknown> = {}
@@ -323,6 +390,10 @@ export async function usersRoutes(app: FastifyInstance) {
       } else {
         return reply.code(400).send({ error: 'notification_sound must be an object or null' })
       }
+    }
+    if ('onboarding_done' in body) {
+      // First-login checklist (#134): the personal setup card dismisses once.
+      patch.onboarding_done = body.onboarding_done === true
     }
     if ('auto_watch' in body) {
       // Auto-watch rules (#400): {created, commented, transitioned} booleans.

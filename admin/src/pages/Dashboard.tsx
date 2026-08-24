@@ -17,6 +17,8 @@ import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type CMSField, type Collection } from "@/lib/api"
 import { useAuth } from '@/lib/auth'
+import { FirstLoginChecklist, NavigationContext, NivaroProvider } from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
@@ -231,6 +233,22 @@ function QuickAction({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+// Shared FirstLoginChecklist needs a Nivaro client + navigation context; the
+// dashboard otherwise talks axios, so a small host wraps just the card.
+const checklistClient = createNivaro(window.location.origin)
+function DashboardChecklistHost() {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={checklistClient}>
+      <NavigationContext.Provider value={{ navigate: (p: string) => navigate(p) }}>
+        <div className='mb-6'>
+          <FirstLoginChecklist profileUrl='/profile' />
+        </div>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
 export function DashboardPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -385,6 +403,8 @@ export function DashboardPage() {
 
       {/* ── Content ──────────────────────────────────────────────── */}
       <div className='p-8'>
+        {/* First-login checklist (#134) — self-hides once dismissed */}
+        <DashboardChecklistHost />
         <div className='grid grid-cols-1 gap-8 lg:grid-cols-[1fr_280px]'>
           {/* ── Left column ──────────────────────────────────── */}
           <div className='space-y-6'>

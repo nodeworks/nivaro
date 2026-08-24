@@ -3,6 +3,7 @@ import { Check, ChevronDown, ChevronsUpDown, ClipboardList, Plus, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDate, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -26,6 +27,7 @@ interface Task {
   assignee: string | null
   due_date: string | null
   status: string
+  priority?: 'low' | 'normal' | 'urgent'
   created_by: string | null
   completed_at: string | null
 }
@@ -44,6 +46,7 @@ export interface PendingTask {
   title: string
   assignee: string | null
   due_date: string
+  priority?: string
 }
 
 function userName(u: User | undefined): string {
@@ -62,6 +65,21 @@ function AssigneeCombobox({
 }) {
   const [open, setOpen] = useState(false)
   const selected = users.find((u) => u.id === value)
+  const client = useNivaroClient()
+  // Picker load hints (#410): open-task counts per person, fetched only once
+  // the picker actually opens. Keys come back uppercased.
+  const { data: openCounts } = useQuery<Record<string, number>>({
+    queryKey: ['task-open-counts', users.map((u) => u.id).join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, number> }>(
+          get('/tasks/open-counts', { ids: users.map((u) => u.id).join(',') })
+        )
+        .then((r) => r.data)
+        .catch(() => ({})),
+    enabled: open && users.length > 0,
+    staleTime: 60_000
+  })
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -98,7 +116,15 @@ function AssigneeCombobox({
                   <Check
                     className={cn('mr-2 h-3.5 w-3.5', value === u.id ? 'opacity-100' : 'opacity-0')}
                   />
-                  {userName(u)}
+                  <span className='min-w-0 flex-1 truncate'>{userName(u)}</span>
+                  {openCounts && (openCounts[u.id.toUpperCase()] ?? 0) > 0 && (
+                    <span
+                      className='ml-2 shrink-0 rounded-full bg-slate-100 px-1.5 text-[10px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'
+                      title={`${openCounts[u.id.toUpperCase()]} open task${openCounts[u.id.toUpperCase()] === 1 ? '' : 's'} already assigned`}
+                    >
+                      {openCounts[u.id.toUpperCase()]}
+                    </span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -139,6 +165,7 @@ export function TaskPanel({
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string | null>(null)
   const [newDueDate, setNewDueDate] = useState('')
+  const [newPriority, setNewPriority] = useState<'low' | 'normal' | 'urgent'>('normal')
 
   const { data: tasks = [] } = useQuery({
     queryKey: ['tasks', collection, item],
@@ -163,7 +190,8 @@ export function TaskPanel({
           item,
           title: newTitle.trim(),
           assignee: newAssignee,
-          due_date: newDueDate || undefined
+          due_date: newDueDate || undefined,
+          priority: newPriority
         })
       ),
     onSuccess: () => {
@@ -172,6 +200,7 @@ export function TaskPanel({
       setNewTitle('')
       setNewAssignee(null)
       setNewDueDate('')
+      setNewPriority('normal')
       toast.success('Task created')
     },
     onError: () => toast.error('Failed to create task')
@@ -206,7 +235,7 @@ export function TaskPanel({
   function handleCreate() {
     if (!newTitle.trim()) return
     if (isNew && onQueueTask) {
-      onQueueTask({ title: newTitle.trim(), assignee: newAssignee, due_date: newDueDate })
+      onQueueTask({ title: newTitle.trim(), assignee: newAssignee, due_date: newDueDate, priority: newPriority })
       setAdding(false)
       setNewTitle('')
       setNewAssignee(null)
@@ -295,6 +324,18 @@ export function TaskPanel({
                     <Label className='mb-1 block text-[11px]'>Due date</Label>
                     <Input type='date' value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} className='h-8 bg-white text-[12px]' />
                   </div>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Priority</Label>
+                    <SimpleSelect
+                      value={newPriority}
+                      onChange={(v) => setNewPriority(v as 'low' | 'normal' | 'urgent')}
+                      options={[
+                        { value: 'low', label: 'Low' },
+                        { value: 'normal', label: 'Normal' },
+                        { value: 'urgent', label: 'Urgent' }
+                      ]}
+                    />
+                  </div>
                 </div>
                 <div className='flex justify-end gap-2'>
                   <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
@@ -312,6 +353,17 @@ export function TaskPanel({
                     <div className='min-w-0 flex-1'>
                       <p className='text-[13px] font-medium text-slate-800'>{t.title}</p>
                       <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
+                        {t.priority && t.priority !== 'normal' && (
+                          <span
+                            className={
+                              t.priority === 'urgent'
+                                ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                                : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
+                            }
+                          >
+                            {t.priority}
+                          </span>
+                        )}
                         {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
                         {t.due_date && <span>Due {formatDate(t.due_date)}</span>}
                       </div>
@@ -353,7 +405,18 @@ export function TaskPanel({
                           </p>
                         )}
                         <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
-                          {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
+                          {t.priority && t.priority !== 'normal' && (
+                          <span
+                            className={
+                              t.priority === 'urgent'
+                                ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                                : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
+                            }
+                          >
+                            {t.priority}
+                          </span>
+                        )}
+                        {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
                           {t.due_date && (
                             <span className={cn(overdue && 'font-medium text-red-500')}>
                               Due {formatDate(t.due_date)}
@@ -424,6 +487,18 @@ export function TaskPanel({
                       className='h-8 bg-white text-[12px]'
                     />
                   </div>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Priority</Label>
+                    <SimpleSelect
+                      value={newPriority}
+                      onChange={(v) => setNewPriority(v as 'low' | 'normal' | 'urgent')}
+                      options={[
+                        { value: 'low', label: 'Low' },
+                        { value: 'normal', label: 'Normal' },
+                        { value: 'urgent', label: 'Urgent' }
+                      ]}
+                    />
+                  </div>
                 </div>
                 <div className='flex justify-end gap-2'>
                   <Button
@@ -470,7 +545,18 @@ export function TaskPanel({
                         <div className='min-w-0 flex-1'>
                           <p className='text-[13px] text-slate-600 line-through'>{t.title}</p>
                           <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
-                            {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
+                            {t.priority && t.priority !== 'normal' && (
+                          <span
+                            className={
+                              t.priority === 'urgent'
+                                ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                                : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
+                            }
+                          >
+                            {t.priority}
+                          </span>
+                        )}
+                        {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
                             {t.completed_at && <span>Done {formatRelative(t.completed_at)}</span>}
                           </div>
                         </div>

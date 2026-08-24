@@ -87,6 +87,7 @@ export type {
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
 export { ProfileView } from './components/ProfileView'
+export { FirstLoginChecklist } from './components/FirstLoginChecklist'
 export * from './components/panels'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'

@@ -47,6 +47,8 @@ type MentionUser = {
   first_name: string | null
   last_name: string | null
   email: string
+  title?: string | null
+  department?: string | null
 }
 
 // Active "@tok" the caret is currently inside: token start (the @) + the
@@ -245,6 +247,12 @@ function MentionTextarea({
                         </span>
                       )}
                       @{mentionHandle(u)}
+                      {(u.title || u.department) && (
+                        <span className='text-slate-400 dark:text-slate-500'>
+                          {' · '}
+                          {[u.title, u.department].filter(Boolean).join(', ')}
+                        </span>
+                      )}
                     </span>
                   </span>
                 </button>

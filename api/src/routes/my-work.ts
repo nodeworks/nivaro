@@ -34,12 +34,13 @@ export async function myWorkRoutes(app: FastifyInstance) {
       resolveOwnedByMeSource(userId).catch(() => ({ items: [], matchedCount: 0, truncated: false })),
       db('nivaro_tasks')
         .where({ assignee: userId, status: 'open' })
+        .orderByRaw("CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END")
         .orderBy([
           { column: 'due_date', order: 'asc' },
           { column: 'id', order: 'desc' }
         ])
         .limit(50)
-        .select('id', 'collection', 'item', 'title', 'due_date', 'status')
+        .select('id', 'collection', 'item', 'title', 'due_date', 'status', 'priority')
         .catch(() => []),
       // Approval chains — pending instances whose CURRENT step approver is me
       // (directly, or via my role).

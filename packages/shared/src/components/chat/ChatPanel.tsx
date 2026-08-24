@@ -1444,7 +1444,14 @@ export function ChatRoomView({
                 )}
               >
                 <Avatar id={u.user_id} name={u.display_name} size={22} />
-                <span className='truncate'>{u.display_name ?? 'Unknown'}</span>
+                <span className='min-w-0 flex-1 truncate'>
+                  {u.display_name ?? 'Unknown'}
+                  {u.user_id !== '__bot__' && humanLabel(u.role_name) && (
+                    <span className='ml-1.5 text-[11px] text-slate-400 dark:text-slate-500'>
+                      {humanLabel(u.role_name)}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </div>

@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
-import { get, patch, post } from '../lib/commands'
+import { del, get, patch, post } from '../lib/commands'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
@@ -1770,6 +1770,8 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <EmailDeliveryCard />
         <NotificationRulesCard />
         <DisplayPrefsCard />
+        <RemindersCard />
+        <MyStatsCard />
         <MySecurityCard />
         <MyPermissionsCard />
         <MyMatrixSeatsCard />
@@ -1924,6 +1926,173 @@ function MyMatrixSeatsCard() {
 
 
 // ─── My security (#103): my sessions, sign-out-others, login history ─────────
+
+// ─── Reminders manager (#259) ────────────────────────────────────────────────
+// The chat bot's set_reminder tool creates these; this card is the first place
+// to SEE them — list upcoming, add one without the bot, edit time, cancel.
+function RemindersCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: reminders = [] } = useQuery<
+    Array<{ id: number; note: string; remind_at: string; sent: number | boolean }>
+  >({
+    queryKey: ['my-reminders'],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get('/reminders'))
+        .then((r) => r.data)
+        .catch(() => [] as never),
+    staleTime: 30_000
+  })
+  const [note, setNote] = useState('')
+  const [at, setAt] = useState('')
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['my-reminders'] })
+  const create = useMutation({
+    mutationFn: () => client.request(post('/reminders', { note, remind_at: new Date(at).toISOString() })),
+    onSuccess: () => {
+      setNote('')
+      setAt('')
+      invalidate()
+    }
+  })
+  const remove = useMutation({
+    mutationFn: (id: number) => client.request(del(`/reminders/${id}`)),
+    onSuccess: invalidate
+  })
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Reminders</h3>
+        <p className='mt-0.5 text-[11px] text-slate-400'>
+          Personal nudges delivered as notifications at the time you pick. The chat bot's
+          "remind me…" requests land here too.
+        </p>
+      </header>
+      <div className='space-y-2 px-4 py-3'>
+        {reminders.length === 0 && (
+          <p className='text-[12px] text-slate-400'>No upcoming reminders.</p>
+        )}
+        {reminders.map((r) => (
+          <div key={r.id} className='flex items-center gap-2'>
+            <div className='min-w-0 flex-1'>
+              <p className='truncate text-[12.5px] text-slate-700 dark:text-slate-200'>{r.note}</p>
+              <p className='text-[11px] text-slate-400'>{new Date(r.remind_at).toLocaleString()}</p>
+            </div>
+            <button
+              type='button'
+              onClick={() => remove.mutate(r.id)}
+              className='shrink-0 rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10'
+            >
+              Cancel
+            </button>
+          </div>
+        ))}
+        <form
+          className='flex flex-wrap items-center gap-2 pt-1'
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (note.trim() && at) create.mutate()
+          }}
+        >
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder='Remind me to…'
+            className='h-7 min-w-[160px] flex-1 rounded border border-slate-200 px-2 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+          />
+          <input
+            type='datetime-local'
+            value={at}
+            onChange={(e) => setAt(e.target.value)}
+            className='h-7 rounded border border-slate-200 px-2 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+          />
+          <button
+            type='submit'
+            disabled={!note.trim() || !at || create.isPending}
+            className='h-7 rounded bg-nvr-cyan px-2.5 text-[11.5px] font-medium text-white hover:bg-[#00b8e0] disabled:opacity-50'
+          >
+            {create.isPending ? 'Adding…' : 'Add'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ─── My stats (#201) ─────────────────────────────────────────────────────────
+// Eight-week personal activity: transitions made, tasks completed, records
+// created — with a consecutive-active-day streak. Own data, nothing comparative.
+function MyStatsCard() {
+  const client = useNivaroClient()
+  const { data } = useQuery<{
+    weeks: Array<{ transitions: number; tasks_done: number; created: number }>
+    streak_days: number
+    totals: { transitions: number; tasks_done: number; created: number }
+  } | null>({
+    queryKey: ['my-stats'],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get('/users/me/stats'))
+        .then((r) => r.data)
+        .catch(() => null as never),
+    staleTime: 5 * 60_000
+  })
+  if (!data) return null
+  const weekMax = Math.max(
+    1,
+    ...data.weeks.map((w) => w.transitions + w.tasks_done + w.created)
+  )
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <div>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            My activity
+          </h3>
+          <p className='mt-0.5 text-[11px] text-slate-400'>Last 8 weeks — just yours.</p>
+        </div>
+        {data.streak_days > 1 && (
+          <span className='rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'>
+            {data.streak_days}-day streak
+          </span>
+        )}
+      </header>
+      <div className='px-4 py-3'>
+        <div className='flex items-end gap-1.5' style={{ height: 56 }}>
+          {data.weeks.map((w, i) => {
+            const total = w.transitions + w.tasks_done + w.created
+            return (
+              <div
+                key={i}
+                className='flex-1 rounded-t bg-nvr-cyan/60 transition-all dark:bg-nvr-cyan/40'
+                style={{ height: `${Math.max(4, (total / weekMax) * 100)}%` }}
+                data-tip={`${total} action${total === 1 ? '' : 's'}: ${w.transitions} transitions, ${w.tasks_done} tasks done, ${w.created} created`}
+              />
+            )
+          })}
+        </div>
+        <div className='mt-2 flex items-center justify-between text-[11px] text-slate-400'>
+          <span>8 weeks ago</span>
+          <span>this week</span>
+        </div>
+        <div className='mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          <span>
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.transitions}</b>{' '}
+            transitions
+          </span>
+          <span>
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.tasks_done}</b>{' '}
+            tasks done
+          </span>
+          <span>
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.created}</b>{' '}
+            records created
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function MySecurityCard() {
   const client = useNivaroClient()

@@ -243,7 +243,12 @@ export async function listUsers(
       .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
   }
 
-  const listQ = db<User>('nivaro_users').select(directory ? DIRECTORY_USER_COLS : USER_COLS)
+  // Directory rows also SELECT preferences — but only to derive `timezone`
+  // (#175 local-time chips); the raw blob is stripped before the response so
+  // the withheld column still never leaves the server.
+  const listQ = db<User>('nivaro_users').select(
+    directory ? [...DIRECTORY_USER_COLS, 'preferences'] : USER_COLS
+  )
   applyHiddenAccountFilter(listQ)
   applySuspendedFilter(listQ)
   // Directory callers get search + sort only: an arbitrary caller-supplied
@@ -267,9 +272,27 @@ export async function listUsers(
 
   const [users, [{ count }]] = await Promise.all([listQ.limit(limit).offset(offset), countQ])
   const rows = users as unknown as User[]
-  // parsePreferences would be a no-op here — directory rows never select it.
   return {
-    data: directory ? rows : rows.map((u) => parsePreferences(u)),
+    data: directory
+      ? rows.map((u) => {
+          const r = u as User & { preferences?: unknown; timezone?: string | null }
+          let tz: string | null = null
+          try {
+            const prefs =
+              typeof r.preferences === 'string' ? JSON.parse(r.preferences) : r.preferences
+            if (prefs && typeof prefs === 'object') {
+              const v = (prefs as { timezone?: unknown }).timezone
+              if (typeof v === 'string' && v) tz = v
+            }
+          } catch {
+            /* corrupt prefs — no timezone */
+          }
+          ;(r as unknown as Record<string, unknown>).preferences = undefined
+          delete (r as unknown as Record<string, unknown>).preferences
+          r.timezone = tz
+          return r
+        })
+      : rows.map((u) => parsePreferences(u)),
     total: Number(count)
   }
 }

@@ -728,6 +728,7 @@ interface UserCardData {
   role_name?: string | null
   manager_name?: string | null
   manager_id?: string | null
+  timezone?: string | null
 }
 
 function UserCardPopover({
@@ -750,6 +751,23 @@ function UserCardPopover({
   onAction?: () => void
 }) {
   const managerName = user?.manager_name?.trim() || null
+  // Local-time chip (#175): "6:12 PM for Beth" — only when their timezone pref
+  // is set AND differs from the viewer's, so same-office teams see no noise.
+  const localTime = (() => {
+    const tz = user?.timezone
+    if (!tz) return null
+    try {
+      const viewerTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (tz === viewerTz) return null
+      return new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: tz
+      }).format(new Date())
+    } catch {
+      return null
+    }
+  })()
   const lastSeen = user?.last_access
     ? (() => {
         const diff = Date.now() - new Date(user.last_access).getTime()
@@ -793,6 +811,11 @@ function UserCardPopover({
           {(user?.title || user?.department) && (
             <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
               {[user.title, user.department].filter(Boolean).join(' · ')}
+            </p>
+          )}
+          {localTime && (
+            <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
+              Local time: {localTime}
             </p>
           )}
           {user?.is_out_of_office && (

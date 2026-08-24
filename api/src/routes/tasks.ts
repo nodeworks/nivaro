@@ -14,6 +14,7 @@ interface TaskRow {
   assignee: string
   due_date: Date | null
   status: 'open' | 'done' | 'cancelled'
+  priority: 'low' | 'normal' | 'urgent'
   created_by: string
   completed_at: Date | null
   created_at: Date
@@ -21,6 +22,9 @@ interface TaskRow {
 }
 
 const TASK_STATUSES = ['open', 'done', 'cancelled']
+const TASK_PRIORITIES = ['low', 'normal', 'urgent']
+// urgent first in any 'what next' ordering
+const PRIORITY_RANK_SQL = "CASE t.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END"
 
 function userName(row: { first_name?: string | null; last_name?: string | null } | undefined) {
   if (!row) return null
@@ -132,6 +136,7 @@ export async function tasksRoutes(app: FastifyInstance) {
     const rows = (await baseQuery()
       .where('t.assignee', req.user!.id)
       .where('t.status', 'open')
+      .orderByRaw(PRIORITY_RANK_SQL)
       .orderBy('t.due_date', 'asc')) as Array<TaskRow & Record<string, unknown>>
 
     const labels = await getItemLabels(rows as TaskRow[])
@@ -140,6 +145,27 @@ export async function tasksRoutes(app: FastifyInstance) {
       item_label: labels[`${r.collection}:${r.item}`] ?? null
     }))
     return reply.send({ data })
+  })
+
+  // GET /open-counts?ids=a,b,c — open-task counts per assignee (#410): picker
+  // load hints ("Beth · 3 open") so assignment can weigh who's already loaded.
+  app.get<{ Querystring: { ids?: string } }>('/open-counts', async (req, reply) => {
+    const ids = String(req.query.ids ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 200)
+    if (ids.length === 0) return reply.send({ data: {} })
+    const rows = (await db('nivaro_tasks')
+      .whereIn('assignee', ids)
+      .where('status', 'open')
+      .groupBy('assignee')
+      .select('assignee')
+      .count('* as n')) as Array<{ assignee: string; n: number }>
+    const out: Record<string, number> = {}
+    for (const id of ids) out[id.toUpperCase()] = 0
+    for (const r of rows) out[String(r.assignee).toUpperCase()] = Number(r.n)
+    return reply.send({ data: out })
   })
 
   // GET /:id — single task
@@ -160,9 +186,13 @@ export async function tasksRoutes(app: FastifyInstance) {
       description?: string | null
       assignee?: string
       due_date?: string | null
+      priority?: string
     }
   }>('/', async (req, reply) => {
-    const { collection, item, title, description, assignee, due_date } = req.body ?? {}
+    const { collection, item, title, description, assignee, due_date, priority } = req.body ?? {}
+    if (priority && !TASK_PRIORITIES.includes(priority)) {
+      return reply.code(400).send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
+    }
     if (!collection || !item || !title || !assignee) {
       return reply.code(400).send({ error: 'collection, item, title, and assignee are required' })
     }
@@ -215,6 +245,7 @@ export async function tasksRoutes(app: FastifyInstance) {
         description: description ?? null,
         assignee: effectiveAssignee,
         due_date: due_date ? new Date(due_date) : null,
+        priority: priority && TASK_PRIORITIES.includes(priority) ? priority : 'normal',
         status: 'open',
         created_by: req.user!.id,
         completed_at: null,
@@ -246,6 +277,7 @@ export async function tasksRoutes(app: FastifyInstance) {
       assignee?: string
       due_date?: string | null
       status?: string
+      priority?: string
     }
   }>('/:id', async (req, reply) => {
     const id = Number(req.params.id)
@@ -272,6 +304,12 @@ export async function tasksRoutes(app: FastifyInstance) {
     }
     if (body.due_date !== undefined) {
       patch.due_date = body.due_date ? new Date(body.due_date) : null
+    }
+    if (body.priority !== undefined) {
+      if (!TASK_PRIORITIES.includes(String(body.priority))) {
+        return reply.code(400).send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
+      }
+      patch.priority = body.priority
     }
     if (body.status !== undefined) {
       patch.status = body.status

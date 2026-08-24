@@ -127,6 +127,33 @@ export function MyWorkView({
   // owned records already on screen.
   const realtime = useOptionalRealtime()
   const [updatesPending, setUpdatesPending] = useState(false)
+  // #368 — per-browser section order/visibility (deliberately unlogged UI pref)
+  const [sectionPrefs, setSectionPrefs] = useState<{ order: string[]; hidden: string[] }>(() => {
+    try {
+      const raw = localStorage.getItem('nvr_mywork_sections')
+      if (raw) {
+        const p = JSON.parse(raw)
+        if (Array.isArray(p?.order) && Array.isArray(p?.hidden)) {
+          const order = ['records', 'tasks', 'notifications'].sort(
+            (a, b) => p.order.indexOf(a) - p.order.indexOf(b)
+          )
+          return { order, hidden: p.hidden.filter((h: string) => order.includes(h)) }
+        }
+      }
+    } catch {
+      /* fresh defaults */
+    }
+    return { order: ['records', 'tasks', 'notifications'], hidden: [] }
+  })
+  const updateSectionPrefs = (next: { order: string[]; hidden: string[] }) => {
+    setSectionPrefs(next)
+    try {
+      localStorage.setItem('nvr_mywork_sections', JSON.stringify(next))
+    } catch {
+      /* storage full/blocked — session-only */
+    }
+  }
+  const [customizeOpen, setCustomizeOpen] = useState(false)
   const debounceRef = useRef(0)
 
   const { data, isLoading, refetch, isFetching } = useQuery<MyWorkData>({
@@ -256,10 +283,65 @@ export function MyWorkView({
         >
           {isFetching ? 'Refreshing…' : 'Refresh'}
         </button>
+        <div className='relative ml-2'>
+          <button
+            type='button'
+            onClick={() => setCustomizeOpen((o) => !o)}
+            className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted dark:border-border'
+          >
+            Customize
+          </button>
+          {customizeOpen && (
+            <div className='absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
+              <p className='px-1 pb-1.5 text-[11px] font-semibold text-slate-500'>Sections</p>
+              {sectionPrefs.order.map((k, idx) => {
+                const label =
+                  k === 'records' ? 'Waiting on you' : k === 'tasks' ? 'My tasks' : 'Notifications'
+                const hidden = sectionPrefs.hidden.includes(k)
+                const move = (dir: -1 | 1) => {
+                  const order = [...sectionPrefs.order]
+                  const j = idx + dir
+                  if (j < 0 || j >= order.length) return
+                  ;[order[idx], order[j]] = [order[j], order[idx]]
+                  updateSectionPrefs({ ...sectionPrefs, order })
+                }
+                return (
+                  <div key={k} className='flex items-center gap-1 rounded px-1 py-1 hover:bg-muted'>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        updateSectionPrefs({
+                          ...sectionPrefs,
+                          hidden: hidden
+                            ? sectionPrefs.hidden.filter((h) => h !== k)
+                            : [...sectionPrefs.hidden, k]
+                        })
+                      }
+                      className='flex h-4 w-4 items-center justify-center rounded border border-slate-300 text-[10px] dark:border-border'
+                      title={hidden ? 'Show section' : 'Hide section'}
+                    >
+                      {hidden ? '' : '✓'}
+                    </button>
+                    <span className={`min-w-0 flex-1 truncate text-[12px] ${hidden ? 'text-slate-400 line-through' : ''}`}>
+                      {label}
+                    </span>
+                    <button type='button' onClick={() => move(-1)} disabled={idx === 0} className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'>↑</button>
+                    <button type='button' onClick={() => move(1)} disabled={idx === sectionPrefs.order.length - 1} className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'>↓</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Records waiting on me */}
-      <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      {/* My Work customization (#368): the three sections render in the
+          user's saved order; hidden ones are skipped; consecutive card
+          sections pair up into the two-column grid. Per-browser UI pref. */}
+      {(() => {
+        const renderers: Record<string, () => React.ReactNode> = {
+          records: () => (
+            <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
         <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
           <h2 className='text-[13px] font-medium'>Waiting on you</h2>
           <p className='text-[11px] text-muted-foreground'>
@@ -293,10 +375,9 @@ export function MyWorkView({
           </ul>
         )}
       </section>
-
-      <div className='grid gap-5 lg:grid-cols-2'>
-        {/* Tasks */}
-        <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+          ),
+          tasks: () => (
+            <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
           <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
             <h2 className='text-[13px] font-medium'>My tasks</h2>
           </div>
@@ -317,6 +398,11 @@ export function MyWorkView({
                   >
                     ✓
                   </button>
+                  {(t as { priority?: string }).priority === 'urgent' && (
+                    <span className='shrink-0 rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                      urgent
+                    </span>
+                  )}
                   <button
                     type='button'
                     onClick={() => open(t.collection, t.item)}
@@ -340,9 +426,9 @@ export function MyWorkView({
             </ul>
           )}
         </section>
-
-        {/* Notifications */}
-        <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+          ),
+          notifications: () => (
+            <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
           <div className='flex items-center justify-between border-b border-slate-200 px-4 py-2.5 dark:border-border'>
             <h2 className='text-[13px] font-medium'>Unread notifications</h2>
             {data.notifications.length > 0 && (
@@ -397,7 +483,31 @@ export function MyWorkView({
             </ul>
           )}
         </section>
-      </div>
+          )
+        }
+        const visible = sectionPrefs.order.filter((k) => !sectionPrefs.hidden.includes(k))
+        const out: React.ReactNode[] = []
+        let i = 0
+        while (i < visible.length) {
+          const k = visible[i]
+          if (k === 'records') {
+            out.push(<div key={k}>{renderers[k]()}</div>)
+            i++
+          } else {
+            const pair = [k]
+            if (i + 1 < visible.length && visible[i + 1] !== 'records') pair.push(visible[i + 1])
+            out.push(
+              <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
+                {pair.map((pk) => (
+                  <div key={pk}>{renderers[pk]()}</div>
+                ))}
+              </div>
+            )
+            i += pair.length
+          }
+        }
+        return out
+      })()}
     </div>
   )
 }

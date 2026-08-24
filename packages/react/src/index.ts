@@ -165,6 +165,7 @@ export {
   PipelinePanel,
   PipelineTransitionButtons,
   ProfileView,
+  FirstLoginChecklist,
   parseExpression,
   precisionOf,
   QueryStatStrip,
