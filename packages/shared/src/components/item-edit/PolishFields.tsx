@@ -2,6 +2,7 @@ import { Check, MapPin, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { CMSField } from './types'
 import { parseJson } from './helpers'
+import { fiscalPeriodOf, getFiscalStartMonth } from '../../lib/fiscal'
 import { Input } from '../ui/input'
 
 /**
@@ -365,8 +366,21 @@ export function FiscalPeriodField({
   const quarter = m ? Number(m[2]) : 1
   const commit = (y: number, q: number) => onChange(`FY${y}-Q${q}`)
   const years = Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - 3 + i)
+  const current = fiscalPeriodOf(new Date())
   return (
     <div className='flex items-center gap-1.5'>
+      <button
+        type='button'
+        onClick={() => onChange(current)}
+        data-tip={`Set to the current period (fiscal year starts month ${getFiscalStartMonth()})`}
+        className={
+          value === current
+            ? 'rounded-md bg-nvr-cyan/10 px-2 py-1.5 text-[11.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'
+            : 'rounded-md border border-slate-200 px-2 py-1.5 text-[11.5px] text-slate-500 hover:bg-muted dark:border-border'
+        }
+      >
+        Now
+      </button>
       <div className='flex overflow-hidden rounded-md border border-input'>
         {years.slice(2, 6).map((y) => (
           <button

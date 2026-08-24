@@ -1,4 +1,5 @@
 import { Parser } from 'expr-eval'
+import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
@@ -74,6 +75,44 @@ _exprParser.functions.replace = (s: unknown, find: unknown, rep: unknown) =>
   String(s ?? '').replaceAll(String(find), String(rep))
 _exprParser.functions.coalesce = (...args: unknown[]) =>
   args.find((v) => v !== null && v !== undefined && v !== '') ?? null
+// Date/business-calendar helpers (#343/#344)
+_exprParser.functions.networkdays = (a: unknown, b: unknown) => {
+  const da = toFormulaDate(a)
+  const dbb = toFormulaDate(b)
+  return da && dbb ? networkdaysBetween(da, dbb) : null
+}
+_exprParser.functions.fiscal_year = (d: unknown) => {
+  const dt = toFormulaDate(d)
+  if (!dt) return null
+  const start = _formulaSnapshot.fiscalStartMonth
+  return dt.getMonth() + 1 >= start ? dt.getFullYear() + (start > 1 ? 1 : 0) : dt.getFullYear()
+}
+_exprParser.functions.fiscal_quarter = (d: unknown) => {
+  const dt = toFormulaDate(d)
+  if (!dt) return null
+  const start = _formulaSnapshot.fiscalStartMonth
+  const offset = (dt.getMonth() + 1 - start + 12) % 12
+  return Math.floor(offset / 3) + 1
+}
+function toFormulaDate(v: unknown): Date | null {
+  if (v instanceof Date) return v
+  if (typeof v !== 'string' || !v) return null
+  const d = v.length === 10 ? new Date(`${v}T00:00:00`) : new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+// Sync snapshot of the formula context — refreshed fire-and-forget wherever
+// computed fields are about to run (evalFormula itself is synchronous).
+let _formulaSnapshot: { constants: Record<string, number>; fiscalStartMonth: number } = {
+  constants: {},
+  fiscalStartMonth: 1
+}
+function refreshFormulaSnapshot(): void {
+  getFormulaContext()
+    .then((ctx) => {
+      _formulaSnapshot = ctx
+    })
+    .catch(() => {})
+}
 
 export class CollectionNotFoundError extends Error {
   constructor(collection: string) {
@@ -271,7 +310,7 @@ function evalFormula(formula: string, item: Record<string, unknown>): unknown {
   try {
     // expr-eval's Value type is narrower than Record<string,unknown> but handles nested objects fine at runtime
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = _exprParser.evaluate(formula, { item } as any)
+    const result = _exprParser.evaluate(formula, { item, ..._formulaSnapshot.constants } as any)
     // NaN means a field reference resolved to undefined (e.g. missing field in payload).
     // Treat as formula failure so we don't overwrite a valid client value with NaN,
     // which tedious rejects as "Invalid number" for numeric columns.
@@ -294,6 +333,7 @@ interface ComputedFieldRow {
  * Returns only rows that have a non-null computed_formula.
  */
 async function getComputedFields(collection: string): Promise<ComputedFieldRow[]> {
+  refreshFormulaSnapshot()
   try {
     const rows = (await db('nivaro_fields')
       .where({ collection })
@@ -362,6 +402,42 @@ async function applyWriteComputedFields(
 ): Promise<void> {
   const fields = await getComputedFields(collection)
   const writeFields = fields.filter((f) => f.computed_type === 'write' && f.computed_formula)
+
+  // Lookup fields (#349): computed_type 'lookup', computed_formula JSON
+  // {fk_field, source_field} — when the FK is present in the write (set or
+  // changed), copy the target record's source_field into this column. A
+  // write-time snapshot, deliberately not live: the copied value records
+  // what the target said WHEN the link was made (price-at-order semantics).
+  // A null/cleared FK clears the copy. Failures never block the write.
+  const lookupFields = fields.filter((f) => f.computed_type === 'lookup' && f.computed_formula)
+  for (const f of lookupFields) {
+    try {
+      const cfg = JSON.parse(f.computed_formula as string) as {
+        fk_field?: string
+        source_field?: string
+      }
+      if (!cfg?.fk_field || !cfg?.source_field) continue
+      if (!(cfg.fk_field in payload)) continue
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.source_field)) continue
+      const fkVal = payload[cfg.fk_field]
+      if (fkVal === null || fkVal === undefined || fkVal === '') {
+        payload[f.field] = null
+        continue
+      }
+      const rel = (await getRelsForCollection(collection)).find(
+        (r) => r.many_collection === collection && r.many_field === cfg.fk_field && r.one_collection
+      )
+      if (!rel?.one_collection) continue
+      const target = await db(rel.one_collection)
+        .where({ id: fkVal })
+        .select(cfg.source_field)
+        .first()
+      if (target && cfg.source_field in target) payload[f.field] = target[cfg.source_field]
+    } catch {
+      // bad config or unreadable target — leave the column alone
+    }
+  }
+
   if (!writeFields.length) return
 
   const evalCtx = context ?? payload

@@ -1,4 +1,5 @@
 import { getFields } from './collections.js'
+import { validatorRegistry } from '../extensions/validators.js'
 
 /**
  * Server-side enforcement of `nivaro_fields.validation_rules`.
@@ -150,6 +151,19 @@ export function applyValidationRule(
       const n = Number(rule.value)
       if (diff === null || Number.isNaN(n)) return null
       return diff <= n ? null : (rule.message ?? `${label} must be within ${n} days of today`)
+    }
+    case 'custom': {
+      // Custom validators (#239): extension-registered functions keyed by
+      // operator. The CLIENT skips these (unknown type = pass), so the server
+      // is the enforcement point — exactly right for extension logic.
+      try {
+        const op = (rule as { operator?: string }).operator
+        if (!op || !validatorRegistry.has(op)) return null
+        const err = validatorRegistry.run(op, value, (rule as { options?: unknown }).options)
+        return err ? (rule.message ?? err) : null
+      } catch {
+        return null
+      }
     }
     default:
       // An unknown rule type is a NEWER client's config on an older server —

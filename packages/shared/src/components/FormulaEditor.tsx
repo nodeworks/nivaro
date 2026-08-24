@@ -31,6 +31,12 @@ export interface FormulaEditorProps {
    * because the server resolves relations this editor cannot see.
    */
   serverEvaluated?: boolean
+  /**
+   * AI formula assistant (#130): host-supplied generator (POST /ai/formula).
+   * Present = the ✨ bar renders; the returned formula lands in the editor
+   * for review, never auto-saved.
+   */
+  onAiGenerate?: (prompt: string, current: string) => Promise<{ formula: string | null; text: string } | null>
   className?: string
 }
 
@@ -62,8 +68,31 @@ export function FormulaEditor({
   placeholder,
   rows = 3,
   serverEvaluated,
+  onAiGenerate,
   className
 }: FormulaEditorProps) {
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiNote, setAiNote] = useState<string | null>(null)
+  const runAi = async () => {
+    if (!onAiGenerate || !aiPrompt.trim() || aiBusy) return
+    setAiBusy(true)
+    setAiNote(null)
+    try {
+      const res = await onAiGenerate(aiPrompt.trim(), value)
+      if (res?.formula) {
+        onChange(res.formula)
+        setAiNote(res.text || 'Formula generated — review before saving.')
+        setAiPrompt('')
+      } else {
+        setAiNote(res?.text || 'No formula came back — try rephrasing.')
+      }
+    } catch {
+      setAiNote('Assistant unavailable.')
+    } finally {
+      setAiBusy(false)
+    }
+  }
   const taRef = useRef<HTMLTextAreaElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -154,6 +183,32 @@ export function FormulaEditor({
         >
           ＋ Insert field
         </button>
+
+        {onAiGenerate && (
+          <span className='flex min-w-[220px] flex-1 items-center gap-1'>
+            <input
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void runAi()
+                }
+              }}
+              placeholder='✨ Describe the formula… (e.g. "price times quantity minus discount")'
+              className='h-6 flex-1 rounded border border-slate-200 bg-background px-1.5 text-[11px] dark:border-border'
+            />
+            <button
+              type='button'
+              onClick={() => void runAi()}
+              disabled={aiBusy || !aiPrompt.trim()}
+              className='rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:border-border dark:text-nvr-cyan'
+            >
+              {aiBusy ? '…' : 'Generate'}
+            </button>
+          </span>
+        )}
+        {aiNote && <span className='w-full text-[11px] text-muted-foreground'>{aiNote}</span>}
 
         {validation && !validation.ok && (
           <span className='text-[11px] text-red-600 dark:text-red-400'>

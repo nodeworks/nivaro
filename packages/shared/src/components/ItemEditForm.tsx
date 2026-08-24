@@ -95,7 +95,11 @@ import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
-import { DeepRecordSearchButton, RecordInsightsButton } from './item-edit/RecordInsights'
+import { RecordInsightsButton } from './item-edit/RecordInsights'
+import { setFiscalStartMonth } from '../lib/fiscal'
+import { setFormulaConstants } from '../lib/expression'
+
+let formulaCtxHydrated = false
 import { FindInRecordButton, type FindableField } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -5899,6 +5903,33 @@ export function ItemEditForm({
       : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
+  // Formula constants + fiscal calendar (#244/#343): hydrate the shared
+  // expression engine from instance settings once per session — module-level
+  // singletons, so every mounted form/grid shares one fetch.
+  useEffect(() => {
+    if (formulaCtxHydrated) return
+    formulaCtxHydrated = true
+    client
+      .request<{ data?: { formula_constants?: string | null; fiscal_year_start_month?: number } }>({
+        _method: 'GET',
+        _path: '/settings'
+      })
+      .then((r) => {
+        const row = r?.data
+        if (!row) return
+        try {
+          const parsed = row.formula_constants ? JSON.parse(row.formula_constants) : null
+          if (parsed && typeof parsed === 'object') setFormulaConstants(parsed)
+        } catch {
+          // malformed constants JSON — engine runs without them
+        }
+        setFiscalStartMonth(row.fiscal_year_start_month)
+      })
+      .catch(() => {
+        formulaCtxHydrated = false
+      })
+  }, [client])
+
   // Tab titles with context (#145): the browser tab names the record.
   useEffect(() => {
     if (isNew || !itemTitle) return
@@ -6226,13 +6257,6 @@ export function ItemEditForm({
                                       <RecordInsightsButton
                                         collection={collection}
                                         itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {!isNew && (
-                                      <DeepRecordSearchButton
-                                        fields={fieldConfig ?? []}
-                                        draft={draft}
-                                        onJump={flashField}
                                       />
                                     )}
                                     {!isNew && itemId && (

@@ -698,6 +698,76 @@ export async function aiRoutes(app: FastifyInstance) {
     }
   })
 
+  // AI formula assistant (#130): prose -> a {{token}} formula for the shared
+  // expression engine (or item.<col> for server write-computed fields).
+  app.post('/formula', { preHandler: requireAdmin }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const b = req.body as {
+      prompt?: string
+      collection?: string
+      dialect?: string
+      current_formula?: string
+      fields?: Array<{ field: string; label?: string }>
+    }
+    if (!b.prompt?.trim()) return reply.code(400).send({ error: 'prompt is required' })
+    const dialect = b.dialect === 'server' ? 'server' : 'client'
+
+    // Field context: caller-supplied list wins (the editor knows its exact
+    // token set); else the collection's registered fields.
+    let fieldLines: string[] = []
+    if (Array.isArray(b.fields) && b.fields.length) {
+      fieldLines = b.fields
+        .slice(0, 120)
+        .map((f) => `${f.field}${f.label ? ` — ${f.label}` : ''}`)
+    } else if (b.collection && /^[A-Za-z_][A-Za-z0-9_]*$/.test(b.collection)) {
+      try {
+        const rows = (await db('nivaro_fields')
+          .where({ collection: b.collection })
+          .select('field', 'label', 'type')) as Array<{ field: string; label: string | null; type: string }>
+        fieldLines = rows.slice(0, 120).map((r) => `${r.field} (${r.type})${r.label ? ` — ${r.label}` : ''}`)
+      } catch {
+        /* no field context */
+      }
+    }
+    const tokenForm = dialect === 'server' ? 'item.<field>' : '{{<field>}}'
+    const fnList =
+      dialect === 'server'
+        ? 'concat, join, upper, lower, trim, len, substr, replace, coalesce, networkdays(a,b), fiscal_year(d), fiscal_quarter(d), abs, round, floor, ceil'
+        : 'networkdays(a,b), fiscal_year(d), fiscal_quarter(d), abs, round(n, places), floor, ceil'
+    const system = `You write formulas for a CMS expression engine. Field references use the form ${tokenForm}. Supported: + - * / ( ) comparisons && ||, and functions: ${fnList}. ALL_CAPS names (e.g. TAX_RATE) reference instance-wide formula constants. Return ONLY the formula on the first line, then ONE plain-language sentence describing it. Never invent field names — use only the fields listed.`
+    const fieldsCtx = fieldLines.length ? `Available fields:\n${fieldLines.join('\n')}` : 'No field list provided.'
+
+    const { model } = await getAiSettings()
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 400,
+        system,
+        messages: [
+          {
+            role: 'user',
+            content: `${fieldsCtx}\n\nRequest: ${b.prompt}${b.current_formula ? `\n\nCurrent formula (revise it): ${b.current_formula}` : ''}`
+          }
+        ]
+      })
+      const text = msg.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('\n')
+        .trim()
+      const lines = text.split('\n').filter((l) => l.trim())
+      const formula = (lines[0] ?? '').replace(/^`+|`+$/g, '').trim()
+      await logActivity({ action: 'ai-formula', user: req.user?.id, comment: b.collection ?? undefined, req })
+      return { data: { formula: formula || null, text: lines.slice(1).join(' ').trim() } }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err)
+      return reply.code(502).send({ error: `AI call failed: ${m.slice(0, 300)}` })
+    }
+  })
+
   app.post('/generate', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {

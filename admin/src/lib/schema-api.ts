@@ -15,7 +15,7 @@ export type FieldMeta = {
   sort: number | null
   group: string | null
   computed_formula: string | null
-  computed_type: 'read' | 'write' | 'rollup' | null
+  computed_type: 'read' | 'write' | 'rollup' | 'lookup' | null
   computed_store: boolean
 }
 

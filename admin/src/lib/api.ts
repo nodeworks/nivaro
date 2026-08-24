@@ -465,7 +465,7 @@ export type CMSField = {
   required: boolean
   sort: number | null
   computed_formula: string | null
-  computed_type: 'read' | 'write' | null
+  computed_type: 'read' | 'write' | 'rollup' | 'lookup' | null
   computed_store: boolean
   // Content ops fields:
   group_key: string | null

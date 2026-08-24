@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { bustFormulaContextCache } from '../services/formula-context.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
 import { sendSms } from '../services/sms.js'
@@ -24,6 +25,7 @@ export async function settingsRoutes(app: FastifyInstance) {
   })
 
   app.patch('/', { preHandler: requireAdmin }, async (req, reply) => {
+    bustFormulaContextCache()
     // Maintenance flag edits must apply immediately, not after the 15s cache.
     {
       const { bustMaintenanceCache } = await import('../services/security.js')
@@ -87,7 +89,9 @@ export async function settingsRoutes(app: FastifyInstance) {
       'brand_logo',
       'brand_login_title',
       'brand_login_message',
-      'login_links'
+      'login_links',
+      'formula_constants',
+      'fiscal_year_start_month'
     ]
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))

@@ -19,7 +19,9 @@ function parseJson<T>(v: string | null | undefined): T | null {
 export interface RollupSource {
   related_collection: string // table to aggregate from
   fk_field: string // column on related_collection pointing to this item's id
-  aggregate: 'sum' | 'count' | 'avg' | 'min' | 'max'
+  aggregate: 'sum' | 'count' | 'avg' | 'min' | 'max' | 'median' | 'distinct_count' | 'weighted_avg'
+  /** weighted_avg (#403): sum(value*weight)/sum(weight). */
+  weight_field?: string
   value_field: string // column to aggregate (ignored for count)
   recursive?: boolean // if true: aggregate all descendants in same-collection tree
   /** Per-row arithmetic instead of a plain column: `{{col}}` and one-hop
@@ -36,7 +38,7 @@ export interface NormalizedRollup {
   sources: RollupSource[]
 }
 
-const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max'])
+const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max', 'median', 'distinct_count', 'weighted_avg'])
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -156,8 +158,15 @@ async function computeFormulaRollup(cfg: RollupSource, id: unknown): Promise<num
   switch (cfg.aggregate) {
     case 'count':
       return perRow.length
+    case 'distinct_count':
+      return new Set(perRow).size
     case 'avg':
       return perRow.reduce((a, b) => a + b, 0) / perRow.length
+    case 'median': {
+      const sorted = [...perRow].sort((a, b) => a - b)
+      const mid = Math.floor(sorted.length / 2)
+      return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+    }
     case 'min':
       return Math.min(...perRow)
     case 'max':
@@ -271,10 +280,49 @@ OPTION (MAXRECURSION 100)`
       return Number(r?.v ?? 0)
     }
 
+    // Median / distinct-count / weighted-average (#402/#403): fetched + reduced
+    // in JS — MSSQL's PERCENTILE_CONT needs OVER clauses knex can't compose here.
+    if (
+      cfg.aggregate === 'median' ||
+      cfg.aggregate === 'distinct_count' ||
+      cfg.aggregate === 'weighted_avg'
+    ) {
+      const cols = [cfg.value_field]
+      if (cfg.aggregate === 'weighted_avg' && cfg.weight_field) cols.push(cfg.weight_field)
+      const rows = (await db(cfg.related_collection)
+        .where(cfg.fk_field, id as Knex.Value)
+        .modify((q) => applyRollupFilter(q, cfg.filter))
+        .limit(10_000)
+        .select(cols)) as Array<Record<string, unknown>>
+      const nums = rows
+        .map((row) => Number(row[cfg.value_field]))
+        .filter((n) => Number.isFinite(n))
+      if (cfg.aggregate === 'distinct_count') return new Set(nums).size
+      if (nums.length === 0) return null
+      if (cfg.aggregate === 'median') {
+        const sorted = [...nums].sort((a, b) => a - b)
+        const mid = Math.floor(sorted.length / 2)
+        return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+      }
+      // weighted_avg
+      const wf = cfg.weight_field
+      if (!wf) return nums.reduce((a, b) => a + b, 0) / nums.length
+      let wSum = 0
+      let vSum = 0
+      for (const row of rows) {
+        const v = Number(row[cfg.value_field])
+        const w = Number(row[wf])
+        if (!Number.isFinite(v) || !Number.isFinite(w)) continue
+        vSum += v * w
+        wSum += w
+      }
+      return wSum === 0 ? null : vSum / wSum
+    }
+
     const r = (await db(cfg.related_collection)
       .where(cfg.fk_field, id as Knex.Value)
       .modify((q) => applyRollupFilter(q, cfg.filter))
-      [cfg.aggregate](`${cfg.value_field} as v`)
+      [cfg.aggregate as 'sum' | 'avg' | 'min' | 'max'](`${cfg.value_field} as v`)
       .first()) as { v: number | null } | undefined
     return r?.v != null ? Number(r.v) : null
   } catch {

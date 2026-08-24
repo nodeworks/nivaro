@@ -311,13 +311,15 @@ function O2MAggFieldCombobox({
 
 // ─── Rollup computed config ────────────────────────────────────────────────────
 
-type RollupAggregate = 'sum' | 'count' | 'avg' | 'min' | 'max'
+type RollupAggregate = 'sum' | 'count' | 'avg' | 'min' | 'max' | 'median' | 'distinct_count' | 'weighted_avg'
 
 interface RollupSourceConfig {
   related_collection: string
   fk_field: string
   aggregate: RollupAggregate
   value_field: string
+  /** weighted_avg only: the per-row weight column. */
+  weight_field?: string
   recursive?: boolean
 }
 
@@ -330,7 +332,10 @@ const ROLLUP_AGGREGATE_OPTIONS: { value: RollupAggregate; label: string }[] = [
   { value: 'count', label: 'count' },
   { value: 'avg', label: 'avg' },
   { value: 'min', label: 'min' },
-  { value: 'max', label: 'max' }
+  { value: 'max', label: 'max' },
+  { value: 'median', label: 'median' },
+  { value: 'distinct_count', label: 'distinct count' },
+  { value: 'weighted_avg', label: 'weighted avg' }
 ]
 
 const EMPTY_ROLLUP_SOURCE: RollupSourceConfig = {
@@ -491,6 +496,19 @@ function RollupSourceRow({
             disabled={source.aggregate === 'count' || !source.related_collection}
           />
         </div>
+
+        {source.aggregate === 'weighted_avg' && (
+          <div className='space-y-1'>
+            <Label className='text-[11px] text-slate-500'>Weight field</Label>
+            <Combobox
+              value={source.weight_field ?? ''}
+              onChange={(v) => onChange({ ...source, weight_field: v })}
+              options={fieldOptions}
+              placeholder='e.g. quantity'
+              disabled={!source.related_collection}
+            />
+          </div>
+        )}
       </div>
 
       {/* Recursive — only when aggregating the same collection (tree) */}
@@ -596,6 +614,83 @@ function RollupConfigEditor({
           </p>
         </div>
         <Switch checked={computedStore} onCheckedChange={onComputedStoreChange} />
+      </div>
+    </div>
+  )
+}
+
+// ─── Lookup fields (#349): write-time copy from an M2O target ────────────────
+
+interface LookupConfig {
+  fk_field: string
+  source_field: string
+}
+
+function parseLookup(formula: string | null | undefined): LookupConfig {
+  try {
+    const cfg = JSON.parse(formula ?? '') as LookupConfig
+    return { fk_field: cfg.fk_field ?? '', source_field: cfg.source_field ?? '' }
+  } catch {
+    return { fk_field: '', source_field: '' }
+  }
+}
+
+function LookupConfigEditor({
+  collection,
+  config,
+  onChange
+}: {
+  collection: string
+  config: LookupConfig
+  onChange: (next: LookupConfig) => void
+}) {
+  const { data: rels } = useQuery({
+    queryKey: ['relations-for', collection],
+    queryFn: () => api.get(`/data-model/relations/for/${collection}`).then((r) => r.data.data),
+    enabled: !!collection
+  })
+  const m2o = ((rels ?? []) as Array<{
+    many_collection: string
+    many_field: string
+    one_collection: string | null
+    junction_field: string | null
+  }>).filter((r) => r.many_collection === collection && r.one_collection && !r.junction_field)
+  const target = m2o.find((r) => r.many_field === config.fk_field)?.one_collection ?? null
+  const { data: targetMeta } = useQuery({
+    queryKey: ['collection-meta', target],
+    queryFn: () => api.get(`/collections/${target}`).then((r) => r.data.data),
+    enabled: !!target
+  })
+  const targetFields = ((targetMeta?.fields ?? []) as Array<{ field: string; hidden?: boolean }>)
+    .filter((f) => !f.hidden && f.field !== 'id')
+    .map((f) => ({ value: f.field, label: f.field }))
+  return (
+    <div className='space-y-2'>
+      <p className='text-[11px] text-slate-400'>
+        When the relation below is set or changed, the target record's field is copied into this
+        column — a snapshot at link time (price-at-order semantics), not a live reference. Clearing
+        the relation clears the copy.
+      </p>
+      <div className='grid grid-cols-2 gap-2'>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Relation (M2O field)</Label>
+          <Combobox
+            value={config.fk_field}
+            onChange={(v) => onChange({ fk_field: v, source_field: '' })}
+            options={m2o.map((r) => ({ value: r.many_field, label: `${r.many_field} → ${r.one_collection}` }))}
+            placeholder='Select relation…'
+          />
+        </div>
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500'>Copy this field</Label>
+          <Combobox
+            value={config.source_field}
+            onChange={(v) => onChange({ ...config, source_field: v })}
+            options={targetFields}
+            placeholder={target ? 'Select field…' : 'Pick a relation first'}
+            disabled={!target}
+          />
+        </div>
       </div>
     </div>
   )
@@ -1717,8 +1812,17 @@ function FieldMetaEditor({
 
   // Computed formula state
   const [computedEnabled, setComputedEnabled] = useState(() => !!fm?.computed_formula)
-  const [computedType, setComputedType] = useState<'read' | 'write' | 'rollup'>(() =>
-    fm?.computed_type === 'write' ? 'write' : fm?.computed_type === 'rollup' ? 'rollup' : 'read'
+  const [computedType, setComputedType] = useState<'read' | 'write' | 'rollup' | 'lookup'>(() =>
+    fm?.computed_type === 'write'
+      ? 'write'
+      : fm?.computed_type === 'rollup'
+        ? 'rollup'
+        : fm?.computed_type === 'lookup'
+          ? 'lookup'
+          : 'read'
+  )
+  const [lookup, setLookup] = useState<LookupConfig>(() =>
+    fm?.computed_type === 'lookup' ? parseLookup(fm?.computed_formula) : { fk_field: '', source_field: '' }
   )
   const [computedFormula, setComputedFormula] = useState(() =>
     fm?.computed_type === 'rollup' ? '' : (fm?.computed_formula ?? '')
@@ -1867,10 +1971,16 @@ function FieldMetaEditor({
     computedEnabled && computedReady
       ? {
           computed_formula:
-            computedType === 'rollup' ? serializeRollup(rollup) : computedFormula.trim(),
+            computedType === 'rollup'
+              ? serializeRollup(rollup)
+              : computedType === 'lookup'
+                ? JSON.stringify(lookup)
+                : computedFormula.trim(),
           computed_type: computedType,
           computed_store:
-            computedType === 'write' || computedType === 'rollup' ? computedStore : false
+            computedType === 'write' || computedType === 'rollup'
+              ? computedStore
+              : computedType === 'lookup'
         }
       : { computed_formula: null, computed_type: null, computed_store: false }
 
@@ -2272,9 +2382,21 @@ function FieldMetaEditor({
                 />
                 Rollup (aggregate)
               </label>
+              <label className='flex cursor-pointer items-center gap-1.5'>
+                <input
+                  type='radio'
+                  name={`computed-type-${col.name}`}
+                  value='lookup'
+                  checked={computedType === 'lookup'}
+                  onChange={() => setComputedType('lookup')}
+                />
+                Lookup (copy from relation)
+              </label>
             </div>
 
-            {computedType === 'rollup' ? (
+            {computedType === 'lookup' ? (
+              <LookupConfigEditor collection={tableName} config={lookup} onChange={setLookup} />
+            ) : computedType === 'rollup' ? (
               <RollupConfigEditor
                 config={rollup}
                 currentCollection={tableName}
@@ -20036,6 +20158,21 @@ function ValidationRulesEditor({
     }
   }
 
+  // Regex preset library (#391): the patterns people reach for — picking one
+  // fills the pattern AND a default message (kept if the author already wrote one).
+  const REGEX_PRESETS = [
+    { value: 'phone_us', label: 'US phone', pattern: '^\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$', message: 'Enter a 10-digit US phone number' },
+    { value: 'zip_us', label: 'US ZIP', pattern: '^\\d{5}(-\\d{4})?$', message: 'Enter a 5-digit ZIP (or ZIP+4)' },
+    { value: 'email', label: 'Email', pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$', message: 'Enter a valid email address' },
+    { value: 'url_https', label: 'HTTPS URL', pattern: '^https://\\S+$', message: 'Enter a full https:// link' },
+    { value: 'uuid', label: 'UUID', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', message: 'Enter a valid UUID' },
+    { value: 'digits', label: 'Digits only', pattern: '^\\d+$', message: 'Digits only' },
+    { value: 'alnum', label: 'Letters & numbers', pattern: '^[A-Za-z0-9]+$', message: 'Letters and numbers only' },
+    { value: 'currency', label: 'Dollar amount', pattern: '^\\$?\\d{1,3}(,?\\d{3})*(\\.\\d{2})?$', message: 'Enter a dollar amount' },
+    { value: 'ein', label: 'EIN (tax id)', pattern: '^\\d{2}-\\d{7}$', message: 'Enter an EIN like 12-3456789' },
+    { value: 'po_number', label: 'PO number (alnum-dash)', pattern: '^[A-Z0-9][A-Z0-9-]{2,}$', message: 'Uppercase letters, numbers, dashes' }
+  ]
+
   const RULE_TYPES = [
     { value: 'min_length', label: 'Min length' },
     { value: 'max_length', label: 'Max length' },
@@ -20063,7 +20200,18 @@ function ValidationRulesEditor({
               value={rule.value ?? ''}
               onChange={(e) => updateRule(idx, { value: e.target.value })}
               placeholder={rule.type === 'regex' ? '^[A-Z].*' : '10'}
-              className='h-7 text-[12px] w-28'
+              className={rule.type === 'regex' ? 'h-7 w-52 font-mono text-[12px]' : 'h-7 text-[12px] w-28'}
+            />
+          )}
+          {rule.type === 'regex' && (
+            <Combobox
+              value=''
+              onChange={(v) => {
+                const preset = REGEX_PRESETS.find((r) => r.value === v)
+                if (preset) updateRule(idx, { value: preset.pattern, message: rule.message || preset.message })
+              }}
+              options={REGEX_PRESETS.map((r) => ({ value: r.value, label: r.label }))}
+              placeholder='Presets…'
             />
           )}
           {rule.type === 'required_if' && (

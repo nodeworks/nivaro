@@ -698,6 +698,16 @@ export function RawFormulaEditor({
       sampleLabel={sample?.id != null ? `#${String(sample.id)}` : undefined}
       placeholder={placeholder}
       serverEvaluated={serverEvaluated}
+      onAiGenerate={async (prompt, current) => {
+        const r = await api.post('/ai/formula', {
+          prompt,
+          collection,
+          dialect: serverEvaluated ? 'server' : 'client',
+          current_formula: current || undefined,
+          fields: fields.map((f) => ({ field: f.field }))
+        })
+        return r.data?.data ?? null
+      }}
       rows={2}
     />
   )

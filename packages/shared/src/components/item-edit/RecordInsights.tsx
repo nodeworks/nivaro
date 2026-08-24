@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Info, Search } from 'lucide-react'
+import { Info } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -248,99 +248,6 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
           </p>
         </div>
       ))}
-    </div>
-  )
-}
-
-// ─── Deep record search (#399) ───────────────────────────────────────────────
-// Find-in-record: matches field labels + current values; picking a hit jumps
-// to (and flashes) the field via the host's flashField.
-export function DeepRecordSearchButton({
-  fields,
-  draft,
-  onJump
-}: {
-  fields: Array<{ field: string; label?: string | null; hidden?: boolean }>
-  draft: Record<string, unknown>
-  onJump: (field: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [q, setQ] = useState('')
-  const rootRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-  const needle = q.trim().toLowerCase()
-  const hits =
-    needle.length >= 2
-      ? fields
-          .filter((f) => !f.hidden)
-          .map((f) => ({
-            field: f.field,
-            label: f.label ?? f.field,
-            value: String(draft[f.field] ?? '')
-          }))
-          .filter(
-            (f) =>
-              f.label.toLowerCase().includes(needle) ||
-              f.value.toLowerCase().includes(needle)
-          )
-          .slice(0, 12)
-      : []
-  return (
-    <div ref={rootRef} className='relative'>
-      <button
-        type='button'
-        onClick={() => setOpen((v) => !v)}
-        data-tip='Find in record — search field names and values'
-        aria-label='Find in record'
-        className='flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-      >
-        <Search className='h-4 w-4' />
-      </button>
-      {open && (
-        <div className='absolute right-0 top-full z-[60] mt-1 w-[320px] rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'>
-          <input
-            // biome-ignore lint/a11y/noAutofocus: opened intentionally by click
-            autoFocus
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder='Find a field or value…'
-            className='h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
-          />
-          {needle.length >= 2 && (
-            <div className='mt-1 max-h-64 overflow-y-auto'>
-              {hits.length === 0 ? (
-                <p className='px-1 py-2 text-[12px] text-slate-400'>No matching fields.</p>
-              ) : (
-                hits.map((h) => (
-                  <button
-                    key={h.field}
-                    type='button'
-                    onClick={() => {
-                      onJump(h.field)
-                      setOpen(false)
-                    }}
-                    className='block w-full rounded px-1.5 py-1 text-left hover:bg-muted'
-                  >
-                    <span className='text-[12.5px] font-medium'>{h.label}</span>
-                    {h.value && (
-                      <span className='ml-1.5 text-[11px] text-slate-400'>
-                        {h.value.length > 40 ? `${h.value.slice(0, 40)}…` : h.value}
-                      </span>
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }

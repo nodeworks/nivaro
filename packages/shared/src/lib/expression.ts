@@ -29,6 +29,8 @@
  * number.
  */
 
+import { fiscalQuarterOf, fiscalYearOf } from './fiscal'
+
 export type ExprValue = number | string | boolean | null
 
 export type ExprNode =
@@ -389,7 +391,15 @@ export function evaluateAst(
         return null
       case 'token': {
         const raw = resolve(node.path)
-        if (isEmpty(raw)) return null
+        if (isEmpty(raw)) {
+          // ALL_CAPS single-segment tokens fall through to the instance-wide
+          // formula constants (#244) before reading as missing.
+          if (/^[A-Z][A-Z0-9_]*$/.test(node.path)) {
+            const c = formulaConstant(node.path)
+            if (c !== null) return c
+          }
+          return null
+        }
         if (typeof raw === 'number' || typeof raw === 'boolean' || typeof raw === 'string') {
           return raw
         }
@@ -398,10 +408,37 @@ export function evaluateAst(
         // arithmetic out of a relation.
         return null
       }
-      case 'call':
-        // Not evaluated here — see the parser note. Null, not a throw, so a
+      case 'call': {
+        // A small set of BUILTINS evaluates natively (#344); anything else is
+        // a server-side (expr-eval) function — null, not a throw, so a
         // preview simply shows "no value" instead of breaking the editor.
+        const fn = node.name.toLowerCase()
+        if (fn === 'networkdays' && node.args.length >= 2) {
+          const a = toDateValue(walk(node.args[0]))
+          const b = toDateValue(walk(node.args[1]))
+          if (!a || !b) return null
+          return networkdaysBetween(a, b)
+        }
+        if (fn === 'abs' && node.args.length === 1) {
+          const n = num(node.args[0])
+          return n === null ? null : Math.abs(n)
+        }
+        if ((fn === 'fiscal_year' || fn === 'fiscal_quarter') && node.args.length >= 1) {
+          const d = toDateValue(walk(node.args[0]))
+          if (!d) return null
+          return fn === 'fiscal_year' ? fiscalYearOf(d) : fiscalQuarterOf(d)
+        }
+        if ((fn === 'round' || fn === 'floor' || fn === 'ceil') && node.args.length >= 1) {
+          const n = num(node.args[0])
+          if (n === null) return null
+          if (fn === 'floor') return Math.floor(n)
+          if (fn === 'ceil') return Math.ceil(n)
+          const places = node.args[1] ? (num(node.args[1]) ?? 0) : 0
+          const f = 10 ** places
+          return Math.round(n * f) / f
+        }
         return null
+      }
       case 'unary': {
         if (node.op === '!') return !truthy(walk(node.operand))
         const n = num(node.operand)
@@ -561,4 +598,41 @@ export function validateExpression(src: string, knownFields?: string[]): Validat
 export function extractExpressionTokens(src: string): string[] {
   const parsed = parseExpression(src)
   return parsed.ok ? parsed.tokens : []
+}
+
+
+// ─── networkdays (#344): business days between two dates, inclusive-exclusive
+// (Mon–Fri; the fractional part of partial days is dropped). Order-agnostic —
+// swapped arguments return a negative count.
+function toDateValue(v: ExprValue): Date | null {
+  if (typeof v !== 'string' || !v) return null
+  const d = v.length === 10 ? new Date(`${v}T00:00:00`) : new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+export function networkdaysBetween(a: Date, b: Date): number {
+  const sign = b.getTime() >= a.getTime() ? 1 : -1
+  let [from, to] = sign === 1 ? [a, b] : [b, a]
+  from = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  to = new Date(to.getFullYear(), to.getMonth(), to.getDate())
+  let days = 0
+  const cur = new Date(from)
+  while (cur.getTime() < to.getTime()) {
+    const dow = cur.getDay()
+    if (dow !== 0 && dow !== 6) days++
+    cur.setDate(cur.getDate() + 1)
+  }
+  return days * sign
+}
+
+// ─── Formula constants (#244): named instance values (TAX_RATE) resolvable in
+// any expression. Hosts hydrate this from nivaro_settings.formula_constants;
+// resolvers that miss a token can fall through to it.
+let _formulaConstants: Record<string, number> = {}
+export function setFormulaConstants(map: Record<string, number> | null | undefined): void {
+  _formulaConstants = map && typeof map === 'object' ? map : {}
+}
+export function formulaConstant(name: string): number | null {
+  const v = _formulaConstants[name]
+  return Number.isFinite(v) ? v : null
 }
