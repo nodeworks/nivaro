@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T23:33:25.649Z",
+  "generated_at": "2026-08-24T23:46:10.757Z",
   "releases": [
+    {
+      "version": "0.1.124",
+      "tag": "v0.1.124",
+      "date": "2026-08-24T19:46:07-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Ops & Observability batch A (#100 #105 #106 #114 #155 #234 #236 #252 #289 #290 #291 #295 #297 #298 #310 #312)",
+              "hash": "4cab072f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.123",
       "tag": "v0.1.123",
-      "date": "2026-08-24T19:33:21-04:00",
+      "date": "2026-08-24T19:33:25-04:00",
       "sections": [
         {
           "label": "Added",
