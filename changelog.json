@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-24T21:11:47.146Z",
+  "generated_at": "2026-08-24T21:44:52.760Z",
   "releases": [
+    {
+      "version": "0.1.118",
+      "tag": "v0.1.118",
+      "date": "2026-08-24T17:44:49-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Data Model & Config Platform sprint (#113 #119 #153 #154 #169 #228 #355 #357 #358 #360 #361 #405 #424 #425; #356 #359 pre-built)",
+              "hash": "ca53c5d6"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "ItemEditForm hooks-order crash on loading→loaded transition",
+              "hash": "9c059efa"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.117",
       "tag": "v0.1.117",
-      "date": "2026-08-24T17:11:44-04:00",
+      "date": "2026-08-24T17:11:47-04:00",
       "sections": [
         {
           "label": "Added",
