@@ -738,6 +738,7 @@ export function AppLayout() {
             new build (see the shared api-version watcher). */}
         <ApiUpdateBanner appName='Nivaro' />
         <OfflineBanner />
+        <DbOutageBanner />
         <NivaroProvider client={announcementsClient}>
           <AnnouncementBanner />
         </NivaroProvider>
@@ -1033,6 +1034,40 @@ function useSessionKeepalive() {
       window.removeEventListener('keydown', onActivity)
     }
   }, [])
+}
+
+/**
+ * DB outage banner (#329): shown when any API call returns the fast
+ * DB_UNAVAILABLE 503; clears itself by probing /api/health until the
+ * database answers again.
+ */
+function DbOutageBanner() {
+  const [down, setDown] = useState(false)
+  useEffect(() => {
+    const onDown = () => setDown(true)
+    window.addEventListener('nvr:db-down', onDown)
+    return () => window.removeEventListener('nvr:db-down', onDown)
+  }, [])
+  useEffect(() => {
+    if (!down) return
+    const t = setInterval(() => {
+      void fetch('/api/health', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.db?.status === 'connected') setDown(false)
+        })
+        .catch(() => {})
+    }, 5000)
+    return () => clearInterval(t)
+  }, [down])
+  if (!down) return null
+  return (
+    <div className='flex items-center justify-center gap-2 border-b border-red-300 bg-red-50 px-4 py-1.5 text-[12px] text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'>
+      <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-red-500' />
+      The database is unreachable — changes can't be saved right now. This clears automatically
+      when it recovers.
+    </div>
+  )
 }
 
 function ForceRefreshBanner() {

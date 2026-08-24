@@ -153,6 +153,24 @@ export async function healthRoutes(app: FastifyInstance) {
         inngest: { ok: inngestStatus },
         migrations,
         sockets: { connections },
+        // Redis degradation map (#330): what each consumer does when Redis is
+        // gone. 'open' = the feature degrades but requests keep working;
+        // 'closed' = the feature genuinely stops. Audited posture, served
+        // beside live status so an outage can be reasoned about at a glance.
+        redis_degradation: {
+          redis_ok: redisOk,
+          consumers: [
+            { name: 'sessions', posture: 'closed', note: 'cookie sessions live in Redis — logins stop until it returns (static tokens unaffected)' },
+            { name: 'ws-token', posture: 'closed', note: 'session-cookie users cannot mint new socket tokens; existing sockets keep working' },
+            { name: 'rate-limit', posture: 'open', note: 'requests pass unthrottled' },
+            { name: 'event-journal', posture: 'open', note: 'emits fall back to plain (unjournaled) broadcasts; catch-up degrades to full refresh' },
+            { name: 'custom-query-cache', posture: 'open', note: 'queries execute uncached' },
+            { name: 'activity-throttle', posture: 'open', note: 'repeats log normally (duplicate rows beat lost audit)' },
+            { name: 'masquerade', posture: 'closed', note: 'masquerade tokens cannot resolve' },
+            { name: 'socket-adapter', posture: 'open', note: 'events stay node-local; single-node deployments unaffected' }
+          ]
+        },
+        db_posture: (await import('../services/db-health.js')).dbHealthState(),
         uptime_s: Math.round(process.uptime()),
         version: NIVARO_VERSION,
         node_version: process.version,

@@ -417,6 +417,13 @@ function logMail(
 let mailLogWarned = false
 
 export async function sendMail(opts: MailOptions): Promise<void> {
+  // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
+  // host would, verifying the callers' failure paths (mail log, outbox).
+  {
+    const { chaosMailDown } = await import('../routes/chaos.js')
+    if (chaosMailDown()) throw new Error('chaos: mail transport down (drill)')
+  }
+
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {
     console.warn('[mail] SMTP not configured, skipping email to', opts.to)
@@ -492,6 +499,13 @@ export async function sendRawMail(opts: {
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
 }): Promise<void> {
+  // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
+  // host would, verifying the callers' failure paths (mail log, outbox).
+  {
+    const { chaosMailDown } = await import('../routes/chaos.js')
+    if (chaosMailDown()) throw new Error('chaos: mail transport down (drill)')
+  }
+
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {
     console.warn('[mail] SMTP not configured, skipping email to', opts.to)

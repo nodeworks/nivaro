@@ -20,6 +20,12 @@ api.interceptors.response.use(
   (err) => {
     const status = err.response?.status
 
+    // DB outage posture (#329): the server answers fast 503s while the
+    // database is down — surface ONE banner instead of scattered failures.
+    if (status === 503 && err.response?.data?.code === 'DB_UNAVAILABLE') {
+      window.dispatchEvent(new CustomEvent('nvr:db-down'))
+    }
+
     if (
       status === 401 &&
       window.location.pathname !== '/login' &&

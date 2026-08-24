@@ -95,6 +95,8 @@ export interface NotifyUserOptions {
   sender?: string | null
   /** Defaults: inapp true, email false, sms false. */
   channels?: { inapp?: boolean; email?: boolean; sms?: boolean }
+  /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
+  _retry?: boolean
 }
 
 /**
@@ -293,5 +295,13 @@ export async function notifyUser(
   } catch (err) {
     // Notifications are non-critical — never break the calling flow
     console.warn('[notification-channels] notifyUser error:', err)
+    // Notification outbox (#335): a delivery failure lands in the outbox and
+    // retries with backoff instead of vanishing. `_retry` marks a worker
+    // re-invocation so a permanently-failing delivery can't loop forever
+    // outside the outbox's own attempt cap.
+    if (!opts._retry) {
+      const { enqueueOutbox } = await import('./outbox.js')
+      await enqueueOutbox('notification', { userId, opts: { ...opts, _retry: true } })
+    }
   }
 }

@@ -35,7 +35,13 @@ export function useRecordPresence(collection: string | undefined, item: string |
   useEffect(() => {
     if (!collection || !item || item === 'new') return
 
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+    const socket = io(API_URL, {
+      transports: ['websocket', 'polling'],
+      withCredentials: true,
+      reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
+      reconnectionDelayMax: 15_000,
+      randomizationFactor: 0.6
+    })
     socketRef.current = socket
     let disposed = false
 

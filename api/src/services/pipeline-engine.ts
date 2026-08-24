@@ -351,10 +351,31 @@ async function getOwnerGroupsForStates(
     }
   }
   if (missing.length > 0) {
-    const rows = (await database<OwnerGroup>('nivaro_pipeline_owner_groups')
-      .whereIn('state', missing)
-      .orderBy('sort')
-      .orderBy('is_default')) as OwnerGroup[]
+    let rows: OwnerGroup[]
+    try {
+      rows = (await database<OwnerGroup>('nivaro_pipeline_owner_groups')
+        .whereIn('state', missing)
+        .orderBy('sort')
+        .orderBy('is_default')) as OwnerGroup[]
+    } catch (err) {
+      // Stale-while-revalidate (#331): a refresh failure serves each state's
+      // last-known-good groups (extended one TTL) instead of dropping owner
+      // resolution for the whole request. States with no prior cache rethrow.
+      if (cacheable) {
+        let covered = true
+        for (const id of missing) {
+          const stale = ownerGroupCache.get(id)
+          if (!stale) {
+            covered = false
+            break
+          }
+          out.set(id, { groups: stale.groups, prepared: stale.prepared })
+          ownerGroupCache.set(id, { ...stale, at: now })
+        }
+        if (covered) return out
+      }
+      throw err
+    }
     const byState = new Map<string, OwnerGroup[]>()
     for (const g of rows) {
       const list = byState.get(g.state) ?? []

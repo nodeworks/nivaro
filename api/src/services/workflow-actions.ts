@@ -442,6 +442,51 @@ export async function runTransitionActions(opts: {
 
   const { collection, item } = opts.instance
 
+  // Action journal (#327): write-ahead intent for the chain. If the process
+  // dies mid-chain the row stays 'running' — boot recovery flags it as
+  // interrupted with the record named, so a half-run chain is REPORTED
+  // rather than silently half-done. Best-effort: journal failures never
+  // block the transition.
+  let journalId: number | null = null
+  try {
+    const inserted = (await db('nivaro_action_journal')
+      .insert({
+        collection,
+        item: String(item),
+        transition_label: opts.transition.label?.slice(0, 255) ?? null,
+        actions_total: actions.length,
+        actions_done: 0,
+        status: 'running',
+        started_at: new Date()
+      })
+      .returning('id')) as Array<number | { id: number }>
+    const first = inserted[0]
+    journalId = typeof first === 'object' ? first.id : (first ?? null)
+  } catch {
+    journalId = null
+  }
+  let journalDone = 0
+  const journalTick = async (err?: unknown) => {
+    if (journalId == null) return
+    try {
+      if (err !== undefined) {
+        await db('nivaro_action_journal').where({ id: journalId }).update({
+          status: 'error',
+          last_error: String(err instanceof Error ? err.message : err).slice(0, 2000),
+          actions_done: journalDone,
+          finished_at: new Date()
+        })
+      } else {
+        journalDone++
+        await db('nivaro_action_journal')
+          .where({ id: journalId })
+          .update({ actions_done: journalDone })
+      }
+    } catch {
+      /* journal is best-effort */
+    }
+  }
+
   const responses: unknown[] = []
   for (const action of actions) {
     if (action.type !== 'erp_submit' && action.type !== 'create_record') continue
@@ -460,6 +505,7 @@ export async function runTransitionActions(opts: {
 
     if (action.type === 'create_record') {
       await runCreateRecordAction(action, collection, item, record, opts.newStateObj, responses)
+      await journalTick()
       continue
     }
 
@@ -624,12 +670,20 @@ export async function runTransitionActions(opts: {
         // Abort the transition: the caller keeps the record in its current
         // state and surfaces the error. on_failure writebacks (mdsi_status =
         // 'error') already landed, which is what the form banner keys off.
+        await journalTick(`blocked: ${error ?? 'unknown error'}`)
         return { blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}` }
       }
     } else {
       await applyWriteback(collection, item, action.on_success?.set, postScope)
       await applyChildWritebacks(action.on_success_children, item, postScope)
     }
+    await journalTick()
+  }
+  if (journalId != null) {
+    await db('nivaro_action_journal')
+      .where({ id: journalId })
+      .update({ status: 'done', actions_done: journalDone, finished_at: new Date() })
+      .catch(() => {})
   }
   return { blockedError: null }
 }

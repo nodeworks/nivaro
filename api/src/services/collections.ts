@@ -79,9 +79,20 @@ export function clearMetadataCache(collection?: string): void {
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {
   const hit = collectionCache.get(name)
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
-  const value = await loadCollection(name)
-  collectionCache.set(name, { value, at: Date.now() })
-  return value
+  try {
+    const value = await loadCollection(name)
+    collectionCache.set(name, { value, at: Date.now() })
+    return value
+  } catch (err) {
+    // Stale-while-revalidate (#331): a refresh failure (DB blip) serves the
+    // last-known-good metadata flagged fresh for one more TTL, instead of
+    // failing every request that needed it.
+    if (hit) {
+      collectionCache.set(name, { ...hit, at: Date.now() })
+      return hit.value
+    }
+    throw err
+  }
 }
 
 async function loadCollection(name: string): Promise<CMSCollection | undefined> {
@@ -150,9 +161,18 @@ export async function deleteCollection(name: string): Promise<void> {
 export async function getFields(collection: string): Promise<CMSField[]> {
   const hit = fieldsCache.get(collection)
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
-  const value = await loadFields(collection)
-  fieldsCache.set(collection, { value, at: Date.now() })
-  return value
+  try {
+    const value = await loadFields(collection)
+    fieldsCache.set(collection, { value, at: Date.now() })
+    return value
+  } catch (err) {
+    // Stale-while-revalidate (#331) — same rationale as getCollection.
+    if (hit) {
+      fieldsCache.set(collection, { ...hit, at: Date.now() })
+      return hit.value
+    }
+    throw err
+  }
 }
 
 async function loadFields(collection: string): Promise<CMSField[]> {

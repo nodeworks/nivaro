@@ -15,6 +15,7 @@ type CronFn = () => void | Promise<void>
 interface InternalEntry extends CronEntry {
   fn: CronFn
   job: Cron
+  catchUpHours?: number
 }
 
 // Cron watchdog (#93): a tick still running when its budget expires raises a
@@ -39,7 +40,7 @@ export class CronManager {
     id: string,
     expression: string,
     fn: CronFn,
-    opts?: { extensionId?: string; watchdogMs?: number }
+    opts?: { extensionId?: string; watchdogMs?: number; catchUpHours?: number }
   ): void {
     // Replace any existing job with the same id
     this.unschedule(id)
@@ -89,6 +90,7 @@ export class CronManager {
       expression,
       fn,
       extensionId: opts?.extensionId,
+      catchUpHours: opts?.catchUpHours,
       job,
       get nextRun() {
         return job.nextRun() ?? null
@@ -117,6 +119,37 @@ export class CronManager {
       throw err
     }
     return true
+  }
+
+  /** Flag an already-registered job for boot catch-up (#328). */
+  markCatchUp(id: string, hours: number): void {
+    const entry = this.entries.get(id)
+    if (entry) entry.catchUpHours = hours
+  }
+
+  /**
+   * Missed-cron catch-up (#328): jobs flagged with catchUpHours run once on
+   * boot when no completed run exists inside that window — a restart that
+   * straddled 3am no longer silently skips a nightly. Only idempotent
+   * detectors/cleanups should opt in.
+   */
+  async runCatchUps(): Promise<void> {
+    const { db } = await import('../db/index.js')
+    for (const entry of this.entries.values()) {
+      const hours = entry.catchUpHours
+      if (!hours) continue
+      try {
+        const recent = await db('nivaro_job_runs')
+          .where({ job_id: entry.id, status: 'completed' })
+          .where('started_at', '>=', new Date(Date.now() - hours * 3_600_000))
+          .first('id')
+        if (recent) continue
+        console.log(`[cron] catch-up run for overdue job "${entry.id}"`)
+        await this.runNow(entry.id, null)
+      } catch (err) {
+        console.warn(`[cron] catch-up for "${entry.id}" failed:`, err)
+      }
+    }
   }
 
   unschedule(id: string): void {

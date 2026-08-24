@@ -42,7 +42,11 @@ export function getSocket(): Socket {
     transports: ['websocket', 'polling'],
     withCredentials: true,
     reconnection: true,
-    reconnectionDelay: 2000
+    // Reconnect jitter (#332): after an API restart every open tab reconnects
+    // at once — randomized backoff spreads the stampede over a window.
+    reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
+    reconnectionDelayMax: 15_000,
+    randomizationFactor: 0.6
   })
   socket.on('connect', () => {
     reconnects += 1
@@ -55,7 +59,10 @@ export function getSocket(): Socket {
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
     for (const room of joinedWatchRooms) socket?.emit('admin:join', { room })
-    if (everAuthed && lastSeq > 0) socket?.emit('catchup', { cursor: lastSeq })
+    if (everAuthed && lastSeq > 0) {
+      const cursor = lastSeq
+      setTimeout(() => socket?.emit('catchup', { cursor }), Math.random() * 2000)
+    }
     everAuthed = true
   })
   socket.on('nvr:ping', (p: { t?: number }) => socket?.emit('nvr:pong', { t: p?.t }))

@@ -149,6 +149,70 @@ export async function buildServer() {
     setJournalRedis(app.redis)
   }
 
+  // ── Resiliency sprint wiring ─────────────────────────────────────────────
+  {
+    // DB outage posture (#329): probe loop + fast honest 503s while down.
+    const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')
+    startDbHealthProbe()
+    const DB_EXEMPT = /^\/api\/(version|health|changelog)/
+    app.addHook('onRequest', async (req, reply) => {
+      if (!isDbHealthy() && req.url.startsWith('/api') && !DB_EXEMPT.test(req.url)) {
+        return reply.code(503).send({
+          error: 'The database is unreachable — retrying automatically. Nothing was saved.',
+          code: 'DB_UNAVAILABLE'
+        })
+      }
+    })
+
+    // Chaos slow-request fault (#333) — zero cost unless a drill is active.
+    const { chaosSlowDelayMs } = await import('./routes/chaos.js')
+    app.addHook('onRequest', async () => {
+      const delay = chaosSlowDelayMs()
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay))
+    })
+
+    // Outbox worker (#326/#335) + the notification redelivery handler.
+    const { registerOutboxHandler } = await import('./services/outbox.js')
+    const { notifyUser } = await import('./services/notification-channels.js')
+    registerOutboxHandler('notification', async (payload) => {
+      const p = payload as { userId?: string; opts?: Record<string, unknown> }
+      if (!p.userId || !p.opts) return
+      await notifyUser(app, p.userId, p.opts as never)
+    })
+
+    // Action-journal boot recovery (#327): chains still 'running' from a dead
+    // process are REPORTED (actions are not idempotent — never auto-re-run).
+    void (async () => {
+      try {
+        const stuck = (await db('nivaro_action_journal')
+          .where({ status: 'running' })
+          .where('started_at', '<', new Date(Date.now() - 5 * 60_000))
+          .limit(20)) as Array<{
+          id: number
+          collection: string
+          item: string
+          transition_label: string | null
+          actions_done: number
+          actions_total: number
+        }>
+        for (const row of stuck) {
+          await db('nivaro_action_journal')
+            .where({ id: row.id })
+            .update({ status: 'interrupted', finished_at: new Date() })
+          const { trackError } = await import('./services/error-tracking.js')
+          void trackError({
+            source: 'server',
+            route: 'action-journal',
+            severity: 'high',
+            message: `Transition action chain interrupted mid-run on ${row.collection}/${row.item} ("${row.transition_label ?? '?'}" — ${row.actions_done}/${row.actions_total} actions completed). Verify the record's integrations manually.`
+          })
+        }
+      } catch {
+        /* recovery is best-effort */
+      }
+    })()
+  }
+
   // ─── Inngest ──────────────────────────────────────────────────────────────
   await app.register(inngestPlugin)
 
@@ -460,6 +524,12 @@ export async function buildServer() {
           .whereNotNull('ooo_end')
           .where('ooo_end', '<=', now)
           .update({ is_out_of_office: false, ooo_start: null, ooo_end: null })
+      })
+
+      // Outbox worker (#326/#335): deliver pending rows every minute.
+      app.cron.schedule('outbox-worker', '* * * * *', async () => {
+        const { runOutboxPass } = await import('./services/outbox.js')
+        await runOutboxPass()
       })
 
       // Concurrency sampling (#275): sockets + distinct users every 5 min,
@@ -786,6 +856,13 @@ export async function buildServer() {
       }
       app.cron.schedule('anomaly-checks-daily', '0 3 * * *', () => anomalyPass('daily'))
       app.cron.schedule('anomaly-checks-weekly', '20 3 * * 1', () => anomalyPass('weekly'))
+
+      // Missed-cron catch-up (#328): the idempotent nightly detectors run once
+      // now if a restart straddled their window. Deliberately NOT flagged:
+      // anything that sends mail or mutates business data.
+      app.cron.markCatchUp('fk-integrity-sweep', 26)
+      app.cron.markCatchUp('rollup-drift-sweep', 26)
+      setTimeout(() => void app.cron.runCatchUps(), 30_000)
     })
 
   return app
