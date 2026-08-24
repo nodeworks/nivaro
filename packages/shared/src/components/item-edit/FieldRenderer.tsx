@@ -1,5 +1,21 @@
 import { ExternalLink } from 'lucide-react'
 import { useContext, useEffect, useRef, useState } from 'react'
+import {
+  AddressField,
+  applyInputMask,
+  ChecklistField,
+  ColorField,
+  CountdownChip,
+  DateRangeField,
+  DurationField,
+  FiscalPeriodField,
+  maskFor,
+  RangeSliderField,
+  RatingField,
+  RepeaterField,
+  smartParseDate
+} from './PolishFields'
+import { useApiFetchConfig } from '../../context'
 import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown , useParentDraft } from '../../context'
 import { precisionOf } from '../../lib/format-value'
 import { Badge } from '../ui/badge'
@@ -136,6 +152,16 @@ export function FieldRenderer({
   const drill = useDrilldown()
   const parentDraftForFilters = useParentDraft()
   const relationPathData = useContext(RelationPathDataContext)
+  const parentDraftCtx = parentDraftForFilters
+  const apiCfg = (() => {
+    try {
+      // Optional — AddressField geocoding only; hosts without a provider skip it.
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      return useApiFetchConfig()
+    } catch {
+      return null
+    }
+  })()
   const iface = field.interface ?? ''
   // Extension-registered interfaces win over the built-in dispatch. Resolved
   // ONCE at mount: flipping to a plugin on a later render would early-return
@@ -460,13 +486,27 @@ export function FieldRenderer({
   }
 
   if (field.type === 'date' || iface === 'date') {
+    const showCountdown = parseJson<{ countdown?: boolean }>(field.options)?.countdown === true
     return (
-      <Input
-        type='date'
-        value={strVal.slice(0, 10)}
-        onChange={(e) => onChange(e.target.value || null)}
-        placeholder={field.placeholder ?? undefined}
-      />
+      <div className='flex items-center'>
+        <Input
+          type='date'
+          value={strVal.slice(0, 10)}
+          onChange={(e) => onChange(e.target.value || null)}
+          // Smart date entry (#138): paste/typed shorthands like "+30",
+          // "eom", "next friday" resolve on paste into the text form.
+          onPaste={(e) => {
+            const parsed = smartParseDate(e.clipboardData.getData('text'))
+            if (parsed) {
+              e.preventDefault()
+              onChange(parsed)
+            }
+          }}
+          placeholder={field.placeholder ?? undefined}
+          className='flex-1'
+        />
+        {showCountdown && <CountdownChip value={strVal.slice(0, 10)} />}
+      </div>
     )
   }
 
@@ -552,6 +592,7 @@ export function FieldRenderer({
         onChange={onChange}
         placeholder={field.placeholder ?? undefined}
         disabled={field.readonly}
+        pastePlain={parseJson<{ paste_plain?: boolean }>(field.options)?.paste_plain === true}
       />
     )
   }
@@ -680,6 +721,49 @@ export function FieldRenderer({
 
   // Tags (#92): free-entry chips stored as a JSON string array. Optional
   // suggested values via options.tag_options (string list).
+  // ── Structured interfaces (Field Types sprint) ──────────────────────────
+  if (iface === 'color') return <ColorField value={value} onChange={onChange} />
+  if (iface === 'rating') return <RatingField value={value} onChange={onChange} />
+  if (iface === 'duration') return <DurationField value={value} onChange={onChange} />
+  if (iface === 'fiscal_period') return <FiscalPeriodField value={value} onChange={onChange} />
+  if (iface === 'checklist') return <ChecklistField value={value} onChange={onChange} />
+  if (iface === 'repeater' || (field.repeater_schema && field.type === 'json')) {
+    return <RepeaterField field={field} value={value} onChange={onChange} />
+  }
+  if (iface === 'range_slider') {
+    const endField = parseJson<{ range_end_field?: string }>(field.options)?.range_end_field
+    return (
+      <RangeSliderField
+        field={field}
+        value={value}
+        onChange={onChange}
+        pairedValue={endField ? parentDraftCtx?.draft?.[endField] : undefined}
+      />
+    )
+  }
+  if (iface === 'date_range') {
+    const endField = parseJson<{ range_end_field?: string }>(field.options)?.range_end_field
+    return (
+      <DateRangeField
+        field={field}
+        value={value}
+        onChange={onChange}
+        pairedValue={endField ? parentDraftCtx?.draft?.[endField] : undefined}
+      />
+    )
+  }
+  if (iface === 'address') {
+    return (
+      <AddressField
+        field={field}
+        value={value}
+        onChange={onChange}
+        apiBase={apiCfg?.apiBase}
+        authHeaders={apiCfg?.authHeaders}
+      />
+    )
+  }
+
   if (iface === 'tags') {
     return <TagsField field={field} value={value} onChange={onChange} />
   }
@@ -706,13 +790,51 @@ export function FieldRenderer({
     }
   }
 
-  return (
+  // Input mask (#137): options.input_mask (# digit, A letter, * any; other
+  // chars are literals shown while typing). The STORED value is clean.
+  const mask = maskFor(field)
+  const maxLen = (() => {
+    const o = parseJson<{ max_length?: number }>(field.options)
+    if (Number.isFinite(Number(o?.max_length))) return Number(o?.max_length)
+    const rules = parseJson<Array<{ type?: string; value?: number }>>(field.validation_rules)
+    const maxRule = Array.isArray(rules) ? rules.find((r) => r?.type === 'max') : null
+    return maxRule && Number.isFinite(Number(maxRule.value)) ? Number(maxRule.value) : null
+  })()
+  const input = (
     <Input
-      value={strVal}
-      onChange={(e) => onChange(e.target.value || null)}
-      placeholder={field.placeholder ?? undefined}
+      value={mask ? applyInputMask(mask, strVal).display : strVal}
+      onChange={(e) => {
+        if (mask) {
+          const { clean } = applyInputMask(mask, e.target.value)
+          onChange(clean || null)
+        } else {
+          onChange(e.target.value || null)
+        }
+      }}
+      placeholder={field.placeholder ?? (mask ?? undefined)}
     />
   )
+  // Character counter (#183): shows once past 60% of the limit.
+  if (maxLen != null && maxLen > 0) {
+    const len = strVal.length
+    return (
+      <div>
+        {input}
+        {len >= maxLen * 0.6 && (
+          <p
+            className={
+              len > maxLen
+                ? 'mt-0.5 text-right text-[10.5px] tabular-nums text-red-500'
+                : 'mt-0.5 text-right text-[10.5px] tabular-nums text-slate-400'
+            }
+          >
+            {len}/{maxLen}
+          </p>
+        )}
+      </div>
+    )
+  }
+  return input
 }
 
 

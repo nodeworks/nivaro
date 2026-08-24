@@ -3217,6 +3217,7 @@ function RelationsTab({
   const [deleteId, setDeleteId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editForm, setEditForm] = useState(DEFAULT_REL_FORM)
+  const [quickBuilder, setQuickBuilder] = useState<'users' | 'm2a' | null>(null)
 
   const patch = (k: Partial<typeof DEFAULT_REL_FORM>) => setForm((f) => ({ ...f, ...k }))
   const editPatch = (k: Partial<typeof DEFAULT_REL_FORM>) => setEditForm((f) => ({ ...f, ...k }))
@@ -3647,6 +3648,36 @@ function RelationsTab({
               </Button>
             </div>
           </div>
+        )}
+
+        {/* Quick builders: multi-user field (#243) + M2A (#242) */}
+        <div className='flex flex-wrap gap-2'>
+          <button
+            type='button'
+            onClick={() => setQuickBuilder('users')}
+            className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[12px] text-slate-500 hover:bg-slate-50 dark:border-border'
+          >
+            ＋ Multi-user field…
+          </button>
+          <button
+            type='button'
+            onClick={() => setQuickBuilder('m2a')}
+            className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[12px] text-slate-500 hover:bg-slate-50 dark:border-border'
+          >
+            ＋ Polymorphic (M2A) relation…
+          </button>
+        </div>
+        {quickBuilder && (
+          <QuickRelationBuilder
+            kind={quickBuilder}
+            table={tableName}
+            tables={allTables.map((t) => t.name)}
+            onClose={() => setQuickBuilder(null)}
+            onCreated={() => {
+              setQuickBuilder(null)
+              invalidate()
+            }}
+          />
         )}
 
         {/* Existing CMS relations */}
@@ -21245,5 +21276,93 @@ export function TableEditorPage() {
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+
+// ─── Quick relation builders (#242 M2A / #243 multi-user) ────────────────────
+function QuickRelationBuilder({
+  kind,
+  table,
+  tables,
+  onClose,
+  onCreated
+}: {
+  kind: 'users' | 'm2a'
+  table: string
+  tables: string[]
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [field, setField] = useState('')
+  const [allowed, setAllowed] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const submit = () => {
+    setBusy(true)
+    const req =
+      kind === 'users'
+        ? api.post(`/data-model/${table}/multi-user-field`, { field })
+        : api.post(`/data-model/${table}/m2a-field`, { field, allowed_collections: allowed })
+    void req
+      .then(() => {
+        toast.success(kind === 'users' ? 'Multi-user field created' : 'M2A relation created')
+        onCreated()
+      })
+      .catch((err) => toast.error(err?.response?.data?.error ?? 'Create failed'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className='space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/30'>
+      <p className='text-[12.5px] font-medium'>
+        {kind === 'users' ? 'New multi-user field' : 'New polymorphic (M2A) relation'}
+      </p>
+      <p className='text-[11px] text-slate-400'>
+        {kind === 'users'
+          ? `Creates ${table}_<field>_users (junction to users), the relation pair and the alias field — one click, no manual junction setup.`
+          : `Creates ${table}_<field> with a collection discriminator — one field linking to records of several collections.`}
+      </p>
+      <input
+        value={field}
+        onChange={(e) => setField(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+        placeholder='field name (e.g. reviewers)'
+        className='h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 font-mono text-[12.5px] dark:border-border'
+      />
+      {kind === 'm2a' && (
+        <div className='flex max-h-40 flex-wrap gap-1 overflow-y-auto'>
+          {tables
+            .filter((t) => !t.startsWith('nivaro_') && t !== table)
+            .map((t) => (
+              <button
+                key={t}
+                type='button'
+                onClick={() =>
+                  setAllowed((prev) =>
+                    prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+                  )
+                }
+                className={
+                  allowed.includes(t)
+                    ? 'rounded-full bg-nvr-cyan/15 px-2 py-0.5 font-mono text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'rounded-full border border-slate-200 px-2 py-0.5 font-mono text-[11px] text-slate-500 hover:border-nvr-cyan/50 dark:border-border'
+                }
+              >
+                {t}
+              </button>
+            ))}
+        </div>
+      )}
+      <div className='flex justify-end gap-2'>
+        <Button size='sm' variant='outline' onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          size='sm'
+          onClick={submit}
+          disabled={busy || !field || (kind === 'm2a' && allowed.length === 0)}
+        >
+          {busy ? 'Creating…' : 'Create'}
+        </Button>
+      </div>
+    </div>
   )
 }

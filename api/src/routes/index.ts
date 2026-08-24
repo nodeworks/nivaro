@@ -60,6 +60,7 @@ import { exportPresetRoutes } from './export-presets.js'
 import { recordMergeRoutes } from './record-merge.js'
 import { realtimeRoutes, recordViewersRoutes } from './realtime.js'
 import { chaosRoutes } from './chaos.js'
+import { geocodeRoutes } from './geocode.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customQueriesRoutes } from './custom-queries.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
@@ -249,6 +250,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
   await app.register(recordViewersRoutes, { prefix: '/presence' })
+  await app.register(geocodeRoutes)
   // Chaos drills (#333) — only when explicitly enabled; never by default.
   if (process.env.CHAOS_ENABLED === 'true') {
     await app.register(chaosRoutes, { prefix: '/chaos' })

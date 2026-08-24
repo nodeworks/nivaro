@@ -32,6 +32,7 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'tags', label: 'Tags' },
     { value: 'color', label: 'Color Picker' },
     { value: 'slug', label: 'Slug' },
+    { value: 'fiscal_period', label: 'Fiscal Period (FY/Q)' },
     { value: 'input-hash', label: 'Password / Hash' }
   ],
   text: [
@@ -39,11 +40,16 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'input-multiline', label: 'Textarea' },
     { value: 'input-rich-text-md', label: 'Markdown' },
     { value: 'input-rich-text-html', label: 'WYSIWYG' },
-    { value: 'input-code', label: 'Code Editor' }
+    { value: 'input-code', label: 'Code Editor' },
+    { value: 'checklist', label: 'Checklist (todo list)' },
+    { value: 'address', label: 'Structured Address' }
   ],
   integer: [
     { value: 'input', label: 'Number Input' },
     { value: 'slider', label: 'Slider' },
+    { value: 'rating', label: 'Rating (1-5 stars)' },
+    { value: 'duration', label: 'Duration (h:mm → minutes)' },
+    { value: 'range_slider', label: 'Range Slider (paired)' },
     { value: 'select-dropdown', label: 'Dropdown' },
     { value: 'select-radio', label: 'Radio Buttons' }
   ],
@@ -58,14 +64,19 @@ export const INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
     { value: 'checkbox', label: 'Checkbox' },
     { value: 'boolean', label: 'Boolean Select' }
   ],
-  date: [{ value: 'datetime', label: 'Date Picker' }],
+  date: [
+    { value: 'datetime', label: 'Date Picker' },
+    { value: 'date_range', label: 'Date Range (paired)' }
+  ],
   datetime: [{ value: 'datetime', label: 'Date & Time Picker' }],
   time: [{ value: 'datetime', label: 'Time Picker' }],
   timestamp: [{ value: 'datetime', label: 'Date & Time Picker' }],
   uuid: [{ value: 'input', label: 'Text Input (readonly)' }],
   json: [
     { value: 'input-code', label: 'Code Editor' },
-    { value: 'list', label: 'Repeater List' }
+    { value: 'list', label: 'Repeater List' },
+    { value: 'repeater', label: 'Repeater (schema rows)' },
+    { value: 'checklist', label: 'Checklist (todo list)' }
   ],
   csv: [{ value: 'tags', label: 'Tags' }],
   hash: [{ value: 'input-hash', label: 'Password / Hash' }],

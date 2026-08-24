@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { clearMetadataCache } from '../services/collections.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -1234,6 +1235,160 @@ export async function dataModelRoutes(app: FastifyInstance) {
   })
 
   // ─── POST /relations — create a CMS relation ─────────────────────────────
+
+  // ── Multi-user field builder (#243) ──────────────────────────────────────
+  // One call provisions the junction table (<collection>_<field>_users:
+  // parent FK + user uuid), the relation pair, and the alias field metadata.
+  app.post<{ Params: { table: string }; Body: { field?: string; label?: string } }>(
+    '/:table/multi-user-field',
+    async (req, reply) => {
+      const { table } = req.params
+      const field = String(req.body?.field ?? '').trim()
+      if (!/^[a-z][a-z0-9_]*$/i.test(field))
+        return reply.code(400).send({ error: 'field must be a plain identifier' })
+      if (!/^[a-z][a-z0-9_]*$/i.test(table) || /^nivaro_/i.test(table))
+        return reply.code(400).send({ error: 'bad table' })
+      const junction = `${table}_${field}_users`.slice(0, 120)
+      if (await db.schema.hasTable(junction))
+        return reply.code(409).send({ error: `${junction} already exists` })
+      // Parent PK type drives the FK column type.
+      const pk = (await db('information_schema.COLUMNS')
+        .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
+        .first('DATA_TYPE')) as { DATA_TYPE?: string } | undefined
+      if (!pk) return reply.code(404).send({ error: 'table has no id column' })
+      const parentIsUuid = String(pk.DATA_TYPE).toLowerCase() === 'uniqueidentifier'
+      await db.schema.createTable(junction, (t) => {
+        t.increments('id')
+        if (parentIsUuid) t.uuid(`${table}_id`).notNullable()
+        else t.integer(`${table}_id`).notNullable()
+        // nivaro_users.id is uniqueidentifier — FK columns must be uuid.
+        t.uuid('user_id').notNullable()
+        t.unique([`${table}_id`, 'user_id'], { indexName: `uq_${junction}`.slice(0, 120) })
+      })
+      const now = new Date()
+      await db('nivaro_collections')
+        .insert({
+          collection: junction,
+          hidden: true,
+          created_at: now,
+          updated_at: now
+        })
+        .catch(() => {})
+      // Relation pair: alias on the parent + mutual junction legs.
+      await db('nivaro_relations').insert([
+        {
+          many_collection: junction,
+          many_field: `${table}_id`,
+          one_collection: table,
+          one_field: field,
+          junction_field: 'user_id'
+        },
+        {
+          many_collection: junction,
+          many_field: 'user_id',
+          one_collection: 'nivaro_users',
+          one_field: null,
+          junction_field: `${table}_id`
+        }
+      ])
+      await db('nivaro_fields').insert({
+        collection: table,
+        field,
+        type: 'alias',
+        interface: 'select-multiple-m2m',
+        label: req.body?.label ?? null,
+        special: JSON.stringify(['m2m']),
+        hidden: false,
+        sort: 999
+      })
+      clearMetadataCache(table)
+      await logActivity({
+        action: 'schema-multi-user-field',
+        user: req.user?.id,
+        collection: table,
+        comment: `${field} via ${junction}`,
+        req
+      })
+      return reply.code(201).send({ data: { junction, field } })
+    }
+  )
+
+  // ── M2A builder (#242) ────────────────────────────────────────────────────
+  // Polymorphic relation: junction table with the parent FK, an `item`
+  // anything-column, and a `collection` discriminator; relations rows carry
+  // one_allowed_collections. The Data Model UI drives this.
+  app.post<{
+    Params: { table: string }
+    Body: { field?: string; label?: string; allowed_collections?: string[] }
+  }>('/:table/m2a-field', async (req, reply) => {
+    const { table } = req.params
+    const field = String(req.body?.field ?? '').trim()
+    const allowed = Array.isArray(req.body?.allowed_collections)
+      ? req.body.allowed_collections.filter((c) => /^[a-z][a-z0-9_]*$/i.test(String(c)))
+      : []
+    if (!/^[a-z][a-z0-9_]*$/i.test(field))
+      return reply.code(400).send({ error: 'field must be a plain identifier' })
+    if (allowed.length === 0)
+      return reply.code(400).send({ error: 'allowed_collections is required' })
+    if (!/^[a-z][a-z0-9_]*$/i.test(table) || /^nivaro_/i.test(table))
+      return reply.code(400).send({ error: 'bad table' })
+    const junction = `${table}_${field}`.slice(0, 120)
+    if (await db.schema.hasTable(junction))
+      return reply.code(409).send({ error: `${junction} already exists` })
+    const pk = (await db('information_schema.COLUMNS')
+      .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
+      .first('DATA_TYPE')) as { DATA_TYPE?: string } | undefined
+    if (!pk) return reply.code(404).send({ error: 'table has no id column' })
+    const parentIsUuid = String(pk.DATA_TYPE).toLowerCase() === 'uniqueidentifier'
+    await db.schema.createTable(junction, (t) => {
+      t.increments('id')
+      if (parentIsUuid) t.uuid(`${table}_id`).notNullable()
+      else t.integer(`${table}_id`).notNullable()
+      t.string('collection', 255).notNullable()
+      t.string('item', 255).notNullable()
+    })
+    const now = new Date()
+    await db('nivaro_collections')
+      .insert({ collection: junction, hidden: true, created_at: now, updated_at: now })
+      .catch(() => {})
+    await db('nivaro_relations').insert([
+      {
+        many_collection: junction,
+        many_field: `${table}_id`,
+        one_collection: table,
+        one_field: field,
+        junction_field: 'item'
+      },
+      {
+        many_collection: junction,
+        many_field: 'item',
+        one_collection: null,
+        one_field: null,
+        junction_field: `${table}_id`,
+        one_collection_field: 'collection',
+        one_allowed_collections: JSON.stringify(allowed)
+      }
+    ])
+    await db('nivaro_fields').insert({
+      collection: table,
+      field,
+      type: 'alias',
+      interface: 'list-m2a',
+      label: req.body?.label ?? null,
+      special: JSON.stringify(['m2a']),
+      hidden: false,
+      sort: 999
+    })
+    clearMetadataCache(table)
+    await logActivity({
+      action: 'schema-m2a-field',
+      user: req.user?.id,
+      collection: table,
+      comment: `${field} → [${allowed.join(', ')}]`,
+      req
+    })
+    return reply.code(201).send({ data: { junction, field, allowed } })
+  })
 
   app.post('/relations', async (req, reply) => {
     const body = req.body as {

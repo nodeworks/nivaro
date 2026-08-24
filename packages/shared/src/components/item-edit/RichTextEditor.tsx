@@ -107,12 +107,15 @@ export function RichTextEditor({
   value,
   onChange,
   placeholder,
-  disabled
+  disabled,
+  pastePlain
 }: {
   value: string
   onChange: (v: unknown) => void
   placeholder?: string
   disabled?: boolean
+  /** Paste control (#189): strip formatting from pasted content. */
+  pastePlain?: boolean
 }) {
   const [linkInputOpen, setLinkInputOpen] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
@@ -134,6 +137,17 @@ export function RichTextEditor({
     ],
     content: initialHtml,
     editable: !disabled,
+    editorProps: pastePlain
+      ? {
+          handlePaste(view, event) {
+            const text = event.clipboardData?.getData('text/plain')
+            if (text == null) return false
+            event.preventDefault()
+            view.dispatch(view.state.tr.insertText(text))
+            return true
+          }
+        }
+      : undefined,
     onUpdate({ editor }) {
       onChange(editor.getHTML())
     }

@@ -227,6 +227,57 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
 
   const iface = field?.interface ?? ''
 
+  // Per-field display formats (#350): options.display_format overrides the
+  // default rendering — 'currency', 'percent', a number precision ('0.00'),
+  // or a compact date ('date'/'datetime').
+  const df = (() => {
+    try {
+      const o = field?.options ? (JSON.parse(String(field.options)) as { display_format?: string }) : null
+      return o?.display_format ?? null
+    } catch {
+      return null
+    }
+  })()
+  if (df) {
+    const n = Number(value)
+    if (df === 'currency' && Number.isFinite(n))
+      return n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+    if (df === 'percent' && Number.isFinite(n)) return `${(n * 100).toFixed(1)}%`
+    if (/^0\.0+$/.test(df) && Number.isFinite(n)) return n.toFixed(df.length - 2)
+    if (df === 'date' && typeof value === 'string') {
+      const d = value.length === 10 ? new Date(`${value}T00:00:00`) : new Date(value)
+      if (!Number.isNaN(d.getTime())) return d.toLocaleDateString()
+    }
+    if (df === 'datetime' && typeof value === 'string') {
+      const d = new Date(value)
+      if (!Number.isNaN(d.getTime())) return d.toLocaleString()
+    }
+  }
+
+  // Structured interface displays (Field Types sprint)
+  if (iface === 'duration' && Number.isFinite(Number(value))) {
+    const mins = Number(value)
+    return `${Math.floor(mins / 60)}:${String(Math.round(mins % 60)).padStart(2, '0')}`
+  }
+  if (iface === 'rating' && Number.isFinite(Number(value))) return `${'★'.repeat(Number(value))} (${value}/5)`
+  if (iface === 'checklist' && typeof value === 'string') {
+    try {
+      const items = JSON.parse(value) as Array<{ done?: boolean }>
+      if (Array.isArray(items))
+        return `${items.filter((x) => x?.done).length}/${items.length} done`
+    } catch {
+      /* fall through */
+    }
+  }
+  if (iface === 'address' && typeof value === 'string' && value.trim().startsWith('{')) {
+    try {
+      const a = JSON.parse(value) as Record<string, string>
+      return [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') || '—'
+    } catch {
+      /* fall through */
+    }
+  }
+
   // Boolean-like interfaces
   if (iface === 'toggle' || iface === 'boolean') {
     return value ? 'Yes' : 'No'

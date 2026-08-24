@@ -968,6 +968,18 @@ export function ItemEditForm({
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
+
+  // Cross-field writes from structured interfaces (range/date-range end
+  // fields, geocoded lat/lng — PolishFields.setSiblingField). Routed through
+  // handleFieldChange so rules/visibility/dirty state apply.
+  useEffect(() => {
+    const onSet = (e: Event) => {
+      const d = (e as CustomEvent).detail as { field?: string; value?: unknown }
+      if (d?.field) handleFieldChange(d.field, d.value ?? null)
+    }
+    window.addEventListener('nvr:set-field', onSet)
+    return () => window.removeEventListener('nvr:set-field', onSet)
+  })
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
@@ -4438,6 +4450,51 @@ export function ItemEditForm({
       // read from userTouchedRef BEFORE the dirty state clears.
       setJustSaved(true)
       setTimeout(() => setJustSaved(false), 1600)
+      // Rich-text mentions (#188): "@First Last" typed into a rich-text body
+      // the user just changed notifies that person (exact directory-name
+      // match, case-insensitive; best-effort, never blocks the save).
+      void (async () => {
+        try {
+          const richFields = (fieldConfig ?? []).filter(
+            (f) =>
+              userTouchedRef.current.has(f.field) &&
+              ['wysiwyg', 'rich_text', 'input-rich-text-html', 'rich-text-html'].includes(
+                String(f.interface ?? '')
+              )
+          )
+          if (richFields.length === 0) return
+          const names = new Set<string>()
+          for (const f of richFields) {
+            const html = String(draft[f.field] ?? '')
+            const text = html.replace(/<[^>]+>/g, ' ')
+            for (const m of text.matchAll(/@([A-Z][a-z]+ [A-Z][a-zA-Z'-]+)/g)) names.add(m[1])
+          }
+          if (names.size === 0) return
+          const res = (await client.request(
+            get('/users', { limit: '500' })
+          )) as { data?: Array<{ id: string; first_name?: string; last_name?: string }> }
+          for (const name of names) {
+            const hit = (res.data ?? []).find(
+              (u) =>
+                `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim().toLowerCase() ===
+                name.toLowerCase()
+            )
+            if (hit) {
+              await client.request(
+                post('/notifications', {
+                  recipient: hit.id,
+                  subject: `You were mentioned on ${collection}/${id}`,
+                  message: `Mentioned in a note on this record.`,
+                  collection,
+                  item: String(id)
+                })
+              )
+            }
+          }
+        } catch {
+          /* mention delivery is best-effort */
+        }
+      })()
       try {
         for (const f of userTouchedRef.current) {
           const el = document.querySelector(`[data-field="${CSS.escape(f)}"]`)
