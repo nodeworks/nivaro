@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T14:43:52.936Z",
+  "generated_at": "2026-08-24T14:54:27.714Z",
   "releases": [
+    {
+      "version": "0.1.106",
+      "tag": "v0.1.106",
+      "date": "2026-08-24T10:54:24-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "stats/now-editing serialize users as display strings",
+              "hash": "68c00f40"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.105",
       "tag": "v0.1.105",
-      "date": "2026-08-24T10:43:49-04:00",
+      "date": "2026-08-24T10:43:52-04:00",
       "sections": [
         {
           "label": "Added",
