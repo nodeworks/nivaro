@@ -55,6 +55,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
         await db('nivaro_api_logs').where('created_at', '<', cutoff).delete()
         await db('nivaro_rum_events').where('created_at', '<', cutoff).delete().catch(() => {})
+        await db('nivaro_outbound_log').where('created_at', '<', cutoff).delete().catch(() => {})
         // Mail log rides the same pass — 30 days answers "did it send".
         await db('nivaro_mail_log')
           .where('created_at', '<', new Date(Date.now() - 30 * 86_400_000))

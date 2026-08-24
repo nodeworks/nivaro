@@ -172,10 +172,48 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
         .then((r) => r.data),
     staleTime: 30_000
   })
+  // External ID registry (#351): the record's stored external-system
+  // identifiers — heuristic column-name scan, labeled as such.
+  const { data: extIds = [] } = useQuery<Array<{ field: string; value: string }>>({
+    queryKey: ['record-external-ids', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
+        .then((r) => {
+          const row = r.data ?? {}
+          const PATTERN = /(external|nuvolo|mwf|oracle|sap|erp|legacy|fusion|mdsi).*(id|number|ref)|^(order_number|requisition_id|sales_order_id)$/i
+          return Object.entries(row)
+            .filter(([k, v]) => k !== 'id' && v != null && v !== '' && PATTERN.test(k))
+            .map(([field, v]) => ({ field, value: String(v).slice(0, 60) }))
+            .slice(0, 12)
+        })
+        .catch(() => []),
+    staleTime: 60_000
+  })
   if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
   if ((data?.erp.length ?? 0) + (data?.webhooks.length ?? 0) === 0)
     return <p className='text-[12px] text-slate-400'>No integration activity for this record.</p>
   return (
+    <>
+      {extIds.length > 0 && (
+        <div className='border-b border-slate-100 px-3 py-2 dark:border-border/50'>
+          <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            External identifiers
+          </p>
+          <div className='mt-1 flex flex-wrap gap-1.5'>
+            {extIds.map((e) => (
+              <span
+                key={e.field}
+                className='inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-muted/40'
+              >
+                <span className='text-slate-400'>{e.field}:</span>
+                <span className='font-mono text-slate-700 dark:text-slate-200'>{e.value}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {(() => { return (
     <div className='max-h-72 space-y-1 overflow-y-auto text-[12px]'>
       {data?.erp.map((e) => (
         <p key={`e${e.id}`} className='flex items-baseline justify-between gap-2'>
@@ -206,6 +244,8 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
         </p>
       ))}
     </div>
+  ) })()}
+    </>
   )
 }
 

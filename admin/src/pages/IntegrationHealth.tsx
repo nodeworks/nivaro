@@ -31,6 +31,16 @@ interface Health {
   crons: CronEntry[]
   dead_letters_24h: number
   flow_runs_24h: Record<string, number>
+  outbound_24h?: Array<{
+    api_name: string
+    method: string
+    path: string
+    calls: number
+    ok_calls: number
+    avg_ms: number
+    max_ms: number
+  }>
+  oauth_health?: Array<{ api: string; ok: boolean; expires_in_s: number | null; error: string | null }>
 }
 
 /**
@@ -203,6 +213,85 @@ export function IntegrationHealthPage() {
                 </span>
               </Link>
             </div>
+
+            {(data.oauth_health ?? []).length > 0 && (
+              <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+                <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>OAuth token health</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Live token mint per oauth2 API — a failing credential surfaces here before a
+                    push fails at 2am.
+                  </p>
+                </div>
+                <div className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {(data.oauth_health ?? []).map((o) => (
+                    <div key={o.api} className='flex items-center gap-2 px-4 py-2 text-[12.5px]'>
+                      <span
+                        className={cn('h-2 w-2 rounded-full', o.ok ? 'bg-emerald-500' : 'bg-red-500')}
+                      />
+                      <span className='font-medium text-slate-700 dark:text-slate-200'>{o.api}</span>
+                      <span className='ml-auto text-[11.5px] text-slate-400'>
+                        {o.ok
+                          ? o.expires_in_s != null
+                            ? `token OK · expires in ${Math.round(o.expires_in_s / 60)} min`
+                            : 'token OK'
+                          : (o.error ?? 'failing')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(data.outbound_24h ?? []).length > 0 && (
+              <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+                <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>Outbound calls (24h)</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Every callExternalApi, per endpoint — success rate and latency (#124/#422).
+                  </p>
+                </div>
+                <table className='w-full text-[12px]'>
+                  <thead>
+                    <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+                      <th className='px-4 py-1.5'>API</th>
+                      <th className='px-2 py-1.5'>Endpoint</th>
+                      <th className='px-2 py-1.5 text-right'>Calls</th>
+                      <th className='px-2 py-1.5 text-right'>OK</th>
+                      <th className='px-2 py-1.5 text-right'>Avg</th>
+                      <th className='px-4 py-1.5 text-right'>Max</th>
+                    </tr>
+                  </thead>
+                  <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
+                    {(data.outbound_24h ?? []).map((o) => {
+                      const okPct = o.calls > 0 ? Math.round((Number(o.ok_calls) / o.calls) * 100) : 0
+                      return (
+                        <tr key={`${o.api_name}-${o.method}-${o.path}`}>
+                          <td className='px-4 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
+                            {o.api_name}
+                          </td>
+                          <td className='max-w-[260px] truncate px-2 py-1.5 font-mono text-[11px] text-slate-500'>
+                            {o.method} {o.path}
+                          </td>
+                          <td className='px-2 py-1.5 text-right tabular-nums'>{o.calls}</td>
+                          <td
+                            className={cn(
+                              'px-2 py-1.5 text-right tabular-nums',
+                              okPct < 100 && 'font-medium text-amber-600',
+                              okPct < 50 && 'text-red-600'
+                            )}
+                          >
+                            {okPct}%
+                          </td>
+                          <td className='px-2 py-1.5 text-right tabular-nums'>{Math.round(Number(o.avg_ms))}ms</td>
+                          <td className='px-4 py-1.5 text-right tabular-nums'>{Number(o.max_ms)}ms</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>

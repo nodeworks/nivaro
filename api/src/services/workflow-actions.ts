@@ -622,6 +622,44 @@ export async function runTransitionActions(opts: {
       }
     }
 
+    // Outbound contracts (#352): assert the shape WE send. Missing required
+    // paths raise a deduped issue naming them — drift surfaces first — but
+    // the push still goes (warn, never block; the receiving system is the
+    // authority on what it actually rejects).
+    try {
+      const apiRow = (await db('nivaro_external_apis')
+        .where({ id: Number(apiId) })
+        .first('name', 'outbound_contract')) as
+        | { name: string; outbound_contract: string | null }
+        | undefined
+      const contract = apiRow?.outbound_contract
+        ? (JSON.parse(apiRow.outbound_contract) as { required?: string[] })
+        : null
+      if (contract?.required?.length && body && typeof body === 'object') {
+        const missing = contract.required.filter((path) => {
+          const v = String(path)
+            .split('.')
+            .reduce<unknown>(
+              (cur, seg) =>
+                cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined,
+              body
+            )
+          return v === undefined || v === null || v === ''
+        })
+        if (missing.length > 0) {
+          const { trackError } = await import('./error-tracking.js')
+          void trackError({
+            source: 'server',
+            route: `outbound-contract:${apiRow?.name ?? apiId}`,
+            message: `Outbound payload to ${apiRow?.name ?? apiId} is missing required path(s): ${missing.join(', ')} (${opts.instance.collection}/${opts.instance.item})`,
+            severity: 'medium'
+          }).catch(() => {})
+        }
+      }
+    } catch {
+      /* contract check is advisory */
+    }
+
     let status: 'pending' | 'accepted' | 'failed' = 'failed'
     let responseBody: unknown = null
     let error: string | null = null

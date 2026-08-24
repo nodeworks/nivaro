@@ -350,6 +350,33 @@ interface EndpointDefRow {
  * Handles all auth types automatically (bearer, api_key, basic, oauth2_cc).
  * Pass `_log: { triggeredBy }` in options to write a call log to nivaro_external_api_logs.
  */
+/** Outbound HTTP log (#124): one light row per call, ALWAYS — fire-and-forget
+ *  so logging can never fail a call; powers the /integration-health outbound
+ *  section and per-endpoint latency trends (#422). Pruned at 14 days. */
+function logOutbound(entry: {
+  api_id: number
+  api_name: string
+  method: string
+  path: string
+  status: number | null
+  duration_ms: number
+  error?: string | null
+}): void {
+  void db('nivaro_outbound_log')
+    .insert({
+      api_id: entry.api_id,
+      api_name: entry.api_name.slice(0, 255),
+      method: entry.method.slice(0, 12),
+      path: entry.path.slice(0, 500),
+      status: entry.status,
+      ok: entry.status != null && entry.status >= 200 && entry.status < 300,
+      duration_ms: entry.duration_ms,
+      error: entry.error ? String(entry.error).slice(0, 500) : null,
+      created_at: new Date()
+    })
+    .catch(() => {})
+}
+
 export async function callExternalApi(
   nameOrId: string | number,
   options: CallOptions = {}
@@ -449,6 +476,15 @@ export async function callExternalApi(
   const durationMs = Date.now() - startMs
 
   if (fetchError || !res) {
+    logOutbound({
+      api_id: row.id,
+      api_name: row.name,
+      method,
+      path: suffix || '/',
+      status: null,
+      duration_ms: durationMs,
+      error: fetchError
+    })
     if (options._log) {
       await writeApiCallLog({
         api_id: row.id,
@@ -481,6 +517,14 @@ export async function callExternalApi(
     }
   }
 
+  logOutbound({
+    api_id: row.id,
+    api_name: row.name,
+    method,
+    path: suffix || '/',
+    status: res.status,
+    duration_ms: durationMs
+  })
   if (options._log) {
     await writeApiCallLog({
       api_id: row.id,

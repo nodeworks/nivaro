@@ -140,12 +140,91 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
     const flowsByStatus: Record<string, number> = {}
     for (const r of flowRuns) flowsByStatus[r.status] = Number(r.c)
 
+    // Outbound HTTP log rollup (#124) + per-endpoint latency trends (#422):
+    // 24h aggregates per (api, method, path) from the always-on light log.
+    let outbound: Array<Record<string, unknown>> = []
+    try {
+      outbound = (await db('nivaro_outbound_log')
+        .where('created_at', '>=', db.raw('DATEADD(hour, -24, GETUTCDATE())'))
+        .select('api_name', 'method', 'path')
+        .count({ calls: '*' })
+        .sum({ ok_calls: db.raw('CASE WHEN ok = 1 THEN 1 ELSE 0 END') as never })
+        .avg({ avg_ms: 'duration_ms' })
+        .max({ max_ms: 'duration_ms' })
+        .groupBy('api_name', 'method', 'path')
+        .orderBy('calls', 'desc')
+        .limit(50)) as Array<Record<string, unknown>>
+    } catch {
+      /* table mid-migration */
+    }
+
+    // OAuth token health (#421): for oauth2_cc APIs, whether a token can be
+    // minted RIGHT NOW and when it expires — checked live, secrets never leave.
+    const oauthHealth: Array<{ api: string; ok: boolean; expires_in_s: number | null; error: string | null }> = []
+    try {
+      const oauthApis = (await db('nivaro_external_apis')
+        .where({ auth_type: 'oauth2_cc', enabled: true })
+        .select('id', 'name', 'auth_config')) as Array<{ id: number; name: string; auth_config: string | null }>
+      for (const a of oauthApis.slice(0, 10)) {
+        try {
+          const cfg = JSON.parse(a.auth_config ?? '{}') as {
+            token_url?: string
+            client_id?: string
+            client_secret?: string
+            audience?: string
+            token_headers?: Record<string, string>
+          }
+          if (!cfg.token_url) {
+            oauthHealth.push({ api: a.name, ok: false, expires_in_s: null, error: 'No token_url' })
+            continue
+          }
+          const bodyParams: Record<string, string> = { grant_type: 'client_credentials' }
+          if (cfg.client_id) bodyParams.client_id = cfg.client_id
+          if (cfg.client_secret) bodyParams.client_secret = cfg.client_secret
+          if (cfg.audience) bodyParams.audience = cfg.audience
+          const ctrl = new AbortController()
+          const t = setTimeout(() => ctrl.abort(), 6000)
+          const resp = await fetch(cfg.token_url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              ...(cfg.token_headers ?? {})
+            },
+            body: new URLSearchParams(bodyParams).toString(),
+            signal: ctrl.signal
+          }).finally(() => clearTimeout(t))
+          if (!resp.ok) {
+            oauthHealth.push({ api: a.name, ok: false, expires_in_s: null, error: `HTTP ${resp.status}` })
+            continue
+          }
+          const tok = (await resp.json().catch(() => ({}))) as { expires_in?: number }
+          oauthHealth.push({
+            api: a.name,
+            ok: true,
+            expires_in_s: Number.isFinite(tok.expires_in) ? Number(tok.expires_in) : null,
+            error: null
+          })
+        } catch (err) {
+          oauthHealth.push({
+            api: a.name,
+            ok: false,
+            expires_in_s: null,
+            error: err instanceof Error ? err.message.slice(0, 120) : 'failed'
+          })
+        }
+      }
+    } catch {
+      /* oauth health is additive */
+    }
+
     return reply.send({
       data: {
         apis: [...byApi.values()],
         crons: app.cron.list(),
         dead_letters_24h: Number(flowsByStatus.error ?? 0),
-        flow_runs_24h: flowsByStatus
+        flow_runs_24h: flowsByStatus,
+        outbound_24h: outbound,
+        oauth_health: oauthHealth
       }
     })
   })
