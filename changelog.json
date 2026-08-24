@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T18:11:06.137Z",
+  "generated_at": "2026-08-24T18:37:47.579Z",
   "releases": [
+    {
+      "version": "0.1.112",
+      "tag": "v0.1.112",
+      "date": "2026-08-24T14:37:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "Record & Form UX sprint — 19 features (backlog 123-399, migration 257)",
+              "hash": "f4b0de1b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.111",
       "tag": "v0.1.111",
-      "date": "2026-08-24T14:11:02-04:00",
+      "date": "2026-08-24T14:11:06-04:00",
       "sections": [
         {
           "label": "Added",
