@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T14:54:27.714Z",
+  "generated_at": "2026-08-24T15:28:08.307Z",
   "releases": [
+    {
+      "version": "0.1.107",
+      "tag": "v0.1.107",
+      "date": "2026-08-24T11:28:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ui",
+              "text": "UI, Motion & Polish sprint — 16 features (backlog 127, 316-325, 347-348, 369-370, 386)",
+              "hash": "f5dce6d9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.106",
       "tag": "v0.1.106",
-      "date": "2026-08-24T10:54:24-04:00",
+      "date": "2026-08-24T10:54:27-04:00",
       "sections": [
         {
           "label": "Fixed",
