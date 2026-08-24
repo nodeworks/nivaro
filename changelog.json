@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-22T22:47:00.190Z",
+  "generated_at": "2026-08-24T14:43:52.936Z",
   "releases": [
+    {
+      "version": "0.1.105",
+      "tag": "v0.1.105",
+      "date": "2026-08-24T10:43:49-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "realtime & live surfaces sprint — 18 features (backlog 264-286)",
+              "hash": "d6a17fb6"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.104",
       "tag": "v0.1.104",
-      "date": "2026-08-22T18:46:56-04:00",
+      "date": "2026-08-22T18:47:00-04:00",
       "sections": [
         {
           "label": "Added",
