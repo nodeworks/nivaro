@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-08-24T17:18:01.130Z",
+  "generated_at": "2026-08-24T18:11:06.137Z",
   "releases": [
+    {
+      "version": "0.1.111",
+      "tag": "v0.1.111",
+      "date": "2026-08-24T14:11:02-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "automation",
+              "text": "Automation, Flows & Rules sprint — 7 features (backlog 283-417, migration 256)",
+              "hash": "e63daf9b"
+            },
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "Workflow, Approvals & Owner Matrix sprint — 10 features (backlog 99-415)",
+              "hash": "1165b4a9"
+            },
+            {
+              "section": "Added",
+              "scope": "fields",
+              "text": "Field Types & Interfaces sprint — 19 features (backlog 137-416)",
+              "hash": "91676edd"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.110",
       "tag": "v0.1.110",
-      "date": "2026-08-24T13:17:57-04:00",
+      "date": "2026-08-24T13:18:01-04:00",
       "sections": [
         {
           "label": "Added",
