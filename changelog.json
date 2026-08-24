@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T20:57:54.726Z",
+  "generated_at": "2026-08-24T21:11:47.146Z",
   "releases": [
+    {
+      "version": "0.1.117",
+      "tag": "v0.1.117",
+      "date": "2026-08-24T17:11:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Chat & Bot sprint (#132 #146 #147 #148 #223 #224 #247 #263 #280 #346 #375)",
+              "hash": "e6398bec"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.116",
       "tag": "v0.1.116",
-      "date": "2026-08-24T16:57:51-04:00",
+      "date": "2026-08-24T16:57:54-04:00",
       "sections": [
         {
           "label": "Added",
