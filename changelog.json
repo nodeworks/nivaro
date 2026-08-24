@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-24T20:50:00.510Z",
+  "generated_at": "2026-08-24T20:57:54.726Z",
   "releases": [
+    {
+      "version": "0.1.116",
+      "tag": "v0.1.116",
+      "date": "2026-08-24T16:57:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Broadcasts sprint (#104 #222 #245 #246 #265 #385 #389 #429)",
+              "hash": "15d39ec3"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.115",
       "tag": "v0.1.115",
-      "date": "2026-08-24T16:49:57-04:00",
+      "date": "2026-08-24T16:50:00-04:00",
       "sections": [
         {
           "label": "Added",
