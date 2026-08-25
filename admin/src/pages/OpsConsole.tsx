@@ -3,6 +3,16 @@ import { RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Check, ChevronsUpDown } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 
@@ -148,6 +158,17 @@ export function OpsConsolePage() {
       )
   })
   const [followId, setFollowId] = useState('')
+  const [followOpen, setFollowOpen] = useState(false)
+  // /users already excludes suspended + redacted accounts by default.
+  const { data: followUsers = [] } = useQuery({
+    queryKey: ['ops-follow-users'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string }> }>('/users?limit=500')
+        .then((r) => r.data.data),
+    enabled: followOpen,
+    staleTime: 5 * 60_000
+  })
   const follow = useMutation({
     mutationFn: () => api.post('/ops-runtime/trace-user', { user_id: followId }),
     onSuccess: () => toast.success('Following — their next 50 requests trace fully'),
@@ -407,18 +428,55 @@ export function OpsConsolePage() {
           </Card>
 
           <Card title='Follow a user' sub="Flag someone; their next 50 requests trace fully regardless of speed — for a 'slow for Beth' report (#309). Traces land on /api-analytics.">
-            <form
-              className='flex items-center gap-2'
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (followId.trim()) follow.mutate()
-              }}
-            >
-              <Input value={followId} onChange={(e) => setFollowId(e.target.value)} placeholder='User id (uuid)' className='h-7 w-96 font-mono text-[12px]' />
-              <Button type='submit' size='sm' className='h-7 text-[11.5px]' disabled={follow.isPending}>
+            <div className='flex items-center gap-2'>
+              <Popover open={followOpen} onOpenChange={setFollowOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant='outline' role='combobox' aria-expanded={followOpen} className='h-8 w-96 justify-between px-2.5 text-[12.5px] font-normal'>
+                    <span className={followId ? '' : 'text-muted-foreground'}>
+                      {followId
+                        ? (() => {
+                            const u = followUsers.find((x) => x.id === followId)
+                            return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email : followId
+                          })()
+                        : 'Pick a user to follow…'}
+                    </span>
+                    <ChevronsUpDown className='ml-1 h-3.5 w-3.5 shrink-0 opacity-50' />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className='w-96 p-0' align='start'>
+                  <Command>
+                    <CommandInput placeholder='Search users…' className='h-8 text-[12px]' />
+                    <CommandList>
+                      <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+                        No users found
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {followUsers.map((u) => (
+                          <CommandItem
+                            key={u.id}
+                            value={`${u.first_name ?? ''} ${u.last_name ?? ''} ${u.email}`}
+                            onSelect={() => {
+                              setFollowId(u.id === followId ? '' : u.id)
+                              setFollowOpen(false)
+                            }}
+                            className='text-[12px]'
+                          >
+                            <Check className={`mr-2 h-3.5 w-3.5 ${followId === u.id ? 'opacity-100' : 'opacity-0'}`} />
+                            <span className='min-w-0 flex-1 truncate'>
+                              {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                            </span>
+                            <span className='ml-2 shrink-0 text-[11px] text-muted-foreground'>{u.email}</span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              <Button size='sm' className='h-8 text-[11.5px]' disabled={!followId || follow.isPending} onClick={() => follow.mutate()}>
                 Follow
               </Button>
-            </form>
+            </div>
           </Card>
 
           <Card

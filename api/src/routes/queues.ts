@@ -100,7 +100,7 @@ export async function queuesRoutes(app: FastifyInstance) {
     const readable = queues.filter((q) => canReadQueue(q, req))
     const out: Record<
       string,
-      { total: number; sla_breached: number; source: 'cache' | 'snapshot'; as_of: string | null }
+      { total: number; sla_breached: number; unowned: number; source: 'cache' | 'snapshot'; as_of: string | null }
     > = {}
     const matIds = readable.filter((q) => q.materialized).map((q) => q.id)
     if (matIds.length > 0) {
@@ -109,18 +109,22 @@ export async function queuesRoutes(app: FastifyInstance) {
         .groupBy('queue_id')
         .select('queue_id')
         .count('* as total')) as Array<{ queue_id: string; total: number | string }>
-      const breached = (await db('nivaro_queue_items')
-        .whereIn('queue_id', matIds)
-        .whereNotNull('sla_duration_hours')
-        .groupBy('queue_id')
-        .select('queue_id')
-        .count('* as c')) as Array<{ queue_id: string; c: number | string }>
-      void breached
+      // Unowned straight off the owner-mirror table — one LEFT JOIN count.
+      const unownedRows = (await db('nivaro_queue_items as qi')
+        .leftJoin('nivaro_queue_item_owners as o', 'o.queue_item_id', 'qi.id')
+        .whereIn('qi.queue_id', matIds)
+        .whereNull('o.id')
+        .whereNull('qi.claimed_by')
+        .groupBy('qi.queue_id')
+        .select('qi.queue_id')
+        .count('* as c')
+        .catch(() => [])) as Array<{ queue_id: string; c: number | string }>
       for (const q of readable.filter((x) => x.materialized)) {
         const row = counts.find((c) => c.queue_id === q.id)
         out[q.id] = {
           total: Number(row?.total ?? 0),
           sla_breached: 0,
+          unowned: Number(unownedRows.find((u) => u.queue_id === q.id)?.c ?? 0),
           source: 'cache',
           as_of: null
         }
@@ -136,6 +140,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         snapshot_date: string | Date
         total: number
         sla_breached: number
+        unowned: number
       }>
       for (const qid of liveIds) {
         const snap = snaps.find((sn) => sn.queue_id === qid)
@@ -143,10 +148,11 @@ export async function queuesRoutes(app: FastifyInstance) {
           ? {
               total: Number(snap.total ?? 0),
               sla_breached: Number(snap.sla_breached ?? 0),
+              unowned: Number(snap.unowned ?? 0),
               source: 'snapshot',
               as_of: String(snap.snapshot_date)
             }
-          : { total: 0, sla_breached: 0, source: 'snapshot', as_of: null }
+          : { total: 0, sla_breached: 0, unowned: 0, source: 'snapshot', as_of: null }
       }
     }
     return reply.send({ data: out })

@@ -66,6 +66,77 @@ export async function captureErrorClip(): Promise<ErrorReplayLink | null> {
   }
 }
 
+
+// ── Replay context instrumentation ───────────────────────────────────────────
+// Console lines + route changes ride the recording as rrweb CUSTOM events
+// (type 5), so the player can mark them on the scrubber and show the user's
+// console next to the replay. Capped so a render-loop error flood can't bloat
+// the recording; console.log deliberately excluded (noise) — info/warn/error
+// only. Returns an undo function that restores the patched globals.
+function instrumentReplayContext(
+  addCustomEvent: (tag: string, payload: unknown) => void
+): () => void {
+  let captured = 0
+  const MAX_EVENTS = 500
+  const originals: Partial<Record<'info' | 'warn' | 'error', (...a: unknown[]) => void>> = {}
+  let inHook = false
+  for (const level of ['info', 'warn', 'error'] as const) {
+    originals[level] = console[level].bind(console)
+    console[level] = (...args: unknown[]) => {
+      originals[level]?.(...args)
+      if (inHook || captured >= MAX_EVENTS) return
+      inHook = true
+      try {
+        captured++
+        const msg = args
+          .map((a) => {
+            if (typeof a === 'string') return a
+            if (a instanceof Error) return `${a.name}: ${a.message}`
+            try {
+              return JSON.stringify(a)
+            } catch {
+              return String(a)
+            }
+          })
+          .join(' ')
+          .slice(0, 500)
+        addCustomEvent('console', { level, msg })
+      } catch {
+        /* never break the console */
+      } finally {
+        inHook = false
+      }
+    }
+  }
+  const routeEvent = () => {
+    try {
+      addCustomEvent('route', { path: window.location.pathname + window.location.search })
+    } catch {
+      /* best-effort */
+    }
+  }
+  const origPush = history.pushState.bind(history)
+  const origReplace = history.replaceState.bind(history)
+  history.pushState = (...a: Parameters<History['pushState']>) => {
+    origPush(...a)
+    routeEvent()
+  }
+  history.replaceState = (...a: Parameters<History['replaceState']>) => {
+    origReplace(...a)
+    routeEvent()
+  }
+  window.addEventListener('popstate', routeEvent)
+  routeEvent() // the starting page is a marker too
+  return () => {
+    for (const level of ['info', 'warn', 'error'] as const) {
+      if (originals[level]) console[level] = originals[level] as never
+    }
+    history.pushState = origPush
+    history.replaceState = origReplace
+    window.removeEventListener('popstate', routeEvent)
+  }
+}
+
 export function useSessionRecorder() {
   const { user } = useAuth()
 
@@ -85,6 +156,7 @@ export function useSessionRecorder() {
     buffer: unknown[]
     seq: number
     stop: (() => void) | null
+    uninstrument: (() => void) | null
     dead: boolean
     startedAt: number
     // Buffer mode: previous + current checkout windows.
@@ -93,6 +165,7 @@ export function useSessionRecorder() {
   }>({
     recordingId: null,
     buffer: [],
+    uninstrument: null,
     seq: 0,
     stop: null,
     dead: false,
@@ -147,6 +220,12 @@ export function useSessionRecorder() {
             blockClass: 'nvr-no-record',
             checkoutEveryNms: 60_000
           }) ?? null
+        {
+          const { record: rec } = await import('rrweb')
+          state.uninstrument = instrumentReplayContext((tag, payload) =>
+            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(tag, payload)
+          )
+        }
 
         // A live full recording answers an error capture with itself + the
         // error's offset, after pushing whatever is still buffered.
@@ -174,6 +253,8 @@ export function useSessionRecorder() {
       captureFn = null
       document.removeEventListener('visibilitychange', onHide)
       clearInterval(timer)
+      state.uninstrument?.()
+      state.uninstrument = null
       state.stop?.()
       state.stop = null
       void flush().then(() => {
@@ -213,6 +294,12 @@ export function useSessionRecorder() {
             blockClass: 'nvr-no-record',
             checkoutEveryNms: CLIP_WINDOW_MS
           }) ?? null
+        {
+          const { record: rec } = await import('rrweb')
+          state.uninstrument = instrumentReplayContext((tag, payload) =>
+            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(tag, payload)
+          )
+        }
 
         captureFn = async () => {
           // One clip per burst — a render-loop error must not mint dozens.
@@ -242,6 +329,8 @@ export function useSessionRecorder() {
     return () => {
       cancelled = true
       captureFn = null
+      state.uninstrument?.()
+      state.uninstrument = null
       state.stop?.()
       state.stop = null
       state.buffer = []

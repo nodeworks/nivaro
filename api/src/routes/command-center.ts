@@ -132,7 +132,7 @@ export async function commandCenterRoutes(app: FastifyInstance) {
       // resolves centroids; the pane also lists names).
       safe(async () => {
         const cutoff = new Date(Date.now() - 70_000)
-        const online = (await db('user_presence')
+        let online = (await db('user_presence')
           .where('last_seen', '>', cutoff)
           .whereNot('is_online', false)
           .select('user_id', 'display_name', 'is_idle')) as Array<{
@@ -140,6 +140,60 @@ export async function commandCenterRoutes(app: FastifyInstance) {
           display_name: string | null
           is_idle: boolean | null
         }>
+        // Presence visibility boundary (same rule as /presence/online): a
+        // viewer with restrict scopes only sees people whose restrict scopes
+        // OVERLAP on EVERY dimension the viewer restricts (self always
+        // visible). Without this the board leaked the full online roster to
+        // scoped users — security-review finding.
+        if (!req.isAdmin) {
+          const myRows = (await db('nivaro_user_scopes')
+            .where({ user: req.user!.id, mode: 'restrict' })
+            .select('dimension', 'values')) as Array<{ dimension: string; values: string | null }>
+          const myDims = new Map<string, Set<string>>()
+          for (const r of myRows) {
+            try {
+              const v = JSON.parse(r.values ?? '[]')
+              if (Array.isArray(v) && v.length) myDims.set(r.dimension, new Set(v.map(String)))
+            } catch {
+              /* corrupt row */
+            }
+          }
+          if (myDims.size > 0) {
+            const allIds = online.map((o) => String(o.user_id).toUpperCase())
+            const theirRows = allIds.length
+              ? ((await db('nivaro_user_scopes')
+                  .whereIn('dimension', [...myDims.keys()])
+                  .where('mode', 'restrict')
+                  .whereIn('user', allIds)
+                  .select('user', 'dimension', 'values')) as Array<{ user: string; dimension: string; values: string | null }>)
+              : []
+            const theirs = new Map<string, Map<string, Set<string>>>()
+            for (const r of theirRows) {
+              const uid = String(r.user).toUpperCase()
+              const m = theirs.get(uid) ?? new Map<string, Set<string>>()
+              try {
+                const v = JSON.parse(r.values ?? '[]')
+                if (Array.isArray(v)) m.set(r.dimension, new Set(v.map(String)))
+              } catch {
+                /* corrupt row */
+              }
+              theirs.set(uid, m)
+            }
+            const me = String(req.user!.id).toUpperCase()
+            online = online.filter((o) => {
+              const uid = String(o.user_id).toUpperCase()
+              if (uid === me) return true
+              const m = theirs.get(uid)
+              if (!m) return false
+              return [...myDims.entries()].every(([dim, mine]) => {
+                const t = m.get(dim)
+                if (!t) return false
+                return [...t].some((v) => mine.has(v))
+              })
+            })
+          }
+        }
+
         const ids = online.map((o) => String(o.user_id).toUpperCase())
         const scopeRows = ids.length
           ? ((await db('nivaro_user_scopes')

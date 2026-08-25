@@ -155,6 +155,13 @@ function ReplayPlayer({
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
   const [following, setFollowing] = useState(!!live)
+  // Replay context (#Rob 2026-08-24): route changes + the user's console
+  // lines ride the recording as rrweb custom events (type 5) — markers on
+  // the scrubber, console panel underneath, both seekable.
+  const [markers, setMarkers] = useState<
+    Array<{ offset: number; tag: 'route' | 'console'; level?: string; text: string }>
+  >([])
+  const [consoleFilter, setConsoleFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all')
 
   useEffect(() => {
     let cancelled = false
@@ -186,6 +193,25 @@ function ReplayPlayer({
         if (cancelled || !frameRef.current) return
         const events = r.data.data.events
         lastSeqRef.current = r.data.data.last_seq ?? -1
+        {
+          const evs = events as Array<{ type?: number; timestamp?: number; data?: { tag?: string; payload?: Record<string, unknown> } }>
+          const first = evs.find((e) => typeof e.timestamp === 'number')?.timestamp ?? 0
+          const found: Array<{ offset: number; tag: 'route' | 'console'; level?: string; text: string }> = []
+          for (const e of evs) {
+            if (e.type !== 5 || !e.data?.tag || typeof e.timestamp !== 'number') continue
+            if (e.data.tag === 'route') {
+              found.push({ offset: e.timestamp - first, tag: 'route', text: String(e.data.payload?.path ?? '') })
+            } else if (e.data.tag === 'console') {
+              found.push({
+                offset: e.timestamp - first,
+                tag: 'console',
+                level: String(e.data.payload?.level ?? 'info'),
+                text: String(e.data.payload?.msg ?? '')
+              })
+            }
+          }
+          setMarkers(found)
+        }
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
           return
@@ -360,15 +386,38 @@ function ReplayPlayer({
           <span className='w-10 text-right font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(time)}
           </span>
-          <input
-            type='range'
-            min={0}
-            max={Math.max(1, total)}
-            value={Math.min(time, total)}
-            onChange={(e) => seek(Number(e.target.value))}
-            className='flex-1 accent-[#00ceff]'
-            aria-label='Replay position'
-          />
+          <div className='relative flex-1'>
+            {/* Event ticks: routes sky, console warn amber, error red —
+                clickable, positioned by offset. */}
+            <div className='pointer-events-none absolute inset-x-0 -top-1.5 h-1.5'>
+              {total > 0 &&
+                markers.map((m, i) => {
+                  if (m.tag === 'console' && m.level === 'info') return null
+                  const left = `${Math.min(100, Math.max(0, (m.offset / total) * 100))}%`
+                  const color =
+                    m.tag === 'route' ? '#38bdf8' : m.level === 'error' ? '#ef4444' : '#f59e0b'
+                  return (
+                    <button
+                      key={i}
+                      type='button'
+                      onClick={() => seek(Math.max(0, m.offset - 500))}
+                      className='pointer-events-auto absolute h-1.5 w-[3px] -translate-x-1/2 rounded-sm'
+                      style={{ left, background: color }}
+                      data-tip={`${fmtClock(m.offset)} · ${m.tag === 'route' ? m.text : `${m.level}: ${m.text.slice(0, 120)}`}`}
+                    />
+                  )
+                })}
+            </div>
+            <input
+              type='range'
+              min={0}
+              max={Math.max(1, total)}
+              value={Math.min(time, total)}
+              onChange={(e) => seek(Number(e.target.value))}
+              className='w-full accent-[#00ceff]'
+              aria-label='Replay position'
+            />
+          </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
           </span>
@@ -388,6 +437,52 @@ function ReplayPlayer({
               </button>
             ))}
           </span>
+        </div>
+      )}
+      {ready && !following && markers.some((m) => m.tag === 'console') && (
+        <div className='mt-3 rounded-lg border border-slate-200 dark:border-border'>
+          <div className='flex items-center gap-2 border-b border-slate-100 px-3 py-1.5 dark:border-border/60'>
+            <span className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+              Console
+            </span>
+            {(['all', 'info', 'warn', 'error'] as const).map((f) => {
+              const n =
+                f === 'all'
+                  ? markers.filter((m) => m.tag === 'console').length
+                  : markers.filter((m) => m.tag === 'console' && m.level === f).length
+              return (
+                <button
+                  key={f}
+                  type='button'
+                  onClick={() => setConsoleFilter(f)}
+                  className={`rounded px-1.5 py-0.5 text-[11px] ${consoleFilter === f ? 'bg-accent font-medium text-accent-foreground' : 'text-slate-400 hover:bg-muted'}`}
+                >
+                  {f} {n > 0 && <span className='tabular-nums'>({n})</span>}
+                </button>
+              )
+            })}
+            <span className='ml-auto text-[10.5px] text-slate-400'>click a line to seek</span>
+          </div>
+          <div className='max-h-56 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed'>
+            {markers
+              .filter((m) => m.tag === 'console' && (consoleFilter === 'all' || m.level === consoleFilter))
+              .map((m, i) => (
+                <button
+                  key={i}
+                  type='button'
+                  onClick={() => seek(Math.max(0, m.offset - 500))}
+                  className='flex w-full items-start gap-2 rounded px-1.5 py-0.5 text-left hover:bg-muted'
+                >
+                  <span className='shrink-0 tabular-nums text-slate-400'>{fmtClock(m.offset)}</span>
+                  <span
+                    className={`shrink-0 ${m.level === 'error' ? 'text-red-500' : m.level === 'warn' ? 'text-amber-500' : 'text-sky-500'}`}
+                  >
+                    {m.level}
+                  </span>
+                  <span className='min-w-0 break-all text-slate-600 dark:text-slate-300'>{m.text}</span>
+                </button>
+              ))}
+          </div>
         </div>
       )}
     </div>
