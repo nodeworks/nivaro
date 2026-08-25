@@ -55,7 +55,13 @@ async function loadRules(): Promise<void> {
     rules = rows.map((r) => {
       let regex: RegExp | null = null
       try {
-        regex = new RegExp(r.pattern, 'i')
+        // Admin-authored patterns (same trust tier as the SQL scratchpad) —
+        // still cap complexity: JS regex has no timeout, so a catastrophic
+        // pattern would stall log writes. Nested quantifiers are the classic
+        // ReDoS shape; refuse them.
+        if (r.pattern.length <= 200 && !/(\([^)]*[+*][^)]*\)|\[[^\]]*\])[+*]\??[+*]/.test(r.pattern)) {
+          regex = new RegExp(r.pattern, 'i')
+        }
       } catch {
         /* invalid pattern — rule inert until fixed */
       }

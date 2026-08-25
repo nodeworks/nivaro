@@ -15,7 +15,7 @@ import type { FastifyInstance } from 'fastify'
 
 export interface MonitorRow {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey'
   name: string
   config: string | null
   state: string | null
@@ -232,7 +232,7 @@ async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInsta
     } else {
       await db('nivaro_issues').insert({
         title: `Monitor failing: ${monitor.name}`,
-        severity: monitor.type === 'synthetic' ? 'error' : 'warning',
+        severity: monitor.type === 'synthetic' || monitor.type === 'journey' ? 'error' : 'warning',
         status: 'open',
         source: 'server',
         details: detail,
@@ -254,6 +254,46 @@ async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInsta
   }
 }
 
+
+/** Journey probe (#293): a scripted sequence of INTERNAL requests run through
+ *  app.inject as a configured token's identity — "login → read a record →
+ *  evaluate transitions" as a scheduled canary. Config:
+ *  { token: '<static or api key>', steps: [{ path, method?, expect_status?, max_ms? }] } */
+async function evalJourney(
+  cfg: { token?: string; steps?: Array<{ path?: string; method?: string; expect_status?: number; max_ms?: number }> },
+  app: FastifyInstance | null
+): Promise<EvalResult> {
+  if (!app) return { status: 'unknown', detail: 'No app instance in this context' }
+  const steps = Array.isArray(cfg.steps) ? cfg.steps : []
+  if (steps.length === 0) return { status: 'unknown', detail: 'No steps configured' }
+  const results: string[] = []
+  for (const [i, step] of steps.entries()) {
+    const path = String(step.path ?? '')
+    if (!path.startsWith('/api/')) {
+      return { status: 'failing', detail: `Step ${i + 1}: path must start with /api/` }
+    }
+    const t0 = Date.now()
+    const res = await app.inject({
+      method: (step.method ?? 'GET') as 'GET',
+      url: path,
+      headers: cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
+    })
+    const ms = Date.now() - t0
+    const want = step.expect_status ?? 200
+    if (res.statusCode !== want) {
+      return {
+        status: 'failing',
+        detail: `Step ${i + 1} (${path}) answered ${res.statusCode}, expected ${want} — after ${results.length} passing step(s)`
+      }
+    }
+    if (step.max_ms && ms > step.max_ms) {
+      return { status: 'failing', detail: `Step ${i + 1} (${path}) took ${ms}ms, budget ${step.max_ms}ms` }
+    }
+    results.push(`${path} ${res.statusCode} in ${ms}ms`)
+  }
+  return { status: 'ok', detail: results.join(' → ') }
+}
+
 export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance | null): Promise<EvalResult> {
   const cfg = parseJson<Record<string, unknown>>(monitor.config, {})
   const state = parseJson<Record<string, unknown>>(monitor.state, {})
@@ -264,6 +304,7 @@ export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance 
   try {
     if (monitor.type === 'freshness') result = await evalFreshness(cfg)
     else if (monitor.type === 'synthetic') result = await evalSynthetic(cfg)
+    else if (monitor.type === 'journey') result = await evalJourney(cfg, app)
     else {
       const r = await evalDeployRegression(cfg, state)
       result = r.result

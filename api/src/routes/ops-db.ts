@@ -249,9 +249,79 @@ export async function opsDbRoutes(app: FastifyInstance) {
     return reply.send(result)
   })
 
-  // #114 — connection pool right now.
+  // #114 — connection pool right now, with #304 leak attribution: which
+  // requests are holding connections and for how long.
   app.get('/pool', async (_req, reply) => {
-    return reply.send({ data: poolStats() })
+    const { heldConnections } = await import('../services/pool-attribution.js')
+    return reply.send({ data: { ...poolStats(), held: heldConnections() } })
+  })
+
+  // #213 — data velocity: rows created/changed per day per collection.
+  app.get<{ Querystring: { days?: string } }>('/velocity', async (req, reply) => {
+    const days = Math.min(90, Number(req.query.days) || 14)
+    const since = new Date(Date.now() - days * 86_400_000)
+    const rows = (await db('nivaro_activity')
+      .where('timestamp', '>', since)
+      .whereIn('action', ['create', 'update'])
+      .whereNot('collection', 'like', 'nivaro\\_%')
+      .groupBy('collection', 'action', db.raw('CAST(timestamp AS date)'))
+      .select('collection', 'action', db.raw('CAST(timestamp AS date) as day'))
+      .count('* as n')
+      .catch(() => [])) as Array<{ collection: string; action: string; day: Date; n: number }>
+    return reply.send({ data: rows })
+  })
+
+  // #306 — latency by hour: hour-of-day x route p50-ish heat from the api log.
+  app.get('/latency-heat', async (_req, reply) => {
+    const since = new Date(Date.now() - 7 * 86_400_000)
+    const rows = (await db('nivaro_api_logs')
+      .where('created_at', '>', since)
+      .groupBy(db.raw('DATEPART(hour, created_at)'), 'path')
+      .havingRaw('COUNT(*) >= 20')
+      .select(
+        db.raw('DATEPART(hour, created_at) as hour'),
+        'path',
+        db.raw('AVG(CAST(latency_ms AS float)) as avg_ms'),
+        db.raw('COUNT(*) as n')
+      )
+      .orderByRaw('AVG(CAST(latency_ms AS float)) DESC')
+      .limit(400)
+      .catch(() => [])) as Array<Record<string, unknown>>
+    return reply.send({ data: rows })
+  })
+
+  // #307 — estimated plan for a statement off the expensive-SQL panel. SELECT
+  // only, same posture as the scratchpad's plan mode.
+  app.post<{ Body: { sql?: string } }>('/explain', async (req, reply) => {
+    const sql = String(req.body?.sql ?? '').trim()
+    if (!sql) return reply.code(400).send({ error: 'sql is required' })
+    const stripped = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()
+    if (!/^(select|with)\b/i.test(stripped)) {
+      return reply.code(400).send({ error: 'Only SELECT statements can be explained here' })
+    }
+    try {
+      const { explainSqlPlan } = await import('../services/custom-query-exec.js')
+      const plan = await explainSqlPlan(sql, {})
+      return reply.send({ data: { plan } })
+    } catch (err) {
+      return reply.code(422).send({ error: err instanceof Error ? err.message.slice(0, 300) : 'Explain failed' })
+    }
+  })
+
+  // #311 — Inngest panel: best-effort read of the self-hosted Inngest API.
+  app.get('/inngest', async (_req, reply) => {
+    const base = process.env.INNGEST_API_URL || 'http://localhost:8288'
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 4000)
+      const res = await fetch(`${base}/v1/events?limit=20`, { signal: ctrl.signal })
+      clearTimeout(t)
+      if (!res.ok) return reply.send({ unavailable: `Inngest answered ${res.status}` })
+      const body = (await res.json()) as { data?: unknown[] }
+      return reply.send({ data: { base, recent_events: (body.data ?? []).slice(0, 20) } })
+    } catch {
+      return reply.send({ unavailable: `Inngest unreachable at ${base} (set INNGEST_API_URL)` })
+    }
   })
 
   // #298 — Redis health: memory, evictions, keyspace, slowlog.

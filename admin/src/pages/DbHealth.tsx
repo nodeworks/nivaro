@@ -110,6 +110,10 @@ export function DbHealthPage() {
   const tableHeat = useOps<Array<Record<string, unknown>>>('/ops-db/table-heat')
   const deadlocks = useOps<Array<Record<string, unknown>>>('/ops-db/deadlocks')
   const redis = useOps<Record<string, unknown>>('/ops-db/redis')
+  const poolDetail = useOps<{ used: number; max: number; held: Array<{ held_ms: number; hint: string | null }> }>('/ops-db/pool')
+  const velocity = useOps<Array<{ collection: string; action: string; day: string; n: number }>>('/ops-db/velocity')
+  const heat = useOps<Array<{ hour: number; path: string; avg_ms: number; n: number }>>('/ops-db/latency-heat')
+  const inngest = useOps<{ base: string; recent_events: unknown[] }>('/ops-db/inngest')
   const storage = useOps<{
     current: Maybe<Record<string, unknown>>
     snapshots: Array<Record<string, unknown>>
@@ -131,6 +135,19 @@ export function DbHealthPage() {
       toast.error(
         (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Drop failed'
       )
+  })
+  const explain = useMutation({
+    mutationFn: (sql: string) =>
+      api.post<{ data: { plan: string | null } }>('/ops-db/explain', { sql }).then((r) => r.data.data),
+    onSuccess: (d) => {
+      const w = window.open('', '_blank')
+      if (w) {
+        w.document.write(`<pre style="white-space:pre-wrap;font:11px monospace;padding:16px">${(d.plan ?? 'No plan returned').replace(/</g, '&lt;')}</pre>`)
+        w.document.title = 'Estimated plan'
+      }
+    },
+    onError: (e) =>
+      toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Explain failed')
   })
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null)
   const [killTarget, setKillTarget] = useState<number | null>(null)
@@ -279,9 +296,21 @@ export function DbHealthPage() {
                   num(r.execution_count),
                   `${num(r.avg_cpu_ms)} ms`,
                   `${num(r.avg_elapsed_ms)} ms`,
-                  <code key='s' className='block max-w-[560px] truncate font-mono text-[11px]' title={String(r.statement_text ?? '')}>
-                    {String(r.statement_text ?? '')}
-                  </code>
+                  <span key='s' className='flex items-center gap-2'>
+                    <code className='block max-w-[520px] truncate font-mono text-[11px]' title={String(r.statement_text ?? '')}>
+                      {String(r.statement_text ?? '')}
+                    </code>
+                    {/^\s*(select|with)/i.test(String(r.statement_text ?? '')) && (
+                      <button
+                        type='button'
+                        className='shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-500 hover:bg-muted dark:border-border'
+                        onClick={() => explain.mutate(String(r.statement_text))}
+                        title='Estimated execution plan (#307)'
+                      >
+                        Explain
+                      </button>
+                    )}
+                  </span>
                 ])}
               />
             )}
@@ -460,6 +489,72 @@ export function DbHealthPage() {
                 </div>
               )
             })()}
+          </Panel>
+
+          <div className='grid gap-5 xl:grid-cols-2'>
+            <Panel title='Held connections' sub='Pool connections currently checked out, attributed to the request holding them (#304 · this replica)'>
+              <MiniTable
+                head={['Held for', 'Request']}
+                rows={((poolDetail.data?.data?.held ?? []) as Array<{ held_ms: number; hint: string | null }>).map((h) => [
+                  `${(h.held_ms / 1000).toFixed(1)}s`,
+                  <code key='h' className='font-mono text-[11px]'>{h.hint ?? '(background job / cron)'}</code>
+                ])}
+              />
+            </Panel>
+
+            <Panel title='Inngest' sub='Self-hosted Inngest reachability + recent events (#311)'>
+              {inngest.data?.unavailable ? (
+                <Unavailable reason={inngest.data.unavailable} />
+              ) : (
+                <p className='text-[12.5px]'>
+                  Reachable at <code className='font-mono text-[11.5px]'>{inngest.data?.data?.base}</code> ·{' '}
+                  {(inngest.data?.data?.recent_events ?? []).length} recent event(s)
+                </p>
+              )}
+            </Panel>
+          </div>
+
+          <Panel title='Data velocity' sub='Rows created / changed per day per collection, last 14 days (#213)'>
+            {(() => {
+              const rows = velocity.data?.data ?? []
+              const byCol = new Map<string, { created: number; updated: number }>()
+              for (const r of rows) {
+                const b = byCol.get(r.collection) ?? { created: 0, updated: 0 }
+                if (r.action === 'create') b.created += Number(r.n)
+                else b.updated += Number(r.n)
+                byCol.set(r.collection, b)
+              }
+              const top = [...byCol.entries()]
+                .sort((a, z) => z[1].created + z[1].updated - (a[1].created + a[1].updated))
+                .slice(0, 15)
+              return (
+                <MiniTable
+                  head={['Collection', 'Created (14d)', 'Updated (14d)', '/day']}
+                  rows={top.map(([col, b]) => [
+                    col,
+                    num(b.created),
+                    num(b.updated),
+                    num(Math.round((b.created + b.updated) / 14))
+                  ])}
+                />
+              )
+            })()}
+          </Panel>
+
+          <Panel title='Latency by hour' sub='Hour-of-day × route average latency, 7 days — the "slow every morning at 9" detector (#306)'>
+            {heat.data?.unavailable ? (
+              <Unavailable reason={heat.data.unavailable} />
+            ) : (
+              <MiniTable
+                head={['Hour (UTC)', 'Route', 'Avg', 'Requests']}
+                rows={(heat.data?.data ?? []).slice(0, 20).map((r) => [
+                  `${String(r.hour).padStart(2, '0')}:00`,
+                  <code key='p' className='block max-w-[380px] truncate font-mono text-[11px]'>{String(r.path)}</code>,
+                  `${Math.round(Number(r.avg_ms))} ms`,
+                  num(r.n)
+                ])}
+              />
+            )}
           </Panel>
 
           <Panel title='Deadlocks' sub='Mined from the system_health session; the hourly sweep also raises an issue on fresh ones (#100)'>

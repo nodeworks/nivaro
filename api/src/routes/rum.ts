@@ -19,7 +19,7 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
     const b = req.body as { events?: Array<Record<string, unknown>> }
     const events = (Array.isArray(b?.events) ? b.events : []).slice(0, MAX_EVENTS)
     const rows = events
-      .filter((e) => typeof e.route === 'string' && (e.kind === 'load' || e.kind === 'route'))
+      .filter((e) => typeof e.route === 'string' && (e.kind === 'load' || e.kind === 'route' || e.kind === 'rage'))
       .map((e) => ({
         route: String(e.route).slice(0, 300),
         kind: e.kind,
@@ -57,8 +57,14 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
       return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75))]
     }
 
+    // Rage clicks (#409): the frustration signal aggregated per target.
+    const rageByTarget = new Map<string, number>()
     const byRoute = new Map<string, { loads: number[]; lcps: number[]; routes: number[] }>()
     for (const r of rows) {
+      if (r.kind === 'rage') {
+        rageByTarget.set(r.route, (rageByTarget.get(r.route) ?? 0) + 1)
+        continue
+      }
       const key = `${r.app ?? 'admin'} ${r.route}`
       const b = byRoute.get(key) ?? { loads: [], lcps: [], routes: [] }
       if (r.kind === 'load') {
@@ -78,6 +84,10 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
         route_p75: p75(b.routes)
       }))
       .sort((a, z) => (z.lcp_p75 ?? z.route_p75 ?? 0) - (a.lcp_p75 ?? a.route_p75 ?? 0))
-    return { data, total_events: rows.length }
+    const rage = [...rageByTarget.entries()]
+      .map(([target, bursts]) => ({ target, bursts }))
+      .sort((a, z) => z.bursts - a.bursts)
+      .slice(0, 25)
+    return { rage, data, total_events: rows.length }
   })
 }

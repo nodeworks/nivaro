@@ -88,6 +88,68 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
 
+  // #214 — maintenance windows: schedule start/end; the per-minute sweep flips
+  // maintenance mode, the banner pre-announces (#218), the exit smoke-checks
+  // and auto-sends the all-clear (#303).
+  app.get('/maintenance-windows', async (_req, reply) => {
+    const rows = await db('nivaro_maintenance_windows')
+      .orderBy('starts_at', 'desc')
+      .limit(50)
+      .catch(() => [])
+    return reply.send({ data: rows })
+  })
+  app.post<{
+    Body: { title?: string; message?: string; starts_at?: string; ends_at?: string; send_all_clear?: boolean }
+  }>('/maintenance-windows', async (req, reply) => {
+    const title = String(req.body?.title ?? '').trim()
+    const starts = req.body?.starts_at ? new Date(req.body.starts_at) : null
+    const ends = req.body?.ends_at ? new Date(req.body.ends_at) : null
+    if (!title) return reply.code(400).send({ error: 'title is required' })
+    if (!starts || !ends || Number.isNaN(starts.getTime()) || Number.isNaN(ends.getTime())) {
+      return reply.code(400).send({ error: 'starts_at and ends_at must be valid datetimes' })
+    }
+    if (ends <= starts) return reply.code(400).send({ error: 'ends_at must be after starts_at' })
+    await db('nivaro_maintenance_windows').insert({
+      title: title.slice(0, 300),
+      message: req.body?.message ? String(req.body.message).slice(0, 2000) : null,
+      starts_at: starts,
+      ends_at: ends,
+      status: 'scheduled',
+      send_all_clear: req.body?.send_all_clear !== false,
+      created_by: req.user?.id ?? null,
+      created_at: new Date()
+    })
+    await logActivity({ action: 'maintenance-window-create', user: req.user?.id, comment: title, req })
+    const row = await db('nivaro_maintenance_windows').orderBy('id', 'desc').first()
+    return reply.code(201).send({ data: row })
+  })
+  app.delete<{ Params: { id: string } }>('/maintenance-windows/:id', async (req, reply) => {
+    // Cancelling an ACTIVE window also lifts maintenance mode.
+    const row = (await db('nivaro_maintenance_windows')
+      .where({ id: Number(req.params.id) })
+      .first()) as { id: number; status: string; title: string } | undefined
+    if (!row) return reply.code(404).send({ error: 'Window not found' })
+    await db('nivaro_maintenance_windows').where({ id: row.id }).update({ status: 'cancelled' })
+    if (row.status === 'active') {
+      await db('nivaro_settings')
+        .orderBy('id', 'asc')
+        .first('id')
+        .then((s) =>
+          s ? db('nivaro_settings').where({ id: s.id }).update({ maintenance_mode: 0 }) : null
+        )
+      const { bustMaintenanceCache } = await import('../services/security.js')
+      bustMaintenanceCache()
+    }
+    await logActivity({ action: 'maintenance-window-cancel', user: req.user?.id, comment: row.title, req })
+    return reply.code(204).send()
+  })
+
+  // #299 — run the smoke suite on demand.
+  app.post('/smoke', async (_req, reply) => {
+    const { runSmokeCheck } = await import('../services/maintenance-windows.js')
+    return reply.send({ data: await runSmokeCheck(app) })
+  })
+
   // #294 — clock skew sentinel: DB clock vs app clock, plus a DST audit of
   // crons scheduled in the 01:00-03:59 band (the hours DST transitions eat or
   // repeat).
@@ -180,6 +242,21 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       setTimeout(() => process.exit(0), 200)
     })
     return reply.send({ data: { restarting: true } })
+  })
+
+  // #309 — follow-this-user tracing: their next N requests fully trace
+  // regardless of speed. In-process (like the trace buffer itself).
+  app.post<{ Body: { user_id?: string; requests?: number } }>('/trace-user', async (req, reply) => {
+    const userId = String(req.body?.user_id ?? '').trim()
+    if (!userId) return reply.code(400).send({ error: 'user_id is required' })
+    const { followUser } = await import('../services/request-trace.js')
+    followUser(userId, Math.min(200, Math.max(1, Number(req.body?.requests) || 50)))
+    await logActivity({ action: 'trace-user', user: req.user?.id, comment: userId, req })
+    return reply.send({ data: { following: userId } })
+  })
+  app.get('/trace-user', async (_req, reply) => {
+    const { followedUsers } = await import('../services/request-trace.js')
+    return reply.send({ data: followedUsers() })
   })
 
   // #312 — per-environment expected database name; a mismatch is the

@@ -108,6 +108,51 @@ export function OpsConsolePage() {
     },
     onError: () => toast.error('Snapshot failed')
   })
+  const { data: windows } = useQuery({
+    queryKey: ['maint-windows'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; title: string; status: string; starts_at: string; ends_at: string }> }>('/ops-runtime/maintenance-windows')
+        .then((r) => r.data.data)
+  })
+  const [winTitle, setWinTitle] = useState('')
+  const [winStart, setWinStart] = useState('')
+  const [winEnd, setWinEnd] = useState('')
+  const addWindow = useMutation({
+    mutationFn: () =>
+      api.post('/ops-runtime/maintenance-windows', {
+        title: winTitle,
+        starts_at: new Date(winStart).toISOString(),
+        ends_at: new Date(winEnd).toISOString()
+      }),
+    onSuccess: () => {
+      setWinTitle('')
+      setWinStart('')
+      setWinEnd('')
+      void qc.invalidateQueries({ queryKey: ['maint-windows'] })
+      toast.success('Window scheduled')
+    },
+    onError: (e) =>
+      toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Failed')
+  })
+  const smoke = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } }>('/ops-runtime/smoke')
+        .then((r) => r.data.data),
+    onSuccess: (d) =>
+      toast[d.ok ? 'success' : 'error'](
+        d.ok
+          ? `Smoke passed (${d.checks.length} checks)`
+          : `Smoke FAILED: ${d.checks.filter((c) => !c.ok).map((c) => c.name).join(', ')}`
+      )
+  })
+  const [followId, setFollowId] = useState('')
+  const follow = useMutation({
+    mutationFn: () => api.post('/ops-runtime/trace-user', { user_id: followId }),
+    onSuccess: () => toast.success('Following — their next 50 requests trace fully'),
+    onError: () => toast.error('Failed')
+  })
   const [restartReason, setRestartReason] = useState('')
   const restart = useMutation({
     mutationFn: (force: boolean) => api.post('/ops-runtime/restart', { reason: restartReason, force }),
@@ -300,6 +345,81 @@ export function OpsConsolePage() {
               </div>
             </Card>
           </div>
+
+          <Card
+            title='Maintenance windows'
+            sub='Scheduled freezes: the banner pre-announces, the sweep flips maintenance mode at the boundaries, the exit smoke-checks and auto-sends the all-clear (#214 · #218 · #303). Alert engines pause while active (#365).'
+            right={
+              <Button size='sm' variant='outline' className='h-7 text-[11.5px]' disabled={smoke.isPending} onClick={() => smoke.mutate()}>
+                {smoke.isPending ? 'Checking…' : 'Run smoke check'}
+              </Button>
+            }
+          >
+            <div className='space-y-1.5'>
+              {(windows ?? []).map((w) => (
+                <div key={w.id} className='flex items-center gap-2 text-[12.5px]'>
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${
+                      w.status === 'active'
+                        ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                        : w.status === 'scheduled'
+                          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          : 'bg-slate-500/10 text-slate-500'
+                    }`}
+                  >
+                    {w.status}
+                  </span>
+                  <span className='min-w-0 flex-1 truncate'>{w.title}</span>
+                  <span className='tabular-nums text-[11.5px] text-slate-400'>
+                    {new Date(w.starts_at).toLocaleString()} → {new Date(w.ends_at).toLocaleTimeString()}
+                  </span>
+                  {(w.status === 'scheduled' || w.status === 'active') && (
+                    <button
+                      type='button'
+                      className='shrink-0 text-[11px] text-slate-400 hover:text-red-500'
+                      onClick={() =>
+                        api
+                          .delete(`/ops-runtime/maintenance-windows/${w.id}`)
+                          .then(() => void qc.invalidateQueries({ queryKey: ['maint-windows'] }))
+                      }
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              ))}
+              <form
+                className='flex flex-wrap items-center gap-2 pt-1'
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (winTitle.trim() && winStart && winEnd) addWindow.mutate()
+                }}
+              >
+                <Input value={winTitle} onChange={(e) => setWinTitle(e.target.value)} placeholder='Title' className='h-7 w-44 text-[12px]' />
+                <Input type='datetime-local' value={winStart} onChange={(e) => setWinStart(e.target.value)} className='h-7 text-[12px]' />
+                <span className='text-[11px] text-slate-400'>to</span>
+                <Input type='datetime-local' value={winEnd} onChange={(e) => setWinEnd(e.target.value)} className='h-7 text-[12px]' />
+                <Button type='submit' size='sm' className='h-7 text-[11.5px]' disabled={addWindow.isPending}>
+                  Schedule
+                </Button>
+              </form>
+            </div>
+          </Card>
+
+          <Card title='Follow a user' sub="Flag someone; their next 50 requests trace fully regardless of speed — for a 'slow for Beth' report (#309). Traces land on /api-analytics.">
+            <form
+              className='flex items-center gap-2'
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (followId.trim()) follow.mutate()
+              }}
+            >
+              <Input value={followId} onChange={(e) => setFollowId(e.target.value)} placeholder='User id (uuid)' className='h-7 w-96 font-mono text-[12px]' />
+              <Button type='submit' size='sm' className='h-7 text-[11.5px]' disabled={follow.isPending}>
+                Follow
+              </Button>
+            </form>
+          </Card>
 
           <Card
             title='Environment knobs'

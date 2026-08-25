@@ -14,6 +14,16 @@ import { swallowStats } from '../services/swallow-counter.js'
 
 const SECRET_ENV = /secret|token|pass|key|credential|signing/i
 
+/** Mask by key name, and ALSO by value shape: connection-string URLs embed
+ *  credentials under innocent key names (CLOUD_META_DB_URL, REDIS_URL). */
+function maskEnvValue(key: string, value: string): string {
+  if (SECRET_ENV.test(key)) return '••••••'
+  if (/:\/\/[^/\s]*:[^/\s]*@/.test(value)) {
+    return value.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
+  }
+  return value.slice(0, 200)
+}
+
 export async function opsLogsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
@@ -44,11 +54,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
     const rows: Array<{ key: string; value: string | null; set: boolean }> = []
     for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
       const set = value !== undefined && value !== null && value !== ''
-      rows.push({
-        key,
-        set,
-        value: !set ? null : SECRET_ENV.test(key) ? '••••••' : String(value).slice(0, 200)
-      })
+      rows.push({ key, set, value: !set ? null : maskEnvValue(key, String(value)) })
     }
     for (const key of [
       'NIVARO_INSTANCE',
@@ -69,7 +75,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       rows.push({
         key,
         set: v !== undefined && v !== '',
-        value: v === undefined || v === '' ? null : SECRET_ENV.test(key) ? '••••••' : v.slice(0, 200)
+        value: v === undefined || v === '' ? null : maskEnvValue(key, v)
       })
     }
     rows.sort((a, b) => a.key.localeCompare(b.key))
@@ -159,16 +165,19 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       return v
     }
     const method = issue.title.match(/\] (GET|POST|PUT|PATCH|DELETE) /)?.[1] ?? 'GET'
-    const url = String(ctx.url ?? '/api/')
+    // The stored URL came from the FAILING REQUEST — attacker-influenced.
+    // Interpolated into a shell script an admin will run, so strip anything
+    // shell-active; a mangled path beats an executed one.
+    const url = String(ctx.url ?? '/api/').replace(/[^A-Za-z0-9/_.?&=%:-]/g, '')
     const body = ctx.body_shape != null ? JSON.stringify(fill(ctx.body_shape), null, 2) : null
     const script = [
       '#!/bin/bash',
-      `# Repro for issue #${req.params.id}: ${issue.title}`,
+      `# Repro for issue #${req.params.id}: ${issue.title.replace(/[\r\n]+/g, ' ')}`,
       '# Target dev; set TOKEN to an appropriate bearer token first.',
       'TOKEN=${TOKEN:?set TOKEN}',
       `curl -s -X ${method} "http://localhost:3055${url}" \\`,
       '  -H "Authorization: Bearer $TOKEN" \\',
-      ...(body ? ['  -H "Content-Type: application/json" \\', `  -d '${body.replace(/'/g, "'\\''")}'`] : []),
+      ...(body ? ['  -H "Content-Type: application/json" \\', `  -d '${body.replace(/'/g, "'\\''").replace(/\\(?!n)/g, '')}'`] : []),
       ''
     ].join('\n')
     reply.header('Content-Type', 'text/plain')

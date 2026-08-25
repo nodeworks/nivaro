@@ -18,7 +18,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     // Tracing the trace reader would be circular and would evict real traces
     // from the ring buffer every time the page polled.
     if (path.startsWith('/api/traces')) return
-    beginTrace()
+    beginTrace(path)
   })
 
   app.addHook('onResponse', async (req, reply) => {

@@ -182,6 +182,8 @@ export async function buildServer() {
     registerKnownCaches()
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
+    const { startPoolAttribution } = await import('./services/pool-attribution.js')
+    startPoolAttribution()
   }
 
   // ── Resiliency sprint wiring ─────────────────────────────────────────────
@@ -541,6 +543,12 @@ export async function buildServer() {
 
       // Ops monitors: freshness / deploy-regression / synthetic checks.
       app.cron.schedule('ops-monitors', '*/5 * * * *', async () => {
+        // #365 — alert engines pause during maintenance: a planned freeze must
+        // not fire threshold/anomaly noise about itself.
+        {
+          const { maintenanceState } = await import('./services/security.js')
+          if ((await maintenanceState()).on) return
+        }
         const { evaluateAllMonitors } = await import('./services/ops-monitors.js')
         await evaluateAllMonitors(app)
       })
@@ -653,6 +661,22 @@ export async function buildServer() {
         const { deliverScheduledAnnouncements } = await import('./routes/announcements.js')
         await deliverScheduledAnnouncements(app)
       })
+
+      // Maintenance windows (#214/#303): per-minute sweep flips maintenance
+      // mode at window boundaries; the exit smoke-checks and sends the
+      // verified all-clear.
+      app.cron.schedule('maintenance-windows', '* * * * *', async () => {
+        const { sweepMaintenanceWindows } = await import('./services/maintenance-windows.js')
+        await sweepMaintenanceWindows(app)
+      })
+
+      // Post-deploy smoke (#299): a version change gets one health verdict at
+      // minute one instead of waiting for the first user report.
+      setTimeout(() => {
+        void import('./services/maintenance-windows.js').then(({ postDeploySmoke }) =>
+          postDeploySmoke(app)
+        )
+      }, 60_000)
 
       // Storage snapshots (#291/#155): one row per day of DB + uploads size,
       // feeding the runway projection on /db-health.
@@ -1084,6 +1108,12 @@ export async function buildServer() {
       // Alert definitions sweep — anomaly detections and threshold rules whose
       // data changes outside record writes only fire from a periodic pass.
       app.cron.schedule('alert-definitions-sweep', '15 * * * *', async () => {
+        // #365 — alert engines pause during maintenance: a planned freeze must
+        // not fire threshold/anomaly noise about itself.
+        {
+          const { maintenanceState } = await import('./services/security.js')
+          if ((await maintenanceState()).on) return
+        }
         try {
           const { evaluateAlerts } = await import('./hooks/alerts.js')
           const fired = await evaluateAlerts()
@@ -1094,6 +1124,12 @@ export async function buildServer() {
       })
 
       app.cron.schedule('report-studio-alerts', '0 * * * *', async () => {
+        // #365 — alert engines pause during maintenance: a planned freeze must
+        // not fire threshold/anomaly noise about itself.
+        {
+          const { maintenanceState } = await import('./services/security.js')
+          if ((await maintenanceState()).on) return
+        }
         try {
           const { runReportAlertChecks } = await import('./services/report-studio-jobs.js')
           const r = await runReportAlertChecks(app)

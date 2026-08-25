@@ -50,6 +50,7 @@ export interface TraceRecord {
 interface TraceContext {
   start: number
   spans: TraceSpan[]
+  urlHint?: string
 }
 
 const als = new AsyncLocalStorage<TraceContext>()
@@ -61,10 +62,15 @@ const CAPACITY = Number(process.env.TRACE_BUFFER ?? 200)
 
 const buffer: TraceRecord[] = []
 
-export function beginTrace(): void {
+export function beginTrace(urlHint?: string): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
-  als.enterWith({ start: performance.now(), spans: [] })
+  als.enterWith({ start: performance.now(), spans: [], urlHint })
+}
+
+/** #304 — the current request's URL, for pool-leak attribution. */
+export function currentRequestHint(): string | null {
+  return als.getStore()?.urlHint ?? null
 }
 
 /**
@@ -97,6 +103,28 @@ export function isTracing(): boolean {
   return als.getStore() !== undefined
 }
 
+
+// ─── Follow-this-user (#309) ─────────────────────────────────────────────────
+const followBudget = new Map<string, { remaining: number; until: number }>()
+
+export function followUser(userId: string, requests = 50): void {
+  followBudget.set(userId.toUpperCase(), { remaining: requests, until: Date.now() + 3600_000 })
+}
+
+export function followedUsers(): Array<{ user: string; remaining: number }> {
+  const now = Date.now()
+  return [...followBudget.entries()]
+    .filter(([, v]) => v.remaining > 0 && v.until > now)
+    .map(([user, v]) => ({ user, remaining: v.remaining }))
+}
+
+function consumeFollow(userId: string): boolean {
+  const f = followBudget.get(userId.toUpperCase())
+  if (!f || f.remaining <= 0 || f.until < Date.now()) return false
+  f.remaining--
+  return true
+}
+
 export function finishTrace(meta: {
   method: string
   route: string
@@ -107,7 +135,11 @@ export function finishTrace(meta: {
   const ctx = als.getStore()
   if (!ctx) return
   const total = performance.now() - ctx.start
-  if (total < SLOW_MS) return
+  // #309 — follow-this-user: a flagged user's requests are kept regardless of
+  // speed (their next N, whatever they touch), so a "it's slow for Beth"
+  // report can be traced without waiting for a threshold breach.
+  const followed = meta.user && consumeFollow(meta.user)
+  if (total < SLOW_MS && !followed) return
 
   // Spans nest (a phase can contain sub-phases), so they are kept in start
   // order and the UI indents by overlap rather than being handed a tree the

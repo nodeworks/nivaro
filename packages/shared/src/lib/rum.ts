@@ -13,7 +13,7 @@
 
 interface RumEvent {
   route: string
-  kind: 'load' | 'route'
+  kind: 'load' | 'route' | 'rage'
   ttfb_ms?: number
   fcp_ms?: number
   lcp_ms?: number
@@ -27,6 +27,52 @@ let toPattern: (path: string) => string = (p) => p
 let queue: RumEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let apiBase = '/api'
+
+// ─── Rage-click detection (#409) ────────────────────────────────────────────
+// 3+ clicks on the same element within 600ms = frustration; reported as a
+// 'rage' RUM event with the element's readable label folded into the route
+// ("/collections/:c :: button 'Save'"). Detection only — no recording.
+let rageTarget: EventTarget | null = null
+let rageCount = 0
+let rageTimer: ReturnType<typeof setTimeout> | null = null
+
+function targetLabel(el: Element): string {
+  const tag = el.tagName.toLowerCase()
+  const text = (el.textContent ?? '').trim().slice(0, 40)
+  const aria = el.getAttribute('aria-label')
+  const testid = el.getAttribute('data-testid')
+  return `${tag}${testid ? `[${testid}]` : ''}${aria ? ` '${aria}'` : text ? ` '${text}'` : ''}`
+}
+
+function watchRageClicks(currentRoute: () => string): void {
+  if (typeof window === 'undefined') return
+  window.addEventListener(
+    'click',
+    (e) => {
+      const el = e.target instanceof Element ? e.target.closest('button, a, [role="button"], input, [data-testid]') : null
+      if (!el) return
+      if (el === rageTarget) {
+        rageCount++
+        if (rageCount === 3) {
+          enqueue({
+            kind: 'rage',
+            route: `${currentRoute()} :: ${targetLabel(el)}`.slice(0, 300),
+            duration_ms: rageCount
+          })
+        }
+      } else {
+        rageTarget = el
+        rageCount = 1
+      }
+      if (rageTimer) clearTimeout(rageTimer)
+      rageTimer = setTimeout(() => {
+        rageTarget = null
+        rageCount = 0
+      }, 600)
+    },
+    { capture: true, passive: true }
+  )
+}
 
 function flush(): void {
   if (queue.length === 0) return
@@ -80,6 +126,7 @@ export function startRum(opts?: { app?: string; routePattern?: (path: string) =>
   appName = opts?.app
   if (opts?.routePattern) toPattern = opts.routePattern
   if (opts?.apiBase) apiBase = opts.apiBase
+  watchRageClicks(() => toPattern(window.location.pathname))
 
   const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
   let lcp: number | null = null

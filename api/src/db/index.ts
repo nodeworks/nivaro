@@ -54,7 +54,11 @@ function buildConnection(host: string, port: number) {
       password: config.DB_PASSWORD,
       options: {
         encrypt: config.DB_ENCRYPT,
-        trustServerCertificate: config.DB_TRUST_SERVER_CERT
+        trustServerCertificate: config.DB_TRUST_SERVER_CERT,
+        // #423 — DB-side attribution: DBA tools (sp_who2, dm_exec_sessions
+        // program_name) see WHICH app + instance holds a connection instead
+        // of a generic driver name.
+        appName: `nivaro-api${process.env.NIVARO_INSTANCE ? `@${process.env.NIVARO_INSTANCE}` : ''}`
       }
     }
   }

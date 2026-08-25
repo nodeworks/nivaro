@@ -267,7 +267,7 @@ async function buildAudienceSummaries(
  * Returns how many people were reached. Idempotence: rows with sent_at set
  * are never re-delivered.
  */
-async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<number> {
+export async function deliverAnnouncement(app: FastifyInstance, id: number): Promise<number> {
   const row = (await db('nivaro_announcements').where('id', id).first()) as
     | Record<string, unknown>
     | undefined
@@ -538,6 +538,36 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         dismissable: false,
         require_ack: false
       })
+    } else {
+      // Upcoming-window countdown (#218): a scheduled window starting within
+      // 24h pre-announces on the same surface, dismissable until it actually
+      // starts. The countdown is baked into the text — the banner polls 60s.
+      try {
+        const next = (await db('nivaro_maintenance_windows')
+          .where('status', 'scheduled')
+          .where('starts_at', '>', new Date())
+          .where('starts_at', '<', new Date(Date.now() + 24 * 3600_000))
+          .orderBy('starts_at', 'asc')
+          .first()) as
+          | { id: number; title: string; message: string | null; starts_at: Date; ends_at: Date }
+          | undefined
+        if (next) {
+          const mins = Math.max(1, Math.round((new Date(next.starts_at).getTime() - Date.now()) / 60_000))
+          const when =
+            mins >= 120 ? `in ${Math.round(mins / 60)} hours` : mins >= 60 ? 'in about an hour' : `in ${mins} minutes`
+          data.unshift({
+            id: -2,
+            message: `${next.message ?? 'The system will be briefly unavailable for maintenance.'} Starts ${when} (${new Date(next.starts_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} – ${new Date(next.ends_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}).`,
+            subject: `Scheduled maintenance: ${next.title}`,
+            severity: 'warning',
+            ends_at: null,
+            dismissable: true,
+            require_ack: false
+          })
+        }
+      } catch {
+        /* table mid-migration */
+      }
     }
     return { data }
   })
