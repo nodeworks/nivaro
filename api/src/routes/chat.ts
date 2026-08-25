@@ -634,6 +634,8 @@ export async function chatRoutes(app: FastifyInstance) {
     const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
     const aiClient = await getAiClient()
     if (!aiClient) return reply.code(503).send({ error: 'AI is not configured' })
+    // Every other AI invocation is attributed — this one was the odd one out.
+    void logActivity({ action: 'ai-room-summary', user: req.user!.id, comment: room, req })
     const { model } = await getAiModelSettings()
     const transcript = msgs
       .map((m) => `${String(m.sender_name ?? 'Someone')}: ${String(m.message).slice(0, 300)}`)

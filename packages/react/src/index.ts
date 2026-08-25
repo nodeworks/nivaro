@@ -252,6 +252,54 @@ export {
   WidgetSlot,
   WorkflowPanel
 } from '@nivaro/shared'
+// Re-export sweep (2026-08-25): shared surface that headless hosts were
+// missing — display-pref setters, the fiscal/formula/layout-slot libs,
+// field-interface registry, and the utility components/hooks below.
+export {
+  setDisplayTimezone,
+  setTimeDisplay,
+  setNumberFormat,
+  setFiscalStartMonth,
+  getFiscalStartMonth,
+  fiscalYearOf,
+  fiscalQuarterOf,
+  fiscalPeriodOf,
+  setFormulaConstants,
+  formulaConstant,
+  networkdaysBetween,
+  registerLayoutSlot,
+  getLayoutSlot,
+  extSlotKey,
+  CustomActionButtons,
+  AutolinkedText,
+  ReviewListWidget,
+  DefinitionsPanel,
+  NewImportDialog,
+  QueryWidgetView,
+  RecordGridWidgetBody,
+  TickerNumber,
+  CronBuilder,
+  describeCron,
+  EmptyState,
+  ErrorSurface,
+  OfflineBanner,
+  useDebounced,
+  useFileHealth,
+  useElapsedLoading
+} from '@nivaro/shared'
+export {
+  registerFieldInterface,
+  getFieldInterface,
+  listFieldInterfaces,
+  onFieldInterfacesChange
+} from '@nivaro/shared'
+export type {
+  FieldInterfaceProps,
+  FieldInterfaceHandle,
+  FieldInterfacePlugin,
+  BaseMapPin,
+  BaseMapBubble
+} from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
 export { FileField } from './components/fields/FileField'

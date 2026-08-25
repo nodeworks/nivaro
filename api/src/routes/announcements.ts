@@ -813,6 +813,12 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireAdmin },
     async (req, reply) => {
       await db('nivaro_broadcast_templates').where('id', Number(req.params.tid)).del()
+      await logActivity({
+        action: 'broadcast-template-delete',
+        user: req.user!.id,
+        comment: `#${req.params.tid}`,
+        req
+      })
       return reply.send({ data: { ok: true } })
     }
   )

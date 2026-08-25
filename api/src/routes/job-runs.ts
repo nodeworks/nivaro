@@ -17,6 +17,13 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/:id/cancel', async (req, reply) => {
     const { requestCancel } = await import('../services/job-cancel.js')
     requestCancel(Number(req.params.id))
+    const { logActivity } = await import('../services/activity.js')
+    await logActivity({
+      action: 'job-run-cancel',
+      user: req.user?.id,
+      comment: `run #${req.params.id}`,
+      req
+    })
     return reply.send({ data: { cancel_requested: true } })
   })
 

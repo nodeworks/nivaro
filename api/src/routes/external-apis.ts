@@ -1347,6 +1347,12 @@ export async function externalApisRoutes(app: FastifyInstance) {
         .where({ id: Number(req.params.logId) })
         .delete()
       if (!deleted) return reply.code(404).send({ error: 'Not found' })
+      await logActivity({
+        action: 'external-api-log-delete',
+        user: req.user?.id,
+        comment: `log #${req.params.logId}`,
+        req
+      })
       return { data: { success: true } }
     }
   )
@@ -1359,7 +1365,13 @@ export async function externalApisRoutes(app: FastifyInstance) {
       const apiId = Number(req.params.id)
       const exists = await db('nivaro_external_apis').where({ id: apiId }).first()
       if (!exists) return reply.code(404).send({ error: 'Not found' })
-      await db('nivaro_external_api_logs').where({ api_id: apiId }).delete()
+      const cleared = await db('nivaro_external_api_logs').where({ api_id: apiId }).delete()
+      await logActivity({
+        action: 'external-api-logs-clear',
+        user: req.user?.id,
+        comment: `${(exists as { name?: string }).name ?? apiId}: ${cleared} log rows cleared`,
+        req
+      })
       return { data: { success: true } }
     }
   )

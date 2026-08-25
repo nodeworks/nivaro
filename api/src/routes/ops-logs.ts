@@ -120,6 +120,12 @@ export async function opsLogsRoutes(app: FastifyInstance) {
         .update({ is_active: req.body?.is_active === true })
       if (!n) return reply.code(404).send({ error: 'Rule not found' })
       bustLogRules()
+      await logActivity({
+        action: 'log-alert-rule-update',
+        user: req.user?.id,
+        comment: `#${req.params.id} is_active=${req.body?.is_active === true}`,
+        req
+      })
       return reply.send({ data: { ok: true } })
     }
   )
@@ -127,6 +133,12 @@ export async function opsLogsRoutes(app: FastifyInstance) {
     const n = await db('nivaro_log_alert_rules').where({ id: Number(req.params.id) }).del()
     if (!n) return reply.code(404).send({ error: 'Rule not found' })
     bustLogRules()
+    await logActivity({
+      action: 'log-alert-rule-delete',
+      user: req.user?.id,
+      comment: `#${req.params.id}`,
+      req
+    })
     return reply.code(204).send()
   })
 

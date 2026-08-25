@@ -77,6 +77,13 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         created_at: new Date()
       })
       .returning('id')) as Array<{ id: number } | number>
+    await logActivity({
+      action: 'export-preset-create',
+      user: req.user?.id,
+      collection,
+      comment: name,
+      req
+    })
     return reply
       .code(201)
       .send({ data: { id: typeof created === 'object' ? created.id : created } })
@@ -91,6 +98,12 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(403).send({ error: 'Only the creator or an admin can delete a preset' })
     }
     await db('nivaro_export_presets').where('id', req.params.id).del()
+    await logActivity({
+      action: 'export-preset-delete',
+      user: req.user?.id,
+      comment: `#${req.params.id}`,
+      req
+    })
     return { data: { deleted: true } }
   })
 

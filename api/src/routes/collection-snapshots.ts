@@ -148,6 +148,13 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const n = await db('nivaro_collection_snapshots').where('id', req.params.id).del()
     if (n === 0) return reply.code(404).send({ error: 'Not found' })
+    // Destroying a recovery point is audit-worthy (trash-purge precedent).
+    await logActivity({
+      action: 'collection-snapshot-delete',
+      user: req.user?.id,
+      comment: `#${req.params.id}`,
+      req
+    })
     return { data: { deleted: true } }
   })
 }
