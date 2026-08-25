@@ -118,7 +118,9 @@ async function notifyAlertSubscribers(
       void sendRawMail({
         to: sub.email as string,
         subject,
-        html: `<p>${esc(message)}</p><p style="color:#64748b;font-size:12px">Alert definition: ${esc(def.name)} · ${esc(def.collection)}</p>`
+        html: `<p>${esc(message)}</p><p style="color:#64748b;font-size:12px">Alert definition: ${esc(def.name)} · ${esc(def.collection)}</p>`,
+        collection: def.collection,
+        item
       }).catch(() => {
         /* mail failures never block alert firing */
       })

@@ -92,8 +92,27 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
       if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      // Tagged rows first-class; UNTAGGED rows (senders that predate record
+      // context, or third-party paths) are caught by the record's human id
+      // appearing in the subject — flow mails and legacy sends all carry it.
+      let friendlyId: string | null = null
+      try {
+        const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
+        friendlyId = await resolveFriendlyId(collection, item)
+      } catch {
+        friendlyId = null
+      }
       const rows = await db('nivaro_mail_log')
-        .where({ collection, item })
+        .where((q) => {
+          q.where({ collection, item })
+          if (friendlyId && friendlyId !== item && friendlyId.length >= 4) {
+            q.orWhere((q2) =>
+              q2
+                .whereNull('collection')
+                .where('subject', 'like', `%${friendlyId.replace(/[%_[]/g, '[$&]')}%`)
+            )
+          }
+        })
         .orderBy('id', 'desc')
         .limit(50)
         .select('id', 'to', 'subject', 'template', 'status', 'created_at')

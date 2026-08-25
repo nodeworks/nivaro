@@ -226,7 +226,21 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
   }
 
   try {
-    await sendRawMail({ to, subject, html: body })
+    // Record context (present on event / workflow-transition flow payloads)
+    // rides into the mail log so the record's Mail tab sees flow sends.
+    const dataRec = data as Record<string, unknown>
+    await sendRawMail({
+      to,
+      subject,
+      html: body,
+      collection: typeof dataRec.collection === 'string' ? dataRec.collection : undefined,
+      item:
+        dataRec.item != null
+          ? String(dataRec.item)
+          : Array.isArray(dataRec.keys) && dataRec.keys[0] != null
+            ? String(dataRec.keys[0])
+            : undefined
+    })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, to }, 'Mail sent')
     return { status: 'resolve' as const, output: data }
   } catch (err) {

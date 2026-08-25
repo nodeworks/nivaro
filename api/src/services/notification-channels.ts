@@ -289,6 +289,10 @@ export async function notifyUser(
           to: user.email,
           subject: opts.subject,
           template: 'notification',
+          // Record context rides into the mail log so the record's Mail tab
+          // sees every notification email about it.
+          collection: opts.collection ?? undefined,
+          item: opts.item != null ? String(opts.item) : undefined,
           data: {
             first_name: user.first_name,
             message: opts.message,
