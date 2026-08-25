@@ -36,13 +36,15 @@ export function FirstLoginChecklist({ profileUrl = '/profile' }: { profileUrl?: 
         .catch(() => null),
     staleTime: 60_000
   })
-  const { data: scopes } = useQuery<Array<{ mode: string; values: unknown[] }>>({
+  // /users/me/scopes returns {dimensions, defaults, restricted} — defaults is
+  // a {dimension: values[]} map, not an array (crashed with .some on first ship).
+  const { data: scopes } = useQuery<{ defaults?: Record<string, unknown[]> } | null>({
     queryKey: ['first-login-scopes'],
     queryFn: () =>
       client
         .request<{ data: never }>(get('/users/me/scopes'))
         .then((r) => r.data)
-        .catch(() => [] as never),
+        .catch(() => null as never),
     enabled: !!me,
     staleTime: 60_000
   })
@@ -77,7 +79,7 @@ export function FirstLoginChecklist({ profileUrl = '/profile' }: { profileUrl?: 
     },
     {
       label: 'Pick your default filters',
-      done: (scopes ?? []).some((s) => s.mode === 'default' && (s.values ?? []).length > 0),
+      done: Object.values(scopes?.defaults ?? {}).some((v) => Array.isArray(v) && v.length > 0),
       hint: 'Pre-filter lists to your zone or region'
     }
   ]

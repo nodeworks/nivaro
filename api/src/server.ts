@@ -193,7 +193,7 @@ export async function buildServer() {
     startDbHealthProbe()
     const DB_EXEMPT = /^\/api\/(version|health|changelog)/
     app.addHook('onRequest', async (req, reply) => {
-      if (!isDbHealthy() && req.url.startsWith('/api') && !DB_EXEMPT.test(req.url)) {
+      if (!isDbHealthy() && /^\/api([/?]|$)/.test(req.url) && !DB_EXEMPT.test(req.url)) {
         return reply.code(503).send({
           error: 'The database is unreachable — retrying automatically. Nothing was saved.',
           code: 'DB_UNAVAILABLE'
@@ -358,7 +358,11 @@ export async function buildServer() {
   if (existsSync(adminBuildPath)) {
     await app.register(fastifyStatic, { root: adminBuildPath, prefix: '/' })
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api') || req.url.startsWith('/socket.io')) {
+      // Segment-exact prefix match: '/api/...' is an API miss, but the admin
+      // SPA routes /api-analytics, /api-keys and /api-docs also START WITH
+      // '/api' — a bare startsWith('/api') served them a JSON 404 on hard
+      // reload instead of the app (Rob hit it live on /api-analytics).
+      if (/^\/api([/?]|$)/.test(req.url) || req.url.startsWith('/socket.io')) {
         return reply.code(404).send({ error: 'Not found' })
       }
       reply.sendFile('index.html')
