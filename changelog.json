@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-24T23:46:10.757Z",
+  "generated_at": "2026-08-25T00:08:35.292Z",
   "releases": [
+    {
+      "version": "0.1.125",
+      "tag": "v0.1.125",
+      "date": "2026-08-24T20:08:31-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Ops & Observability batch B (#136 #156 #157 #198 #235 #253 #257 #258 #288 #292 #294 #296 #300 #301 #302 #305 #308 #313 #314)",
+              "hash": "eb83bd22"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "tolerate ledger rows for migration files this image doesn't carry",
+              "hash": "e39274c7"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.124",
       "tag": "v0.1.124",
-      "date": "2026-08-24T19:46:07-04:00",
+      "date": "2026-08-24T19:46:10-04:00",
       "sections": [
         {
           "label": "Added",
