@@ -146,14 +146,14 @@ async function fireSubscriptionNotifications(
   }
 }
 
-type SubFilterOp = 'eq' | 'in' | 'intersects' | 'null' | 'nnull'
-interface SubFilter {
+export type SubFilterOp = 'eq' | 'in' | 'intersects' | 'null' | 'nnull'
+export interface SubFilter {
   field: string
   op: SubFilterOp
   value?: unknown
 }
 
-function filterMatches(op: SubFilterOp, actual: unknown, expected: unknown): boolean {
+export function filterMatches(op: SubFilterOp, actual: unknown, expected: unknown): boolean {
   const actualList = Array.isArray(actual) ? actual.map(String) : null
   const expectedList = Array.isArray(expected) ? expected.map(String) : null
   switch (op) {

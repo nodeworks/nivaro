@@ -82,12 +82,27 @@ export function RecordInsightsButton({
   )
 }
 
+const EVENT_LABEL: Record<string, string> = {
+  all: 'all changes',
+  create: 'new records',
+  update: 'updates',
+  delete: 'deletions',
+  workflow_transition: 'state changes'
+}
+
 function AudienceTab({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useNivaroClient()
+  // One deduped row per person (server drops redacted/suspended users and
+  // merges owner + watcher + subscriber roles) — the old three-list shape
+  // repeated the same names and surfaced redacted accounts.
   const { data, isLoading } = useQuery<{
-    watchers: Array<{ user: string; name: string; field: string }>
-    subscribers: Array<{ user: string; name: string; cadence: string; event_type: string }>
-    owners: Array<{ id: string; name: string }>
+    people: Array<{
+      id: string
+      name: string
+      owner: boolean
+      watch_fields: string[]
+      subscriptions: Array<{ event_type: string; cadence: string; reason: string | null }>
+    }>
   }>({
     queryKey: ['record-audience', collection, itemId],
     queryFn: () =>
@@ -97,72 +112,80 @@ function AudienceTab({ collection, itemId }: { collection: string; itemId: strin
     staleTime: 30_000
   })
   if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
-  const total =
-    (data?.watchers.length ?? 0) + (data?.subscribers.length ?? 0) + (data?.owners.length ?? 0)
-  if (total === 0)
+  const people = data?.people ?? []
+  if (people.length === 0)
     return (
       <p className='text-[12px] text-slate-400'>
-        Nobody is watching or subscribed — a change here notifies no one automatically.
+        Nobody hears about changes here automatically — no owners, watchers, or subscribers.
       </p>
     )
   return (
-    <div className='max-h-72 space-y-2 overflow-y-auto text-[12px]'>
-      {(data?.owners.length ?? 0) > 0 && (
-        <section>
-          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-            Current owners (in-app on transition)
-          </p>
-          {data?.owners.map((o) => (
-            <p key={o.id} className='text-slate-700 dark:text-slate-200'>
-              {o.name}
-            </p>
-          ))}
-        </section>
-      )}
-      {(data?.watchers.length ?? 0) > 0 && (
-        <section>
-          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-            Field watchers (instant)
-          </p>
-          {data?.watchers.map((w, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: user+field pairs can repeat
-            <p key={i} className='text-slate-700 dark:text-slate-200'>
-              {w.name} <span className='font-mono text-[10.5px] text-slate-400'>{w.field}</span>
-            </p>
-          ))}
-        </section>
-      )}
-      {(data?.subscribers.length ?? 0) > 0 && (
-        <section>
-          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-            Subscribers
-          </p>
-          {data?.subscribers.map((sub, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: rows can repeat per event type
-            <p key={i} className='text-slate-700 dark:text-slate-200'>
-              {sub.name}{' '}
-              <span className='text-[10.5px] text-slate-400'>
-                {sub.event_type} · {sub.cadence}
+    <div className='max-h-72 overflow-y-auto'>
+      <p className='pb-1.5 text-[10.5px] text-slate-400'>
+        {people.length} {people.length === 1 ? 'person hears' : 'people hear'} about changes to
+        this record
+      </p>
+      {people.map((p) => (
+        <div
+          key={p.id}
+          className='border-t border-slate-100 py-1.5 first:border-t-0 dark:border-border/50'
+        >
+          <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>{p.name}</p>
+          <div className='mt-0.5 flex flex-wrap gap-1'>
+            {p.owner && (
+              <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-medium text-nvr-navy dark:text-nvr-cyan'>
+                Owner — notified on transitions
               </span>
-            </p>
-          ))}
-        </section>
-      )}
+            )}
+            {p.watch_fields.length > 0 && (
+              <span
+                className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] text-slate-600 dark:bg-muted dark:text-slate-300'
+                data-tip={p.watch_fields.join(', ')}
+              >
+                Chose to watch {p.watch_fields.length}{' '}
+                {p.watch_fields.length === 1 ? 'field' : 'fields'}
+              </span>
+            )}
+            {p.subscriptions.map((s) => (
+              <span
+                key={`${s.event_type}:${s.cadence}:${s.reason ?? ''}`}
+                className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] text-slate-600 dark:bg-muted dark:text-slate-300'
+              >
+                {s.reason ?? `Subscribed to ${EVENT_LABEL[s.event_type] ?? s.event_type}`} ·{' '}
+                {s.cadence}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
 
 function IntegrationsTab({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useNivaroClient()
-  const { data, isLoading } = useQuery<{
-    erp: Array<{
+  // ERP rows come from the SAME route + query key the External-requests chip
+  // and failure banner use, so this tab can never disagree with them.
+  const { data: erpRows = [], isLoading: erpLoading } = useQuery<
+    Array<{
       id: number
+      external_api_name: string | null
       target: string | null
       endpoint_path: string | null
       status: string
       created_at: string
       attempts: number
     }>
+  >({
+    queryKey: ['erp-submissions', collection, String(itemId)],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/erp-submissions/${collection}/${encodeURIComponent(itemId)}`))
+        .then((r) => r.data ?? [])
+        .catch(() => [] as never),
+    staleTime: 30_000
+  })
+  const { data, isLoading } = useQuery<{
     webhooks: Array<{ id: number; webhook: string; response_status: number; created_at: string }>
   }>({
     queryKey: ['record-integrations', collection, itemId],
@@ -190,8 +213,8 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
         .catch(() => []),
     staleTime: 60_000
   })
-  if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
-  if ((data?.erp.length ?? 0) + (data?.webhooks.length ?? 0) === 0)
+  if (isLoading || erpLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
+  if (erpRows.length + (data?.webhooks.length ?? 0) === 0)
     return <p className='text-[12px] text-slate-400'>No integration activity for this record.</p>
   return (
     <>
@@ -215,10 +238,10 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
       )}
       {(() => { return (
     <div className='max-h-72 space-y-1 overflow-y-auto text-[12px]'>
-      {data?.erp.map((e) => (
+      {erpRows.map((e) => (
         <p key={`e${e.id}`} className='flex items-baseline justify-between gap-2'>
           <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
-            {e.target ?? e.endpoint_path ?? 'ERP push'}
+            {e.external_api_name ?? e.target ?? e.endpoint_path ?? 'ERP push'}
           </span>
           <span
             className={
