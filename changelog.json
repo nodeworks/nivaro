@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-08-25T16:14:37.605Z",
+  "generated_at": "2026-08-25T16:34:27.048Z",
   "releases": [
+    {
+      "version": "0.1.134",
+      "tag": "v0.1.134",
+      "date": "2026-08-25T12:34:23-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record-insights",
+              "text": "tab labels never wrap; popover widens to 480px",
+              "hash": "cea3c42e"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "cover the recent feature window — 5 new sections + 7 extended",
+              "hash": "fcbc9652"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "sweep — close 9 audit-log gaps, catch @nivaro/react re-exports up to shared",
+              "hash": "99c75bef"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.133",
       "tag": "v0.1.133",
-      "date": "2026-08-25T12:14:33-04:00",
+      "date": "2026-08-25T12:14:37-04:00",
       "sections": [
         {
           "label": "Added",
