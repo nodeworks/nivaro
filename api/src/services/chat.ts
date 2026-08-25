@@ -323,10 +323,13 @@ async function lastMessagePerRoom(rooms: string[]): Promise<Map<string, RoomSumm
   const out = new Map<string, RoomSummary['last_message']>()
   if (rooms.length === 0) return out
   for (const chunk of chunked(rooms)) {
+    // Tombstones (deleted_at set) are skipped — a deleted message must not be
+    // the sidebar preview, so the newest SURVIVING message represents the room.
     const rows = (await db('chat_messages as m')
       .whereIn('m.room', chunk)
+      .whereNull('m.deleted_at')
       .whereRaw(
-        'm.id = (SELECT MAX(m2.id) FROM chat_messages m2 WHERE m2.room = m.room)'
+        'm.id = (SELECT MAX(m2.id) FROM chat_messages m2 WHERE m2.room = m.room AND m2.deleted_at IS NULL)'
       )
       .select('m.id', 'm.room', 'm.message', 'm.sender', 'm.sender_name', 'm.date_created')) as Array<
       Record<string, unknown>
@@ -355,6 +358,8 @@ async function unreadPerRoom(userId: string, rooms: string[]): Promise<Map<strin
         j.on('w.room', '=', 'm.room').andOn(db.raw('w.[user] = ?', [userId]))
       )
       .whereIn('m.room', chunk)
+      // A deleted message is not something to catch up on — no unread credit.
+      .whereNull('m.deleted_at')
       .andWhere((qb) => qb.whereNull('m.sender').orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [userId.toUpperCase()]))
       .andWhere((qb) =>
         qb.whereNull('w.last_read_at').orWhereRaw('m.date_created > w.last_read_at')
