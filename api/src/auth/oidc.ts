@@ -20,7 +20,15 @@ export async function buildLoginUrl(state: string, codeVerifier: string, redirec
 
   return oidc.buildAuthorizationUrl(cfg, {
     redirect_uri: redirectUri ?? config.OIDC_REDIRECT_URI,
-    scope: isMicrosoftIssuer() ? 'openid profile email User.Read' : 'openid profile email',
+    // OIDC_EXTRA_SCOPES (space/comma list) widens the Graph token once the
+    // tenant has consented the permissions — e.g. "User.Read.All
+    // MailboxSettings.Read Presence.Read GroupMember.Read.All". Requesting an
+    // UNconsented scope fails the whole login, so this stays opt-in config.
+    scope: isMicrosoftIssuer()
+      ? ['openid profile email User.Read', (process.env.OIDC_EXTRA_SCOPES ?? '').replace(/,/g, ' ').trim()]
+          .filter(Boolean)
+          .join(' ')
+      : 'openid profile email',
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256'
