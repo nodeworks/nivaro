@@ -49,6 +49,21 @@ export const fieldDisplaySettingsGuide: DocSection = {
         ]
       ]
     },
+    { type: 'h3', text: 'Input masks' },
+    {
+      type: 'p',
+      text: 'Text fields can carry an input mask that formats as the user types — e.g. `(###) ###-####` for a phone number or `AA-####` for a reference code. Three tokens: `#` accepts a digit, `A` a letter, `*` any character; everything else in the mask is a literal that inserts itself automatically. The mask shapes only what is on screen — the stored value is the clean characters with the literals stripped, so filters and integrations never see the punctuation. The mask also doubles as the input placeholder when the field has no explicit one.'
+    },
+    { type: 'h3', text: 'Display units on numbers' },
+    {
+      type: 'p',
+      text: 'Numeric fields accept a display unit: `$` renders the value as currency, `%` appends a percent sign, and any other text becomes a suffix ("14 days"). Set it once on the field and it applies everywhere the shared display formatter renders that field. An explicit Format setting on the field wins over the unit.'
+    },
+    { type: 'h3', text: 'Freeze first column (inline grids)' },
+    {
+      type: 'p',
+      text: 'Wide inline grids (O2M child tables) can pin their leading cells: the "Freeze first column" switch in the grid settings keeps the row handles and the first data column in place while the rest of the grid scrolls horizontally. Pinned cells need an opaque background, so they give up row tinting — the trade-off the switch’s help text spells out.'
+    },
     { type: 'h3', text: 'Storage and API' },
     {
       type: 'ul',

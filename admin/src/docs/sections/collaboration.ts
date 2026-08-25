@@ -667,6 +667,19 @@ export const collabChat: DocSection = {
     {
       type: 'p',
       text: 'Admins manage the entity-room registry from the "Record rooms" button on `/chat`: register a prefix + collection + match field, or deactivate an existing type. Entity ids mentioned in messages render as links into the collection browser when a matching room type is registered.'
+    },
+    { type: 'h2', id: 'chat-edit-delete', text: 'Editing and deleting messages' },
+    {
+      type: 'ul',
+      items: [
+        'Edit — hover your own message and pick Edit. The window is 15 minutes from when it was sent; after that the option disappears. Edited messages show an "(edited)" marker, and an edit never re-fires mentions — nobody is notified again.',
+        'Delete — you can delete your own messages at any time, and admins can delete anyone’s. A delete leaves a "Message removed" tombstone so the thread’s shape survives, but the text and attachments are gone and its reactions are cleared. Admin deletions of someone else’s message are recorded in the audit log with the original sender named.',
+        'Deleted messages stop counting: they are excluded from the sidebar’s room previews and from unread counts, so a removed message can’t leave a phantom badge.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'To reach a whole group at once, use @channel in a channel room — it notifies up to 300 members and is limited to the channel’s creator or an admin. Regular @mentions are per-person.'
     }
   ]
 }

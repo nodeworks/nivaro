@@ -245,6 +245,19 @@ export const userFlows: DocSection = {
     {
       type: 'p',
       text: 'Only `active` flows execute. Toggling a flow to `inactive` immediately unregisters its cron job. Scheduled flows are re-registered automatically when the API restarts.'
+    },
+    { type: 'h2', id: 'flow-ai-build', text: 'Build with AI' },
+    {
+      type: 'p',
+      text: 'Admins can draft a flow from plain prose: the "Build with AI" button on the Flows page opens a prompt bar — describe what you want ("when an order is created over $500, email the sales team and log it") and the AI drafts a flow with a trigger and wired-up operations, then opens it in the editor.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The draft is always created inactive and named with an "(AI draft)" suffix — nothing runs until you have reviewed it and switched it on yourself.',
+        'The AI knows your collection names and any custom operation types extensions have registered, and keeps drafts small (a handful of operations wired head-to-tail).',
+        'If the AI cannot produce a valid flow from the prompt, nothing is created — rephrase and try again. Every successful draft is recorded in the activity log.'
+      ]
     }
   ]
 }

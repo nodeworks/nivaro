@@ -181,6 +181,15 @@ Content-Type: text/csv
     {
       type: 'note',
       text: "Export respects the current user's RBAC field permissions. Fields the user cannot read are excluded from the export regardless of what is specified in the fields array."
+    },
+    { type: 'h3', text: 'Background (async) exports' },
+    {
+      type: 'p',
+      text: 'Big exports do not have to be waited on: an export preset can be run asynchronously via `POST /api/export-presets/:id/run-async` (same filter body as the normal run). The call answers immediately with a run id while the export builds in the background as a tracked job run, using your identity and filters exactly as a foreground export would. When it finishes, the file lands in the file library and you get a notification — "Export ready" — that deep-links to the file for download. Failures are recorded on the job run.'
+    },
+    {
+      type: 'note',
+      text: 'This is currently an API-level capability — the collection browser’s Export popover still downloads directly.'
     }
   ]
 }

@@ -112,6 +112,19 @@ export const userExternalApisGuide: DocSection = {
       type: 'p',
       text: 'Secrets (token, password, client_secret, api_key value) are masked in GET responses with `••••••`. Re-submitting the masked value on PATCH preserves the existing secret. Only admins can read or write API configs.'
     },
+    { type: 'h3', text: 'Automatic retry for failed pushes' },
+    {
+      type: 'p',
+      text: 'Each API can carry its own auto-retry policy for failed ERP/external submissions: a maximum attempt count (1–10) and a starting backoff in minutes. The "Automatic retry for failed pushes" block on the API edit page has two inputs — both must be filled for the policy to be on; leaving either blank turns it off.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A background sweep runs every 10 minutes and picks up failed submissions on APIs that declare a policy, retrying up to 25 per sweep.',
+        'The backoff doubles after each failed attempt (5 min, 10, 20, 40, …) and caps at 24 hours; a submission that has used up its attempts is left alone.',
+        'Manual retry from the ERP Submissions page is unaffected — it always works, policy or not.'
+      ]
+    },
     { type: 'h3', text: 'Spec import (OpenAPI / Swagger)' },
     {
       type: 'p',
@@ -630,6 +643,11 @@ export const userDashboardsGuide: DocSection = {
     {
       type: 'p',
       text: "Shared dashboards appear in every user's list but can only be edited by the owner or an admin."
+    },
+    { type: 'h3', text: 'Sharing with one role' },
+    {
+      type: 'p',
+      text: 'A shared dashboard can be limited to a single role: check Shared, then pick a role under "Limit to a role (optional)". Only members of that role (plus the owner and admins) see it. Picking a role automatically forces the dashboard shared — a role-scoped private dashboard would be a contradiction — and clearing the role makes it visible to everyone again.'
     }
   ]
 }
@@ -825,6 +843,11 @@ export const userWorkspacesGuide: DocSection = {
     {
       type: 'p',
       text: 'Admins can create, edit, and delete workspaces via the Workspaces page in the sidebar. Each workspace needs a unique slug. The default workspace cannot be deleted.'
+    },
+    { type: 'h3', text: 'Workspace color' },
+    {
+      type: 'p',
+      text: 'Each workspace can carry an accent color (the color picker in the workspace form). While a workspace with a color is active, the whole admin re-tints to it — buttons, highlights, and tinted surfaces all follow, and the switcher dot shows the same color — so you can always tell at a glance which workspace you are in. Workspaces without a color fall back to the instance project color, then the default cyan.'
     }
   ]
 }

@@ -6,6 +6,7 @@ export * from './sections/admin-ux.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/collaboration.js'
+export * from './sections/command-center.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/devex.js'
@@ -20,10 +21,12 @@ export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/platform.js'
 export * from './sections/queues.js'
+export * from './sections/record-insights.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -53,6 +56,13 @@ import {
   ssoDocs
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
+import { commandCenterDocs } from './sections/command-center.js'
+import {
+  dbHealthDocs,
+  instanceOverridesDocs,
+  opsConsoleDocs
+} from './sections/ops-observability.js'
+import { recordInsightsDocs } from './sections/record-insights.js'
 import {
   collabApprovals,
   collabChat,
@@ -617,6 +627,7 @@ export const navSections: NavGroup[] = [
       contentOpsCloneItem,
       contentOpsRollback,
       contentOpsFieldHistory,
+      recordInsightsDocs,
       contentOpsAddendums,
       contentOpsPercentComplete,
       contentOpsPolymorphicRelations,
@@ -727,12 +738,16 @@ export const navSections: NavGroup[] = [
     label: 'Observability',
     items: [
       obsApiAnalytics,
+      commandCenterDocs,
       wallboardPulseDocs,
       recordGraphDocs,
       bugReporterDocs,
       journeyTrailDocs,
       sessionReplayDocs,
       obsHealthDashboard,
+      dbHealthDocs,
+      opsConsoleDocs,
+      instanceOverridesDocs,
       obsDataQuality,
       obsIssueLog,
       opsErrorTracking,

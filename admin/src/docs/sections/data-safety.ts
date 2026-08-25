@@ -208,6 +208,19 @@ function App() {
     {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
+    },
+    { type: 'h2', id: 'session-replay-markers', text: 'Timeline markers and the console panel' },
+    {
+      type: 'p',
+      text: 'Recordings now capture context alongside the pixels: every route change and every console info/warning/error the page emitted (plain console.log is deliberately skipped as noise; lines are truncated to 500 characters, capped at 500 markers per recording).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The player’s scrubber shows the markers as colored ticks — blue for route changes, red for console errors, amber for warnings. Clicking a tick seeks the replay to just before that moment. Info-level console lines are kept out of the scrubber to avoid clutter.',
+        'When a recording has console output, a Console panel appears under the player: a scrollable list of every captured line with All / Info / Warn / Error filter buttons and per-level counts. Clicking a line seeks the replay to it.',
+        'This makes "what was the user doing when that error fired" a one-click question — find the red tick, click it, watch.'
+      ]
     }
   ]
 }

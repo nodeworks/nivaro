@@ -159,6 +159,11 @@ export const queuesGuide: DocSection = {
         'When other users change items in this queue, an N updates · Refresh pill appears instead of the board reloading under you — click it to refresh.'
       ]
     },
+    { type: 'h3', text: 'Sidebar badges' },
+    {
+      type: 'p',
+      text: 'Each queue in the Queues sidebar carries a count pill: the total item count, with a red past-SLA count appended (e.g. "142 · 3⚠") when anything has breached. Large materialized queues show exact live counts straight from their cache; regular queues show the numbers from the latest nightly snapshot — the pill’s tooltip tells you which. Badges refresh every minute and only appear for queues with items.'
+    },
     { type: 'h3', text: 'Trends' },
     {
       type: 'p',
