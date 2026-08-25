@@ -72,9 +72,11 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
       preferredLanguage?: string | null
     }
     // Dev-only: dump the raw payload so an operator can see everything the
-    // tenant actually returns for these User.Read fields.
-    if (process.env.NODE_ENV === 'development') {
+    // tenant actually returns for these User.Read fields. NOTE: dev runs
+    // without NODE_ENV set, so gate on not-production.
+    if (process.env.NODE_ENV !== 'production') {
       console.info('[graph] /me payload:', JSON.stringify(g))
+      void probeGatedGraphEndpoints(accessToken)
     }
     return {
       title: g.jobTitle ?? null,
@@ -90,6 +92,35 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
     }
   } catch {
     return null
+  }
+}
+
+/**
+ * Dev-only reconnaissance: hit the Graph endpoints that need EXTRA scopes
+ * (manager → User.Read.All, groups → GroupMember.Read.All, mailbox settings
+ * incl. timezone/OOO → MailboxSettings.Read, Teams presence → Presence.Read)
+ * with the plain User.Read login token and log each outcome. A 403 means the
+ * tenant hasn't consented that scope; a 200 means the data is already ours.
+ * Never runs in production, never affects login (fire-and-forget).
+ */
+async function probeGatedGraphEndpoints(accessToken: string): Promise<void> {
+  const probes: Array<[string, string]> = [
+    ['manager', 'https://graph.microsoft.com/v1.0/me/manager?$select=displayName,mail,jobTitle'],
+    ['memberOf', 'https://graph.microsoft.com/v1.0/me/memberOf?$select=displayName&$top=10'],
+    ['mailboxSettings', 'https://graph.microsoft.com/v1.0/me/mailboxSettings'],
+    ['presence', 'https://graph.microsoft.com/v1.0/me/presence']
+  ]
+  for (const [label, url] of probes) {
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(5000)
+      })
+      const body = await res.text()
+      console.info(`[graph-probe] ${label}: ${res.status} ${body.slice(0, 400)}`)
+    } catch (err) {
+      console.info(`[graph-probe] ${label}: failed (${String(err).slice(0, 120)})`)
+    }
   }
 }
 
