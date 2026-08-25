@@ -6934,9 +6934,14 @@ export function ItemEditForm({
                               )}
 
                               {showHeader &&
-                                !headerCondensed &&
                                 (headerWidgets.length > 0 || headerFields.length > 0) && (
-                                  <div className='flex shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4'>
+                                  // Condensing HIDES rather than unmounts: a
+                                  // remount refires every header widget/chip
+                                  // fetch, which read as the sub-header
+                                  // "reloading" on scroll-up.
+                                  <div
+                                    className={`shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
+                                  >
                                     {[
                                       ...headerWidgets.map((w) => ({
                                         type: 'widget' as const,
