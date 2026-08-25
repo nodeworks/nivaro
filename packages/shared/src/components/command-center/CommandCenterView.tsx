@@ -32,6 +32,9 @@ interface Snapshot {
     idle_count: number
     names: string[]
     by_region: Array<{ region_id: number; count: number }>
+    /** Online people grouped at their geocoded office — precise map pins;
+     *  by_region only covers people WITHOUT an office (no double counting). */
+    offices?: Array<{ lat: number; lng: number; label: string; count: number; names: string[] }>
     regions: Array<{ region_id: number | null; label: string; count: number; names: string[] }>
   }
   throughput: { transitions_today: number; transitions_yesterday_same_time: number }
@@ -142,8 +145,19 @@ export function CommandCenterView({
   )
   const bubbles: BaseMapBubble[] = useMemo(() => {
     if (!showPeople) return []
+    // Precise office pins first (people with a geocoded Graph office address —
+    // names ride the label), then region centroids for everyone else. The
+    // server already keeps the two sets disjoint.
+    const offices: BaseMapBubble[] = (snap?.people.offices ?? []).map((o, i) => ({
+      id: `office-${i}`,
+      lat: o.lat,
+      lng: o.lng,
+      count: o.count,
+      label: `${o.label}${o.names.length ? ` — ${o.names.slice(0, 5).join(', ')}${o.names.length > 5 ? ` +${o.names.length - 5}` : ''}` : ''}`,
+      color: '#34d399'
+    }))
     const counts = new Map((snap?.people.by_region ?? []).map((r) => [r.region_id, r.count]))
-    return centroids
+    const regionBubbles = centroids
       .filter((c) => (counts.get(c.id) ?? 0) > 0)
       .map((c) => ({
         id: String(c.id),
@@ -153,6 +167,7 @@ export function CommandCenterView({
         label: c.label,
         color: '#34d399'
       }))
+    return [...offices, ...regionBubbles]
   }, [centroids, snap, showPeople])
 
   const t = snap?.throughput

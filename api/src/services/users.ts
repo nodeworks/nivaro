@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
+import { queueOfficeGeocode } from './office-geocode.js'
 
 export async function findOrCreateFromOIDC(profile: {
   sub: string
@@ -57,6 +58,7 @@ export async function findOrCreateFromOIDC(profile: {
     }
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
+    if (profile.office_location) queueOfficeGeocode(existing.id)
     return {
       ...existing,
       ...updates,
@@ -103,6 +105,7 @@ export async function findOrCreateFromOIDC(profile: {
   // Welcome auto-broadcast (#389): a configured message greets brand-new
   // users on first login — in-app row, fire-and-forget.
   const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  if (newId && profile.office_location) queueOfficeGeocode(newId)
   if (newId) {
     void db('nivaro_settings')
       .first('welcome_message')

@@ -195,6 +195,46 @@ export async function commandCenterRoutes(app: FastifyInstance) {
         }
 
         const ids = online.map((o) => String(o.user_id).toUpperCase())
+
+        // Precise office pins: users whose Graph office_location has been
+        // geocoded (migration 276) group into per-office bubbles; only the
+        // REMAINDER falls back to region-centroid bubbles, so nobody is
+        // counted on the map twice.
+        const officeRows = ids.length
+          ? ((await db('nivaro_users')
+              .whereIn('id', ids)
+              .whereNotNull('office_lat')
+              .select('id', 'office_lat', 'office_lng', 'office_location')
+              .catch(() => [])) as Array<{
+              id: string
+              office_lat: number
+              office_lng: number
+              office_location: string | null
+            }>)
+          : []
+        const officeByUser = new Map(officeRows.map((r) => [String(r.id).toUpperCase(), r]))
+        const officeGroups = new Map<
+          string,
+          { lat: number; lng: number; label: string; names: string[] }
+        >()
+        for (const o of online) {
+          const office = officeByUser.get(String(o.user_id).toUpperCase())
+          if (!office) continue
+          const lat = Number(office.office_lat)
+          const lng = Number(office.office_lng)
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
+          const key = `${lat.toFixed(4)},${lng.toFixed(4)}`
+          const g = officeGroups.get(key) ?? {
+            lat,
+            lng,
+            label: office.office_location ?? 'Office',
+            names: []
+          }
+          g.names.push(o.display_name ?? 'Unknown')
+          officeGroups.set(key, g)
+        }
+        const hasOffice = (uid: string) => officeByUser.has(uid)
+
         const scopeRows = ids.length
           ? ((await db('nivaro_user_scopes')
               .whereIn('dimension', ['region', 'division'])
@@ -214,7 +254,9 @@ export async function commandCenterRoutes(app: FastifyInstance) {
         }
         const byRegion = new Map<number, number>()
         for (const o of online) {
-          for (const rid of regionByUser.get(String(o.user_id).toUpperCase()) ?? []) {
+          const uid = String(o.user_id).toUpperCase()
+          if (hasOffice(uid)) continue // already pinned at a real office
+          for (const rid of regionByUser.get(uid) ?? []) {
             byRegion.set(rid, (byRegion.get(rid) ?? 0) + 1)
           }
         }
@@ -248,6 +290,13 @@ export async function commandCenterRoutes(app: FastifyInstance) {
           idle_count: online.filter((o) => o.is_idle).length,
           names: online.slice(0, 40).map((o) => o.display_name ?? 'Unknown'),
           by_region: [...byRegion.entries()].map(([region_id, count]) => ({ region_id, count })),
+          offices: [...officeGroups.values()].map((g) => ({
+            lat: g.lat,
+            lng: g.lng,
+            label: g.label,
+            count: g.names.length,
+            names: g.names.slice(0, 30)
+          })),
           regions: [...grouped.entries()]
             .map(([region_id, names]) => ({
               region_id,
@@ -257,7 +306,7 @@ export async function commandCenterRoutes(app: FastifyInstance) {
             }))
             .sort((a, z) => z.count - a.count)
         }
-      }, { online_count: 0, idle_count: 0, names: [] as string[], by_region: [] as Array<{ region_id: number; count: number }>, regions: [] as Array<{ region_id: number | null; label: string; count: number; names: string[] }> }),
+      }, { online_count: 0, idle_count: 0, names: [] as string[], by_region: [] as Array<{ region_id: number; count: number }>, offices: [] as Array<{ lat: number; lng: number; label: string; count: number; names: string[] }>, regions: [] as Array<{ region_id: number | null; label: string; count: number; names: string[] }> }),
 
       // Throughput: transitions today vs same window yesterday.
       safe(async () => {
