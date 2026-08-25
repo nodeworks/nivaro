@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-25T01:26:10.179Z",
+  "generated_at": "2026-08-25T02:04:00.781Z",
   "releases": [
+    {
+      "version": "0.1.131",
+      "tag": "v0.1.131",
+      "date": "2026-08-24T22:03:57-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "round 23 — the approved dozen (#441 #444 #447 #451 #453 #454 #457 #458 #459 #463 #469 #474)",
+              "hash": "4f351ad7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.130",
       "tag": "v0.1.130",
-      "date": "2026-08-24T21:26:06-04:00",
+      "date": "2026-08-24T21:26:10-04:00",
       "sections": [
         {
           "label": "Added",
