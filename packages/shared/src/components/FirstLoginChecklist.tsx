@@ -31,8 +31,10 @@ export function FirstLoginChecklist({ profileUrl = '/profile' }: { profileUrl?: 
     queryKey: ['first-login-me'],
     queryFn: () =>
       client
-        .request<MePayload>(get('/auth/me'))
-        .then((r) => r)
+        .request<{ data: MePayload }>(get('/auth/me'))
+        // /auth/me wraps the user in {data} — reading the wrapper made every
+        // row look undone and hid the saved onboarding_done dismissal.
+        .then((r) => r.data ?? null)
         .catch(() => null),
     staleTime: 60_000
   })
