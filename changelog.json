@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-08-25T13:58:20.985Z",
+  "generated_at": "2026-08-25T16:14:37.605Z",
   "releases": [
+    {
+      "version": "0.1.133",
+      "tag": "v0.1.133",
+      "date": "2026-08-25T12:14:33-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "record-insights",
+              "text": "readable Mail tab — status pills, wrapping subjects, failure reasons",
+              "hash": "727ecc4b"
+            },
+            {
+              "section": "Added",
+              "scope": "record-insights",
+              "text": "audience tab shows one person per row with the WHY; integrations aligned with External requests",
+              "hash": "87b71c28"
+            },
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "session recorder captures console + route markers like admin",
+              "hash": "271323a2"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "mail-log",
+              "text": "record Mail tab captures every send about the record, failed included",
+              "hash": "3099ced7"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.132",
       "tag": "v0.1.132",
-      "date": "2026-08-25T09:58:16-04:00",
+      "date": "2026-08-25T09:58:21-04:00",
       "sections": [
         {
           "label": "Added",
