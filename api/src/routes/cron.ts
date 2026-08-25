@@ -13,6 +13,37 @@ export async function cronRoutes(app: FastifyInstance) {
     return { data: app.cron.list() }
   })
 
+  // #198 — pause/resume a cron without a deploy. Persisted in
+  // settings.paused_crons so a restart keeps the choice; the schedule itself
+  // stays registered so resume is instant.
+  for (const action of ['pause', 'resume'] as const) {
+    app.post<{ Params: { id: string } }>(
+      `/:id/${action}`,
+      { preHandler: requireAdmin },
+      async (req, reply) => {
+        const { id } = req.params
+        if (!app.cron.list().some((j) => j.id === id)) {
+          return reply.code(404).send({ error: 'No scheduled job with that id' })
+        }
+        if (action === 'pause') app.cron.pause(id)
+        else app.cron.resume(id)
+        const { db } = await import('../db/index.js')
+        const paused = app.cron.list().filter((j) => j.paused).map((j) => j.id)
+        await db('nivaro_settings')
+          .orderBy('id', 'asc')
+          .first('id')
+          .then((row) =>
+            row
+              ? db('nivaro_settings').where({ id: row.id }).update({ paused_crons: JSON.stringify(paused) })
+              : null
+          )
+          .catch(() => {})
+        await logActivity({ action: `cron-${action}`, user: req.user?.id, req, comment: id })
+        return { data: { id, paused: action === 'pause' } }
+      }
+    )
+  }
+
   app.post<{ Params: { id: string } }>(
     '/:id/run',
     { preHandler: requireAdmin },

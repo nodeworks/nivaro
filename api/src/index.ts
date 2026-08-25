@@ -100,6 +100,26 @@ async function main() {
     shuttingDown = true
     app.log.info(`${signal} received — draining in-flight requests`)
     try {
+      // #313 — report what the shutdown cuts: running job runs are marked
+      // interrupted NOW (with a shutdown note) rather than discovered as
+      // stranded rows by the next boot's restart-impact sweep.
+      try {
+        const { db } = await import('./db/index.js')
+        const running = (await db('nivaro_job_runs')
+          .where('status', 'running')
+          .limit(50)
+          .select('id', 'job_id')) as Array<{ id: number; job_id: string }>
+        if (running.length > 0) {
+          app.log.warn(
+            `Shutdown is cutting ${running.length} running job(s): ${running.map((r) => r.job_id).join(', ')}`
+          )
+          await db('nivaro_job_runs')
+            .whereIn('id', running.map((r) => r.id))
+            .update({ status: 'interrupted', finished_at: new Date() })
+        }
+      } catch {
+        /* best-effort bookkeeping — never delay the drain */
+      }
       await app.close()
       await closeDb()
       process.exit(0)

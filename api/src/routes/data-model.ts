@@ -1358,7 +1358,13 @@ export async function dataModelRoutes(app: FastifyInstance) {
       })
       let recalculated = 0
       try {
+        const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
         for (const chunk of chunkArray(ids, 500)) {
+          if (jobRun.id != null && isCancelled(jobRun.id)) {
+            clearCancel(jobRun.id as number)
+            await jobRun.complete(`cancelled after ${recalculated}/${ids.length}`)
+            return reply.send({ data: { recalculated, cancelled: true } })
+          }
           for (const id of chunk) {
             await recalcRollupsForParent(entry, id)
           }

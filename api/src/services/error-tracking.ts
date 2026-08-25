@@ -21,6 +21,8 @@ export async function trackError(opts: {
   /** Session replay link — the recording (full or error clip) + offset of the error moment. */
   recordingId?: string | null
   recordingOffsetMs?: number | null
+  /** #300 — redacted request context (method/route/query keys/body SHAPE, never values). */
+  requestContext?: string | null
 }): Promise<void> {
   try {
     const message = (opts.message || 'Unknown error').slice(0, 400)
@@ -54,6 +56,7 @@ export async function trackError(opts: {
 
     const details = [
       `Route: ${opts.route}`,
+      opts.requestContext ? `Request context: ${String(opts.requestContext).slice(0, 2000)}` : null,
       opts.stack ? `\n${String(opts.stack).slice(0, 4000)}` : null
     ]
       .filter(Boolean)

@@ -11,6 +11,15 @@ import { requireAdmin } from '../middleware/authenticate.js'
 export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
+  /** Cooperative cancel (#302): flags the run; cancel-aware loops (rollup
+   *  backfill, find-replace) stop at their next chunk boundary. Flags are
+   *  in-process — a run on another replica ignores this replica's flag. */
+  app.post<{ Params: { id: string } }>('/:id/cancel', async (req, reply) => {
+    const { requestCancel } = await import('../services/job-cancel.js')
+    requestCancel(Number(req.params.id))
+    return reply.send({ data: { cancel_requested: true } })
+  })
+
   /** Filterable run history. */
   app.get('/', async (req) => {
     const q = req.query as {
@@ -95,6 +104,9 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
           expression: c.expression,
           extension_id: c.extensionId ?? null,
           next_run: c.nextRun,
+          paused: c.paused ?? false,
+          heavy: c.heavy ?? false,
+          idempotent: c.idempotent ?? 'unknown',
           last: strip(latestByJob.get(`cron:${c.id}`)),
           errors_7d: errByJob.get(`cron:${c.id}`) ?? 0
         })),

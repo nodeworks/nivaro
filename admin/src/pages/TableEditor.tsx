@@ -4874,14 +4874,15 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-protection', tableName],
     queryFn: () =>
       api
-        .get<{ data: { read_logging?: boolean; export_watermark?: boolean; collision_detection?: boolean } }>(
+        .get<{ data: { read_logging?: boolean; export_watermark?: boolean; collision_detection?: boolean; activity_retention_days?: number | null; trash_retention_days?: number | null } }>(
           `/collections/${tableName}`
         )
         .then((r) => r.data.data),
     enabled: !!tableName
   })
   const saveMut = useMutation({
-    mutationFn: (patch: Record<string, boolean>) => api.patch(`/collections/${tableName}`, patch),
+    mutationFn: (patch: Record<string, boolean | number | null>) =>
+      api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-protection', tableName] })
       toast.success('Data protection setting saved')
@@ -4933,6 +4934,40 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
           onCheckedChange={(v) => saveMut.mutate({ collision_detection: v })}
           disabled={saveMut.isPending || meta === undefined}
         />
+      </div>
+      {/* Per-collection retention overrides (#257/#258): purge this
+          collection's activity / trash on its own schedule; blank = follow
+          the instance-wide settings. */}
+      <div className='flex items-center justify-between border-t border-slate-100 px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Retention overrides</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Days to keep this collection&rsquo;s activity log and trash before the nightly purge —
+            blank follows the instance-wide settings. Imported legacy history is never purged.
+          </p>
+        </div>
+        <div className='flex items-center gap-3'>
+          {(
+            [
+              ['Activity', 'activity_retention_days'],
+              ['Trash', 'trash_retention_days']
+            ] as const
+          ).map(([label, key]) => (
+            <label key={key} className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+              {label}
+              <Input
+                type='number'
+                min={1}
+                defaultValue={meta?.[key] ?? ''}
+                onBlur={(e) =>
+                  saveMut.mutate({ [key]: e.target.value === '' ? null : Number(e.target.value) })
+                }
+                className='h-7 w-20 text-[12px]'
+                placeholder='—'
+              />
+            </label>
+          ))}
+        </div>
       </div>
     </div>
   )

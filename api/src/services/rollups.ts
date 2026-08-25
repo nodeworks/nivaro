@@ -457,6 +457,8 @@ export async function recalcRollupsForParent(
       'Rollup recalc failed'
     )
     // swallow — recalc must never break the write that triggered it
+    const { countSwallow } = await import('./swallow-counter.js')
+    countSwallow('rollup-recalc', err)
   }
 }
 
@@ -489,6 +491,8 @@ export async function recalcAffectedRollups(
   } catch (err) {
     console.error({ err, childCollection }, 'Rollup recalc failed for child collection')
     // swallow — recalc must never break the write that triggered it
+    const { countSwallow } = await import('./swallow-counter.js')
+    countSwallow('rollup-recalc-affected', err)
   }
 }
 

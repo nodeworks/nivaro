@@ -278,6 +278,9 @@ const HealthDashboardPage = lazy(() =>
 const DbHealthPage = lazy(() =>
   import('@/pages/DbHealth').then((m) => ({ default: m.DbHealthPage }))
 )
+const OpsConsolePage = lazy(() =>
+  import('@/pages/OpsConsole').then((m) => ({ default: m.OpsConsolePage }))
+)
 
 const RetentionPoliciesPage = lazy(() =>
   import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
@@ -553,6 +556,7 @@ export default function App() {
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
+                  <Route path='ops-console' element={<OpsConsolePage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
                   <Route path='data-quality' element={<Navigate to='/data-integrity?tab=quality' replace />} />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />

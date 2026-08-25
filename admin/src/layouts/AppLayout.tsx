@@ -233,6 +233,7 @@ export const navCategories: NavCategory[] = [
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics' },
       { icon: HeartPulse, label: 'Health', to: '/health' },
       { icon: Database, label: 'DB & Runtime', to: '/db-health' },
+      { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console' },
       { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity' },
       { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
       { icon: AlertOctagon, label: 'Issues', to: '/issues' },

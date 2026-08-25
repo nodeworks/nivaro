@@ -8,6 +8,12 @@ export interface CronEntry {
   expression: string
   extensionId?: string
   nextRun: Date | null
+  /** #136 — heavy jobs serialize through one global slot. */
+  heavy?: boolean
+  /** #305 — declared re-run safety, shown beside the run-now button. */
+  idempotent?: 'safe' | 'unsafe' | 'unknown'
+  /** #198 — a paused cron's ticks return immediately. */
+  paused?: boolean
 }
 
 type CronFn = () => void | Promise<void>
@@ -35,12 +41,51 @@ function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
 export class CronManager {
   private entries = new Map<string, InternalEntry>()
   private runningSince = new Map<string, number>()
+  /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
+  private pausedIds = new Set<string>()
+  /** Heavy-job serialization (#136): heavy ticks run one at a time, queued in
+   *  arrival order — nightly procs/sweeps/backfills stop piling onto the pool. */
+  private heavyChain: Promise<void> = Promise.resolve()
+
+  setPaused(ids: string[]): void {
+    this.pausedIds = new Set(ids)
+  }
+  pause(id: string): void {
+    this.pausedIds.add(id)
+  }
+  resume(id: string): void {
+    this.pausedIds.delete(id)
+  }
+  isPaused(id: string): boolean {
+    return this.pausedIds.has(id)
+  }
+  /** Post-registration metadata (#136/#305) — one annotation block in
+   *  server.ts marks heaviness and re-run safety without touching each
+   *  schedule() call site. */
+  annotate(id: string, meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }): void {
+    const e = this.entries.get(id)
+    if (!e) return
+    if (meta.heavy !== undefined) e.heavy = meta.heavy
+    if (meta.idempotent) e.idempotent = meta.idempotent
+  }
+  private runSerialized(heavy: boolean, work: () => Promise<void>): Promise<void> {
+    if (!heavy) return work()
+    const next = this.heavyChain.then(work, work)
+    this.heavyChain = next.catch(() => {})
+    return next
+  }
 
   schedule(
     id: string,
     expression: string,
     fn: CronFn,
-    opts?: { extensionId?: string; watchdogMs?: number; catchUpHours?: number }
+    opts?: {
+      extensionId?: string
+      watchdogMs?: number
+      catchUpHours?: number
+      heavy?: boolean
+      idempotent?: 'safe' | 'unsafe' | 'unknown'
+    }
   ): void {
     // Replace any existing job with the same id
     this.unschedule(id)
@@ -62,8 +107,12 @@ export class CronManager {
         catch: true
       },
       async () => {
+        // Paused (#198): the schedule stays registered (so resume needs no
+        // deploy) but ticks return without running or recording anything.
+        if (this.pausedIds.has(id)) return
         // Every tick lands in nivaro_job_runs (best-effort) so the Background
         // Jobs console and per-extension health read one source of truth.
+        await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
         const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
         this.runningSince.set(id, Date.now())
         const watchdog = setTimeout(() => {
@@ -82,18 +131,25 @@ export class CronManager {
           clearTimeout(watchdog)
           this.runningSince.delete(id)
         }
+        })
       }
     )
 
+    const self = this
     this.entries.set(id, {
       id,
       expression,
       fn,
       extensionId: opts?.extensionId,
       catchUpHours: opts?.catchUpHours,
+      heavy: opts?.heavy,
+      idempotent: opts?.idempotent ?? 'unknown',
       job,
       get nextRun() {
         return job.nextRun() ?? null
+      },
+      get paused() {
+        return self.pausedIds.has(id)
       }
     })
   }
@@ -180,11 +236,14 @@ export class CronManager {
   }
 
   list(): CronEntry[] {
-    return Array.from(this.entries.values()).map(({ id, expression, extensionId, job }) => ({
+    return Array.from(this.entries.values()).map(({ id, expression, extensionId, job, heavy, idempotent }) => ({
       id,
       expression,
       extensionId,
-      nextRun: job.nextRun() ?? null
+      nextRun: job.nextRun() ?? null,
+      heavy,
+      idempotent,
+      paused: this.pausedIds.has(id)
     }))
   }
 

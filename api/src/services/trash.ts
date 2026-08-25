@@ -129,14 +129,31 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
 /** Purge trash rows older than the retention window. Returns purged count.
  *  Records under an active legal hold are exempt — the hold's whole point. */
 export async function purgeExpiredTrash(): Promise<number> {
-  const cutoff = new Date(Date.now() - TRASH_RETENTION_DAYS * 86_400_000)
-  return db('nivaro_trash')
-    .where('deleted_at', '<', cutoff)
-    .whereNotExists(
+  const holdGuard = (q: ReturnType<typeof db>) =>
+    q.whereNotExists(
       db('nivaro_legal_holds')
         .whereRaw('nivaro_legal_holds.collection = nivaro_trash.collection')
         .whereRaw('nivaro_legal_holds.item_id = CAST(nivaro_trash.item_id AS NVARCHAR(255))')
         .whereNull('released_at')
     )
-    .del()
+  // Per-collection trash retention overrides (#258) purge on their own
+  // schedule; the default pass excludes overridden collections.
+  const overrides = (await db('nivaro_collections')
+    .whereNotNull('trash_retention_days')
+    .select('collection', 'trash_retention_days')
+    .catch(() => [])) as Array<{ collection: string; trash_retention_days: number }>
+  let purged = 0
+  for (const o of overrides) {
+    const cutoff = new Date(Date.now() - o.trash_retention_days * 86_400_000)
+    purged += await holdGuard(
+      db('nivaro_trash').where('collection', o.collection).where('deleted_at', '<', cutoff)
+    )
+      .del()
+      .catch(() => 0)
+  }
+  const cutoff = new Date(Date.now() - TRASH_RETENTION_DAYS * 86_400_000)
+  const base = db('nivaro_trash').where('deleted_at', '<', cutoff)
+  if (overrides.length > 0) base.whereNotIn('collection', overrides.map((o) => o.collection))
+  purged += await holdGuard(base).del()
+  return purged
 }

@@ -103,9 +103,15 @@ export async function findReplaceRoutes(app: FastifyInstance): Promise<void> {
     void (async () => {
       const { updateOne } = await import('../services/items.js')
       const user = req.user!
+      const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
       let done = 0
       let failed = 0
       for (const r of rows) {
+        if (run.id != null && isCancelled(run.id)) {
+          clearCancel(run.id as number)
+          await run.complete(`cancelled after ${done}/${rows.length}`)
+          return
+        }
         try {
           await updateOne(user, b.collection!, String(r.id), {
             [b.field!]: newValue(String(r[b.field!] ?? ''), b.find!, String(b.replace ?? ''), mode)

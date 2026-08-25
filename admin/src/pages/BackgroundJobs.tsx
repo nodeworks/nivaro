@@ -18,6 +18,9 @@ interface CronEntry {
   expression: string
   extension_id: string | null
   next_run: string | null
+  paused?: boolean
+  heavy?: boolean
+  idempotent?: 'safe' | 'unsafe' | 'unknown'
   errors_7d: number
   last: {
     status: string
@@ -148,6 +151,15 @@ export default function BackgroundJobs() {
     return { core, byExt }
   }, [crons])
 
+  const pauseResume = async (id: string, pause: boolean) => {
+    try {
+      await api.post(`/cron/${id}/${pause ? 'pause' : 'resume'}`)
+      toast.success(pause ? `Paused ${id}` : `Resumed ${id}`)
+      qc.invalidateQueries({ queryKey: ['job-registry'] })
+    } catch {
+      toast.error('Could not update the schedule')
+    }
+  }
   const runNow = async (id: string) => {
     setRunning(id)
     try {
@@ -186,6 +198,27 @@ export default function BackgroundJobs() {
           <tr key={c.id} className="border-t border-slate-100 dark:border-border">
             <td className="py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground">
               {c.id}
+              {c.paused && (
+                <span className="ml-1.5 rounded bg-amber-500/10 px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                  paused
+                </span>
+              )}
+              {c.heavy && (
+                <span
+                  className="ml-1.5 rounded bg-slate-500/10 px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-slate-500"
+                  title="Heavy — serialized: only one heavy job runs at a time"
+                >
+                  heavy
+                </span>
+              )}
+              {c.idempotent === 'unsafe' && (
+                <span
+                  className="ml-1.5 rounded bg-red-500/10 px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400"
+                  title="Re-running sends mail or mutates — run-now duplicates its effects"
+                >
+                  re-run unsafe
+                </span>
+              )}
             </td>
             <td className="py-1.5 pr-3 font-mono text-[11px] text-slate-400">{c.expression}</td>
             <td className="py-1.5 pr-3">
@@ -225,6 +258,14 @@ export default function BackgroundJobs() {
               >
                 <Play className="h-3 w-3" strokeWidth={2} />
                 {running === c.id ? 'Running…' : 'Run now'}
+              </button>
+              <button
+                type="button"
+                onClick={() => pauseResume(c.id, !c.paused)}
+                className="ml-1.5 inline-flex items-center rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground"
+                title={c.paused ? 'Resume — ticks run again immediately' : 'Pause — ticks skip until resumed; survives restarts'}
+              >
+                {c.paused ? 'Resume' : 'Pause'}
               </button>
             </td>
           </tr>

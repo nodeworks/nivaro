@@ -58,6 +58,22 @@ export async function buildServer() {
     trustProxy: config.TRUST_PROXY,
     logger: {
       level: config.LOG_LEVEL,
+      // Log viewer (#156): tee every line into the in-process ring buffer.
+      hooks: {
+        logMethod(args: unknown[], method: (...a: unknown[]) => void, level: number) {
+          try {
+            const parts = args.map((a) =>
+              typeof a === 'string' ? a : a instanceof Error ? a.message : JSON.stringify(a)
+            )
+            void import('./services/log-ring.js').then(({ pushLog }) =>
+              pushLog(level, parts.join(' '))
+            )
+          } catch {
+            /* the log line itself must never fail */
+          }
+          method.apply(this, args)
+        }
+      },
       ...(config.NODE_ENV === 'development'
         ? {
             transport: {
@@ -256,6 +272,7 @@ export async function buildServer() {
   }
 
   // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
+  const errorContextCounters = new Map<string, number>()
   app.setErrorHandler(
     (
       err: Error & {
@@ -270,12 +287,44 @@ export async function buildServer() {
     ) => {
       const status = err.statusCode ?? 500
       if (status >= 500 && req.url.startsWith('/api/')) {
+        // #300 — every 5th 500 per route also captures a REDACTED request
+        // sketch (query keys + body shape, never values) onto the issue, so a
+        // recurring 500 carries a reproducible request without leaking data.
+        const routeKey = `${req.method} ${req.routeOptions?.url ?? req.url}`
+        const n = (errorContextCounters.get(routeKey) ?? 0) + 1
+        errorContextCounters.set(routeKey, n)
+        let requestContext: string | null = null
+        if (n % 5 === 1) {
+          const shape = (v: unknown, depth: number): unknown => {
+            if (v === null || v === undefined) return null
+            if (Array.isArray(v)) return depth > 2 ? '[…]' : [shape(v[0], depth + 1)]
+            if (typeof v === 'object') {
+              if (depth > 2) return '{…}'
+              return Object.fromEntries(
+                Object.entries(v as Record<string, unknown>)
+                  .slice(0, 25)
+                  .map(([k, val]) => [k, shape(val, depth + 1)])
+              )
+            }
+            return typeof v
+          }
+          try {
+            requestContext = JSON.stringify({
+              url: req.url.slice(0, 300),
+              query_keys: Object.keys((req.query as Record<string, unknown>) ?? {}),
+              body_shape: shape(req.body, 0)
+            })
+          } catch {
+            requestContext = null
+          }
+        }
         trackError({
           source: 'server',
-          route: `${req.method} ${req.routeOptions?.url ?? req.url}`,
+          route: routeKey,
           message: err.message,
           stack: err.stack,
-          userId: req.user?.id ?? null
+          userId: req.user?.id ?? null,
+          requestContext
         }).catch(() => {})
       }
       req.log.error(err)
@@ -361,13 +410,31 @@ export async function buildServer() {
             .first('activity_retention_days', 'revision_retention_count')
             .catch(() => null)
 
-          if (row?.activity_retention_days) {
-            const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
-            // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
+          // Per-collection retention overrides (#257): a collection with its own
+          // activity_retention_days purges on ITS schedule; the global setting
+          // covers the rest. Overridden collections are excluded from the
+          // global pass so a longer override actually keeps rows longer.
+          const overrides = (await db('nivaro_collections')
+            .whereNotNull('activity_retention_days')
+            .select('collection', 'activity_retention_days')
+            .catch(() => [])) as Array<{ collection: string; activity_retention_days: number }>
+          for (const o of overrides) {
+            const cutoff = new Date(Date.now() - o.activity_retention_days * 86_400_000)
             await db('nivaro_activity')
+              .where('collection', o.collection)
               .where('timestamp', '<', cutoff)
               .whereNull('legacy_id')
               .delete()
+              .catch(() => {})
+          }
+          if (row?.activity_retention_days) {
+            const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
+            // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
+            const q = db('nivaro_activity')
+              .where('timestamp', '<', cutoff)
+              .whereNull('legacy_id')
+            if (overrides.length > 0) q.whereNotIn('collection', overrides.map((o) => o.collection))
+            await q.delete()
           }
 
           if (row?.revision_retention_count) {
@@ -1130,6 +1197,87 @@ export async function buildServer() {
       app.cron.markCatchUp('fk-integrity-sweep', 26)
       app.cron.markCatchUp('rollup-drift-sweep', 26)
       setTimeout(() => void app.cron.runCatchUps(), 30_000)
+
+      // Cron metadata (#136 heavy serialization · #305 re-run safety labels).
+      // Heavy = full-table sweeps that would otherwise pile onto the pool in
+      // the same 03:00-04:00 band; unsafe = re-running sends mail or mutates.
+      for (const id of [
+        'rollup-drift-sweep',
+        'fk-integrity-sweep',
+        'dq-nightly',
+        'conformance-nightly',
+        'config-health-sweep',
+        'dead-link-sweep',
+        'storage-snapshot',
+        'file-integrity-sweep'
+      ]) {
+        app.cron.annotate(id, { heavy: true, idempotent: 'safe' })
+      }
+      for (const id of [
+        'deadlock-sweep',
+        'pool-monitor',
+        'blocking-sessions',
+        'presence-janitor',
+        'ops-monitors',
+        'concurrency-sample',
+        'readiness-snapshot',
+        'workflow-auto-sweep'
+      ]) {
+        app.cron.annotate(id, { idempotent: 'safe' })
+      }
+      for (const id of [
+        'daily-action-digest',
+        'view-subscriptions-daily',
+        'view-subscriptions-weekly',
+        'report-studio-daily',
+        'report-studio-weekly',
+        'metric-alerts-digest-daily',
+        'metric-alerts-digest-weekly',
+        'scheduled-broadcasts',
+        'broadcast-ack-chasers',
+        'chat-reminders'
+      ]) {
+        app.cron.annotate(id, { idempotent: 'unsafe' })
+      }
+
+      // #198 — hydrate the paused set from settings so pauses survive restarts.
+      try {
+        const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons')) as
+          | { paused_crons?: string | null }
+          | undefined
+        if (row?.paused_crons) {
+          const ids = JSON.parse(row.paused_crons)
+          if (Array.isArray(ids)) app.cron.setPaused(ids.map(String))
+        }
+      } catch {
+        /* column mid-migration — nothing paused */
+      }
+
+      // Restart impact report (#292): job runs still marked 'running' from
+      // BEFORE this boot were killed by the restart — mark them interrupted
+      // and raise one summary issue with the names.
+      try {
+        const bootTime = new Date(Date.now() - process.uptime() * 1000)
+        const stranded = (await db('nivaro_job_runs')
+          .where('status', 'running')
+          .where('started_at', '<', bootTime)
+          .limit(50)
+          .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
+        if (stranded.length > 0) {
+          await db('nivaro_job_runs')
+            .whereIn('id', stranded.map((r) => r.id))
+            .update({ status: 'interrupted', finished_at: new Date() })
+          const { trackError } = await import('./services/error-tracking.js')
+          await trackError({
+            source: 'server',
+            route: 'restart-impact',
+            severity: 'medium',
+            message: `Restart interrupted ${stranded.length} running job(s): ${[...new Set(stranded.map((r) => r.job_id))].slice(0, 10).join(', ')} — re-run the ones that matter from /background-jobs`
+          })
+        }
+      } catch {
+        /* job-runs table shape mid-migration — skip */
+      }
     })
 
   return app

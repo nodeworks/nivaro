@@ -127,6 +127,8 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
           await db('nivaro_push_subscriptions').where({ id: sub.id }).del()
         } else {
           console.warn('[web-push] send failed:', status ?? err)
+          const { countSwallow } = await import('./swallow-counter.js')
+          countSwallow('web-push-send', err)
         }
       }
     }
