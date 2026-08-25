@@ -782,7 +782,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- /SYNC:profile -->
         </div>
 
-        <div class="doc-section" id="s-flows" data-toc='[{"id":"flows","label":"Flows"},{"id":"flow-triggers","label":"Triggers"},{"id":"flow-operations","label":"Operations"},{"id":"flow-status","label":"Status"}]'>
+        <div class="doc-section" id="s-flows" data-toc='[{"id":"flows","label":"Flows"},{"id":"flow-triggers","label":"Triggers"},{"id":"flow-operations","label":"Operations"},{"id":"flow-status","label":"Status"},{"id":"flow-ai-build","label":"Build with AI"}]'>
           <!-- SYNC:flows -->
           <h1 class="doc-h1" id="flows">Flows</h1>
           <p class="doc-p">Flows are automated workflows. Each flow has a trigger (how it starts) and a sequence of operations (what it does).</p>
@@ -813,6 +813,13 @@ Server listening on http://0.0.0.0:3055</code></pre>
           </ul>
           <h2 class="doc-h2" id="flow-status">Status</h2>
           <p class="doc-p">Only <code class="doc-code">active</code> flows execute. Toggling a flow to <code class="doc-code">inactive</code> immediately unregisters its cron job. Scheduled flows are re-registered automatically when the API restarts.</p>
+          <h2 class="doc-h2" id="flow-ai-build">Build with AI</h2>
+          <p class="doc-p">Admins can draft a flow from plain prose: the "Build with AI" button on the Flows page opens a prompt bar — describe what you want ("when an order is created over $500, email the sales team and log it") and the AI drafts a flow with a trigger and wired-up operations, then opens it in the editor.</p>
+          <ul class="doc-ul">
+            <li>The draft is always created inactive and named with an "(AI draft)" suffix — nothing runs until you have reviewed it and switched it on yourself.</li>
+            <li>The AI knows your collection names and any custom operation types extensions have registered, and keeps drafts small (a handful of operations wired head-to-tail).</li>
+            <li>If the AI cannot produce a valid flow from the prompt, nothing is created — rephrase and try again. Every successful draft is recorded in the activity log.</li>
+          </ul>
           <!-- /SYNC:flows -->
         </div>
 
@@ -1093,6 +1100,8 @@ const article = await nivaro.request(readItem('articles', '123'))
           <p class="doc-p">Click + New Dashboard, give it a name, and optionally check Shared. Add widgets using + Add Widget in the toolbar.</p>
           <h3 class="doc-h3">Shared dashboards</h3>
           <p class="doc-p">Shared dashboards appear in every user's list but can only be edited by the owner or an admin.</p>
+          <h3 class="doc-h3">Sharing with one role</h3>
+          <p class="doc-p">A shared dashboard can be limited to a single role: check Shared, then pick a role under "Limit to a role (optional)". Only members of that role (plus the owner and admins) see it. Picking a role automatically forces the dashboard shared — a role-scoped private dashboard would be a contradiction — and clearing the role makes it visible to everyone again.</p>
           <!-- /SYNC:dashboards-guide -->
         </div>
 
@@ -1119,6 +1128,8 @@ const article = await nivaro.request(readItem('articles', '123'))
           <div class="doc-note">Workspace isolation applies to collections and roles — which collections appear in the sidebar and which roles exist for assignment. Data rows (items) are not filtered by workspace; all records in a table are visible regardless of active workspace. Full row-level isolation would require a <code class="doc-code">workspace_id</code> FK column per business table and can be added in a future migration.</div>
           <h3 class="doc-h3">Managing workspaces</h3>
           <p class="doc-p">Admins can create, edit, and delete workspaces via the Workspaces page in the sidebar. Each workspace needs a unique slug. The default workspace cannot be deleted.</p>
+          <h3 class="doc-h3">Workspace color</h3>
+          <p class="doc-p">Each workspace can carry an accent color (the color picker in the workspace form). While a workspace with a color is active, the whole admin re-tints to it — buttons, highlights, and tinted surfaces all follow, and the switcher dot shows the same color — so you can always tell at a glance which workspace you are in. Workspaces without a color fall back to the instance project color, then the default cyan.</p>
           <!-- /SYNC:workspaces-guide -->
         </div>
 
@@ -1144,6 +1155,13 @@ const article = await nivaro.request(readItem('articles', '123'))
           <p class="doc-p">The test panel supports full request composition: method selector, path, body textarea (shown for POST/PUT/PATCH), collapsible query params and request headers editors, and a response section that shows status, body, and toggleable response headers. Use the Custom pill for ad-hoc requests or select a predefined endpoint pill to start from its defaults.</p>
           <h3 class="doc-h3">Security</h3>
           <p class="doc-p">Secrets (token, password, client_secret, api_key value) are masked in GET responses with <code class="doc-code">••••••</code>. Re-submitting the masked value on PATCH preserves the existing secret. Only admins can read or write API configs.</p>
+          <h3 class="doc-h3">Automatic retry for failed pushes</h3>
+          <p class="doc-p">Each API can carry its own auto-retry policy for failed ERP/external submissions: a maximum attempt count (1–10) and a starting backoff in minutes. The "Automatic retry for failed pushes" block on the API edit page has two inputs — both must be filled for the policy to be on; leaving either blank turns it off.</p>
+          <ul class="doc-ul">
+            <li>A background sweep runs every 10 minutes and picks up failed submissions on APIs that declare a policy, retrying up to 25 per sweep.</li>
+            <li>The backoff doubles after each failed attempt (5 min, 10, 20, 40, …) and caps at 24 hours; a submission that has used up its attempts is left alone.</li>
+            <li>Manual retry from the ERP Submissions page is unaffected — it always works, policy or not.</li>
+          </ul>
           <h3 class="doc-h3">Spec import (OpenAPI / Swagger)</h3>
           <p class="doc-p">The "Import Spec" collapsible in the Endpoints tab lets you bulk-create endpoint templates from an OpenAPI 3.x or Swagger 2.0 JSON document. Paste or upload the spec JSON; all paths and HTTP methods are parsed and inserted as predefined endpoint templates. YAML is not supported — convert to JSON first.</p>
           <div class="doc-note">External APIs intentionally skip SSRF protection — they are admin-only and designed to reach internal corporate services (Oracle EBS, SAP, etc.) that would otherwise be blocked. SSRF protection applies to webhooks, not external APIs.</div>
@@ -7978,6 +7996,12 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
               <tr><td>Inline edit</td><td>M2O relations</td><td>On by default. When enabled, the related record can be opened and edited inline next to the relation picker; when disabled, the field is a plain pick-only combobox.</td></tr>
               <tr><td>Max values</td><td>M2M relations</td><td>Integer limit on how many related records can be linked. Leave blank for unlimited. Setting it to 1 switches the field to a single-select combobox.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Input masks</h3>
+          <p class="doc-p">Text fields can carry an input mask that formats as the user types — e.g. <code class="doc-code">(###) ###-####</code> for a phone number or <code class="doc-code">AA-####</code> for a reference code. Three tokens: <code class="doc-code">#</code> accepts a digit, <code class="doc-code">A</code> a letter, <code class="doc-code">*</code> any character; everything else in the mask is a literal that inserts itself automatically. The mask shapes only what is on screen — the stored value is the clean characters with the literals stripped, so filters and integrations never see the punctuation. The mask also doubles as the input placeholder when the field has no explicit one.</p>
+          <h3 class="doc-h3">Display units on numbers</h3>
+          <p class="doc-p">Numeric fields accept a display unit: <code class="doc-code">$</code> renders the value as currency, <code class="doc-code">%</code> appends a percent sign, and any other text becomes a suffix ("14 days"). Set it once on the field and it applies everywhere the shared display formatter renders that field. An explicit Format setting on the field wins over the unit.</p>
+          <h3 class="doc-h3">Freeze first column (inline grids)</h3>
+          <p class="doc-p">Wide inline grids (O2M child tables) can pin their leading cells: the "Freeze first column" switch in the grid settings keeps the row handles and the first data column in place while the rest of the grid scrolls horizontally. Pinned cells need an opaque background, so they give up row tinting — the trade-off the switch’s help text spells out.</p>
           <h3 class="doc-h3">Storage and API</h3>
           <ul class="doc-ul">
             <li>Settings are stored on the nivaro_fields row for the collection + field — label, note, interface, required, hidden and readonly are real columns; max_values and inline_relation are merged into the options JSON column.</li>
@@ -9395,6 +9419,9 @@ Content-Type: text/csv
 // Response for json format:
 { "data": [...] }</code></pre>
           <div class="doc-note">Export respects the current user's RBAC field permissions. Fields the user cannot read are excluded from the export regardless of what is specified in the fields array.</div>
+          <h3 class="doc-h3">Background (async) exports</h3>
+          <p class="doc-p">Big exports do not have to be waited on: an export preset can be run asynchronously via <code class="doc-code">POST /api/export-presets/:id/run-async</code> (same filter body as the normal run). The call answers immediately with a run id while the export builds in the background as a tracked job run, using your identity and filters exactly as a foreground export would. When it finishes, the file lands in the file library and you get a notification — "Export ready" — that deep-links to the file for download. Failures are recorded on the job run.</p>
+          <div class="doc-note">This is currently an API-level capability — the collection browser’s Export popover still downloads directly.</div>
           <!-- /SYNC:content-ops-export -->
         </div>
 
