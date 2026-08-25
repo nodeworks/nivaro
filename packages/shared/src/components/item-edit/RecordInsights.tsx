@@ -46,7 +46,7 @@ export function RecordInsightsButton({
         <Info className='h-3.5 w-3.5' />
       </button>
       {open && (
-        <div className='absolute right-0 top-full z-[60] mt-1 w-[380px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
+        <div className='absolute right-0 top-full z-[60] mt-1 w-[440px] max-w-[92vw] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
           <div className='mb-2 flex gap-1'>
             {(
               [
@@ -321,6 +321,23 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
 
 
 // ─── Mail tab (#261): mail sent about this record — headers only ─────────────
+const MAIL_STATUS: Record<string, { label: string; cls: string }> = {
+  sent: { label: 'Sent', cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+  failed: { label: 'Failed', cls: 'bg-red-500/10 text-red-600 dark:text-red-400' },
+  deferred: { label: 'In daily digest', cls: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  dropped: { label: 'Not sent (test mode)', cls: 'bg-slate-500/10 text-slate-500 dark:text-slate-400' }
+}
+
+/** "beth@x.com, rob@y.com, …" → "beth, rob +3" — full list rides the tip. */
+function shortRecipients(to: string): string {
+  const parts = to
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const names = parts.slice(0, 2).map((p) => p.split('@')[0])
+  return names.join(', ') + (parts.length > 2 ? ` +${parts.length - 2}` : '')
+}
+
 function MailTab({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useNivaroClient()
   const { data: rows = [], isLoading } = useQuery({
@@ -328,7 +345,15 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
     queryFn: () =>
       client
         .request<{
-          data: Array<{ id: number; to: string; subject: string; template: string | null; status: string; created_at: string }>
+          data: Array<{
+            id: number
+            to: string
+            subject: string
+            template: string | null
+            status: string
+            error: string | null
+            created_at: string
+          }>
         }>(get(`/mail-log/record/${collection}/${itemId}`))
         .then((r) => r.data ?? [])
         .catch(() => []),
@@ -338,29 +363,55 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
   if (rows.length === 0)
     return (
       <p className='p-3 text-[12px] text-slate-400'>
-        No emails recorded about this record. (Mail logging captures record context from
-        subscription and workflow sends.)
+        No emails have been sent about this record.
       </p>
     )
   return (
-    <div className='max-h-72 overflow-y-auto'>
-      {rows.map((m) => (
-        <div key={m.id} className='border-b border-slate-100 px-3 py-1.5 last:border-b-0 dark:border-border/50'>
-          <div className='flex items-center gap-2'>
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                m.status === 'sent' ? 'bg-emerald-500' : m.status === 'failed' ? 'bg-red-500' : 'bg-slate-300'
-              }`}
-            />
-            <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
-              {m.subject}
-            </span>
+    <div className='max-h-80 overflow-y-auto'>
+      {rows.map((m) => {
+        const st = MAIL_STATUS[m.status] ?? {
+          label: m.status,
+          cls: 'bg-slate-500/10 text-slate-500'
+        }
+        return (
+          <div
+            key={m.id}
+            className='border-t border-slate-100 py-2 first:border-t-0 dark:border-border/50'
+          >
+            <div className='flex items-start justify-between gap-2'>
+              <p
+                className='min-w-0 text-[12px] leading-snug text-slate-700 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden dark:text-slate-200'
+                data-tip={m.subject}
+              >
+                {m.subject}
+              </p>
+              <span
+                className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium ${st.cls}`}
+              >
+                {st.label}
+              </span>
+            </div>
+            <p className='mt-0.5 text-[10.5px] text-slate-400'>
+              <span data-tip={m.to}>to {shortRecipients(m.to)}</span>
+              {' · '}
+              <span data-tip={new Date(m.created_at).toLocaleString()}>
+                {new Date(m.created_at).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric'
+                })}
+              </span>
+            </p>
+            {m.status === 'failed' && m.error && (
+              <p
+                className='mt-0.5 truncate rounded bg-red-500/5 px-1.5 py-0.5 text-[10.5px] text-red-600 dark:text-red-400'
+                data-tip={m.error}
+              >
+                {m.error}
+              </p>
+            )}
           </div>
-          <p className='ml-3.5 truncate text-[10.5px] text-slate-400'>
-            to {m.to} · {m.status} · {new Date(m.created_at).toLocaleString()}
-          </p>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

@@ -115,7 +115,7 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
         })
         .orderBy('id', 'desc')
         .limit(50)
-        .select('id', 'to', 'subject', 'template', 'status', 'created_at')
+        .select('id', 'to', 'subject', 'template', 'status', 'error', 'created_at')
       return reply.send({ data: rows })
     }
   )
