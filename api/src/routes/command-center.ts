@@ -164,13 +164,46 @@ export async function commandCenterRoutes(app: FastifyInstance) {
             byRegion.set(rid, (byRegion.get(rid) ?? 0) + 1)
           }
         }
+        // Group PEOPLE by region so the pane mirrors the map bubbles —
+        // "hard to distinguish who is where" (Rob). Users with no region
+        // placement land in an honest "No region set" bucket.
+        const regionLabels = new Map<number, string>()
+        const allRegionIds = [...new Set([...regionByUser.values()].flat())]
+        if (allRegionIds.length > 0) {
+          try {
+            const labels = (await db('regions')
+              .whereIn('id', allRegionIds)
+              .select('id', 'short_name')) as Array<{ id: number; short_name: string | null }>
+            for (const l of labels) regionLabels.set(l.id, l.short_name ?? String(l.id))
+          } catch {
+            /* labels degrade to ids */
+          }
+        }
+        const grouped = new Map<number | null, string[]>()
+        for (const o of online) {
+          const regs = regionByUser.get(String(o.user_id).toUpperCase()) ?? []
+          const name = o.display_name ?? 'Unknown'
+          if (regs.length === 0) {
+            grouped.set(null, [...(grouped.get(null) ?? []), name])
+          } else {
+            for (const rid of regs) grouped.set(rid, [...(grouped.get(rid) ?? []), name])
+          }
+        }
         return {
           online_count: online.length,
           idle_count: online.filter((o) => o.is_idle).length,
           names: online.slice(0, 40).map((o) => o.display_name ?? 'Unknown'),
-          by_region: [...byRegion.entries()].map(([region_id, count]) => ({ region_id, count }))
+          by_region: [...byRegion.entries()].map(([region_id, count]) => ({ region_id, count })),
+          regions: [...grouped.entries()]
+            .map(([region_id, names]) => ({
+              region_id,
+              label: region_id === null ? 'No region set' : (regionLabels.get(region_id) ?? String(region_id)),
+              count: names.length,
+              names: names.slice(0, 30)
+            }))
+            .sort((a, z) => z.count - a.count)
         }
-      }, { online_count: 0, idle_count: 0, names: [] as string[], by_region: [] as Array<{ region_id: number; count: number }> }),
+      }, { online_count: 0, idle_count: 0, names: [] as string[], by_region: [] as Array<{ region_id: number; count: number }>, regions: [] as Array<{ region_id: number | null; label: string; count: number; names: string[] }> }),
 
       // Throughput: transitions today vs same window yesterday.
       safe(async () => {

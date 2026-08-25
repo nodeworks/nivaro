@@ -59,7 +59,8 @@ export function BaseMap({
   statusLine,
   onPinClick,
   onBubbleClick,
-  minHeight = 420
+  minHeight = 420,
+  focus = null
 }: {
   pins: BaseMapPin[]
   bubbles?: BaseMapBubble[]
@@ -68,6 +69,9 @@ export function BaseMap({
   onPinClick?: (id: string) => void
   onBubbleClick?: (id: string) => void
   minHeight?: number
+  /** Fly the view somewhere (People-pane region click). Nonce forces re-focus
+   *  on repeat clicks of the same target. */
+  focus?: { lat: number; lng: number; zoom?: number; nonce: number } | null
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
@@ -104,6 +108,12 @@ export function BaseMap({
     }
     setView({ ...center, zoom })
   }, [pins, bubbles, size])
+
+  useEffect(() => {
+    if (!focus) return
+    setView({ lat: focus.lat, lng: focus.lng, zoom: focus.zoom ?? 8 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.nonce])
 
   const v = view ?? { lat: 39.5, lng: -98.35, zoom: 4 }
   const cx = lon2x(v.lng, v.zoom)
@@ -235,15 +245,20 @@ export function BaseMap({
             data-tip={`${b.label} — ${b.count} online`}
           >
             <span
-              className='flex items-center justify-center rounded-full font-bold text-white'
+              className='flex items-center justify-center gap-0.5 rounded-full font-bold text-white'
               style={{
                 width: r * 2,
                 height: r * 2,
-                background: `${color}55`,
-                border: `2px solid ${color}`,
-                fontSize: Math.max(12, Math.min(18, r / 2))
+                background: `${color}45`,
+                border: `2.5px dashed ${color}`,
+                boxShadow: `0 0 0 3px ${color}22`,
+                fontSize: Math.max(12, Math.min(18, r / 2)),
+                textShadow: '0 1px 2px rgba(0,0,0,0.55)'
               }}
             >
+              <svg width='12' height='12' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
+                <path d='M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z' />
+              </svg>
               {b.count}
             </span>
             <span

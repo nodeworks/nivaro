@@ -32,6 +32,7 @@ interface Snapshot {
     idle_count: number
     names: string[]
     by_region: Array<{ region_id: number; count: number }>
+    regions: Array<{ region_id: number | null; label: string; count: number; names: string[] }>
   }
   throughput: { transitions_today: number; transitions_yesterday_same_time: number }
   health: {
@@ -91,6 +92,7 @@ export function CommandCenterView({
   const [geoCollection, setGeoCollection] = useState(geoCollections[0] ?? 'locations')
   const [showPeople, setShowPeople] = useState(true)
   const [clock, setClock] = useState(() => new Date())
+  const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number; zoom?: number; nonce: number } | null>(null)
   useEffect(() => {
     const t = setInterval(() => setClock(new Date()), 1000)
     return () => clearInterval(t)
@@ -229,6 +231,7 @@ export function CommandCenterView({
             <BaseMap
               pins={pins}
               bubbles={bubbles}
+              focus={mapFocus}
               onPinClick={(id) =>
                 navigate(recordUrl ? recordUrl(geoCollection, id) : `/collections/${geoCollection}/${id}`)
               }
@@ -286,19 +289,50 @@ export function CommandCenterView({
             </div>
           </div>
 
-          {/* People */}
+          {/* People — grouped by region so the pane mirrors the map bubbles;
+              clicking a region flies the map to its centroid. */}
           <div className={PANEL}>
             <div className={PANEL_HEAD}>
               <span className={TITLE}>People on now</span>
               <span className='text-[11px] tabular-nums text-slate-500'>{snap?.people.online_count ?? 0}</span>
             </div>
-            <div className='flex flex-wrap gap-1.5 p-3'>
-              {(snap?.people.names ?? []).map((n, i) => (
-                <span key={i} className='rounded-full bg-white/5 px-2 py-0.5 text-[11.5px] text-slate-300'>
-                  {n}
-                </span>
-              ))}
-              {(snap?.people.names ?? []).length === 0 && (
+            <div className='space-y-2.5 p-3'>
+              {(snap?.people.regions ?? []).map((g) => {
+                const centroid = g.region_id != null ? centroids.find((c) => c.id === g.region_id) : null
+                return (
+                  <div key={String(g.region_id)}>
+                    <button
+                      type='button'
+                      disabled={!centroid}
+                      onClick={() =>
+                        centroid &&
+                        setMapFocus({ lat: centroid.lat, lng: centroid.lng, zoom: 8, nonce: Date.now() })
+                      }
+                      className={`flex w-full items-center gap-1.5 text-left ${centroid ? 'group cursor-pointer' : 'cursor-default'}`}
+                      title={centroid ? 'Show this region on the map' : 'No map placement for this group'}
+                    >
+                      <span className='flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-dashed border-emerald-400/80 bg-emerald-400/25' />
+                      <span className='text-[11.5px] font-semibold uppercase tracking-wide text-emerald-300 group-hover:underline'>
+                        {g.label}
+                      </span>
+                      <span className='text-[11px] tabular-nums text-slate-500'>{g.count}</span>
+                      {centroid && (
+                        <span className='ml-auto text-[10.5px] text-slate-500 opacity-0 transition-opacity group-hover:opacity-100'>
+                          show on map →
+                        </span>
+                      )}
+                    </button>
+                    <div className='mt-1 flex flex-wrap gap-1.5 pl-5'>
+                      {g.names.map((n, i) => (
+                        <span key={i} className='rounded-full bg-white/5 px-2 py-0.5 text-[11.5px] text-slate-300'>
+                          {n}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              {(snap?.people.regions ?? []).length === 0 && (
                 <p className='text-[12px] text-slate-500'>Nobody online right now.</p>
               )}
             </div>
