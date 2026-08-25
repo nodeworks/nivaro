@@ -71,10 +71,9 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
       employeeId?: string | null
       preferredLanguage?: string | null
     }
-    // Dev-only: dump the raw payload so an operator can see everything the
-    // tenant actually returns for these User.Read fields. NOTE: dev runs
-    // without NODE_ENV set, so gate on not-production.
-    if (process.env.NODE_ENV !== 'production') {
+    // Diagnostics are explicit OPT-IN (GRAPH_DEBUG=true) and never in
+    // production — the payload is PII and must not land in logs by accident.
+    if (process.env.GRAPH_DEBUG === 'true' && process.env.NODE_ENV !== 'production') {
       console.info('[graph] /me payload:', JSON.stringify(g))
       void probeGatedGraphEndpoints(accessToken)
     }
@@ -117,7 +116,19 @@ async function probeGatedGraphEndpoints(accessToken: string): Promise<void> {
         signal: AbortSignal.timeout(5000)
       })
       const body = await res.text()
-      console.info(`[graph-probe] ${label}: ${res.status} ${body.slice(0, 400)}`)
+      if (res.ok) {
+        // A 200 means the scope is consented — the payload IS the finding.
+        console.info(`[graph-probe] ${label}: ${res.status} ${body.slice(0, 400)}`)
+      } else {
+        // Denials log status + Graph error code only, never the full body.
+        let code = ''
+        try {
+          code = (JSON.parse(body) as { error?: { code?: string } }).error?.code ?? ''
+        } catch {
+          /* status alone suffices */
+        }
+        console.info(`[graph-probe] ${label}: ${res.status}${code ? ` (${code})` : ''}`)
+      }
     } catch (err) {
       console.info(`[graph-probe] ${label}: failed (${String(err).slice(0, 120)})`)
     }
