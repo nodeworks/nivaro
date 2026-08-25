@@ -277,7 +277,9 @@ export async function commandCenterRoutes(app: FastifyInstance) {
         }
         const grouped = new Map<number | null, string[]>()
         for (const o of online) {
-          const regs = regionByUser.get(String(o.user_id).toUpperCase()) ?? []
+          const uid = String(o.user_id).toUpperCase()
+          if (hasOffice(uid)) continue // office groups cover them below
+          const regs = regionByUser.get(uid) ?? []
           const name = o.display_name ?? 'Unknown'
           if (regs.length === 0) {
             grouped.set(null, [...(grouped.get(null) ?? []), name])
@@ -297,14 +299,29 @@ export async function commandCenterRoutes(app: FastifyInstance) {
             count: g.names.length,
             names: g.names.slice(0, 30)
           })),
-          regions: [...grouped.entries()]
-            .map(([region_id, names]) => ({
+          regions: [
+            // Office groups lead — a known street address beats a region
+            // bucket, and lat/lng lets the pane fly the map straight there.
+            ...[...officeGroups.values()].map((g) => ({
+              region_id: null as number | null,
+              label: g.label,
+              count: g.names.length,
+              names: g.names.slice(0, 30),
+              lat: g.lat,
+              lng: g.lng
+            })),
+            ...[...grouped.entries()].map(([region_id, names]) => ({
               region_id,
-              label: region_id === null ? 'No region set' : (regionLabels.get(region_id) ?? String(region_id)),
+              label:
+                region_id === null
+                  ? 'No location set'
+                  : (regionLabels.get(region_id) ?? String(region_id)),
               count: names.length,
-              names: names.slice(0, 30)
+              names: names.slice(0, 30),
+              lat: undefined as number | undefined,
+              lng: undefined as number | undefined
             }))
-            .sort((a, z) => z.count - a.count)
+          ].sort((a, z) => z.count - a.count)
         }
       }, { online_count: 0, idle_count: 0, names: [] as string[], by_region: [] as Array<{ region_id: number; count: number }>, offices: [] as Array<{ lat: number; lng: number; label: string; count: number; names: string[] }>, regions: [] as Array<{ region_id: number | null; label: string; count: number; names: string[] }> }),
 

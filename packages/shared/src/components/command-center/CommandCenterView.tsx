@@ -35,7 +35,15 @@ interface Snapshot {
     /** Online people grouped at their geocoded office — precise map pins;
      *  by_region only covers people WITHOUT an office (no double counting). */
     offices?: Array<{ lat: number; lng: number; label: string; count: number; names: string[] }>
-    regions: Array<{ region_id: number | null; label: string; count: number; names: string[] }>
+    regions: Array<{
+      region_id: number | null
+      label: string
+      count: number
+      names: string[]
+      /** Present on office groups — the pane flies the map here directly. */
+      lat?: number
+      lng?: number
+    }>
   }
   throughput: { transitions_today: number; transitions_yesterday_same_time: number }
   health: {
@@ -314,24 +322,29 @@ export function CommandCenterView({
             <div className='space-y-2.5 p-3'>
               {(snap?.people.regions ?? []).map((g) => {
                 const centroid = g.region_id != null ? centroids.find((c) => c.id === g.region_id) : null
+                // Office groups carry their own coords (street-level); region
+                // groups fall back to the region centroid.
+                const focus =
+                  g.lat != null && g.lng != null
+                    ? { lat: g.lat, lng: g.lng, zoom: 12 }
+                    : centroid
+                      ? { lat: centroid.lat, lng: centroid.lng, zoom: 8 }
+                      : null
                 return (
-                  <div key={String(g.region_id)}>
+                  <div key={`${g.region_id ?? 'x'}:${g.label}`}>
                     <button
                       type='button'
-                      disabled={!centroid}
-                      onClick={() =>
-                        centroid &&
-                        setMapFocus({ lat: centroid.lat, lng: centroid.lng, zoom: 8, nonce: Date.now() })
-                      }
-                      className={`flex w-full items-center gap-1.5 text-left ${centroid ? 'group cursor-pointer' : 'cursor-default'}`}
-                      title={centroid ? 'Show this region on the map' : 'No map placement for this group'}
+                      disabled={!focus}
+                      onClick={() => focus && setMapFocus({ ...focus, nonce: Date.now() })}
+                      className={`flex w-full items-center gap-1.5 text-left ${focus ? 'group cursor-pointer' : 'cursor-default'}`}
+                      title={focus ? 'Show this group on the map' : 'No map placement for this group'}
                     >
                       <span className='flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-dashed border-emerald-400/80 bg-emerald-400/25' />
                       <span className='text-[11.5px] font-semibold uppercase tracking-wide text-emerald-300 group-hover:underline'>
                         {g.label}
                       </span>
                       <span className='text-[11px] tabular-nums text-slate-500'>{g.count}</span>
-                      {centroid && (
+                      {focus && (
                         <span className='ml-auto text-[10.5px] text-slate-500 opacity-0 transition-opacity group-hover:opacity-100'>
                           show on map →
                         </span>
