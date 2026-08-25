@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { titleCase } from '../../lib/utils'
 import { BaseMap, type BaseMapBubble, type BaseMapPin } from '../BaseMap'
 
 /**
@@ -102,6 +103,9 @@ export function CommandCenterView({
   const qc = useQueryClient()
   const [geoCollection, setGeoCollection] = useState(geoCollections[0] ?? 'locations')
   const [showPeople, setShowPeople] = useState(true)
+  // Record pins are a toggleable layer like People: click the active
+  // collection chip to hide/show it, click another chip to switch to it.
+  const [showRecords, setShowRecords] = useState(true)
   const [clock, setClock] = useState(() => new Date())
   const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number; zoom?: number; nonce: number } | null>(null)
   useEffect(() => {
@@ -127,7 +131,8 @@ export function CommandCenterView({
         )
         .then((r) => ({ pins: r.data ?? [], truncated: !!r.truncated }))
         .catch(() => ({ pins: [], truncated: false })),
-    refetchInterval: 60_000
+    refetchInterval: 60_000,
+    enabled: showRecords
   })
   const { data: centroids = [] } = useQuery<Array<{ id: number; label: string; lat: number; lng: number }>>({
     queryKey: ['command-center', 'people-geo'],
@@ -141,7 +146,7 @@ export function CommandCenterView({
 
   const pins: BaseMapPin[] = useMemo(
     () =>
-      (geo?.pins ?? []).map((p) => ({
+      (showRecords ? (geo?.pins ?? []) : []).map((p) => ({
         id: p.id,
         lat: p.lat,
         lng: p.lng,
@@ -149,7 +154,7 @@ export function CommandCenterView({
         color: p.sla === 'breached' ? '#ef4444' : p.sla === 'warning' ? '#f59e0b' : (p.state_color ?? '#00a5cc'),
         pulse: p.sla === 'breached'
       })),
-    [geo]
+    [geo, showRecords]
   )
   const bubbles: BaseMapBubble[] = useMemo(() => {
     if (!showPeople) return []
@@ -229,17 +234,28 @@ export function CommandCenterView({
           <div className={PANEL_HEAD}>
             <span className={TITLE}>Live map</span>
             <div className='flex items-center gap-2'>
-              {geoCollections.length > 1 &&
-                geoCollections.map((c) => (
+              {geoCollections.map((c) => {
+                const active = showRecords && geoCollection === c
+                return (
                   <button
                     key={c}
                     type='button'
-                    onClick={() => setGeoCollection(c)}
-                    className={`rounded px-2 py-0.5 text-[11px] ${geoCollection === c ? 'bg-[#00ceff] font-medium text-[#172940]' : 'text-slate-400 hover:bg-white/5'}`}
+                    onClick={() => {
+                      // Click the lit chip to hide the layer; click any chip
+                      // while hidden (or another chip) to show that layer.
+                      if (geoCollection === c) setShowRecords((v) => !v)
+                      else {
+                        setGeoCollection(c)
+                        setShowRecords(true)
+                      }
+                    }}
+                    className={`rounded px-2 py-0.5 text-[11px] ${active ? 'bg-[#00ceff] font-medium text-[#172940]' : 'text-slate-400 hover:bg-white/5'}`}
+                    title={active ? 'Hide this layer' : 'Show this layer'}
                   >
-                    {c.replace(/_/g, ' ')}
+                    {titleCase(c.replace(/_/g, ' '))}
                   </button>
-                ))}
+                )
+              })}
               <button
                 type='button'
                 onClick={() => setShowPeople((v) => !v)}
@@ -258,7 +274,7 @@ export function CommandCenterView({
               onPinClick={(id) =>
                 navigate(recordUrl ? recordUrl(geoCollection, id) : `/collections/${geoCollection}/${id}`)
               }
-              statusLine={`${pins.length} ${geoCollection.replace(/_/g, ' ')}${geo?.truncated ? ' (first 500)' : ''}${bubbles.length > 0 ? ` · ${bubbles.length} regions with people on` : ''} · © OpenStreetMap`}
+              statusLine={`${showRecords ? `${pins.length} ${geoCollection.replace(/_/g, ' ')}${geo?.truncated ? ' (first 500)' : ''}` : `${geoCollection.replace(/_/g, ' ')} hidden`}${bubbles.length > 0 ? ` · ${bubbles.length} groups with people on` : ''} · © OpenStreetMap`}
               minHeight={380}
             />
           </div>
