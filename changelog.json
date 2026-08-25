@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-25T00:24:09.359Z",
+  "generated_at": "2026-08-25T00:38:46.058Z",
   "releases": [
+    {
+      "version": "0.1.127",
+      "tag": "v0.1.127",
+      "date": "2026-08-24T20:38:42-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "record-header insights button matches its siblings",
+              "hash": "eba5f819"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.126",
       "tag": "v0.1.126",
-      "date": "2026-08-24T20:24:05-04:00",
+      "date": "2026-08-24T20:24:09-04:00",
       "sections": [
         {
           "label": "Added",
