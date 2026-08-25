@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-25T00:08:35.292Z",
+  "generated_at": "2026-08-25T00:24:09.359Z",
   "releases": [
+    {
+      "version": "0.1.126",
+      "tag": "v0.1.126",
+      "date": "2026-08-24T20:24:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Ops & Observability batch C — THE BACKLOG IS COMPLETE (#213 #214 #218 #293 #294-ext #299 #303 #304 #306 #307 #309 #311 #365 #409 #423)",
+              "hash": "c4c94123"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.125",
       "tag": "v0.1.125",
-      "date": "2026-08-24T20:08:31-04:00",
+      "date": "2026-08-24T20:08:35-04:00",
       "sections": [
         {
           "label": "Added",
