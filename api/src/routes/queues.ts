@@ -16,6 +16,7 @@ import {
   validateAggregates,
   validateColumnFormats
 } from '../services/queues.js'
+import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
 // Format-only validation for extra_fields entries used as SQL column identifiers in
@@ -119,11 +120,14 @@ export async function queuesRoutes(app: FastifyInstance) {
         .select('qi.queue_id')
         .count('* as c')
         .catch(() => [])) as Array<{ queue_id: string; c: number | string }>
+      const breached = await breachedCountsByQueue(matIds).catch(
+        () => ({}) as Record<string, number>
+      )
       for (const q of readable.filter((x) => x.materialized)) {
         const row = counts.find((c) => c.queue_id === q.id)
         out[q.id] = {
           total: Number(row?.total ?? 0),
-          sla_breached: 0,
+          sla_breached: breached[q.id] ?? 0,
           unowned: Number(unownedRows.find((u) => u.queue_id === q.id)?.c ?? 0),
           source: 'cache',
           as_of: null

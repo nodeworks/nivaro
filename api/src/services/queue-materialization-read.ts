@@ -176,6 +176,42 @@ function computeSla(row: {
   return { status, aging_hours }
 }
 
+/**
+ * Breached-count per queue over the materialized cache — the badges endpoint's
+ * SLA figure. Narrow scan of only rule-carrying rows (sla_duration_hours set),
+ * exact business-hours math via the same computeSla the stats path uses.
+ */
+export async function breachedCountsByQueue(queueIds: string[]): Promise<Record<string, number>> {
+  if (queueIds.length === 0) return {}
+  const rows = (await db('nivaro_queue_items')
+    .whereIn('queue_id', queueIds)
+    .whereNotNull('sla_duration_hours')
+    .select(
+      'queue_id',
+      'entered_state_at',
+      'sla_duration_hours',
+      'sla_warning_pct',
+      'sla_business_hours_only'
+    )) as Array<{
+    queue_id: string
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean | number | null
+  }>
+  const out: Record<string, number> = {}
+  for (const r of rows) {
+    const { status } = computeSla({
+      entered_state_at: r.entered_state_at,
+      sla_duration_hours: r.sla_duration_hours,
+      sla_warning_pct: r.sla_warning_pct,
+      sla_business_hours_only: !!r.sla_business_hours_only
+    })
+    if (status === 'breached') out[r.queue_id] = (out[r.queue_id] ?? 0) + 1
+  }
+  return out
+}
+
 // Applies queue_id + scope (mine/unowned/claimed/all) to a fresh query builder.
 // Shared by the stats/availableValues queries (scope-filtered, pre-column-filter —
 // see fetchQueueItems' computeStats(scoped)/computeAvailableValues(scoped) convention
