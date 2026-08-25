@@ -1137,7 +1137,12 @@ export function ChatRoomView({
                           'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
                           th.surface,
                           'border-slate-200 dark:border-border',
-                          mine ? 'left-0' : 'right-0'
+                          // Anchor at the screen-edge side so the toolbar grows
+                          // INWARD: own bubbles hug the right edge (pin right,
+                          // extend left), others hug the left (pin left, extend
+                          // right). The old inverse pinning pushed the toolbar
+                          // off-screen whenever it was wider than the bubble.
+                          mine ? 'right-0' : 'left-0'
                         )}
                         data-chat-msg-actions
                       >
