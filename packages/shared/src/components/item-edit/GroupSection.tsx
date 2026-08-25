@@ -341,6 +341,23 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
   if (!Number.isNaN(num) && s !== '' && field) {
     const opts = parseFieldOpts(field)
     const fmt = opts.format as string | undefined
+    // Unit declarations (#451): a field declares its unit ONCE
+    // (options.unit: '$' | '%' | 'days' | 'hrs' | any suffix) and every render
+    // formats consistently. '$' implies currency; '%' suffixes; anything else
+    // is a plain suffix with a space.
+    const unit = typeof opts.unit === 'string' ? opts.unit.trim() : ''
+    if (unit && !fmt) {
+      const n = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)
+      if (unit === '$') {
+        try {
+          return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(num)
+        } catch {
+          return `$${n}`
+        }
+      }
+      if (unit === '%') return `${n}%`
+      return `${n} ${unit}`
+    }
     if (fmt === 'currency') {
       try {
         return new Intl.NumberFormat(undefined, {

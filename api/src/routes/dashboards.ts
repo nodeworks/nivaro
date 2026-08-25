@@ -12,6 +12,7 @@ interface DashboardRow {
   name: string
   user: string | null
   is_shared: boolean | number
+  role_id?: string | null
   created_at: Date
   updated_at: Date
 }
@@ -46,9 +47,11 @@ interface CreateWidgetBody {
 interface CreateDashboardBody {
   name: string
   is_shared?: boolean
+  role_id?: string | null
 }
 
 interface UpdateDashboardBody {
+  role_id?: string | null
   name?: string
   is_shared?: boolean
 }
@@ -94,6 +97,7 @@ function formatDashboard(d: DashboardRow, widgets: WidgetRow[] = []) {
   return {
     ...d,
     is_shared: Boolean(d.is_shared),
+    role_id: d.role_id ?? null,
     widgets: widgets.map(formatWidget)
   }
 }
@@ -119,9 +123,15 @@ export async function dashboardsRoutes(app: FastifyInstance) {
   app.get('/', async (req) => {
     const userId = req.user!.id
 
+    const userRole = req.user!.role ?? null
     const rows = (await db('nivaro_dashboards')
       .where('user', userId)
-      .orWhere('is_shared', true)
+      .orWhere((shared) => {
+        shared.where('is_shared', true).andWhere((roleQb) => {
+          roleQb.whereNull('role_id')
+          if (userRole) roleQb.orWhere('role_id', userRole)
+        })
+      })
       .orderBy('created_at', 'asc')) as DashboardRow[]
 
     const ids = rows.map((r) => r.id)
@@ -144,7 +154,7 @@ export async function dashboardsRoutes(app: FastifyInstance) {
 
   // ── POST / — create dashboard ─────────────────────────────────────────────
   app.post<{ Body: CreateDashboardBody }>('/', async (req, reply) => {
-    const { name, is_shared = false } = req.body
+    const { name, is_shared = false, role_id = null } = req.body
     if (!name?.trim()) return reply.code(400).send({ error: 'name is required' })
 
     const id = randomUUID()
@@ -154,7 +164,8 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       id,
       name: name.trim(),
       user: req.user!.id,
-      is_shared,
+      is_shared: role_id ? true : is_shared,
+      role_id: role_id || null,
       created_at: now,
       updated_at: now
     })
@@ -178,7 +189,8 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       | undefined
 
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && row.user !== userId && !row.is_shared) {
+    const roleOk = !row.role_id || row.role_id === (req.user!.role ?? '')
+    if (!req.isAdmin && row.user !== userId && !(row.is_shared && roleOk)) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
@@ -203,6 +215,11 @@ export async function dashboardsRoutes(app: FastifyInstance) {
     const updates: Record<string, unknown> = { updated_at: new Date() }
     if (req.body.name !== undefined) updates.name = req.body.name.trim()
     if (req.body.is_shared !== undefined) updates.is_shared = req.body.is_shared
+    if (req.body.role_id !== undefined) {
+      // Role scoping forces shared (a role-scoped private dashboard is a contradiction).
+      updates.role_id = req.body.role_id || null
+      if (req.body.role_id) updates.is_shared = true
+    }
 
     await db('nivaro_dashboards').where('id', row.id).update(updates)
     const updated = (await db('nivaro_dashboards').where('id', row.id).first()) as DashboardRow

@@ -160,6 +160,25 @@ async function resolveMentions(text: string): Promise<MentionUserRow[]> {
       })
       .select('id', 'first_name', 'last_name', 'email')) as MentionUserRow[]
     for (const u of users) found.set(u.id, u)
+
+    // Role mentions (#441): "@finance-approvers" (role name, spaces as
+    // hyphens) fans the mention to every ACTIVE member of that role. The
+    // client autocomplete inserts this form; a handle matching both a person
+    // and a role notifies both — mentioning is deliberately generous.
+    if (users.length === 0 || handle.includes('-')) {
+      const roleName = handle.replace(/-/g, ' ')
+      const role = (await db('nivaro_roles')
+        .whereRaw('LOWER(name) = ?', [roleName])
+        .first('id')) as { id: string } | undefined
+      if (role) {
+        const members = (await db('nivaro_users')
+          .where({ role: role.id, status: 'active' })
+          .where('is_redacted', false)
+          .limit(100)
+          .select('id', 'first_name', 'last_name', 'email')) as MentionUserRow[]
+        for (const u of members) found.set(u.id, u)
+      }
+    }
   }
 
   return Array.from(found.values())

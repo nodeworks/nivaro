@@ -325,6 +325,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       enabled: boolean
       integration_type: string | null
       integration_config: unknown
+      retry_policy: { max_attempts?: number; backoff_minutes?: number } | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -337,6 +338,18 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = { updated_at: new Date() }
 
     if (body.name !== undefined) patch.name = body.name
+    if (body.retry_policy !== undefined) {
+      // #469 — {max_attempts 1-10, backoff_minutes >= 1}; null disables.
+      if (body.retry_policy === null) patch.retry_policy = null
+      else {
+        const max = Number(body.retry_policy.max_attempts)
+        const back = Number(body.retry_policy.backoff_minutes)
+        if (!Number.isFinite(max) || max < 1 || max > 10 || !Number.isFinite(back) || back < 1) {
+          return reply.code(400).send({ error: 'retry_policy needs max_attempts 1-10 and backoff_minutes >= 1' })
+        }
+        patch.retry_policy = JSON.stringify({ max_attempts: max, backoff_minutes: back })
+      }
+    }
     if (body.base_url !== undefined) patch.base_url = body.base_url
     if (body.description !== undefined) patch.description = body.description
     if (body.auth_type !== undefined) patch.auth_type = body.auth_type

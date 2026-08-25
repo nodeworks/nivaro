@@ -91,12 +91,30 @@ function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
+  // Role mentions (#441): "@finance-approvers" fans server-side to every
+  // member of the role. /chat/roles is the non-admin-readable role list.
+  const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['mention-roles'],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get('/chat/roles'))
+        .then((r) => r.data)
+        .catch(() => [] as never),
+    enabled: !!mention,
+    staleTime: 5 * 60_000
+  })
+  const roleMatches = !mention
+    ? []
+    : allRoles
+        .filter((r) => r.name.toLowerCase().replace(/\s+/g, '-').startsWith(debouncedQuery.toLowerCase()))
+        .slice(0, 3)
   // "@owners" is a pseudo-entry: it fans out server-side to whoever currently
   // resolves as the record's pipeline owners.
   const ownersMatch =
     !!mention && debouncedQuery.length >= 2 && 'owners'.startsWith(debouncedQuery.toLowerCase())
-  const open = !!mention && debouncedQuery.length >= 2 && (users.length > 0 || ownersMatch)
-  const optionCount = users.length + (ownersMatch ? 1 : 0)
+  const open =
+    !!mention && debouncedQuery.length >= 2 && (users.length > 0 || ownersMatch || roleMatches.length > 0)
+  const optionCount = users.length + (ownersMatch ? 1 : 0) + roleMatches.length
 
   // The menu portals to <body>: CommentPanel's rounded card is overflow-hidden
   // (and the drill-down sheet adds more clipping contexts), so an absolutely
@@ -132,10 +150,15 @@ function MentionTextarea({
     if (!next) setHighlight(0)
   }
 
-  function pick(u: MentionUser | '__owners__') {
+  function pick(u: MentionUser | '__owners__' | { role: string }) {
     if (!mention || !ref.current) return
     const caret = ref.current.selectionStart ?? value.length
-    const inserted = u === '__owners__' ? '@owners ' : `@${mentionHandle(u)} `
+    const inserted =
+      u === '__owners__'
+        ? '@owners '
+        : typeof u === 'object' && 'role' in u
+          ? `@${u.role.toLowerCase().replace(/\s+/g, '-')} `
+          : `@${mentionHandle(u)} `
     const next = value.slice(0, mention.start) + inserted + value.slice(caret)
     onChange(next)
     setMention(null)
@@ -158,7 +181,13 @@ function MentionTextarea({
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
       const idx = Math.min(highlight, optionCount - 1)
-      pick(ownersMatch && idx === 0 ? '__owners__' : users[ownersMatch ? idx - 1 : idx])
+      const userStart = ownersMatch ? 1 : 0
+      const roleStart = userStart + users.length
+      if (ownersMatch && idx === 0) pick('__owners__')
+      else if (idx >= roleStart) {
+        const role = roleMatches[idx - roleStart]
+        if (role) pick({ role: role.name })
+      } else pick(users[idx - userStart])
     } else if (e.key === 'Escape') {
       e.preventDefault()
       setMention(null)
@@ -253,6 +282,35 @@ function MentionTextarea({
                           {[u.title, u.department].filter(Boolean).join(', ')}
                         </span>
                       )}
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
+            {roleMatches.map((r, j) => {
+              const i = users.length + (ownersMatch ? 1 : 0) + j
+              return (
+                <button
+                  key={`role-${r.id}`}
+                  type='button'
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    pick({ role: r.name })
+                  }}
+                  onMouseEnter={() => setHighlight(i)}
+                  className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors ${
+                    i === highlight ? 'bg-nvr-cyan/10' : ''
+                  }`}
+                >
+                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/15 text-[10px] font-semibold text-violet-600 dark:text-violet-300'>
+                    R
+                  </span>
+                  <span className='min-w-0 flex-1'>
+                    <span className='block truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                      {r.name}
+                    </span>
+                    <span className='block text-[11px] text-slate-400'>
+                      Role — notifies every member
                     </span>
                   </span>
                 </button>

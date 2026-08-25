@@ -8,7 +8,7 @@ import { getIo } from './io-holder.js'
  * best-effort — job bookkeeping must never break the job.
  */
 
-export type JobRunKind = 'cron' | 'remediation' | 'backfill' | 'recalc' | 'monitor' | 'chaos'
+export type JobRunKind = 'cron' | 'remediation' | 'backfill' | 'recalc' | 'monitor' | 'chaos' | 'export'
 
 export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */

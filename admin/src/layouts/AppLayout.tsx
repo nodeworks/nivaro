@@ -610,8 +610,22 @@ export function AppLayout() {
     }
   }, [settings?.project_name])
 
+  // Workspace theming (#463): the ACTIVE workspace's color (a column that
+  // existed unused) wins over the instance project_color, so switching
+  // workspaces re-accents the whole admin. Falls through when unset.
+  const { data: themeWorkspaces = [] } = useQuery({
+    queryKey: ['workspaces'],
+    queryFn: () => api.get<{ data: Workspace[] }>('/workspaces').then((r) => r.data.data),
+    staleTime: 5 * 60_000
+  })
+  const workspaceColor = (() => {
+    const ws = themeWorkspaces.find((w) => w.id === user?.current_workspace)
+    const c = (ws as { color?: string | null } | undefined)?.color
+    return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null
+  })()
+
   useEffect(() => {
-    const color = settings?.project_color ?? '#00ceff'
+    const color = workspaceColor ?? settings?.project_color ?? '#00ceff'
     const el = document.documentElement
     el.style.setProperty('--nvr-cyan', color)
     el.style.setProperty('--nvr-cyan-dark', color)
@@ -623,7 +637,7 @@ export function AppLayout() {
       el.style.setProperty('--nvr-cyan-rgb', rgb)
       el.style.setProperty('--nvr-cyan-dark-rgb', rgb)
     }
-  }, [settings?.project_color])
+  }, [settings?.project_color, workspaceColor])
 
   useEffect(() => {
     // Following a favourite keeps you in Favourites. The panel otherwise jumps

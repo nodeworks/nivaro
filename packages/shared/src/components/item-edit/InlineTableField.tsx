@@ -208,7 +208,13 @@ export interface RowBulkActionConfig {
 
 /** Rows a grid loads for one parent. Also the point past which a live rollup
  *  refuses to sum, since the set on screen is no longer the whole set. */
-const O2M_ROW_LIMIT = 200
+const O2M_ROW_LIMIT = 1000
+
+function hashString(v: string): number {
+  let h = 0
+  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) | 0
+  return h
+}
 
 /**
  * Numeric client-side formula for a grid row.
@@ -1121,6 +1127,7 @@ export function InlineTableField({
   sortField,
   sortDir = 'asc',
   sectionGroupBy,
+  freezeFirstColumn = false,
   rowFilter,
   rowDefaults,
   allocateDrawer,
@@ -1160,6 +1167,8 @@ export function InlineTableField({
   /** Dotted relation path on the child collection (e.g. 'item.category.name'):
    *  saved rows render grouped into collapsible sections by the resolved value. */
   sectionGroupBy?: string
+  /** #459 — pin the leading cells + first data column while the grid h-scrolls. */
+  freezeFirstColumn?: boolean
   /** Static filter narrowing which child rows this grid shows — flat {col: value}
    *  entries become _eq, object values pass through as filter operators. Lets two
    *  grids on the same relation show disjoint views (e.g. is_osp split). */
@@ -2023,6 +2032,34 @@ export function InlineTableField({
   // sentinel row extends the window as it scrolls into view, so a 1,000-row
   // child set never mounts 1,000 rows of inputs at once. Editing/summing are
   // unaffected (they read `rows`, not the DOM).
+  // Grid column freeze (#459, opt-in options.freeze_first_column): the grid
+  // becomes horizontally scrollable (min-w-max instead of table-fixed) and
+  // the leading utility cells + FIRST data column pin left via generated
+  // nth-child CSS — one style block instead of touching every row renderer.
+  // Pinned cells get an OPAQUE background (the documented pinned-bleed rule);
+  // tinted rows lose their tint on pinned cells, a deliberate v1 trade.
+  const frozenClass = useMemo(() => `nvr-gf-${Math.abs(hashString(`${relatedCollection}:${parentFieldKey ?? manyField}`)) % 100000}`, [relatedCollection, parentFieldKey, manyField])
+  const frozenCss = useMemo(() => {
+    if (!freezeFirstColumn) return null
+    const widths: number[] = []
+    if (enableReorder && (rowOrderField || isNew || isPendingMode)) widths.push(24)
+    if (showLineNumbers) widths.push(32)
+    if (isNew || isPendingMode) widths.push(80)
+    widths.push(220) // first data column
+    let left = 0
+    const rules: string[] = []
+    widths.forEach((w, i) => {
+      rules.push(
+        `.${frozenClass} tr > *:nth-child(${i + 1}){position:sticky;left:${left}px;z-index:2;min-width:${w}px;max-width:${i === widths.length - 1 ? 320 : w}px;background:hsl(var(--card, 0 0% 100%))}`
+      )
+      left += w
+    })
+    rules.push(`.${frozenClass} thead tr > *:nth-child(-n+${widths.length}){z-index:3}`)
+    rules.push(`.${frozenClass} tr > *:nth-child(${widths.length}){box-shadow:2px 0 0 0 rgba(100,116,139,0.18)}`)
+    return rules.join('\n')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freezeFirstColumn, frozenClass, enableReorder, rowOrderField, isNew, isPendingMode, showLineNumbers])
+
   const [renderCap, setRenderCap] = useState(150)
   const renderSentinelRef = useRef<HTMLTableRowElement | null>(null)
   useEffect(() => {
@@ -3723,7 +3760,7 @@ export function InlineTableField({
     )}
     {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
     {readOnly && presetSwitcher}
-    <div className={isPrefilling ? 'hidden' : 'relative rounded-lg border border-slate-200 text-[12px]'}>
+    <div className={isPrefilling ? 'hidden' : `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ''}`}>
       {reordering && (
         <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px] dark:bg-black/40'>
           <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
@@ -3732,7 +3769,8 @@ export function InlineTableField({
           </div>
         </div>
       )}
-      <table className='w-full table-fixed'>
+      {frozenCss && <style>{frozenCss}</style>}
+      <table className={freezeFirstColumn ? `w-full min-w-max ${frozenClass}` : 'w-full table-fixed'}>
         <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
           <tr>
             {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}

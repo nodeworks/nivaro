@@ -1395,4 +1395,132 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(status).send({ error: err instanceof Error ? err.message : 'Failed' })
     }
   })
+
+  // ── POST /ai/flow-build (#447) — prose → drafted flow ─────────────────────
+  // Creates an INACTIVE flow with wired operations for review in the editor;
+  // nothing runs until a human activates it. Admin-only (flows execute code
+  // paths). On any failure after the shell exists, the shell is deleted.
+  app.post<{ Body: { prompt?: string } }>(
+    '/flow-build',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      if (!(await aiFeatureEnabled('flow_build'))) {
+        return reply.code(403).send({ error: 'AI flow building is disabled on this instance' })
+      }
+      const prompt = String(req.body?.prompt ?? '').trim()
+      if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
+      const client = await getClient()
+      if (!client) return reply.code(503).send({ error: 'AI is not configured' })
+
+      const collections = (await db('nivaro_collections')
+        .whereNot('collection', 'like', 'nivaro\\_%')
+        .limit(150)
+        .pluck('collection')) as string[]
+      const { listOps } = await import('../flows/registry.js')
+      const customOps = (() => {
+        try {
+          return listOps().map((o) => o.type)
+        } catch {
+          return [] as string[]
+        }
+      })()
+
+      const cfg = await getAiSettings()
+      const sys = [
+        'You draft Nivaro automation flows as STRICT JSON. Output ONLY a JSON object, no prose.',
+        'Shape: {"name": string, "description": string, "trigger": "event"|"schedule"|"webhook",',
+        ' "trigger_options": object (event: {collections: string[], actions: ["create"|"update"|"delete"]};',
+        '  schedule: {cron: "m h dom mon dow"}; webhook: {}),',
+        ' "operations": [{"key": "step1", "name": string, "type": <op type>, "options": object,',
+        '  "resolve": <key of next op or null>, "reject": <key or null>}]}',
+        `Op types: log{message}, condition{field, operator(eq|neq|gt|lt|contains|exists), value},`,
+        ' mail{to, subject, body — all support {{token}} templates}, notification{recipient, subject, message},',
+        ' webhook{url, method, body}, transform{operations:[{type:"set"|"copy"|"template", target, value}]},',
+        ' item-read{collection, id | filter, fields, result_key}, external-api{mode:"predefined", api_id, endpoint_path, method},',
+        customOps.length ? ` custom ops available: ${customOps.join(', ')},` : '',
+        `Collections that exist: ${collections.join(', ')}.`,
+        'Event-flow record ids template as {{keys.0}}. Keep it to at most 6 operations, wired head-to-tail via resolve.'
+      ]
+        .filter(Boolean)
+        .join('\n')
+
+      const resp = await client.messages.create({
+        model: cfg.model,
+        max_tokens: 1500,
+        system: sys,
+        messages: [{ role: 'user', content: prompt.slice(0, 2000) }]
+      })
+      const text = resp.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+      let draft: {
+        name?: string
+        description?: string
+        trigger?: string
+        trigger_options?: unknown
+        operations?: Array<{ key?: string; name?: string; type?: string; options?: unknown; resolve?: string | null; reject?: string | null }>
+      }
+      try {
+        draft = JSON.parse(text.replace(/^```(json)?\n?|```$/g, '').trim())
+      } catch {
+        return reply.code(422).send({ error: 'The model did not return valid flow JSON — rephrase and retry' })
+      }
+      if (!draft.name || !['event', 'schedule', 'webhook'].includes(String(draft.trigger)) || !Array.isArray(draft.operations) || draft.operations.length === 0) {
+        return reply.code(422).send({ error: 'Draft was missing a name, valid trigger, or operations' })
+      }
+
+      const { randomUUID } = await import('node:crypto')
+      const flowId = randomUUID()
+      const now = new Date()
+      await db('nivaro_flows').insert({
+        id: flowId,
+        name: `${String(draft.name).slice(0, 200)} (AI draft)`,
+        description: String(draft.description ?? prompt).slice(0, 1000),
+        status: 'inactive',
+        trigger: draft.trigger,
+        trigger_options: JSON.stringify(draft.trigger_options ?? {}),
+        accountability: 'all',
+        created_at: now,
+        updated_at: now
+      })
+      try {
+        const idByKey = new Map<string, string>()
+        for (const op of draft.operations.slice(0, 8)) {
+          idByKey.set(String(op.key ?? ''), randomUUID())
+        }
+        let x = 80
+        for (const op of draft.operations.slice(0, 8)) {
+          await db('nivaro_flow_operations').insert({
+            id: idByKey.get(String(op.key ?? '')),
+            flow: flowId,
+            name: String(op.name ?? op.type ?? 'step').slice(0, 200),
+            key: String(op.key ?? `step${x}`).slice(0, 100),
+            type: String(op.type ?? 'log').slice(0, 100),
+            position_x: x,
+            position_y: 120,
+            options: JSON.stringify(op.options ?? {}),
+            // resolve is a SAME-TABLE FK — ids pre-minted so forward refs wire.
+            resolve: op.resolve ? (idByKey.get(String(op.resolve)) ?? null) : null,
+            reject: op.reject ? (idByKey.get(String(op.reject)) ?? null) : null,
+            created_at: now
+          })
+          x += 220
+        }
+      } catch (err) {
+        await db('nivaro_flow_operations').where({ flow: flowId }).del().catch(() => {})
+        await db('nivaro_flows').where({ id: flowId }).del().catch(() => {})
+        throw err
+      }
+      await logActivity({
+        action: 'ai-flow-build',
+        user: req.user?.id,
+        collection: 'nivaro_flows',
+        item: flowId,
+        comment: prompt.slice(0, 200),
+        req
+      })
+      return reply.send({ data: { id: flowId } })
+    }
+  )
 }

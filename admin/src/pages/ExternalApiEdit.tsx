@@ -64,6 +64,8 @@ interface FormState {
   headers: { key: string; value: string }[]
   enabled: boolean
   integration_type: string
+  retry_max: string
+  retry_backoff: string
 }
 
 const EMPTY: FormState = {
@@ -74,7 +76,9 @@ const EMPTY: FormState = {
   auth_config: {},
   headers: [],
   enabled: true,
-  integration_type: ''
+  integration_type: '',
+  retry_max: '',
+  retry_backoff: ''
 }
 
 export function ExternalApiEditPage() {
@@ -104,7 +108,19 @@ export function ExternalApiEditPage() {
           value: String(value)
         })),
         enabled: data.enabled,
-        integration_type: data.integration_type ?? ''
+        integration_type: data.integration_type ?? '',
+        ...(() => {
+          try {
+            const rp = (data as { retry_policy?: string | null }).retry_policy
+            const parsed = rp ? (JSON.parse(rp) as { max_attempts?: number; backoff_minutes?: number }) : null
+            return {
+              retry_max: parsed?.max_attempts != null ? String(parsed.max_attempts) : '',
+              retry_backoff: parsed?.backoff_minutes != null ? String(parsed.backoff_minutes) : ''
+            }
+          } catch {
+            return { retry_max: '', retry_backoff: '' }
+          }
+        })()
       })
     }
   }, [data])
@@ -118,6 +134,11 @@ export function ExternalApiEditPage() {
       const payload = {
         name: form.name,
         base_url: form.base_url,
+        // Auto-retry (#469): both set = policy on; either blank = off.
+        retry_policy:
+          form.retry_max.trim() && form.retry_backoff.trim()
+            ? { max_attempts: Number(form.retry_max), backoff_minutes: Number(form.retry_backoff) }
+            : null,
         description: form.description || null,
         auth_type: form.auth_type,
         auth_config: form.auth_type === 'none' ? null : form.auth_config,
@@ -224,6 +245,41 @@ export function ExternalApiEditPage() {
             checked={form.enabled}
             onCheckedChange={(enabled) => setForm((f) => ({ ...f, enabled }))}
           />
+        </div>
+
+        {/* Auto-retry (#469): failed ERP pushes on this API retry on a backoff
+            schedule (base × 2^attempt, capped daily) instead of waiting for a
+            human. Manual Retry keeps working regardless. */}
+        <div className='rounded-md border border-slate-200 px-3 py-2.5'>
+          <Label>Automatic retry for failed pushes</Label>
+          <p className='mb-2 text-[12px] text-slate-400'>
+            Both set = on. Backoff doubles per attempt; the sweep runs every 10 minutes.
+          </p>
+          <div className='flex items-center gap-3'>
+            <label className='flex items-center gap-1.5 text-[12px] text-slate-500'>
+              Max attempts
+              <Input
+                type='number'
+                min={1}
+                max={10}
+                value={form.retry_max}
+                onChange={(e) => setForm((f) => ({ ...f, retry_max: e.target.value }))}
+                className='h-8 w-20 text-[12.5px]'
+                placeholder='off'
+              />
+            </label>
+            <label className='flex items-center gap-1.5 text-[12px] text-slate-500'>
+              Base backoff (min)
+              <Input
+                type='number'
+                min={1}
+                value={form.retry_backoff}
+                onChange={(e) => setForm((f) => ({ ...f, retry_backoff: e.target.value }))}
+                className='h-8 w-24 text-[12.5px]'
+                placeholder='off'
+              />
+            </label>
+          </div>
         </div>
       </Card>
 

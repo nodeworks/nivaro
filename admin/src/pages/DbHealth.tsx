@@ -114,6 +114,12 @@ export function DbHealthPage() {
   const velocity = useOps<Array<{ collection: string; action: string; day: string; n: number }>>('/ops-db/velocity')
   const heat = useOps<Array<{ hour: number; path: string; avg_ms: number; n: number }>>('/ops-db/latency-heat')
   const inngest = useOps<{ base: string; recent_events: unknown[] }>('/ops-db/inngest')
+  const danglingFks = useOps<{
+    checked_relations: number
+    dangling_relations: number
+    total_dangling_rows: number
+    relations: Array<{ many_collection: string; many_field: string; one_collection: string; dangling: number }>
+  }>('/ops-db/dangling-fks')
   const storage = useOps<{
     current: Maybe<Record<string, unknown>>
     snapshots: Array<Record<string, unknown>>
@@ -150,6 +156,18 @@ export function DbHealthPage() {
       toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Explain failed')
   })
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null)
+  const [fkFixing, setFkFixing] = useState<string | null>(null)
+  const fkRepair = useMutation({
+    mutationFn: (v: { many_collection: string; many_field: string; one_collection: string; action: 'null_out' | 'trash_delete' }) =>
+      api.post<{ data: { repaired: number } }>('/ops-db/dangling-fks/repair', v).then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(`Repaired ${d.repaired} row(s)`)
+      setFkFixing(null)
+      void qc.invalidateQueries({ queryKey: ['ops', '/ops-db/dangling-fks'] })
+    },
+    onError: (e) =>
+      toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Repair failed')
+  })
   const [killTarget, setKillTarget] = useState<number | null>(null)
   const [killReason, setKillReason] = useState('')
   const kill = useMutation({
@@ -553,6 +571,60 @@ export function DbHealthPage() {
                   `${Math.round(Number(r.avg_ms))} ms`,
                   num(r.n)
                 ])}
+              />
+            )}
+          </Panel>
+
+          <Panel
+            title='Dangling foreign keys'
+            sub='Rows pointing at parents that no longer exist (#457). Null-out clears the pointer; trash-delete removes the rows THROUGH the items service (trash + guards apply). Repointing is a data decision — do that by hand.'
+          >
+            {danglingFks.data?.unavailable ? (
+              <Unavailable reason={danglingFks.data.unavailable} />
+            ) : (
+              <MiniTable
+                head={['Child table', 'Column', 'Missing parent in', 'Rows', '']}
+                rows={(danglingFks.data?.data?.relations ?? []).map((r) => {
+                  const key = `${r.many_collection}.${r.many_field}`
+                  return [
+                    r.many_collection,
+                    <code key='c' className='font-mono text-[11px]'>{r.many_field}</code>,
+                    r.one_collection,
+                    num(r.dangling),
+                    fkFixing === key ? (
+                      <span key='fix' className='flex items-center gap-1.5'>
+                        <button
+                          type='button'
+                          className='rounded border border-amber-300 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300'
+                          disabled={fkRepair.isPending}
+                          onClick={() => fkRepair.mutate({ many_collection: r.many_collection, many_field: r.many_field, one_collection: r.one_collection, action: 'null_out' })}
+                        >
+                          Null out
+                        </button>
+                        <button
+                          type='button'
+                          className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
+                          disabled={fkRepair.isPending}
+                          onClick={() => fkRepair.mutate({ many_collection: r.many_collection, many_field: r.many_field, one_collection: r.one_collection, action: 'trash_delete' })}
+                        >
+                          Trash rows
+                        </button>
+                        <button type='button' className='text-[11px] text-slate-400' onClick={() => setFkFixing(null)}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        key='r'
+                        type='button'
+                        className='rounded border border-slate-200 px-2 py-0.5 text-[11px] hover:bg-muted dark:border-border'
+                        onClick={() => setFkFixing(key)}
+                      >
+                        Repair…
+                      </button>
+                    )
+                  ]
+                })}
               />
             )}
           </Panel>

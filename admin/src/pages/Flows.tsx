@@ -6,6 +6,7 @@ import {
   Globe,
   Play,
   Plus,
+  Sparkles,
   Search,
   Trash2,
   Upload,
@@ -342,6 +343,25 @@ export function FlowsPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  async function buildWithAi() {
+    if (!aiPrompt.trim()) return
+    setAiBusy(true)
+    try {
+      const r = await api.post<{ data: { id: string } }>('/ai/flow-build', { prompt: aiPrompt })
+      toast.success('Draft created (inactive) — review it before activating')
+      queryClient.invalidateQueries({ queryKey: ['flows'] })
+      navigate(`/flows/${r.data.data.id}`)
+    } catch (e) {
+      toast.error(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'AI build failed'
+      )
+    } finally {
+      setAiBusy(false)
+    }
+  }
   const importInputRef = useRef<HTMLInputElement>(null)
 
   async function handleImportFlow(e: React.ChangeEvent<HTMLInputElement>) {
@@ -408,12 +428,44 @@ export function FlowsPage() {
             <Button size='sm' variant='outline' onClick={() => importInputRef.current?.click()}>
               <Upload className='mr-1.5 h-3.5 w-3.5' /> Import
             </Button>
+            <Button size='sm' variant='outline' className='gap-1.5' onClick={() => setAiOpen((v) => !v)}>
+              <Sparkles className='h-3.5 w-3.5' /> Build with AI
+            </Button>
             <Button size='sm' onClick={() => setShowCreate(true)}>
               <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Flow
             </Button>
           </div>
         </div>
       </div>
+
+      {aiOpen && (
+        <div className='border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
+          {/* AI flow builder (#447): prose → an INACTIVE drafted flow, opened
+              in the editor for review — nothing runs until activated. */}
+          <form
+            className='flex items-center gap-2'
+            onSubmit={(e) => {
+              e.preventDefault()
+              void buildWithAi()
+            }}
+          >
+            <Input
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder='e.g. "When an invoice is created over $50k, read its workflow and email the internal contact"'
+              className='h-9 flex-1 text-[13px]'
+              autoFocus
+            />
+            <Button type='submit' size='sm' disabled={aiBusy || !aiPrompt.trim()}>
+              {aiBusy ? 'Drafting…' : 'Draft flow'}
+            </Button>
+          </form>
+          <p className='mt-1 text-[11px] text-slate-400'>
+            The draft is created INACTIVE with wired steps — review every operation in the editor
+            before activating.
+          </p>
+        </div>
+      )}
 
       {/* ── Full-width list — rows open the editor directly ───── */}
       <div className='flex flex-1 min-h-0 flex-col overflow-hidden bg-white dark:bg-card'>

@@ -10700,6 +10700,30 @@ function FieldSettingsPopover({
       return 'datetime'
     }
   })
+  const [fieldUnit, setFieldUnit] = useState<string>(() => {
+    try {
+      const o = settings.options
+        ? ((typeof settings.options === 'string'
+            ? JSON.parse(settings.options)
+            : settings.options) as Record<string, unknown>)
+        : {}
+      return typeof o.unit === 'string' ? o.unit : ''
+    } catch {
+      return ''
+    }
+  })
+  const [inputMask, setInputMask] = useState<string>(() => {
+    try {
+      const o = settings.options
+        ? ((typeof settings.options === 'string'
+            ? JSON.parse(settings.options)
+            : settings.options) as Record<string, unknown>)
+        : {}
+      return typeof o.input_mask === 'string' ? o.input_mask : ''
+    } catch {
+      return ''
+    }
+  })
   const [optionSort, setOptionSort] = useState<string>(() => {
     try {
       const o = settings.options
@@ -10722,6 +10746,7 @@ function FieldSettingsPopover({
   const [saveMode, setSaveMode] = useState<'immediate' | 'pending'>('immediate')
   const [showLineNumbers, setShowLineNumbers] = useState(false)
   const [gridRowComments, setGridRowComments] = useState(false)
+  const [gridFreezeFirst, setGridFreezeFirst] = useState(false)
   const [enableReorder, setEnableReorder] = useState(true)
   const [parentCascades, setParentCascades] = useState<
     Array<{ parent_field: string; child_field: string }>
@@ -11104,6 +11129,7 @@ function FieldSettingsPopover({
         setSaveMode((opts.save_mode as 'immediate' | 'pending') ?? 'immediate')
         setShowLineNumbers(!!opts.show_line_numbers)
         setGridRowComments(!!opts.row_comments)
+        setGridFreezeFirst(opts.freeze_first_column === true)
         setEnableReorder(opts.enable_reorder !== false)
         setParentCascades(
           Array.isArray(opts.parent_cascades)
@@ -11204,6 +11230,8 @@ function FieldSettingsPopover({
       iface === 'files-m2m' ||
       iface === 'relation-grouped' ||
       ((isM2O || isM2M) && optionSort.trim() !== '') ||
+      inputMask.trim() !== '' ||
+      fieldUnit.trim() !== '' ||
       abstractType === 'datetime' ||
       iface === 'datetime'
     if (needsOptionsPatch) {
@@ -11253,6 +11281,7 @@ function FieldSettingsPopover({
                       save_mode: saveMode,
                       show_line_numbers: showLineNumbers,
                       row_comments: gridRowComments,
+                      freeze_first_column: gridFreezeFirst || undefined,
                       enable_reorder: enableReorder,
                       ...(parentCascades.length > 0 ? { parent_cascades: parentCascades } : {}),
                       ...(rowRulesLocal.length > 0
@@ -11315,6 +11344,12 @@ function FieldSettingsPopover({
               ? { option_sort: optionSort.trim() }
               : { option_sort: undefined }
             : {}
+        // Input masks (#444): stored on options; FieldRenderer applies them
+        // at typing time (mask engine ships in the shared package).
+        const inputMaskOpts = { input_mask: inputMask.trim() || undefined }
+        // Unit declarations (#451): '$', '%', 'days', any suffix — rendered
+        // consistently everywhere formatDisplayValue runs.
+        const unitOpts = { unit: fieldUnit.trim() || undefined }
         const dateModeOpts =
           abstractType === 'datetime' || iface === 'datetime'
             ? { date_mode: dateMode === 'date' ? 'date' : undefined }
@@ -11326,6 +11361,8 @@ function FieldSettingsPopover({
           ...formatOpts,
           ...groupedOpts,
           ...pickerSortOpts,
+          ...inputMaskOpts,
+          ...unitOpts,
           ...dateModeOpts
         })
       } catch {
@@ -11699,6 +11736,41 @@ function FieldSettingsPopover({
               />
             )}
 
+            {/* ── Unit (#451) ── */}
+            {isNumericAbstractType && (
+              <div className='space-y-2'>
+                <SectionHeader label='Unit' />
+                <Input
+                  value={fieldUnit}
+                  onChange={(e) => setFieldUnit(e.target.value)}
+                  placeholder='$ · % · days · hrs'
+                  className='h-8 w-40 font-mono text-[12px]'
+                />
+                <p className='text-[10.5px] leading-relaxed text-slate-400'>
+                  Declared once, formatted everywhere: "$" renders as currency, "%" suffixes, any
+                  other text becomes a suffix ("14 days"). An explicit Format setting wins.
+                </p>
+              </div>
+            )}
+
+            {/* ── Input mask (#444) ── */}
+            {(abstractType === 'string' || abstractType === 'text') && (
+              <div className='space-y-2'>
+                <SectionHeader label='Input mask' />
+                <Input
+                  value={inputMask}
+                  onChange={(e) => setInputMask(e.target.value)}
+                  placeholder='(###) ###-#### · AA-####'
+                  className='h-8 font-mono text-[12px]'
+                />
+                <p className='text-[10.5px] leading-relaxed text-slate-400'>
+                  Formats typing in place: # = digit, A = letter, * = any; other characters are
+                  literal. The stored value keeps only what the user typed (no mask literals).
+                  Empty = no mask.
+                </p>
+              </div>
+            )}
+
             {/* ── Option sort (M2O / M2M pickers) ── */}
             {(isM2O || isM2M) && (
               <div className='space-y-2'>
@@ -11951,6 +12023,20 @@ function FieldSettingsPopover({
                         <Switch
                           checked={gridRowComments}
                           onCheckedChange={setGridRowComments}
+                          className='scale-90'
+                        />
+                      </div>
+                      <div className='flex items-center justify-between px-3 py-2'>
+                        <div>
+                          <p className='text-[12px] text-slate-700'>Freeze first column</p>
+                          <p className='text-[10px] text-slate-400'>
+                            Grid scrolls horizontally with the leading cells + first column pinned.
+                            Pinned cells lose row tinting (they need an opaque background).
+                          </p>
+                        </div>
+                        <Switch
+                          checked={gridFreezeFirst}
+                          onCheckedChange={setGridFreezeFirst}
                           className='scale-90'
                         />
                       </div>
@@ -17861,7 +17947,8 @@ function FieldGroupsTab({
     'auto_allocate',
     'upload_template',
     'quick_create',
-    'row_comments'
+    'row_comments',
+    'freeze_first_column'
   ]
 
   const patchField = useCallback(

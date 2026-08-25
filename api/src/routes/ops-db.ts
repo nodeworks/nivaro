@@ -324,6 +324,85 @@ export async function opsDbRoutes(app: FastifyInstance) {
     }
   })
 
+  // #457 — dangling-FK repair wizard: the nightly sweep detects; these routes
+  // list live and FIX in bulk. Repoint is deliberately NOT offered — picking a
+  // new parent is a data decision, not a repair.
+  app.get('/dangling-fks', async (_req, reply) => {
+    const { detectDanglingFks } = await import('../services/fk-integrity.js')
+    return reply.send({ data: await detectDanglingFks() })
+  })
+  app.post<{
+    Body: { many_collection?: string; many_field?: string; one_collection?: string; action?: string }
+  }>('/dangling-fks/repair', async (req, reply) => {
+    const manyCollection = String(req.body?.many_collection ?? '')
+    const manyField = String(req.body?.many_field ?? '')
+    const oneCollection = String(req.body?.one_collection ?? '')
+    const action = String(req.body?.action ?? '')
+    const ident = /^[A-Za-z0-9_]+$/
+    if (!ident.test(manyCollection) || !ident.test(manyField) || !ident.test(oneCollection)) {
+      return reply.code(400).send({ error: 'Invalid identifiers' })
+    }
+    if (/^nivaro_/i.test(manyCollection) && manyCollection !== 'nivaro_users') {
+      return reply.code(400).send({ error: 'System tables are not repairable here' })
+    }
+    if (action !== 'null_out' && action !== 'trash_delete') {
+      return reply.code(400).send({ error: "action must be 'null_out' or 'trash_delete'" })
+    }
+    // Verify this IS a registered relation — the identifiers must come from
+    // the sweep's own list, never free-typed table names.
+    const rel = await db('nivaro_relations')
+      .where({ many_collection: manyCollection, many_field: manyField, one_collection: oneCollection })
+      .first('id')
+    if (!rel) return reply.code(404).send({ error: 'No such registered relation' })
+
+    // The dangling set, re-derived NOW (the wizard's list may be stale).
+    const danglingIds = (await db.raw(
+      `SELECT TOP 2000 m.id FROM [${manyCollection}] m
+       LEFT JOIN [${oneCollection}] o ON o.id = m.[${manyField}]
+       WHERE m.[${manyField}] IS NOT NULL AND o.id IS NULL`
+    )) as Array<{ id: unknown }>
+    if (danglingIds.length === 0) return reply.send({ data: { repaired: 0 } })
+    const ids = danglingIds.map((r) => String(r.id))
+
+    let repaired = 0
+    if (action === 'null_out') {
+      // Nullability check first — nulling a NOT NULL column would just error
+      // per row; refuse with the reason instead.
+      const colInfo = (await db.raw(
+        `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [manyCollection, manyField]
+      )) as Array<{ IS_NULLABLE: string }>
+      if (colInfo[0]?.IS_NULLABLE !== 'YES') {
+        return reply.code(400).send({ error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent` })
+      }
+      const { selectInChunks } = await import('../services/db-batch.js')
+      await selectInChunks(ids, 1000, async (chunk) => {
+        await db(manyCollection).whereIn('id', chunk).update({ [manyField]: null })
+        return []
+      })
+      repaired = ids.length
+    } else {
+      // Deletes go THROUGH the items service so trash/guards/hooks apply.
+      const { deleteOne } = await import('../services/items.js')
+      for (const id of ids.slice(0, 500)) {
+        try {
+          await deleteOne(req.user!, manyCollection, id)
+          repaired++
+        } catch {
+          /* guard/permission blocked this row — count stays honest */
+        }
+      }
+    }
+    await logActivity({
+      action: 'fk-repair',
+      user: req.user?.id,
+      collection: manyCollection,
+      comment: `${action} ${repaired} row(s) with dangling ${manyField} → ${oneCollection}`,
+      req
+    })
+    return reply.send({ data: { repaired, action } })
+  })
+
   // #298 — Redis health: memory, evictions, keyspace, slowlog.
   app.get('/redis', async (_req, reply) => {
     try {

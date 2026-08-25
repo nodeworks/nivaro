@@ -14,6 +14,13 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Dashboard } from '@/lib/api'
@@ -32,9 +39,19 @@ function CreateDashboardDialog({
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [isShared, setIsShared] = useState(false)
+  const [roleId, setRoleId] = useState('')
+  const { data: shareRoles = [] } = useQuery({
+    queryKey: ['dashboard-share-roles'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; name: string }> }>('/chat/roles')
+        .then((r) => r.data.data)
+        .catch(() => []),
+    enabled: open && isShared
+  })
 
   const create = useMutation({
-    mutationFn: (body: { name: string; is_shared: boolean }) =>
+    mutationFn: (body: { name: string; is_shared: boolean; role_id?: string | null }) =>
       api.post<{ data: Dashboard }>('/dashboards', body).then((r) => r.data.data),
     onSuccess: (dashboard) => {
       queryClient.invalidateQueries({ queryKey: ['dashboards'] })
@@ -50,7 +67,7 @@ function CreateDashboardDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!name.trim()) return
-    create.mutate({ name: name.trim(), is_shared: isShared })
+    create.mutate({ name: name.trim(), is_shared: isShared, role_id: isShared && roleId ? roleId : null })
   }
 
   return (
@@ -87,6 +104,25 @@ function CreateDashboardDialog({
                   Shared — visible to all users
                 </Label>
               </div>
+              {isShared && (
+                <div className='space-y-1.5'>
+                  {/* Role scoping (#454) — same model as queues/views/reports. */}
+                  <Label>Limit to a role (optional)</Label>
+                  <Select value={roleId || '__all__'} onValueChange={(v) => setRoleId(v === '__all__' ? '' : v)}>
+                    <SelectTrigger className='h-8 text-[13px]'>
+                      <SelectValue placeholder='Everyone' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='__all__'>Everyone</SelectItem>
+                      {shareRoles.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
           </DialogBody>
           <DialogFooter>

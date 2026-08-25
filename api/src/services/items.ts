@@ -2,7 +2,7 @@ import { Parser } from 'expr-eval'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { db } from '../db/index.js'
+import { dbRead, db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
@@ -1656,7 +1656,10 @@ export async function readItems(
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
   const effectiveLimit = limit > 0 ? Math.min(limit, 1000) : 1000
-  const q = db(collection)
+  // #474 — list reads route to the read replica when DB_READ_HOST is set
+  // (dbRead aliases db otherwise, so this is a no-op on single-DB deploys).
+  // Writes and read-back-after-write stay on the primary.
+  const q = dbRead(collection)
     .select(selectFields as string[])
     .limit(effectiveLimit)
     .offset(effectiveOffset)
@@ -1670,7 +1673,7 @@ export async function readItems(
     q.orderByRaw('(SELECT NULL)')
   }
 
-  const countQ = db(collection).count('* as count')
+  const countQ = dbRead(collection).count('* as count')
   if (Object.keys(filter).length) applyFilters(countQ, filter, collection, rels)
 
   // Row-level workspace isolation (no-op when no workspaceId passed or no column)

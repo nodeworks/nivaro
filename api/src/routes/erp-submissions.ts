@@ -102,7 +102,7 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
   }
 }
 
-async function sendPayload(
+export async function sendPayload(
   externalApi: number,
   stored: StoredPayload,
   userId: string | undefined
@@ -382,4 +382,66 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
 
     return { data: serialize(updated) }
   })
+}
+
+
+/**
+ * Auto-retry sweep (#469): failed submissions whose external API declares a
+ * retry_policy ({max_attempts, backoff_minutes}) retry on a backoff schedule
+ * instead of waiting for a human. next_retry_at is stamped after each failed
+ * attempt; a landed retry clears it. Manual /retry keeps working regardless.
+ */
+export async function runErpAutoRetries(): Promise<{ attempted: number; landed: number }> {
+  const apis = (await db('nivaro_external_apis')
+    .whereNotNull('retry_policy')
+    .select('id', 'retry_policy')) as Array<{ id: number; retry_policy: string | null }>
+  const policies = new Map<number, { max_attempts: number; backoff_minutes: number }>()
+  for (const a of apis) {
+    const p = parseJson<{ max_attempts?: number; backoff_minutes?: number }>(a.retry_policy)
+    const max = Number(p?.max_attempts)
+    const backoff = Number(p?.backoff_minutes)
+    if (Number.isFinite(max) && max > 0 && Number.isFinite(backoff) && backoff > 0) {
+      policies.set(a.id, { max_attempts: Math.min(10, max), backoff_minutes: backoff })
+    }
+  }
+  if (policies.size === 0) return { attempted: 0, landed: 0 }
+
+  const now = new Date()
+  const rows = (await db('nivaro_erp_submissions')
+    .where('status', 'failed')
+    .whereIn('external_api', [...policies.keys()])
+    .where((qb) => qb.whereNull('next_retry_at').orWhere('next_retry_at', '<=', now))
+    .orderBy('id', 'asc')
+    .limit(25)) as ErpSubmissionRow[]
+
+  let attempted = 0
+  let landed = 0
+  for (const row of rows) {
+    const policy = policies.get(row.external_api)
+    if (!policy) continue
+    const retries = Number((row as unknown as { retry_count?: number }).retry_count ?? 0)
+    if (retries >= policy.max_attempts) continue
+    const stored = parseJson<StoredPayload>(row.payload)
+    if (!stored?.endpoint_path) continue
+    attempted++
+    const outcome = await sendPayload(row.external_api, stored, undefined)
+    const ok = outcome.status !== 'failed'
+    if (ok) landed++
+    await db('nivaro_erp_submissions')
+      .where({ id: row.id })
+      .update({
+        status: outcome.status,
+        response: serializeResponseBody(outcome.response),
+        external_ref: outcome.external_ref ?? row.external_ref,
+        attempts: row.attempts + 1,
+        retry_count: retries + 1,
+        // Exponential-ish backoff: base * 2^retries, capped at a day.
+        next_retry_at: ok
+          ? null
+          : new Date(now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000),
+        last_error: outcome.error,
+        updated_at: new Date()
+      })
+  }
+  return { attempted, landed }
 }

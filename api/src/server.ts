@@ -793,6 +793,13 @@ export async function buildServer() {
         }
       })
 
+      // ERP auto-retry (#469): failed pushes on APIs with a retry_policy
+      // retry on a backoff schedule instead of waiting for a human.
+      app.cron.schedule('erp-auto-retry', '*/10 * * * *', async () => {
+        const { runErpAutoRetries } = await import('./routes/erp-submissions.js')
+        await runErpAutoRetries()
+      })
+
       // Scheduled DQ runs (#170): every collection's active quality rules,
       // nightly — the runs table becomes a pass-rate trend for free.
       app.cron.schedule('dq-nightly', '50 3 * * *', async () => {

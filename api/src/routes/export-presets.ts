@@ -96,25 +96,45 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
 
   // GET so the browser can navigate/download directly; the caller's live
   // filter state rides as the same `conditions`/`search` params the list uses.
-  app.get<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
-    const preset = (await db('nivaro_export_presets').where('id', req.params.id).first()) as
+
+interface ExportResult {
+  buffer: Buffer
+  filename: string
+  contentType: string
+}
+interface ExportError {
+  code: 404 | 403 | 500
+  error: string
+}
+
+/** The whole export build, callable from the sync route AND the async job
+ *  (#453). `reqLike` only needs `.query.conditions` — the async path passes a
+ *  synthetic one carrying the filters captured at enqueue time. */
+async function buildExport(
+  user: import('../types.js').User,
+  isAdmin: boolean,
+  presetId: string,
+  q: Record<string, string>,
+  reqLike: unknown,
+  workspaceId?: string
+): Promise<ExportResult | ExportError> {
+    const preset = (await db('nivaro_export_presets').where('id', presetId).first()) as
       | { collection: string; name: string; config: string; is_shared: boolean | number; created_by: string | null }
       | undefined
-    if (!preset) return reply.code(404).send({ error: 'Not found' })
-    if (!preset.is_shared && preset.created_by !== req.user?.id && !req.isAdmin) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!preset) return { code: 404 as const, error: 'Not found' }
+    if (!preset.is_shared && preset.created_by !== user.id && !isAdmin) {
+      return { code: 403 as const, error: 'Forbidden' }
     }
     const config = parseConfig(preset.config)
-    if (!config) return reply.code(500).send({ error: 'Preset config is unreadable' })
+    if (!config) return { code: 500 as const, error: 'Preset config is unreadable' }
 
-    const q = req.query as Record<string, string>
     const plain = config.columns.filter((c) => !c.key.includes('.')).map((c) => c.key)
     const dotted = config.columns.filter((c) => c.key.includes('.')).map((c) => c.key)
 
     // readItems reads `conditions` off req.query itself — pass req through so
     // the caller's filters apply, on top of RBAC/RLS/scopes as that user.
     const result = await readItems(
-      req.user!,
+      user,
       preset.collection,
       {
         fields: ['id', ...plain],
@@ -122,8 +142,8 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         ...(q.search ? { search: q.search } : {}),
         ...(q.sort ? { sort: q.sort.split(',') } : {})
       },
-      req,
-      req.workspaceId ?? undefined
+      reqLike as never,
+      workspaceId
     )
     const rows = result.data as Array<Record<string, unknown>>
 
@@ -165,10 +185,9 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
 
     await logActivity({
       action: 'export-preset-run',
-      user: req.user?.id,
+      user: user.id,
       collection: preset.collection,
-      comment: `"${preset.name}": ${rows.length} rows (${config.format})`,
-      req
+      comment: `"${preset.name}": ${rows.length} rows (${config.format})`
     })
 
     // Export filename templates (#412): {{collection}} / {{preset}} / {{date}}.
@@ -186,10 +205,11 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
       }
       const csv = [header, ...dataRows].map((row) => row.map(esc).join(',')).join('\n')
-      return reply
-        .header('Content-Type', 'text/csv; charset=utf-8')
-        .header('Content-Disposition', `attachment; filename="${safeName}.csv"`)
-        .send(`﻿${csv}`)
+      return {
+        buffer: Buffer.from(`﻿${csv}`, 'utf8'),
+        filename: `${safeName}.csv`,
+        contentType: 'text/csv; charset=utf-8'
+      }
     }
     const XLSX = await import('xlsx')
     const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows])
@@ -226,8 +246,8 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
           // read permission, RLS row filters and User Scopes all bind, same
           // as the parent rows above. A raw table read here would let a
           // parent-only permission leak the child collection.
-          if (!req.isAdmin && !(await can(req.user!, 'read', rel.many_collection))) continue
-          const kidsRes = await readItems(req.user!, rel.many_collection, {
+          if (!isAdmin && !(await can(user, 'read', rel.many_collection))) continue
+          const kidsRes = await readItems(user, rel.many_collection, {
             filter: { [rel.many_field]: { _in: parentIds } },
             limit: 1000
           })
@@ -251,12 +271,80 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+    return {
+      buffer: buf,
+      filename: `${safeName}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    }
+}
+
+  app.get<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
+    const result = await buildExport(
+      req.user!,
+      !!req.isAdmin,
+      req.params.id,
+      req.query as Record<string, string>,
+      req,
+      req.workspaceId ?? undefined
+    )
+    if ('error' in result) return reply.code(result.code).send({ error: result.error })
     return reply
-      .header(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      )
-      .header('Content-Disposition', `attachment; filename="${safeName}.xlsx"`)
-      .send(buf)
+      .header('Content-Type', result.contentType)
+      .header('Content-Disposition', `attachment; filename="${result.filename}"`)
+      .send(result.buffer)
   })
+
+  // #453 — async export: the same build runs as a background job; the file
+  // lands in the file library and the requester gets a notification with the
+  // link. For the exports big enough that the sync route feels like a hang.
+  app.post<{ Params: { id: string }; Body: { conditions?: string; search?: string; sort?: string } }>(
+    '/:id/run-async',
+    async (req, reply) => {
+      const user = req.user!
+      const isAdmin = !!req.isAdmin
+      const presetId = req.params.id
+      const preset = await db('nivaro_export_presets').where('id', presetId).first('id', 'name')
+      if (!preset) return reply.code(404).send({ error: 'Not found' })
+      const { startJobRun } = await import('../services/job-runs.js')
+      const run = await startJobRun('export', `preset:${preset.name}`.slice(0, 200), {
+        triggeredBy: user.id
+      })
+      const q: Record<string, string> = {}
+      if (req.body?.search) q.search = String(req.body.search)
+      if (req.body?.sort) q.sort = String(req.body.sort)
+      const conditions = req.body?.conditions ? String(req.body.conditions) : undefined
+      const workspaceId = req.workspaceId ?? undefined
+      void (async () => {
+        try {
+          const result = await buildExport(
+            user,
+            isAdmin,
+            presetId,
+            q,
+            // readItems reads conditions off req.query — a synthetic req
+            // carries the filters captured at enqueue time.
+            conditions ? { query: { conditions } } : undefined,
+            workspaceId
+          )
+          if ('error' in result) {
+            await run.fail(result.error)
+            return
+          }
+          const { uploadFileBuffer } = await import('../services/files.js')
+          const stored = await uploadFileBuffer(user, result.buffer, result.filename, result.contentType)
+          await run.complete(`${result.filename} → file ${stored.id}`)
+          const { notifyUser } = await import('../services/notification-channels.js')
+          await notifyUser(app, user.id, {
+            subject: `Export ready: ${result.filename}`,
+            message: 'Your export finished — open Files to download it.',
+            collection: 'nivaro_files',
+            item: String(stored.id)
+          }).catch(() => {})
+        } catch (err) {
+          await run.fail(err)
+        }
+      })()
+      return reply.code(202).send({ data: { run_id: run.id } })
+    }
+  )
 }
