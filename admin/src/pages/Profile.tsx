@@ -1,5 +1,11 @@
 import { createNivaro } from '@nivaro/sdk'
-import { NivaroProvider, NotificationSourcesCard } from '@nivaro/shared'
+import {
+  DisplayPrefsCard,
+  NivaroProvider,
+  NotificationRulesCard,
+  NotificationSourcesCard,
+  TimezoneCard
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, Copy, Eye, EyeOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -688,6 +694,12 @@ export function ProfilePage() {
             {/* Browser push (own save, outside the profile form) */}
             <EmailDeliveryCard />
             <NivaroProvider client={sharedClient}>
+              {/* Shared self-serve cards — timezone + display prefs lived only
+                  in the headless ProfileView; admin users never saw them
+                  (Rob, 2026-08-24). Same provider the sources card uses. */}
+              <TimezoneCard />
+              <DisplayPrefsCard />
+              <NotificationRulesCard />
               <NotificationSourcesCard />
             </NivaroProvider>
             <BrowserPushCard />

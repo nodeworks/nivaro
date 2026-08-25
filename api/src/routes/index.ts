@@ -148,6 +148,7 @@ import { remindersRoutes } from './reminders.js'
 import { opsDbRoutes } from './ops-db.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsLogsRoutes } from './ops-logs.js'
+import { commandCenterRoutes } from './command-center.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
@@ -373,6 +374,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
+  await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
   await app.register(queuesRoutes, { prefix: '/queues' })
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })

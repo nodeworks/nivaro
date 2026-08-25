@@ -281,6 +281,9 @@ const DbHealthPage = lazy(() =>
 const OpsConsolePage = lazy(() =>
   import('@/pages/OpsConsole').then((m) => ({ default: m.OpsConsolePage }))
 )
+const CommandCenterPage = lazy(() =>
+  import('@/pages/CommandCenter').then((m) => ({ default: m.CommandCenterPage }))
+)
 
 const RetentionPoliciesPage = lazy(() =>
   import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
@@ -557,6 +560,7 @@ export default function App() {
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
+                  <Route path='command' element={<CommandCenterPage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
                   <Route path='data-quality' element={<Navigate to='/data-integrity?tab=quality' replace />} />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />

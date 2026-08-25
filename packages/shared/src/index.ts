@@ -86,8 +86,11 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
-export { ProfileView } from './components/ProfileView'
+export { ProfileView, TimezoneCard, DisplayPrefsCard, NotificationRulesCard } from './components/ProfileView'
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
+export { CommandCenterView } from './components/command-center/CommandCenterView'
+export { BaseMap } from './components/BaseMap'
+export type { BaseMapPin, BaseMapBubble } from './components/BaseMap'
 export * from './components/panels'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'

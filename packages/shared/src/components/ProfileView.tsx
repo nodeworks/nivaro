@@ -257,7 +257,7 @@ const NOTIFY_CATS: Array<{ key: string; label: string }> = [
   { key: 'other', label: 'Everything else' }
 ]
 
-function NotificationRulesCard() {
+export function NotificationRulesCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { data: prefs } = useQuery({
@@ -456,7 +456,7 @@ function NotificationRulesCard() {
 
 /** Timezone preference (#31): applied to every datetime the shared
  *  formatters render. Defaults to the browser's zone. */
-function TimezoneCard() {
+export function TimezoneCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
@@ -2249,7 +2249,7 @@ function MyPermissionsCard() {
 
 // ─── Display preferences (#229/#230/#231/#232/#411) ──────────────────────────
 
-function DisplayPrefsCard() {
+export function DisplayPrefsCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { data: prefs } = useQuery({
