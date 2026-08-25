@@ -15,6 +15,12 @@ export async function findOrCreateFromOIDC(profile: {
   company?: string | null
   department?: string | null
   phone?: string | null
+  office_location?: string | null
+  city?: string | null
+  state?: string | null
+  country?: string | null
+  employee_id?: string | null
+  preferred_language?: string | null
   avatar?: string | null
 }): Promise<User> {
   // Match by the immutable subject first; email only links a pre-provisioned
@@ -39,6 +45,12 @@ export async function findOrCreateFromOIDC(profile: {
     if (profile.company) updates.company = profile.company
     if (profile.department) updates.department = profile.department
     if (profile.phone) updates.phone = profile.phone
+    if (profile.office_location) updates.office_location = profile.office_location
+    if (profile.city) updates.city = profile.city
+    if (profile.state) updates.state = profile.state
+    if (profile.country) updates.country = profile.country
+    if (profile.employee_id) updates.employee_id = profile.employee_id
+    if (profile.preferred_language) updates.preferred_language = profile.preferred_language
     if (profile.avatar) {
       updates.avatar = profile.avatar
       updates.avatar_updated_at = new Date()
@@ -73,6 +85,12 @@ export async function findOrCreateFromOIDC(profile: {
       company: profile.company ?? null,
       department: profile.department ?? null,
       phone: profile.phone ?? null,
+      office_location: profile.office_location ?? null,
+      city: profile.city ?? null,
+      state: profile.state ?? null,
+      country: profile.country ?? null,
+      employee_id: profile.employee_id ?? null,
+      preferred_language: profile.preferred_language ?? null,
       avatar: profile.avatar ?? null,
       avatar_updated_at: profile.avatar ? new Date() : null,
       external_id: profile.sub,
@@ -120,6 +138,11 @@ const USER_COLS = [
   'company',
   'department',
   'phone',
+  'office_location',
+  'city',
+  'state',
+  'country',
+  'employee_id',
   'role',
   'status',
   'last_access',
@@ -159,6 +182,8 @@ const DIRECTORY_USER_COLS = [
   'title',
   'department',
   'company',
+  // Office location is org-visible; employee_id/city stay admin-only.
+  'office_location',
   'status',
   // OOO mention warnings (#221): pickers warn inline when the person being
   // mentioned/assigned is out — availability is org-visible information.

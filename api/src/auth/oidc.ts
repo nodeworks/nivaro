@@ -36,6 +36,12 @@ export interface GraphOrgProfile {
   company: string | null
   department: string | null
   phone: string | null
+  office_location: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  employee_id: string | null
+  preferred_language: string | null
 }
 
 // Azure AD ID tokens carry no org fields (jobTitle/companyName/department live
@@ -45,7 +51,7 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
   if (!isMicrosoftIssuer()) return null
   try {
     const res = await fetch(
-      'https://graph.microsoft.com/v1.0/me?$select=jobTitle,companyName,department,mobilePhone,businessPhones',
+      'https://graph.microsoft.com/v1.0/me?$select=jobTitle,companyName,department,mobilePhone,businessPhones,officeLocation,city,state,country,employeeId,preferredLanguage',
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(5000)
@@ -58,12 +64,29 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
       department?: string | null
       mobilePhone?: string | null
       businessPhones?: string[]
+      officeLocation?: string | null
+      city?: string | null
+      state?: string | null
+      country?: string | null
+      employeeId?: string | null
+      preferredLanguage?: string | null
+    }
+    // Dev-only: dump the raw payload so an operator can see everything the
+    // tenant actually returns for these User.Read fields.
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[graph] /me payload:', JSON.stringify(g))
     }
     return {
       title: g.jobTitle ?? null,
       company: g.companyName ?? null,
       department: g.department ?? null,
-      phone: g.mobilePhone ?? g.businessPhones?.[0] ?? null
+      phone: g.mobilePhone ?? g.businessPhones?.[0] ?? null,
+      office_location: g.officeLocation ?? null,
+      city: g.city ?? null,
+      state: g.state ?? null,
+      country: g.country ?? null,
+      employee_id: g.employeeId ?? null,
+      preferred_language: g.preferredLanguage ?? null
     }
   } catch {
     return null
@@ -134,6 +157,12 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     company: graph?.company ?? null,
     department: graph?.department ?? null,
     phone: graph?.phone ?? null,
+    office_location: graph?.office_location ?? null,
+    city: graph?.city ?? null,
+    state: graph?.state ?? null,
+    country: graph?.country ?? null,
+    employee_id: graph?.employee_id ?? null,
+    preferred_language: graph?.preferred_language ?? null,
     avatar,
     tokens
   }
