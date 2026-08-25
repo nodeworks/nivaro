@@ -41,9 +41,9 @@ export function RecordInsightsButton({
         onClick={() => setOpen((v) => !v)}
         data-tip='Record insights — audience, integrations, owner history'
         aria-label='Record insights'
-        className='flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
       >
-        <Info className='h-4 w-4' />
+        <Info className='h-3.5 w-3.5' />
       </button>
       {open && (
         <div className='absolute right-0 top-full z-[60] mt-1 w-[380px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
