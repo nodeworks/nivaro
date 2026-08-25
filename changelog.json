@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-25T00:52:46.467Z",
+  "generated_at": "2026-08-25T01:10:53.889Z",
   "releases": [
+    {
+      "version": "0.1.129",
+      "tag": "v0.1.129",
+      "date": "2026-08-24T21:10:49-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Command Center — live ops board with map + people layer (/command)",
+              "hash": "8b4c169f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.128",
       "tag": "v0.1.128",
-      "date": "2026-08-24T20:52:41-04:00",
+      "date": "2026-08-24T20:52:46-04:00",
       "sections": [
         {
           "label": "Fixed",
