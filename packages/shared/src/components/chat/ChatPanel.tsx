@@ -370,7 +370,7 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
       : []),
     ['CR26-12345', 'Type a workflow or request ID and it becomes a live card showing its current state — click it to open the record.'],
     ['📎 / paste', 'Attach files, or paste a screenshot straight into the message box.'],
-    ['Hover a message', 'React with an emoji; edit or delete your own within 15 minutes.'],
+    ['Hover a message', 'React with an emoji; edit your own within 15 minutes; delete your own anytime.'],
     ['Search box', 'The box above your conversations searches rooms AND every message in them.'],
     ['Record pages', 'Workflows and requests have a "Chat" button in their header — discuss the record in its own room or send it to any conversation.']
   ]
@@ -609,6 +609,8 @@ export function ChatRoomView({
   const [pinsOpen, setPinsOpen] = useState(false)
   const editMessage = useEditMessage(room)
   const deleteMessage = useDeleteMessage(room)
+  // Admins may delete anyone's message (server enforces the same rule).
+  const { isAdmin } = useItemEditAuth()
   const { setMuted, setNotifyMode } = useRoomMembership()
   const { rooms: allRooms } = useChatRooms()
   const roomInfo = allRooms.find((r) => r.room === room) ?? null
@@ -1068,6 +1070,9 @@ export function ChatRoomView({
             const deleted = !!m.deleted_at
             const editable =
               mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
+            // Delete has no time window: own messages always, any message for
+            // admins (matches the server's own-or-admin rule).
+            const deletable = !deleted && (mine || isAdmin)
             const isEditing = editingId === m.id
             // "New messages" — anchored to the unread count frozen at open.
             const showUnreadDivider =
@@ -1184,19 +1189,21 @@ export function ChatRoomView({
                           <Bookmark className='h-3 w-3' />
                         </button>
                         {editable && (
+                          <button
+                            type='button'
+                            title='Edit'
+                            onClick={() => {
+                              setEditingId(m.id)
+                              setEditDraft(m.message)
+                              setConfirmDeleteId(null)
+                            }}
+                            className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                          >
+                            <Pencil className='h-3 w-3' />
+                          </button>
+                        )}
+                        {deletable && (
                           <>
-                            <button
-                              type='button'
-                              title='Edit'
-                              onClick={() => {
-                                setEditingId(m.id)
-                                setEditDraft(m.message)
-                                setConfirmDeleteId(null)
-                              }}
-                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                            >
-                              <Pencil className='h-3 w-3' />
-                            </button>
                             {confirmDeleteId === m.id ? (
                               <button
                                 type='button'
@@ -1212,7 +1219,7 @@ export function ChatRoomView({
                             ) : (
                               <button
                                 type='button'
-                                title='Delete'
+                                title={mine ? 'Delete' : 'Delete (admin)'}
                                 onClick={() => setConfirmDeleteId(m.id)}
                                 className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
                               >
