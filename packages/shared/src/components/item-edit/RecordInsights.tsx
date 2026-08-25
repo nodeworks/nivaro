@@ -46,7 +46,7 @@ export function RecordInsightsButton({
         <Info className='h-3.5 w-3.5' />
       </button>
       {open && (
-        <div className='absolute right-0 top-full z-[60] mt-1 w-[440px] max-w-[92vw] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
+        <div className='absolute right-0 top-full z-[60] mt-1 w-[480px] max-w-[92vw] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
           <div className='mb-2 flex gap-1'>
             {(
               [
@@ -63,8 +63,8 @@ export function RecordInsightsButton({
                 onClick={() => setTab(key)}
                 className={
                   tab === key
-                    ? 'rounded-md bg-nvr-cyan/10 px-2 py-1 text-[11.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                    : 'rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:bg-muted'
+                    ? 'whitespace-nowrap rounded-md bg-nvr-cyan/10 px-2 py-1 text-[11.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'whitespace-nowrap rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:bg-muted'
                 }
               >
                 {label}
