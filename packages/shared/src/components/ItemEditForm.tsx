@@ -7275,14 +7275,14 @@ export function ItemEditForm({
                                       itemId={String(itemId)}
                                     />
                                   )}
-                                  {!isNew && itemId && (
+                                  {!isNew && itemId && !activeLayoutData?.layout?.hide_integrity_banner && (
                                     <RecordIntegrityBanner
                                       collection={collection}
                                       itemId={String(itemId)}
                                       onJumpToField={flashField}
                                     />
                                   )}
-                                  {!isNew && itemId && (
+                                  {!isNew && itemId && !activeLayoutData?.layout?.hide_sla_banner && (
                                     <SlaBreachBanner
                                       collection={collection}
                                       itemId={String(itemId)}

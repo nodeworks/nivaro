@@ -37,19 +37,126 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
         .orderBy('id', 'desc')
         .first('id', 'finished_at')) as { id: number; finished_at: Date | null } | undefined
       if (!run) return { data: { enabled: true, findings: [] } }
-      const findings = await db('nivaro_conformance_findings')
+      const findings = (await db('nivaro_conformance_findings')
         .where({ run: run.id, item_id: String(id) })
-        .select('field', 'rule', 'message')
+        .select('field', 'rule', 'message')) as Array<{
+        field: string | null
+        rule: string
+        message: string
+      }>
+      // Annotate which findings the Fix button can actually repair: a stale
+      // cascade value can be cleared, and an empty display-template part
+      // backed by an auto_id config can be regenerated. required/validation
+      // need a human value — never auto-fixable.
+      const { autoIdFieldsFor } = await import('../services/auto-ids.js')
+      const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
+      // Cascade clears only work on PHYSICAL columns — an M2M alias PATCHed
+      // to null is silently stripped by updateOne, so offering Fix there
+      // would be a lie.
+      const physical = new Set(
+        (
+          (await db('information_schema.columns')
+            .where({ table_name: collection })
+            .pluck('column_name')
+            .catch(() => [])) as string[]
+        ).map((c) => c.toLowerCase())
+      )
       return {
         data: {
           enabled: true,
           run_id: run.id,
           checked_at: run.finished_at,
-          findings
+          findings: findings.map((f) => ({
+            ...f,
+            fixable:
+              (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
+              (f.rule === 'display' && !!f.field && autoIds.has(f.field))
+          }))
         }
       }
     }
   )
+
+  /** Auto-fix one finding (#record-integrity ask): cascade → clear the stale
+   *  value; display+auto_id → regenerate the id (fresh sequence when empty,
+   *  prefix recompute otherwise). Both write THROUGH updateOne so RBAC,
+   *  validation, hooks, and revisions all apply. */
+  app.post<{
+    Params: { collection: string; id: string }
+    Body: { field?: string; rule?: string }
+  }>('/record/:collection/:id/fix', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, id } = req.params
+    const field = String(req.body?.field ?? '')
+    const rule = String(req.body?.rule ?? '')
+    if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
+      return reply.code(400).send({ error: 'Invalid collection or field' })
+    }
+    if (!(await can(req.user!, 'update', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (rule === 'cascade') {
+      const isPhysical = (
+        (await db('information_schema.columns')
+          .where({ table_name: collection, column_name: field })
+          .pluck('column_name')
+          .catch(() => [])) as string[]
+      ).length > 0
+      if (!isPhysical) {
+        return reply
+          .code(400)
+          .send({ error: 'Linked-list fields must be corrected on the record itself.' })
+      }
+      await updateOne(req.user!, collection, id, { [field]: null })
+      await logActivity({
+        action: 'integrity-fix',
+        user: req.user?.id,
+        collection,
+        item: String(id),
+        comment: `cleared stale cascade value on ${field}`,
+        req
+      })
+      return { data: { fixed: true, action: 'cleared' } }
+    }
+    if (rule === 'display') {
+      const { autoIdFieldsFor, applyAutoIdsExt, recomputeAutoIdPrefix } = await import(
+        '../services/auto-ids.js'
+      )
+      const cfg = (await autoIdFieldsFor(db, collection)).find((f) => f.field === field)
+      if (!cfg) {
+        return reply
+          .code(400)
+          .send({ error: 'This field has no ID pattern — set the value by hand instead.' })
+      }
+      const row = ((await db(collection).where({ id }).first()) ?? {}) as Record<string, unknown>
+      const current = row[field]
+      let value: string | null = null
+      if (current == null || String(current).trim() === '') {
+        // Empty — generate fresh, exactly like create-time would have.
+        const payload: Record<string, unknown> = { ...row }
+        delete payload[field]
+        await applyAutoIdsExt(db, collection, payload)
+        value = payload[field] != null ? String(payload[field]) : null
+      } else {
+        value = await recomputeAutoIdPrefix(db, collection, field, cfg.config, id, row)
+      }
+      if (!value || value === String(current ?? '')) {
+        return reply
+          .code(400)
+          .send({ error: 'Could not regenerate — the pattern did not resolve for this record.' })
+      }
+      await updateOne(req.user!, collection, id, { [field]: value })
+      await logActivity({
+        action: 'integrity-fix',
+        user: req.user?.id,
+        collection,
+        item: String(id),
+        comment: `regenerated ${field} → ${value}`,
+        req
+      })
+      return { data: { fixed: true, action: 'regenerated', value } }
+    }
+    return reply.code(400).send({ error: 'This finding cannot be auto-fixed.' })
+  })
 }
 
 export async function configConformanceRoutes(app: FastifyInstance): Promise<void> {

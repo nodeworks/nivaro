@@ -390,7 +390,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
         'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation', 'pdf_button_label',
         'addendum_layout_id', 'workflow_template_id', 'single_active_addendum', 'addendum_default_view',
-        'record_conditions', 'default_values', 'display_mode'
+        'record_conditions', 'default_values', 'display_mode', 'hide_integrity_banner', 'hide_sla_banner'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
@@ -452,7 +452,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
-    const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null; parent_layout_id: number | null }>
+    const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null; parent_layout_id: number | null; hide_integrity_banner: boolean; hide_sla_banner: boolean }>
 
     if (body.record_conditions !== undefined && body.record_conditions !== null) {
       const err = validateRecordConditions(body.record_conditions)
@@ -510,6 +510,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.record_conditions !== undefined) patch.record_conditions = body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
     if (body.default_values !== undefined) patch.default_values = body.default_values == null ? null : JSON.stringify(body.default_values)
     if (body.display_mode !== undefined) patch.display_mode = body.display_mode ?? null
+    if (body.hide_integrity_banner !== undefined) patch.hide_integrity_banner = body.hide_integrity_banner === true
+    if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
 
     if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
 

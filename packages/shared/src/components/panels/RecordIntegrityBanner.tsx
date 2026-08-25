@@ -1,14 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 
 /**
  * Data-integrity findings for THIS record, from the latest completed
  * conformance run — editors fix issues where they live instead of admins
  * chasing a list. Per-collection toggle (nivaro_collections.integrity_badge,
- * default on) is enforced server-side; nothing renders when the record is
- * clean, the collection has never been swept, or the badge is off.
+ * default on) and a per-layout hide flag are enforced by the callers;
+ * nothing renders when the record is clean, the collection has never been
+ * swept, or the badge is off. Findings the server marks `fixable` (stale
+ * cascade values, empty auto-generated ids) get a one-click Fix that repairs
+ * through the normal write path.
  */
 export function RecordIntegrityBanner({
   collection,
@@ -20,11 +23,13 @@ export function RecordIntegrityBanner({
   onJumpToField?: (field: string) => void
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
+  const [fixError, setFixError] = useState<string | null>(null)
   const { data } = useQuery<{
     enabled: boolean
     checked_at?: string | null
-    findings: Array<{ field: string; rule: string; message: string | null }>
+    findings: Array<{ field: string; rule: string; message: string | null; fixable?: boolean }>
   }>({
     queryKey: ['record-integrity', collection, itemId],
     queryFn: () =>
@@ -35,6 +40,26 @@ export function RecordIntegrityBanner({
         .then((r) => r.data)
         .catch(() => ({ enabled: false, findings: [] }) as never),
     staleTime: 5 * 60_000
+  })
+
+  const fix = useMutation({
+    mutationFn: (f: { field: string; rule: string }) =>
+      client.request<{ data: { fixed: boolean; action: string; value?: string } }>(
+        post(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}/fix`, f)
+      ),
+    onSuccess: () => {
+      setFixError(null)
+      // The record itself changed — refresh it along with the findings.
+      void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })
+      void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+      void qc.invalidateQueries({ queryKey: [collection, itemId] })
+    },
+    onError: (e) => {
+      const msg =
+        (e as { response?: { error?: string }; message?: string }).response?.error ??
+        (e as Error).message
+      setFixError(String(msg ?? 'Fix failed'))
+    }
   })
 
   if (!data?.enabled || data.findings.length === 0) return null
@@ -72,9 +97,34 @@ export function RecordIntegrityBanner({
               >
                 {f.field}
               </button>
-              <span className='min-w-0 text-amber-800 dark:text-amber-200/90'>{f.message}</span>
+              <span className='min-w-0 flex-1 text-amber-800 dark:text-amber-200/90'>
+                {f.message}
+              </span>
+              {f.fixable && (
+                <button
+                  type='button'
+                  disabled={fix.isPending}
+                  onClick={() => fix.mutate({ field: f.field, rule: f.rule })}
+                  title={
+                    f.rule === 'display'
+                      ? 'Regenerate the id from its pattern'
+                      : 'Clear the stale value (it is no longer an available option)'
+                  }
+                  className='shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10.5px] font-semibold text-white transition-opacity hover:bg-amber-700 disabled:opacity-50'
+                >
+                  {fix.isPending ? 'Fixing…' : 'Fix'}
+                </button>
+              )}
             </div>
           ))}
+          {fixError && (
+            <p className='text-[11px] text-red-600 dark:text-red-400'>{fixError}</p>
+          )}
+          {fix.isSuccess && !fixError && (
+            <p className='text-[11px] text-emerald-700 dark:text-emerald-400'>
+              Fixed — reload the record to see the new value everywhere.
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -1300,7 +1300,10 @@ function PipelinePanelInner({
   )
   // Server-computed path relevance for the state track — same key/data as the
   // Approval Chain popover + OwnersSection, so the cache is shared.
-  const { data: pathOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
+  const { data: pathOwners, isLoading: pathOwnersLoading } = useQuery<Record<
+    string,
+    AllOwnersEntry
+  > | null>({
     queryKey: ['pipeline-all-owners', collection, item],
     queryFn: () =>
       client
@@ -1661,15 +1664,31 @@ function PipelinePanelInner({
               <div className='divide-y divide-slate-100 dark:divide-border/60'>
                 {(states ?? []).length > 1 && (
                   <div className='space-y-3 px-5 py-4'>
-                    <StateTrack
-                      states={states}
-                      allTransitions={data?.all_transitions ?? []}
-                      availableTransitions={transitions ?? []}
-                      currentStateId={instance.current_state}
-                      history={history ?? []}
-                      onPathIds={onPathIds}
-                      skippedStates={skippedStates}
-                    />
+                    {pathOwnersLoading ? (
+                      // Path pruning arrives with the owners query — rendering
+                      // the UNPRUNED track first meant every state briefly
+                      // showed, then snapped into formation. Hold a same-height
+                      // placeholder until the real shape is known.
+                      <div className='flex h-[52px] items-center gap-2'>
+                        {[0, 1, 2, 3, 4].map((i) => (
+                          <span key={i} className='flex items-center gap-2'>
+                            <Skeleton className='h-7 w-7 rounded-full' />
+                            {i < 4 && <Skeleton className='h-0.5 w-10' />}
+                          </span>
+                        ))}
+                        <Skeleton className='ml-2 h-3 w-24' />
+                      </div>
+                    ) : (
+                      <StateTrack
+                        states={states}
+                        allTransitions={data?.all_transitions ?? []}
+                        availableTransitions={transitions ?? []}
+                        currentStateId={instance.current_state}
+                        history={history ?? []}
+                        onPathIds={onPathIds}
+                        skippedStates={skippedStates}
+                      />
+                    )}
                     <StateDurationTimeline
                       history={history ?? []}
                       completedAt={instance.completed_at}

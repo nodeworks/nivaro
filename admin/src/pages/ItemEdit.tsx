@@ -488,12 +488,12 @@ export function ItemEditPage() {
   })
 
   const { data: extItemActions = [] } = useQuery({
-    queryKey: ['ext-item-actions', collection],
+    queryKey: ['ext-item-actions', collection, id],
     queryFn: () =>
       api
         .get<{ data: Array<{ id: string; label: string; variant?: string }> }>(
           '/item-actions/registered',
-          { params: { collection } }
+          { params: { collection, item: id } }
         )
         .then((r) => r.data.data),
     enabled: !!collection && !!id && !isNew,

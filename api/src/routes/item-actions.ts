@@ -8,10 +8,27 @@ export async function itemActionsRoutes(app: FastifyInstance) {
 
   // List actions available for a collection
   app.get('/item-actions/registered', { preHandler: [requireAuth] }, async (req) => {
-    const collection = (req.query as Record<string, string>).collection
+    const q = req.query as Record<string, string>
+    const collection = q.collection
+    const item = q.item
     const actions = itemActionRegistry.list(collection)
+    // With ?item=, per-record applicability gates run so the client only
+    // renders buttons that can actually do something on THIS record.
+    const kept = item
+      ? (
+          await Promise.all(
+            actions.map(async (a) => {
+              if (!a.applicable || !collection) return a
+              const ok = await a
+                .applicable({ collection, itemId: item })
+                .catch(() => true) // broken check must not hide a working action
+              return ok ? a : null
+            })
+          )
+        ).filter((a): a is (typeof actions)[number] => a !== null)
+      : actions
     return {
-      data: actions.map(({ execute: _x, ...rest }) => rest)
+      data: kept.map(({ execute: _x, applicable: _a, ...rest }) => rest)
     }
   })
 

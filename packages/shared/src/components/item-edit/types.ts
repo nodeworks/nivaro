@@ -96,6 +96,8 @@ export interface LayoutMeta {
   summary_hide_empty?: boolean
   ai_enabled: boolean
   disable_comments?: boolean | number
+  hide_integrity_banner?: boolean | number
+  hide_sla_banner?: boolean | number
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number

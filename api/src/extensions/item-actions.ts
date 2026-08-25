@@ -7,6 +7,10 @@ export interface ItemActionDef {
   /** Hint for the admin: 'default' | 'destructive' | 'outline' */
   variant?: 'default' | 'destructive' | 'outline'
   execute(ctx: ItemActionContext): Promise<{ message: string; data?: unknown }>
+  /** Optional per-record gate: when present, /item-actions/registered?item=
+   *  evaluates it and the client hides inapplicable buttons. Errors count as
+   *  applicable — a broken check must not hide a working action. */
+  applicable?(ctx: { collection: string; itemId: string | number }): Promise<boolean>
 }
 
 export interface ItemActionContext {

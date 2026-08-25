@@ -14454,6 +14454,8 @@ interface CollectionLayout {
   sort: number
   disable_comments?: boolean | number
   disable_tasks?: boolean | number
+  hide_integrity_banner?: boolean | number
+  hide_sla_banner?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number
   disable_delete?: boolean | number
@@ -14982,6 +14984,8 @@ function LayoutsTab({
           | 'parent_layout_id'
           | 'disable_comments'
           | 'disable_tasks'
+          | 'hide_integrity_banner'
+          | 'hide_sla_banner'
           | 'disable_revisions'
           | 'disable_clone'
           | 'disable_delete'
@@ -16182,6 +16186,38 @@ function LayoutsTab({
                             patchLayoutMut.mutate({
                               id: selected.id,
                               disable_tasks: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide data-integrity banner
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.hide_integrity_banner}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              hide_integrity_banner: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between'>
+                        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                          Hide SLA breach banner
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.hide_sla_banner}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              hide_sla_banner: e.target.checked
                             })
                           }
                           className='h-3.5 w-3.5 rounded accent-nvr-cyan'
