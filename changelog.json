@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-25T16:34:27.048Z",
+  "generated_at": "2026-08-25T23:47:12.073Z",
   "releases": [
+    {
+      "version": "0.1.135",
+      "tag": "v0.1.135",
+      "date": "2026-08-25T19:47:08-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "OIDC_EXTRA_SCOPES widens the Microsoft Graph token once consented",
+              "hash": "09570893"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync-docs output for the new sections (www/docs.html)",
+              "hash": "feef8dda"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.134",
       "tag": "v0.1.134",
-      "date": "2026-08-25T12:34:23-04:00",
+      "date": "2026-08-25T12:34:27-04:00",
       "sections": [
         {
           "label": "Fixed",
