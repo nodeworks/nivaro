@@ -1,10 +1,105 @@
 {
-  "generated_at": "2026-08-25T02:04:00.781Z",
+  "generated_at": "2026-08-25T13:58:20.985Z",
   "releases": [
+    {
+      "version": "0.1.132",
+      "tag": "v0.1.132",
+      "date": "2026-08-25T09:58:16-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "record-pin layer toggles like People; chips title-cased",
+              "hash": "d1a60e2f"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "People pane groups by office address when known",
+              "hash": "9404b092"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "people map pins actual offices from geocoded Graph addresses",
+              "hash": "0ac1ab21"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "capture office location, city/state/country, employeeId, preferredLanguage from Microsoft Graph at login",
+              "hash": "a723a5d6"
+            },
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "admins can delete any message; own-message delete no longer time-boxed",
+              "hash": "dd1508e4"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "condensed header hides the chip/widget band instead of unmounting it",
+              "hash": "bcadf80b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "checklist",
+              "text": "unwrap /auth/me {data} envelope — rows misread as undone, dismissal never stuck",
+              "hash": "ad7ad161"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "hover toolbar anchors at the screen-edge side so it grows inward",
+              "hash": "d7686f73"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "deleted messages excluded from sidebar previews and unread counts",
+              "hash": "2601386d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "badges report real SLA-breached counts for materialized queues",
+              "hash": "13eb5655"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "auth",
+              "text": "Graph diagnostics require explicit GRAPH_DEBUG opt-in; denials log status only",
+              "hash": "0db1b422"
+            },
+            {
+              "section": "Other",
+              "scope": "auth",
+              "text": "dev-mode Graph diagnostics — fix the NODE_ENV gate, probe consent-gated endpoints",
+              "hash": "b8fea0d9"
+            }
+          ]
+        }
+      ],
+      "count": 12
+    },
     {
       "version": "0.1.131",
       "tag": "v0.1.131",
-      "date": "2026-08-24T22:03:57-04:00",
+      "date": "2026-08-24T22:04:00-04:00",
       "sections": [
         {
           "label": "Added",
