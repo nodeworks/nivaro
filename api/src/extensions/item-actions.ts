@@ -6,6 +6,16 @@ export interface ItemActionDef {
   collections?: string[]
   /** Hint for the admin: 'default' | 'destructive' | 'outline' */
   variant?: 'default' | 'destructive' | 'outline'
+  /** When present, clients show a confirmation dialog before executing:
+   *  body explains what will happen ("a draft addendum will be created"),
+   *  input adds an optional/required free-text field delivered to execute()
+   *  as payload.message. */
+  confirm?: {
+    title?: string
+    body?: string
+    confirm_label?: string
+    input?: { label: string; placeholder?: string; required?: boolean }
+  }
   execute(ctx: ItemActionContext): Promise<{ message: string; data?: unknown }>
   /** Optional per-record gate: when present, /item-actions/registered?item=
    *  evaluates it and the client hides inapplicable buttons. Errors count as

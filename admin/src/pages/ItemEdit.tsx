@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
@@ -343,6 +344,32 @@ export function ItemEditPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
+
+  async function runItemAction(
+    action: { id: string; label: string },
+    message?: string
+  ): Promise<void> {
+    setRunningItemAction(action.id)
+    try {
+      const res = await api.post<{ data: { message: string } }>(
+        `/item-actions/${action.id}/execute`,
+        {
+          collection,
+          itemId: id,
+          ...(message?.trim() ? { payload: { message: message.trim() } } : {})
+        }
+      )
+      toast.success(res.data.data.message)
+      // Re-check applicability — the action may have just consumed its own
+      // precondition.
+      void queryClient.invalidateQueries({ queryKey: ['ext-item-actions', collection, id] })
+    } catch (err) {
+      const detail = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(detail ?? `${action.label} failed`, { duration: 12000 })
+    } finally {
+      setRunningItemAction(null)
+    }
+  }
   const { user } = useAuth()
 
   // Optional ?layout=<slug> pins a specific grouped layout (e.g. a queue
@@ -387,6 +414,11 @@ export function ItemEditPage() {
   const presence = useRecordPresence(collection, !isNew && id ? id : undefined)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
+  // Pre-execute confirm dialog (action.confirm from the registry).
+  const [confirmItemAction, setConfirmItemAction] = useState<(typeof extItemActions)[number] | null>(
+    null
+  )
+  const [itemActionNote, setItemActionNote] = useState('')
 
   // ── Admin-specific queries ────────────────────────────────────────────────
   const { data: colMeta } = useQuery({
@@ -491,7 +523,19 @@ export function ItemEditPage() {
     queryKey: ['ext-item-actions', collection, id],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: string; label: string; variant?: string }> }>(
+        .get<{
+          data: Array<{
+            id: string
+            label: string
+            variant?: string
+            confirm?: {
+              title?: string
+              body?: string
+              confirm_label?: string
+              input?: { label: string; placeholder?: string; required?: boolean }
+            }
+          }>
+        }>(
           '/item-actions/registered',
           { params: { collection, item: id } }
         )
@@ -812,27 +856,13 @@ export function ItemEditPage() {
                         (action.variant as 'default' | 'destructive' | 'outline') ?? 'outline'
                       }
                       disabled={runningItemAction !== null}
-                      onClick={async () => {
-                        setRunningItemAction(action.id)
-                        try {
-                          const res = await api.post<{ data: { message: string } }>(
-                            `/item-actions/${action.id}/execute`,
-                            { collection, itemId: id }
-                          )
-                          toast.success(res.data.data.message)
-                          // Re-check applicability — the action may have just
-                          // consumed its own precondition.
-                          void queryClient.invalidateQueries({
-                            queryKey: ['ext-item-actions', collection, id]
-                          })
-                        } catch (err) {
-                          const detail = (
-                            err as { response?: { data?: { error?: string } } }
-                          )?.response?.data?.error
-                          toast.error(detail ?? `${action.label} failed`, { duration: 12000 })
-                        } finally {
-                          setRunningItemAction(null)
+                      onClick={() => {
+                        if (action.confirm) {
+                          setItemActionNote('')
+                          setConfirmItemAction(action)
+                          return
                         }
+                        void runItemAction(action)
                       }}
                     >
                       {runningItemAction === action.id ? (
@@ -843,6 +873,54 @@ export function ItemEditPage() {
                       {action.label}
                     </Button>
                   ))}
+                  {confirmItemAction &&
+                    createPortal(
+                      <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'>
+                        <div className='w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'>
+                          <h3 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                            {confirmItemAction.confirm?.title ?? confirmItemAction.label}
+                          </h3>
+                          {confirmItemAction.confirm?.body && (
+                            <p className='mt-2 text-[12.5px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+                              {confirmItemAction.confirm.body}
+                            </p>
+                          )}
+                          {confirmItemAction.confirm?.input && (
+                            <div className='mt-3'>
+                              <p className='mb-1 text-[11.5px] font-medium text-slate-500'>
+                                {confirmItemAction.confirm.input.label}
+                              </p>
+                              <textarea
+                                value={itemActionNote}
+                                onChange={(e) => setItemActionNote(e.target.value)}
+                                placeholder={confirmItemAction.confirm.input.placeholder}
+                                rows={3}
+                                className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] dark:border-border dark:bg-background'
+                              />
+                            </div>
+                          )}
+                          <div className='mt-4 flex justify-end gap-2'>
+                            <Button size='sm' variant='ghost' onClick={() => setConfirmItemAction(null)}>
+                              Cancel
+                            </Button>
+                            <Button
+                              size='sm'
+                              disabled={
+                                !!confirmItemAction.confirm?.input?.required && !itemActionNote.trim()
+                              }
+                              onClick={() => {
+                                const a = confirmItemAction
+                                setConfirmItemAction(null)
+                                void runItemAction(a, itemActionNote)
+                              }}
+                            >
+                              {confirmItemAction.confirm?.confirm_label ?? confirmItemAction.label}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
 
                   {/* Header widgets render in ItemEditForm's own header strip — not here. */}
 

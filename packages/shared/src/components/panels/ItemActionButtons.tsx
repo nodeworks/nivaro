@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Play } from 'lucide-react'
+import { Loader2, Play, X } from 'lucide-react'
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -17,6 +18,14 @@ interface ItemActionMeta {
   id: string
   label: string
   variant?: 'default' | 'destructive' | 'outline'
+  /** Pre-execute dialog: body explains what will happen; input adds an
+   *  optional/required free-text field posted as payload.message. */
+  confirm?: {
+    title?: string
+    body?: string
+    confirm_label?: string
+    input?: { label: string; placeholder?: string; required?: boolean }
+  }
 }
 
 export function ItemActionButtons({
@@ -39,10 +48,17 @@ export function ItemActionButtons({
     staleTime: 5 * 60_000
   })
 
+  const [confirming, setConfirming] = useState<ItemActionMeta | null>(null)
+  const [note, setNote] = useState('')
+
   const execute = useMutation({
-    mutationFn: (action: ItemActionMeta) =>
+    mutationFn: ({ action, message }: { action: ItemActionMeta; message?: string }) =>
       client.request<{ data: { message: string } }>(
-        post(`/item-actions/${action.id}/execute`, { collection, itemId })
+        post(`/item-actions/${action.id}/execute`, {
+          collection,
+          itemId,
+          ...(message?.trim() ? { payload: { message: message.trim() } } : {})
+        })
       ),
     onSuccess: (res) => {
       toast.success((res as { data?: { message?: string } })?.data?.message ?? 'Action completed')
@@ -59,7 +75,7 @@ export function ItemActionButtons({
       void qc.invalidateQueries({ queryKey: ['o2m-rows'] })
       void qc.invalidateQueries({ queryKey: ['pipeline-instance', collection, String(itemId)] })
     },
-    onError: (err, action) => {
+    onError: (err, { action }) => {
       // SDK attaches the parsed error body as `response` — show the full
       // server message (validation details, HTTP status + body).
       const resp = (err as { response?: { error?: string } })?.response
@@ -82,8 +98,13 @@ export function ItemActionButtons({
           className='gap-1.5'
           disabled={runningId !== null}
           onClick={() => {
+            if (a.confirm) {
+              setNote('')
+              setConfirming(a)
+              return
+            }
             setRunningId(a.id)
-            execute.mutate(a)
+            execute.mutate({ action: a })
           }}
         >
           {runningId === a.id ? (
@@ -94,6 +115,69 @@ export function ItemActionButtons({
           {a.label}
         </Button>
       ))}
+      {confirming &&
+        createPortal(
+          <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'>
+            <div className='w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'>
+              <div className='flex items-start justify-between gap-3'>
+                <h3 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                  {confirming.confirm?.title ?? confirming.label}
+                </h3>
+                <button
+                  type='button'
+                  onClick={() => setConfirming(null)}
+                  className='rounded p-1 text-slate-400 hover:text-slate-600'
+                  aria-label='Close'
+                >
+                  <X className='h-4 w-4' />
+                </button>
+              </div>
+              {confirming.confirm?.body && (
+                <p className='mt-2 text-[12.5px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+                  {confirming.confirm.body}
+                </p>
+              )}
+              {confirming.confirm?.input && (
+                <div className='mt-3'>
+                  <p className='mb-1 text-[11.5px] font-medium text-slate-500'>
+                    {confirming.confirm.input.label}
+                  </p>
+                  <textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder={confirming.confirm.input.placeholder}
+                    rows={3}
+                    className='w-full rounded-md border border-slate-200 bg-background px-2.5 py-1.5 text-[12.5px] dark:border-border'
+                  />
+                </div>
+              )}
+              <div className='mt-4 flex justify-end gap-2'>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  onClick={() => setConfirming(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type='button'
+                  size='sm'
+                  disabled={!!confirming.confirm?.input?.required && !note.trim()}
+                  onClick={() => {
+                    const a = confirming
+                    setConfirming(null)
+                    setRunningId(a.id)
+                    execute.mutate({ action: a, message: note })
+                  }}
+                >
+                  {confirming.confirm?.confirm_label ?? confirming.label}
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </>
   )
 }
