@@ -3,7 +3,7 @@ import { ChevronDown, FileDiff, Loader2, Paperclip, Upload } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
-import { get, post } from '../../lib/commands'
+import { del, get, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
@@ -1126,7 +1126,16 @@ function AddendumCard({
 }) {
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
-  const styles = STATUS_STYLES[addendum.status] ?? STATUS_STYLES.draft
+  // A workflow-driven addendum isn't a 'draft' anyone must submit — its
+  // review IS the pipeline. Say so instead of leaking the storage status.
+  const displayStatus =
+    addendum.workflow_template_id && ['draft', 'review'].includes(addendum.status)
+      ? 'in approvals'
+      : addendum.status
+  const styles =
+    displayStatus === 'in approvals'
+      ? STATUS_STYLES.review
+      : (STATUS_STYLES[addendum.status] ?? STATUS_STYLES.draft)
 
   const proposedData = addendum.data ?? {}
 
@@ -1183,7 +1192,7 @@ function AddendumCard({
   const revertMut = useMutation({
     mutationFn: () => client.request(post(`/addendums/${addendum.id}/revert`)),
     onSuccess: () => {
-      onRefresh()
+      refreshEverything()
       toast.success('Addendum reverted — the record is back to its pre-approval values')
     },
     onError: (e: unknown) => {
@@ -1192,6 +1201,33 @@ function AddendumCard({
     }
   })
   const [confirmRevert, setConfirmRevert] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const qcCard = useQueryClient()
+  // An addendum outcome (delete/revert/approve) changes more than the panel:
+  // the Viewing switcher, item actions (a deleted closeout makes the button
+  // applicable again), the approval chain, the record's own values and child
+  // grids. Same breadth the create path refreshes.
+  const refreshEverything = () => {
+    onRefresh()
+    void qcCard.invalidateQueries({ queryKey: ['addendums'] })
+    void qcCard.invalidateQueries({ queryKey: ['item-actions'] })
+    void qcCard.invalidateQueries({ queryKey: ['ext-item-actions'] })
+    void qcCard.invalidateQueries({ queryKey: ['pipeline-all-owners'] })
+    void qcCard.invalidateQueries({ queryKey: ['item'] })
+    void qcCard.invalidateQueries({ queryKey: ['o2m-rows'] })
+    void qcCard.invalidateQueries({ queryKey: ['pipeline-instance'] })
+  }
+  const deleteMut = useMutation({
+    mutationFn: () => client.request(del(`/addendums/${addendum.id}`)),
+    onSuccess: () => {
+      refreshEverything()
+      toast.success('Addendum deleted')
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Failed to delete', { duration: 10000 })
+    }
+  })
   const { isAdmin } = useItemEditAuth()
 
   const rejectMut = useMutation({
@@ -1305,7 +1341,7 @@ function AddendumCard({
                 styles.badge
               )}
             >
-              {addendum.status}
+              {displayStatus}
             </span>
             {changedFields.length > 0 && (
               <span className='text-[11px] text-slate-400 dark:text-slate-500'>
@@ -1467,6 +1503,81 @@ function AddendumCard({
                 Workflow
               </p>
               <AddendumWorkflowPanel addendumId={addendum.id} onRefresh={onRefresh} />
+              {isAdmin && (
+                <div className='mt-2 flex items-center justify-end gap-2'>
+                  {addendum.status === 'approved' ? (
+                    confirmRevert ? (
+                      <span className='flex items-center gap-1.5'>
+                        <span className='text-[11px] text-amber-600 dark:text-amber-400'>
+                          Roll every applied change back?
+                        </span>
+                        <Button
+                          size='sm'
+                          className='h-6 bg-amber-600 px-2 text-[11px] text-white hover:bg-amber-700'
+                          disabled={revertMut.isPending}
+                          onClick={() => {
+                            revertMut.mutate()
+                            setConfirmRevert(false)
+                          }}
+                        >
+                          {revertMut.isPending ? 'Reverting…' : 'Revert'}
+                        </Button>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          className='h-6 px-2 text-[11px]'
+                          onClick={() => setConfirmRevert(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </span>
+                    ) : (
+                      <button
+                        type='button'
+                        data-tip='Admin only — restores the record to its pre-approval values through the normal revision trail; the addendum stays as a reverted record of what happened'
+                        onClick={() => setConfirmRevert(true)}
+                        className='text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 hover:text-amber-600'
+                      >
+                        Revert…
+                      </button>
+                    )
+                  ) : confirmDelete ? (
+                    <span className='flex items-center gap-1.5'>
+                      <span className='text-[11px] text-red-600 dark:text-red-400'>
+                        Delete this addendum and its approval workflow?
+                      </span>
+                      <Button
+                        size='sm'
+                        className='h-6 bg-red-600 px-2 text-[11px] text-white hover:bg-red-700'
+                        disabled={deleteMut.isPending}
+                        onClick={() => {
+                          deleteMut.mutate()
+                          setConfirmDelete(false)
+                        }}
+                      >
+                        {deleteMut.isPending ? 'Deleting…' : 'Delete'}
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-6 px-2 text-[11px]'
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </span>
+                  ) : (
+                    <button
+                      type='button'
+                      data-tip='Admin only — removes the addendum and its approval workflow; nothing has applied to the record yet'
+                      onClick={() => setConfirmDelete(true)}
+                      className='text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 hover:text-red-600'
+                    >
+                      Delete addendum…
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

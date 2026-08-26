@@ -340,6 +340,22 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     const existing = await db('nivaro_addendums').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    // An approved addendum has already CHANGED the record — deleting the row
+    // would erase the explanation while keeping the effects. Revert first.
+    if (existing.status === 'approved') {
+      return reply
+        .code(409)
+        .send({ error: 'Approved addendums must be reverted first — revert undoes the applied changes, then the addendum can be deleted' })
+    }
+
+    // The addendum's own approval workflow (pipeline-driven flow) goes with it.
+    const inst = (await db('nivaro_workflow_instances')
+      .where({ collection: 'nivaro_addendums', item: String(id) })
+      .first('id')) as { id: string } | undefined
+    if (inst) {
+      await db('nivaro_workflow_history').where({ instance: inst.id }).delete()
+      await db('nivaro_workflow_instances').where({ id: inst.id }).delete()
+    }
 
     await db('nivaro_addendums').where({ id }).delete()
 
