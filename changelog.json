@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T02:49:08.032Z",
+  "generated_at": "2026-08-26T13:38:48.054Z",
   "releases": [
+    {
+      "version": "0.1.139",
+      "tag": "v0.1.139",
+      "date": "2026-08-26T09:38:42-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "backlog completion — #683 custom profile fields + #689 visual query builder",
+              "hash": "6fd4e2bc"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.138",
       "tag": "v0.1.138",
-      "date": "2026-08-25T22:49:04-04:00",
+      "date": "2026-08-25T22:49:08-04:00",
       "sections": [
         {
           "label": "Fixed",
