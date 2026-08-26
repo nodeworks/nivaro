@@ -1,7 +1,5 @@
-import { Badge } from '@/components/ui/badge'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  UserRound,
   BrainCircuit,
   Check,
   Clock,
@@ -19,10 +17,12 @@ import {
   Server,
   Settings2,
   Trash2,
+  UserRound,
   X
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -451,7 +451,10 @@ function ProfileFieldDefsSection() {
         type: nf.type,
         options:
           nf.type === 'select' && nf.choices.trim()
-            ? nf.choices.split(',').map((c) => c.trim()).filter(Boolean)
+            ? nf.choices
+                .split(',')
+                .map((c) => c.trim())
+                .filter(Boolean)
             : null,
         sort: defs.length
       }),
@@ -479,116 +482,121 @@ function ProfileFieldDefsSection() {
   })
 
   return (
-    <div className='max-w-[720px] space-y-4'>
-      <div>
-        <h2 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>
-          Custom profile fields
-        </h2>
-        <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Extra fields every user can fill in on their own profile — cost center, skills, office
-          floor, anything your org tracks about people.
-        </p>
-      </div>
-      <div className='space-y-2'>
-        {defs.map((d) => (
-          <div
-            key={d.id}
-            className='flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
-          >
-            <Switch
-              checked={d.is_active === true || d.is_active === 1}
-              onCheckedChange={(v) => patchDef.mutate({ id: d.id, is_active: v })}
-            />
-            <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-              {d.label}
-            </span>
-            <code className='font-mono text-[11px] text-slate-400'>{d.key}</code>
-            <Badge variant='secondary' className='text-[10px]'>
-              {d.type}
-            </Badge>
-            <button
-              type='button'
-              onClick={() => remove.mutate(d.id)}
-              className='ml-auto rounded p-1 text-slate-400 hover:text-red-500'
-              aria-label='Delete field'
+    <div className='p-8'>
+      <div className='max-w-[720px] space-y-4'>
+        <div>
+          <h2 className='text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+            Custom profile fields
+          </h2>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Extra fields every user can fill in on their own profile — cost center, skills, office
+            floor, anything your org tracks about people.
+          </p>
+        </div>
+        <div className='space-y-2'>
+          {defs.map((d) => (
+            <div
+              key={d.id}
+              className='flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
             >
-              <Trash2 className='h-3.5 w-3.5' />
-            </button>
-          </div>
-        ))}
-        {defs.length === 0 && (
-          <p className='text-[12px] text-slate-400'>No custom fields yet.</p>
-        )}
-      </div>
-      <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/20'>
-        <p className='mb-2 text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
-          Add a field
-        </p>
-        <div className='flex flex-wrap items-end gap-2'>
-          <div>
-            <p className='mb-1 text-[10.5px] text-slate-500'>Label</p>
-            <Input
-              value={nf.label}
-              onChange={(e) =>
-                setNf({
-                  ...nf,
-                  label: e.target.value,
-                  key: nf.key || e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
-                })
-              }
-              placeholder='Cost center'
-              className='h-8 w-44 text-[12.5px]'
-            />
-          </div>
-          <div>
-            <p className='mb-1 text-[10.5px] text-slate-500'>Key</p>
-            <Input
-              value={nf.key}
-              onChange={(e) => setNf({ ...nf, key: e.target.value })}
-              placeholder='cost_center'
-              className='h-8 w-36 font-mono text-[12px]'
-            />
-          </div>
-          <div>
-            <p className='mb-1 text-[10.5px] text-slate-500'>Type</p>
-            <Select value={nf.type} onValueChange={(v) => setNf({ ...nf, type: v })}>
-              <SelectTrigger className='h-8 w-28 text-[12px]'>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {['text', 'number', 'boolean', 'date', 'select'].map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {nf.type === 'select' && (
+              <Switch
+                checked={d.is_active === true || d.is_active === 1}
+                onCheckedChange={(v) => patchDef.mutate({ id: d.id, is_active: v })}
+              />
+              <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                {d.label}
+              </span>
+              <code className='font-mono text-[11px] text-slate-400'>{d.key}</code>
+              <Badge variant='secondary' className='text-[10px]'>
+                {d.type}
+              </Badge>
+              <button
+                type='button'
+                onClick={() => remove.mutate(d.id)}
+                className='ml-auto rounded p-1 text-slate-400 hover:text-red-500'
+                aria-label='Delete field'
+              >
+                <Trash2 className='h-3.5 w-3.5' />
+              </button>
+            </div>
+          ))}
+          {defs.length === 0 && <p className='text-[12px] text-slate-400'>No custom fields yet.</p>}
+        </div>
+        <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/20'>
+          <p className='mb-2 text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+            Add a field
+          </p>
+          <div className='flex flex-wrap items-end gap-2'>
             <div>
-              <p className='mb-1 text-[10.5px] text-slate-500'>Choices (comma list)</p>
+              <p className='mb-1 text-[10.5px] text-slate-500'>Label</p>
               <Input
-                value={nf.choices}
-                onChange={(e) => setNf({ ...nf, choices: e.target.value })}
-                placeholder='Remote, Hybrid, On-site'
-                className='h-8 w-52 text-[12.5px]'
+                value={nf.label}
+                onChange={(e) =>
+                  setNf({
+                    ...nf,
+                    label: e.target.value,
+                    key:
+                      nf.key ||
+                      e.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '_')
+                        .replace(/^_|_$/g, '')
+                  })
+                }
+                placeholder='Cost center'
+                className='h-8 w-44 text-[12.5px]'
               />
             </div>
-          )}
-          <Button
-            size='sm'
-            className='h-8'
-            disabled={!nf.key.trim() || !nf.label.trim() || create.isPending}
-            onClick={() => create.mutate()}
-          >
-            Add
-          </Button>
+            <div>
+              <p className='mb-1 text-[10.5px] text-slate-500'>Key</p>
+              <Input
+                value={nf.key}
+                onChange={(e) => setNf({ ...nf, key: e.target.value })}
+                placeholder='cost_center'
+                className='h-8 w-36 font-mono text-[12px]'
+              />
+            </div>
+            <div>
+              <p className='mb-1 text-[10.5px] text-slate-500'>Type</p>
+              <Select value={nf.type} onValueChange={(v) => setNf({ ...nf, type: v })}>
+                <SelectTrigger className='h-8 w-28 text-[12px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {['text', 'number', 'boolean', 'date', 'select'].map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {nf.type === 'select' && (
+              <div>
+                <p className='mb-1 text-[10.5px] text-slate-500'>Choices (comma list)</p>
+                <Input
+                  value={nf.choices}
+                  onChange={(e) => setNf({ ...nf, choices: e.target.value })}
+                  placeholder='Remote, Hybrid, On-site'
+                  className='h-8 w-52 text-[12.5px]'
+                />
+              </div>
+            )}
+            <Button
+              size='sm'
+              className='h-8'
+              disabled={!nf.key.trim() || !nf.label.trim() || create.isPending}
+              onClick={() => create.mutate()}
+            >
+              Add
+            </Button>
+          </div>
         </div>
+        <p className='text-[11px] text-slate-400'>
+          Values are self-served on each user&apos;s Profile page. Deactivating hides a field
+          without deleting stored values; deleting removes both.
+        </p>
       </div>
-      <p className='text-[11px] text-slate-400'>
-        Values are self-served on each user&apos;s Profile page. Deactivating hides a field without
-        deleting stored values; deleting removes both.
-      </p>
     </div>
   )
 }
