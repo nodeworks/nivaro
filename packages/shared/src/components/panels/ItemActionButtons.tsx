@@ -68,6 +68,11 @@ export function ItemActionButtons({
       // precondition (closeout drafts the addendum) should disappear now,
       // not when the 5-minute staleTime lapses.
       void qc.invalidateQueries({ queryKey: ['item-actions', collection, itemId] })
+      // An action can CREATE an addendum (closeout) — the panel, the record's
+      // Viewing switcher, and the approval chain must all reflect it without
+      // a manual reload.
+      void qc.invalidateQueries({ queryKey: ['addendums', collection] })
+      void qc.invalidateQueries({ queryKey: ['pipeline-all-owners'] })
       // An action can change the record's CHILDREN too — Push to Fusion stamps
       // the requisition id onto every line — and those live in their own
       // queries, so refreshing the record alone left the grid showing stale

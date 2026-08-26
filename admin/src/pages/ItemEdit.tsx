@@ -363,6 +363,14 @@ export function ItemEditPage() {
       // Re-check applicability — the action may have just consumed its own
       // precondition.
       void queryClient.invalidateQueries({ queryKey: ['ext-item-actions', collection, id] })
+      // An action can create an addendum (closeout) or mutate the record and
+      // its children — refresh everything the form shows, no reload needed.
+      void queryClient.invalidateQueries({ queryKey: ['addendums', collection] })
+      void queryClient.invalidateQueries({ queryKey: ['item', collection, String(id)] })
+      void queryClient.invalidateQueries({ queryKey: ['o2m-rows'] })
+      void queryClient.invalidateQueries({ queryKey: ['pipeline-instance', collection, String(id)] })
+      void queryClient.invalidateQueries({ queryKey: ['pipeline-all-owners'] })
+      void queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(id)] })
     } catch (err) {
       const detail = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
       toast.error(detail ?? `${action.label} failed`, { duration: 12000 })
