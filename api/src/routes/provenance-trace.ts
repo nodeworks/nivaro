@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { ForbiddenError, readOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -67,8 +68,10 @@ export async function provenanceTraceRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
 
-      // ── Current value (physical columns only — virtual fields have no
-      //    stored value to show; the derivation cards explain those) ─────────
+      // ── Record access + current value — THROUGH readOne as the caller, so
+      //    RLS row filters, User Scopes, and field-level permissions all bind.
+      //    A raw read here would let table-level read leak scope-hidden rows'
+      //    values and their whole change history (the referenced-by IDOR class).
       const colRows = (await db.raw(
         `SELECT 1 AS x FROM information_schema.columns WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
         [collection, field]
@@ -76,22 +79,27 @@ export async function provenanceTraceRoutes(app: FastifyInstance) {
       const physical = colRows.length > 0
       let current: unknown = null
       let recordExists = false
-      if (physical) {
-        try {
-          const row = (await db(collection).where({ id }).first(field)) as
-            | Record<string, unknown>
-            | undefined
-          recordExists = !!row
-          current = row ? row[field] : null
-        } catch {
-          /* unreadable column — leave null */
+      try {
+        const row = (await readOne(req.user!, collection, id, req.workspaceId ?? undefined)) as
+          | Record<string, unknown>
+          | undefined
+        recordExists = !!row
+        if (physical && row) {
+          if (!(field in row)) {
+            // Field stripped by the caller's allowed-fields projection — they
+            // may see the record but not this column.
+            return reply.code(403).send({ error: 'Forbidden' })
+          }
+          current = row[field]
         }
-      } else {
-        recordExists = !!(await db(collection)
-          .where({ id })
-          .first('id')
-          .catch(() => null))
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          return reply.code(403).send({ error: 'Forbidden' })
+        }
+        // Not found OR hidden by RLS/scopes — indistinguishable by design.
+        return reply.code(404).send({ error: 'Not found' })
       }
+      if (!recordExists) return reply.code(404).send({ error: 'Not found' })
 
       // ── Derivations — every configured writer of this field ──────────────
       const derivations: Derivation[] = []

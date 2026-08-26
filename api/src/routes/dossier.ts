@@ -89,6 +89,9 @@ export async function dossierRoutes(app: FastifyInstance) {
         if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Not found' })
         throw err
       }
+      // readOne returns undefined (not a throw) when the row is missing or
+      // hidden by RLS/scopes — same 404 either way.
+      if (!record) return reply.code(404).send({ error: 'Not found' })
 
       const structure = await loadFormLayout(layout.id, collection, { includeReadonly: true })
 
