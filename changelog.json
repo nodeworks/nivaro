@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-08-26T14:20:54.789Z",
+  "generated_at": "2026-08-26T15:01:16.207Z",
   "releases": [
+    {
+      "version": "0.1.142",
+      "tag": "v0.1.142",
+      "date": "2026-08-26T11:01:07-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "Referenced-by is a page slot",
+              "hash": "8f3f33ca"
+            },
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "pipeline-driven approvals, admin revert, closeout apply-back",
+              "hash": "cb7c6193"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.141",
       "tag": "v0.1.141",
-      "date": "2026-08-26T10:20:50-04:00",
+      "date": "2026-08-26T10:20:54-04:00",
       "sections": [
         {
           "label": "Added",
