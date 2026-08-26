@@ -3513,7 +3513,7 @@ export function PipelineEditPage() {
         <InstanceMigrationCard templateId={id!} />
 
         {/* Owner gaps */}
-        <OwnerGapsCard templateId={id!} />
+        <OwnerGapsCard templateId={id!} states={states} />
         <OwnerLintCard templateId={id!} />
 
         {/* AI config reviewer (#361) */}
@@ -4454,10 +4454,9 @@ function OwnerLintCard({ templateId }: { templateId: string }) {
       ) : (
         <>
           {(data?.findings ?? []).some((f) => f.type === 'inactive_member') && (
-            <OwnerCleanupBar
-              templateId={templateId}
-              count={(data?.findings ?? []).filter((f) => f.type === 'inactive_member').length}
-            />
+            <p className='rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-[11.5px] text-violet-800 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300'>
+              Dead seats are fixable from the Owner coverage card above — “Remove dead seats…”.
+            </p>
           )}
         <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
           {data?.findings.map((f, i) => (
@@ -4489,13 +4488,54 @@ function OwnerLintCard({ templateId }: { templateId: string }) {
   )
 }
 
-// The FIX for owner-lint's dead seats (Rob 2026-08-26): one click removes
-// every suspended/redacted member from this template's owner groups and from
-// open instances' manual owner rows. OOO people are untouched — delegation
-// covers them.
-function OwnerCleanupBar({ templateId, count }: { templateId: string; count: number }) {
+// ─── Owner coverage (redesigned 2026-08-26) ──────────────────────────────────
+// One question, one surface: who actually covers this pipeline? Two problem
+// classes — records resolving NOBODY (clustered by dimension combination,
+// with the closest group as the proposed repair) and owner seats held by
+// people who can no longer act (suspended/redacted), fixable in place.
+
+interface OwnerGapCluster {
+  state_key: string | null
+  collection: string
+  count: number
+  sample_items: string[]
+  dims: Record<string, string>
+  suggestion: {
+    group_id: string | null
+    group_label: string | null
+    matched_filters: string[]
+    mismatched_filters: string[]
+  } | null
+}
+
+function OwnerGapsCard({
+  templateId,
+  states
+}: {
+  templateId: string
+  states: PipelineState[]
+}) {
   const qc = useQueryClient()
-  const [confirming, setConfirming] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [confirmClean, setConfirmClean] = useState(false)
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ['owner-gaps', templateId],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            clusters: OwnerGapCluster[]
+            dead_seats: {
+              group_seats: number
+              instance_seats: number
+              users: Array<{ name: string; seats: number; redacted: boolean }>
+            }
+          }
+        }>(`/pipelines/${templateId}/owner-gaps`)
+        .then((r) => r.data.data),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
   const clean = useMutation({
     mutationFn: () =>
       api.post<{
@@ -4504,97 +4544,60 @@ function OwnerCleanupBar({ templateId, count }: { templateId: string; count: num
     onSuccess: (r) => {
       const d = r.data.data
       toast.success(
-        `Removed ${d.group_members_removed} group seat(s) and ${d.instance_owners_removed} instance owner(s)${d.users.length ? ` — ${d.users.slice(0, 5).join(', ')}${d.users.length > 5 ? '…' : ''}` : ''}`
+        `Removed ${d.group_members_removed} seat(s) and ${d.instance_owners_removed} record owner(s)`
       )
+      void qc.invalidateQueries({ queryKey: ['owner-gaps', templateId] })
       void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
       void qc.invalidateQueries({ queryKey: ['owner-groups', templateId] })
     },
     onError: () => toast.error('Cleanup failed')
   })
-  return (
-    <div className='flex flex-wrap items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-500/30 dark:bg-violet-500/10'>
-      <span className='text-[12px] text-violet-800 dark:text-violet-300'>
-        {count} dead seat(s) held by suspended or redacted people.
-      </span>
-      {confirming ? (
-        <span className='ml-auto flex items-center gap-1.5'>
-          <span className='text-[11.5px] text-violet-700 dark:text-violet-300'>
-            Remove them from every group and open record?
-          </span>
-          <Button
-            size='sm'
-            className='h-6 bg-violet-600 px-2 text-[11px] text-white hover:bg-violet-700'
-            disabled={clean.isPending}
-            onClick={() => {
-              clean.mutate()
-              setConfirming(false)
-            }}
-          >
-            Remove
-          </Button>
-          <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={() => setConfirming(false)}>
-            Cancel
-          </Button>
-        </span>
-      ) : (
-        <Button
-          size='sm'
-          variant='outline'
-          className='ml-auto h-6 border-violet-300 px-2 text-[11px] text-violet-700 dark:text-violet-300'
-          onClick={() => setConfirming(true)}
-        >
-          Remove dead seats…
-        </Button>
-      )}
-    </div>
-  )
-}
 
-function OwnerGapsCard({ templateId }: { templateId: string }) {
-  const [open, setOpen] = useState(false)
-  const { data, isFetching, refetch } = useQuery({
-    queryKey: ['owner-gaps', templateId],
-    queryFn: () =>
-      api
-        .get<{
-          data: Array<{
-            state_key: string | null
-            collection: string
-            count: number
-            sample_items: string[]
-            dims: Record<string, string>
-            suggestion: {
-              group_id: string | null
-              group_label: string | null
-              matched_filters: string[]
-              mismatched_filters: string[]
-            } | null
-          }>
-        }>(`/pipelines/${templateId}/owner-gaps`)
-        .then((r) => r.data.data),
-    enabled: open,
-    staleTime: 5 * 60_000
-  })
-  const gaps = data ?? []
-  const total = gaps.reduce((sum, g) => sum + g.count, 0)
+  const clusters = data?.clusters ?? []
+  const dead = data?.dead_seats
+  const totalUnowned = clusters.reduce((sum, g) => sum + g.count, 0)
+  const stateMeta = new Map(
+    states.map((st) => [st.key, { label: st.label, color: st.color ?? null }])
+  )
+
+  // Group clusters per state, biggest states first — scanning by stage is how
+  // an operator thinks ("who is missing at Manager Approval?").
+  const byState = new Map<string, OwnerGapCluster[]>()
+  for (const g of clusters) {
+    const k = g.state_key ?? '(unknown state)'
+    byState.set(k, [...(byState.get(k) ?? []), g])
+  }
+  const stateGroups = [...byState.entries()].sort(
+    (a, b) =>
+      b[1].reduce((s, g) => s + g.count, 0) - a[1].reduce((s, g) => s + g.count, 0)
+  )
+
+  const dimChip = (k: string, v: string) => (
+    <span
+      key={k}
+      className='inline-flex items-baseline gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-px text-[10.5px] dark:border-border dark:bg-muted/40'
+    >
+      <span className='text-slate-400'>{dimLabel(k)}</span>
+      <span className='font-medium text-slate-700 dark:text-foreground'>{v}</span>
+    </span>
+  )
 
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-      <div className='flex items-center justify-between'>
+      <div className='flex items-start justify-between gap-4'>
         <div>
           <h3 className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>
-            Owner gaps
+            Owner coverage
           </h3>
-          <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Records resolving no owners at all, clustered by their dimension values, with the
-            closest owner-group fix suggested — coverage gaps name the problem, this proposes the
-            repair.
+          <p className='mt-0.5 max-w-[68ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Who actually covers this pipeline — open records resolving nobody, and seats held by
+            people who can no longer act.
           </p>
         </div>
         <Button
           size='sm'
           variant='outline'
-          className='h-8 text-[12.5px]'
+          className='h-8 shrink-0 text-[12.5px]'
           disabled={isFetching}
           onClick={() => {
             if (!open) setOpen(true)
@@ -4604,54 +4607,219 @@ function OwnerGapsCard({ templateId }: { templateId: string }) {
           {isFetching ? 'Analyzing…' : open ? 'Re-analyze' : 'Analyze'}
         </Button>
       </div>
-      {open && !isFetching && gaps.length === 0 && (
-        <p className='mt-3 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400'>
-          Every open record resolves at least one owner.
-        </p>
-      )}
-      {open && gaps.length > 0 && (
-        <div className='mt-3 space-y-2'>
-          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            {total} unowned record(s) in {gaps.length} cluster(s):
-          </p>
-          {gaps.map((g, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: server-ordered clusters
-            <div key={i} className='rounded-md border border-amber-200 bg-amber-50/40 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-400/5'>
-              <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-                {g.count} record(s) in {g.state_key ?? 'unknown state'} ({g.collection})
-              </p>
-              <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                {Object.entries(g.dims)
-                  .filter(([, v]) => v)
-                  .map(([k, v]) => `${k}: ${v}`)
-                  .join(' · ') || 'no dimension values resolved'}
-              </p>
-              {g.suggestion ? (
-                <p className='mt-1 text-[12px] text-slate-700 dark:text-foreground'>
-                  Closest group: <span className='font-medium'>{g.suggestion.group_label}</span> —
-                  matches {g.suggestion.matched_filters.join(', ')}
-                  {g.suggestion.mismatched_filters.length > 0 && (
-                    <span className='text-amber-700 dark:text-amber-400'>
-                      {' '}
-                      but not {g.suggestion.mismatched_filters.join(', ')} — extend its filters or
-                      add a member group for this combination.
-                    </span>
-                  )}
+
+      {open && !isFetching && data && (
+        <div className='mt-4 space-y-4'>
+          {/* Verdict line — a sentence, not a stat wall. */}
+          {totalUnowned === 0 && (dead?.group_seats ?? 0) === 0 ? (
+            <p className='flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400'>
+              <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+              Full coverage — every open record resolves an owner, and every seat is held by an
+              active person.
+            </p>
+          ) : (
+            <div className='flex flex-wrap items-center gap-x-5 gap-y-1 text-[12.5px]'>
+              {totalUnowned > 0 && (
+                <span className='flex items-center gap-1.5 text-slate-700 dark:text-foreground'>
+                  <span className='h-1.5 w-1.5 rounded-full bg-amber-500' />
+                  <span className='font-semibold tabular-nums'>{totalUnowned}</span> unowned record
+                  {totalUnowned === 1 ? '' : 's'} across{' '}
+                  <span className='font-semibold tabular-nums'>{clusters.length}</span> combination
+                  {clusters.length === 1 ? '' : 's'}
+                </span>
+              )}
+              {(dead?.group_seats ?? 0) > 0 && (
+                <span className='flex items-center gap-1.5 text-slate-700 dark:text-foreground'>
+                  <span className='h-1.5 w-1.5 rounded-full bg-violet-500' />
+                  <span className='font-semibold tabular-nums'>{dead?.group_seats}</span> dead seat
+                  {dead?.group_seats === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Dead seats — the fix lives right here. */}
+          {dead && dead.group_seats > 0 && (
+            <div className='rounded-md border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-500/25 dark:bg-violet-500/5'>
+              <div className='flex flex-wrap items-center gap-2'>
+                <p className='text-[12.5px] font-medium text-violet-900 dark:text-violet-300'>
+                  Seats held by suspended or redacted people
                 </p>
-              ) : (
-                <p className='mt-1 text-[12px] text-amber-700 dark:text-amber-400'>
-                  No group comes close — create one for this combination in the Owner Matrix.
+                {confirmClean ? (
+                  <span className='ml-auto flex items-center gap-1.5'>
+                    <span className='text-[11.5px] text-violet-700 dark:text-violet-300'>
+                      Remove them from every group and open record?
+                    </span>
+                    <Button
+                      size='sm'
+                      className='h-6 bg-violet-600 px-2 text-[11px] text-white hover:bg-violet-700'
+                      disabled={clean.isPending}
+                      onClick={() => {
+                        clean.mutate()
+                        setConfirmClean(false)
+                      }}
+                    >
+                      Remove
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-6 px-2 text-[11px]'
+                      onClick={() => setConfirmClean(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                ) : (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='ml-auto h-6 border-violet-300 px-2 text-[11px] text-violet-700 dark:border-violet-500/40 dark:text-violet-300'
+                    disabled={clean.isPending}
+                    onClick={() => setConfirmClean(true)}
+                  >
+                    {clean.isPending ? 'Removing…' : 'Remove dead seats…'}
+                  </Button>
+                )}
+              </div>
+              <div className='mt-2 flex flex-wrap gap-1'>
+                {dead.users.slice(0, 8).map((u) => (
+                  <span
+                    key={u.name}
+                    className='inline-flex items-baseline gap-1 rounded-full border border-violet-200 bg-white px-2 py-px text-[11px] text-slate-700 dark:border-violet-500/30 dark:bg-transparent dark:text-slate-300'
+                  >
+                    {u.name}
+                    <span className='tabular-nums text-slate-400'>×{u.seats}</span>
+                    {u.redacted && <span className='text-[9.5px] uppercase text-violet-500'>redacted</span>}
+                  </span>
+                ))}
+                {dead.users.length > 8 && (
+                  <span className='self-center text-[11px] text-slate-400'>
+                    +{dead.users.length - 8} more
+                  </span>
+                )}
+              </div>
+              {dead.instance_seats > 0 && (
+                <p className='mt-1.5 text-[11.5px] text-violet-700/80 dark:text-violet-300/80'>
+                  {dead.instance_seats} open record{dead.instance_seats === 1 ? '' : 's'} also list
+                  {dead.instance_seats === 1 ? 's' : ''} one as a manually-added owner — removal
+                  covers those too.
                 </p>
               )}
-              <p className='mt-0.5 text-[10.5px] text-slate-400'>
-                e.g. {g.sample_items.slice(0, 3).join(', ')}
-              </p>
             </div>
-          ))}
+          )}
+
+          {/* Unowned records, grouped by stage. */}
+          {stateGroups.map(([stateKey, groupClusters]) => {
+            const meta = stateMeta.get(stateKey)
+            const stateTotal = groupClusters.reduce((s, g) => s + g.count, 0)
+            return (
+              <div
+                key={stateKey}
+                className='overflow-hidden rounded-md border border-slate-200 dark:border-border'
+              >
+                <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
+                  <span
+                    className='h-2 w-2 shrink-0 rounded-full'
+                    style={{ backgroundColor: meta?.color ?? '#94a3b8' }}
+                  />
+                  <span className='text-[12px] font-semibold text-slate-700 dark:text-foreground'>
+                    {meta?.label ?? titleCaseLabel(stateKey)}
+                  </span>
+                  <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
+                    {stateTotal} record{stateTotal === 1 ? '' : 's'} · {groupClusters.length}{' '}
+                    combination{groupClusters.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {groupClusters.map((g, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: server-ordered clusters
+                    <div key={i} className='px-3 py-2'>
+                      <div className='flex flex-wrap items-center gap-1.5'>
+                        <span className='w-8 shrink-0 text-[13px] font-semibold tabular-nums text-slate-800 dark:text-foreground'>
+                          {g.count}
+                        </span>
+                        {Object.entries(g.dims).filter(([, v]) => v).length > 0 ? (
+                          Object.entries(g.dims)
+                            .filter(([, v]) => v)
+                            .map(([k, v]) => dimChip(k, v))
+                        ) : (
+                          <span className='text-[11px] italic text-slate-400'>
+                            no dimension values resolved
+                          </span>
+                        )}
+                        <span
+                          className='ml-auto max-w-[220px] truncate text-[10.5px] text-slate-400'
+                          data-tip={g.sample_items.join(', ')}
+                        >
+                          e.g. {g.sample_items.slice(0, 3).join(', ')}
+                        </span>
+                      </div>
+                      <p className='mt-1 pl-8 text-[11.5px] leading-relaxed'>
+                        {g.suggestion ? (
+                          <>
+                            <span className='text-slate-500 dark:text-muted-foreground'>
+                              Closest group{' '}
+                            </span>
+                            <span className='font-medium text-slate-700 dark:text-foreground'>
+                              {g.suggestion.group_label}
+                            </span>
+                            <span className='text-slate-500 dark:text-muted-foreground'>
+                              {' '}
+                              already matches {humanizeFieldList(g.suggestion.matched_filters.join(', ')) || 'nothing'}
+                            </span>
+                            {g.suggestion.mismatched_filters.length > 0 && (
+                              <span className='text-amber-700 dark:text-amber-400'>
+                                {' '}
+                                — widen it to cover {humanizeFieldList(g.suggestion.mismatched_filters.join(', '))}, or
+                                add a group for this combination
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className='inline-flex items-center gap-1 text-amber-700 dark:text-amber-400'>
+                            <span className='rounded bg-amber-100 px-1 py-px text-[9.5px] font-semibold uppercase dark:bg-amber-500/15'>
+                              no match
+                            </span>
+                            No group comes close — create one for this combination in the Owner
+                            Matrix above.
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
   )
+}
+
+function titleCaseLabel(v: string): string {
+  return v.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/** 'divisions.short_name' → 'Division', 'project.project_type.name' →
+ *  'Project Type' — drop the trailing display column, name the entity. */
+function dimLabel(path: string): string {
+  const segs = path.split('.')
+  while (
+    segs.length > 1 &&
+    /^((short_)?name|label|key|id|.*_id)$/i.test(segs[segs.length - 1])
+  ) {
+    segs.pop()
+  }
+  const leaf = segs[segs.length - 1].replace(/s$/i, '')
+  return titleCaseLabel(leaf)
+}
+
+/** Humanize dotted field tokens inside server suggestion strings
+ *  ('regions.short_name (wants 10)' → 'Region (wants 10)'). */
+function humanizeFieldList(v: string): string {
+  return v.replace(/[a-z_]+(?:\.[a-z_]+)+/g, (m) => dimLabel(m))
 }
 
 function InstanceMigrationCard({ templateId }: { templateId: string }) {

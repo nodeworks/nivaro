@@ -390,9 +390,90 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   })
 
   app.get('/:id/owner-gaps', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
     const { analyzeOwnerGaps } = await import('../services/pipeline-engine.js')
-    const data = await analyzeOwnerGaps((req.params as { id: string }).id)
-    return reply.send({ data })
+    // Dead seats belong to the same question ("who actually covers this
+    // pipeline?"), so the coverage surface reports both problem classes in
+    // one response: unowned-record clusters + suspended/redacted seat holders.
+    const [clusters, deadRows, instDead] = await Promise.all([
+      analyzeOwnerGaps(id),
+      db('nivaro_pipeline_owner_group_users as gu')
+        .join('nivaro_pipeline_owner_groups as g', 'g.id', 'gu.group')
+        .join('nivaro_users as u', 'u.id', 'gu.user')
+        .where('g.template', id)
+        .where((qb) => {
+          qb.where('u.status', 'suspended').orWhere('u.is_redacted', true)
+        })
+        .groupBy('u.id', 'u.first_name', 'u.last_name', 'u.email', 'u.is_redacted')
+        .count('gu.id as seats')
+        .select('u.id', 'u.first_name', 'u.last_name', 'u.email', 'u.is_redacted') as unknown as Promise<
+        Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+          is_redacted: boolean | number
+          seats: number
+        }>
+      >,
+      db('nivaro_pipeline_instance_owners as io')
+        .join('nivaro_workflow_instances as wi', 'wi.id', 'io.instance')
+        .join('nivaro_users as u', 'u.id', 'io.user')
+        .where('wi.template', id)
+        .whereNull('wi.completed_at')
+        .where((qb) => {
+          qb.where('u.status', 'suspended').orWhere('u.is_redacted', true)
+        })
+        .count('io.id as c')
+        .first() as unknown as Promise<{ c: number } | undefined>
+    ])
+    return reply.send({
+      data: {
+        clusters,
+        dead_seats: {
+          group_seats: deadRows.reduce((sum, r) => sum + Number(r.seats), 0),
+          instance_seats: Number(instDead?.c ?? 0),
+          users: (() => {
+            // Redacted users have no meaningful name left — collapsing them
+            // into one anonymous entry beats a wall of "Redacted Redacted".
+            const named: Array<{ name: string; seats: number; redacted: boolean }> = []
+            let redactedPeople = 0
+            let redactedSeats = 0
+            for (const r of deadRows) {
+              // The legacy redaction proc rewrites NAMES to 'Redacted' without
+              // setting is_redacted — treat those as redacted for display too.
+              const nameRedacted =
+                String(r.first_name ?? '').toLowerCase() === 'redacted' &&
+                String(r.last_name ?? '').toLowerCase() === 'redacted'
+              if (r.is_redacted === true || r.is_redacted === 1 || nameRedacted) {
+                redactedPeople++
+                redactedSeats += Number(r.seats)
+              } else {
+                named.push({
+                  name:
+                    [r.first_name, r.last_name].filter(Boolean).join(' ') ||
+                    r.email ||
+                    String(r.id),
+                  seats: Number(r.seats),
+                  redacted: false
+                })
+              }
+            }
+            named.sort((a, b) => b.seats - a.seats)
+            if (redactedPeople > 0) {
+              named.push({
+                // Self-describing label — the client's 'redacted' micro-badge
+                // would be redundant noise on the aggregate chip.
+                name: `${redactedPeople} redacted ${redactedPeople === 1 ? 'person' : 'people'}`,
+                seats: redactedSeats,
+                redacted: false
+              })
+            }
+            return named
+          })()
+        }
+      }
+    })
   })
 
   /** Instance distribution for a template — every current_state with counts,
