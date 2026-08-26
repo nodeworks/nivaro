@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T15:47:40.901Z",
+  "generated_at": "2026-08-26T16:10:40.350Z",
   "releases": [
+    {
+      "version": "0.1.145",
+      "tag": "v0.1.145",
+      "date": "2026-08-26T12:10:35-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-actions",
+              "text": "requires_addendum_create — addendum-creating actions gate on addendum availability",
+              "hash": "65f11da9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.144",
       "tag": "v0.1.144",
-      "date": "2026-08-26T11:47:36-04:00",
+      "date": "2026-08-26T11:47:40-04:00",
       "sections": [
         {
           "label": "Fixed",
