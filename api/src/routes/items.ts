@@ -432,6 +432,10 @@ export async function itemsRoutes(app: FastifyInstance) {
   // the id; the record itself is served through readOne so RBAC / RLS / user
   // scopes apply exactly as on GET /:collection/:id. Case-insensitive, first
   // match by id for determinism. 404 when the collection has no slug_field.
+  // Human record URLs resolve through ONE engine: url_alias_fields
+  // (resolveAliasId — case-insensitive, multi-field, lowest-id-deterministic).
+  // The legacy per-collection slug_field is honored as a fallback so configs
+  // made before the merge keep working; the admin card offers a migrate.
   app.get('/:collection/by-slug/:slug', async (req, reply) => {
     const { collection, slug } = req.params as { collection: string; slug: string }
     const q = req.query as Record<string, string>
@@ -440,20 +444,22 @@ export async function itemsRoutes(app: FastifyInstance) {
       const { getCollection } = await import('../services/collections.js')
       const col = await getCollection(collection)
       if (!col) return reply.code(404).send({ error: 'Not found' })
+      const { resolveAliasId } = await import('../services/items.js')
+      let resolvedId: string | number | null = await resolveAliasId(collection, slug)
       const slugField = (col as { slug_field?: string | null }).slug_field
-      if (!slugField || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(slugField)) {
-        return reply.code(404).send({ error: 'No slug field configured for this collection' })
+      if (resolvedId == null && slugField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(slugField)) {
+        try {
+          const row = (await db(collection)
+            .whereRaw('LOWER(CAST(?? AS NVARCHAR(400))) = ?', [slugField, slug.toLowerCase()])
+            .orderBy('id', 'asc')
+            .first('id')) as { id: unknown } | undefined
+          resolvedId = (row?.id as string | number | undefined) ?? null
+        } catch {
+          resolvedId = null
+        }
       }
-      let row: { id: unknown } | undefined
-      try {
-        row = (await db(collection)
-          .whereRaw('LOWER(??) = ?', [slugField, slug.toLowerCase()])
-          .orderBy('id', 'asc')
-          .first('id')) as { id: unknown } | undefined
-      } catch {
-        row = undefined
-      }
-      if (!row || row.id == null) return reply.code(404).send({ error: 'Not found' })
+      if (resolvedId == null) return reply.code(404).send({ error: 'Not found' })
+      const row = { id: resolvedId }
       const item = await readOne(
         req.user!,
         collection,

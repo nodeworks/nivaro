@@ -6248,7 +6248,9 @@ function UrlAliasSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-alias', tableName],
     queryFn: () =>
       api
-        .get<{ data: { url_alias_fields: string[] | null } }>(`/collections/${tableName}`)
+        .get<{ data: { url_alias_fields: string[] | null; slug_field?: string | null } }>(
+          `/collections/${tableName}`
+        )
         .then((r) => r.data.data)
   })
   const [draft, setDraft] = useState('')
@@ -6277,10 +6279,39 @@ function UrlAliasSection({ tableName }: { tableName: string }) {
           <p className='mt-0.5 text-[12px] text-slate-500'>
             Lets a record be opened by a recognisable value instead of its internal id — with{' '}
             <span className='font-mono'>workflow_id</span> set, /records/{tableName}/CM26-79826
-            resolves the same record as /records/{tableName}/371373. Primary keys keep working. List
+            resolves the same record as /records/{tableName}/371373. Matching is case-insensitive
+            and primary keys keep working. The same alias also powers{' '}
+            <span className='font-mono'>/collections/{tableName}/s/&lt;value&gt;</span> and{' '}
+            <span className='font-mono'>/api/items/{tableName}/by-slug/&lt;value&gt;</span>. List
             several fields to combine them; their values are joined by a dash. If a value matches
             more than one record the lowest id wins, so prefer a field that is genuinely unique.
           </p>
+          {col?.slug_field && (
+            <div className='mt-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 dark:border-amber-500/30 dark:bg-amber-500/10'>
+              <span className='text-[11.5px] text-amber-700 dark:text-amber-400'>
+                Legacy slug field <span className='font-mono'>{col.slug_field}</span> still
+                resolves as a fallback — aliases are the one engine now.
+              </span>
+              <button
+                type='button'
+                onClick={async () => {
+                  const merged = [
+                    ...new Set([...(col.url_alias_fields ?? []), col.slug_field as string])
+                  ]
+                  await api.patch(`/collections/${tableName}`, {
+                    url_alias_fields: merged,
+                    slug_field: null
+                  })
+                  setDraft(merged.join(', '))
+                  qc.invalidateQueries({ queryKey: ['collection-meta-alias', tableName] })
+                  toast.success('Slug field folded into the URL alias')
+                }}
+                className='rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-400'
+              >
+                Migrate
+              </button>
+            </div>
+          )}
         </div>
         <div>
           <p className='mb-1 text-[12.5px] font-medium text-slate-700'>Fields (comma-separated)</p>
@@ -6417,7 +6448,8 @@ interface BrowserConfig {
   default_sort?: string
 }
 
-// #619/#620 — human-readable record URLs + custom collection empty state.
+// #620 — custom collection empty state. (The slug picker that briefly lived
+// here merged into the URL alias card — one engine for human record URLs.)
 function EmptyStateSlugSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const { data: col } = useQuery({
@@ -6426,7 +6458,6 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
       api
         .get<{
           data: {
-            slug_field?: string | null
             empty_state?: {
               title?: string
               message?: string
@@ -6436,14 +6467,6 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
           }
         }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
-    enabled: !!tableName
-  })
-  const { data: fields = [] } = useQuery({
-    queryKey: ['fields-lite', tableName],
-    queryFn: () =>
-      api
-        .get<{ data: Array<{ field: string; type: string }> }>(`/collections/${tableName}`)
-        .then((r) => (r.data.data as unknown as { fields?: Array<{ field: string; type: string }> }).fields ?? []),
     enabled: !!tableName
   })
   const [draft, setDraft] = useState<{
@@ -6471,36 +6494,14 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
         (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Save failed'
       )
   })
-  const stringFields = fields.filter((f) => ['string', 'text'].includes(f.type))
   return (
     <div className='mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
-        URLs &amp; empty state
-      </p>
+      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>Empty state</p>
       <p className='mt-0.5 text-[11.5px] text-slate-400'>
-        A slug field makes records addressable at{' '}
-        <code className='text-[10.5px]'>/items/{tableName}/by-slug/&lt;value&gt;</code>. The empty
-        state replaces the default &quot;no records&quot; panel when the collection has no rows.
+        Replaces the default &quot;no records&quot; panel when the collection has no rows — say
+        what this collection is for and where to start. (Human record URLs live in the URL alias
+        card above.)
       </p>
-      <div className='mt-3 flex items-center gap-2'>
-        <span className='w-24 shrink-0 text-[11.5px] text-slate-500'>Slug field</span>
-        <Select
-          value={col?.slug_field ?? '__none__'}
-          onValueChange={(v) => save.mutate({ slug_field: v === '__none__' ? null : v })}
-        >
-          <SelectTrigger className='h-7 w-56 text-[12px]'>
-            <SelectValue placeholder='None' />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='__none__'>None</SelectItem>
-            {stringFields.map((f) => (
-              <SelectItem key={f.field} value={f.field}>
-                {f.field}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
       <div className='mt-3 space-y-2'>
         {(
           [
@@ -16405,6 +16406,28 @@ function LayoutsTab({
                               className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                             />
                           </label>
+                          {!!(selected as { dossier_enabled?: boolean | number }).dossier_enabled && (
+                            <label className='flex items-center justify-between gap-2'>
+                              <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+                                Dossier button label
+                              </span>
+                              <input
+                                key={`dl-${selected.id}`}
+                                type='text'
+                                defaultValue={
+                                  (selected as { dossier_label?: string | null }).dossier_label ?? ''
+                                }
+                                placeholder='Dossier'
+                                onBlur={(e) =>
+                                  patchLayoutMut.mutate({
+                                    id: selected.id,
+                                    dossier_label: e.target.value.trim() || null
+                                  } as never)
+                                }
+                                className='h-6 w-32 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card'
+                              />
+                            </label>
+                          )}
                           <label className='flex cursor-pointer items-center justify-between'>
                             <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                               Summary panel

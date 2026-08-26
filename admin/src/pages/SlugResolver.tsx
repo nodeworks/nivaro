@@ -27,7 +27,7 @@ export function SlugResolverPage() {
             No record found for &ldquo;{slug}&rdquo;
           </p>
           <p className='mt-1 text-[12px] text-slate-400'>
-            The slug may have changed, or this collection has no slug field configured.
+            The value may have changed, or this collection has no URL alias configured (Data Model → Settings → URL alias).
           </p>
         </div>
       </div>

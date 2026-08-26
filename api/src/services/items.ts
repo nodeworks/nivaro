@@ -1921,8 +1921,13 @@ export async function resolveAliasId(
   if (!parts) return null
 
   try {
+    // Case-insensitive on both sides, with an explicit CAST so an int alias
+    // column compares as text instead of raising a conversion error for
+    // non-numeric segments. Lowest id still wins (determinism note above).
     const q = db(collection).select('id').orderBy('id', 'asc').limit(1)
-    names.forEach((f, i) => void q.where(f, parts[i]))
+    names.forEach(
+      (f, i) => void q.whereRaw('LOWER(CAST(?? AS NVARCHAR(400))) = ?', [f, parts[i].toLowerCase()])
+    )
     const row = (await q.first()) as { id?: string | number } | undefined
     return row?.id ?? null
   } catch {

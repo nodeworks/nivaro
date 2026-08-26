@@ -64,9 +64,9 @@ export const recordToolkit: DocSection = {
           'What points AT this record: per-relation counts + sample links, resolved through the reader’s own permissions (RLS and scopes bound the counts).'
         ],
         [
-          'Pretty URLs (slugs)',
-          '/collections/:c/s/:slug',
-          'Set a slug field in Data Model → Settings → "URLs & empty state". GET /api/items/:c/by-slug/:slug resolves API-side too.'
+          'Pretty URLs',
+          '/collections/:c/s/:value + /api/items/:c/by-slug/:value',
+          'Both resolve through the collection\'s URL alias (Data Model → Settings → URL alias) — case-insensitive, multi-field, lowest-id on duplicates. The briefly-separate slug field folded into aliases; legacy slug configs still resolve with a one-click migrate.'
         ],
         [
           'Custom empty states',

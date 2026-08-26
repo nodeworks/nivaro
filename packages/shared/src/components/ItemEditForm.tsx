@@ -6513,7 +6513,11 @@ export function ItemEditForm({
                                           className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 transition-colors hover:border-[#00ceff] hover:text-slate-900 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-foreground'
                                         >
                                           <FileDown className='h-3.5 w-3.5' />
-                                          Dossier
+                                          {(
+                                            activeLayoutData?.layout as
+                                              | { dossier_label?: string | null }
+                                              | undefined
+                                          )?.dossier_label || 'Dossier'}
                                         </button>
                                       )}
                                     {!isNew && itemId && onDuplicate && (

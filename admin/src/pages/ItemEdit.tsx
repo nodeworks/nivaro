@@ -820,6 +820,11 @@ export function ItemEditPage() {
                             { collection, itemId: id }
                           )
                           toast.success(res.data.data.message)
+                          // Re-check applicability — the action may have just
+                          // consumed its own precondition.
+                          void queryClient.invalidateQueries({
+                            queryKey: ['ext-item-actions', collection, id]
+                          })
                         } catch (err) {
                           const detail = (
                             err as { response?: { data?: { error?: string } } }

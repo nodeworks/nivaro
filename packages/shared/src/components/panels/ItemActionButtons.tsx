@@ -48,6 +48,10 @@ export function ItemActionButtons({
       toast.success((res as { data?: { message?: string } })?.data?.message ?? 'Action completed')
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
       void qc.invalidateQueries({ queryKey: ['erp-submissions', collection, String(itemId)] })
+      // Re-evaluate applicability — an action that just consumed its own
+      // precondition (closeout drafts the addendum) should disappear now,
+      // not when the 5-minute staleTime lapses.
+      void qc.invalidateQueries({ queryKey: ['item-actions', collection, itemId] })
       // An action can change the record's CHILDREN too — Push to Fusion stamps
       // the requisition id onto every line — and those live in their own
       // queries, so refreshing the record alone left the grid showing stale
