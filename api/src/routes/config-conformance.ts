@@ -81,6 +81,20 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
    *  value; display+auto_id → regenerate the id (fresh sequence when empty,
    *  prefix recompute otherwise). Both write THROUGH updateOne so RBAC,
    *  validation, hooks, and revisions all apply. */
+
+  // A repaired finding must vanish immediately — the stored rows belong to
+  // the LAST run and would otherwise show until the next nightly sweep.
+  const clearFinding = async (collection: string, id: string, field: string, rule: string) => {
+    const run = (await db('nivaro_conformance_runs')
+      .where({ collection, status: 'completed' })
+      .orderBy('id', 'desc')
+      .first('id')) as { id: number } | undefined
+    if (!run) return
+    await db('nivaro_conformance_findings')
+      .where({ run: run.id, item_id: String(id), field, rule })
+      .del()
+      .catch(() => {})
+  }
   app.post<{
     Params: { collection: string; id: string }
     Body: { field?: string; rule?: string }
@@ -115,6 +129,7 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
         comment: `cleared stale cascade value on ${field}`,
         req
       })
+      await clearFinding(collection, id, field, rule)
       return { data: { fixed: true, action: 'cleared' } }
     }
     if (rule === 'display') {
@@ -153,6 +168,7 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
         comment: `regenerated ${field} → ${value}`,
         req
       })
+      await clearFinding(collection, id, field, rule)
       return { data: { fixed: true, action: 'regenerated', value } }
     }
     return reply.code(400).send({ error: 'This finding cannot be auto-fixed.' })
