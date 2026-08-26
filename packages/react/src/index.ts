@@ -168,6 +168,7 @@ export {
   TimezoneCard,
   DisplayPrefsCard,
   NotificationRulesCard,
+  ProfileFieldsCard,
   FirstLoginChecklist,
   CommandCenterView,
   BaseMap,

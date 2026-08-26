@@ -1,3 +1,4 @@
+import { VisualQueryBuilder } from '@/components/visual-query-builder'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useRef, useEffect, useState } from 'react'
@@ -427,6 +428,12 @@ export function CustomQueryEditPage() {
                       {aiText}
                     </p>
                   )}
+                  {/* Visual builder (#689) — generates T-SQL into the editor
+                      below; the SQL stays the source of truth. */}
+                  <VisualQueryBuilder
+                    storageKey={String(id ?? 'new')}
+                    onApply={(sql) => setForm((p) => ({ ...p, sql_text: sql }))}
+                  />
                   <Textarea
                     id='cq-sql'
                     value={form.sql_text}

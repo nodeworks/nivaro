@@ -166,6 +166,16 @@ export const adminOpsAdditions: DocSection = {
           'One-click grant sets (Read-only / Contributor / Manager — additive, never rewrites) and a side-by-side policy diff between any two roles.'
         ],
         [
+          'Custom profile fields',
+          'Settings → Profile fields + Profile page',
+          'Admin-defined extra user fields (cost center, skills…) self-served by each user; stored in the generic attribute tables under nivaro_users.'
+        ],
+        [
+          'Visual query builder',
+          'Custom query editor → "Build visually"',
+          'Pick a collection, filters (:param tokens supported), aggregates, grouping and sort — generates T-SQL into the editor; the SQL stays hand-editable.'
+        ],
+        [
           'User groups',
           'Admin → User Groups',
           'Named teams with @slug mentions in comments (group members are notified like individual mentions).'

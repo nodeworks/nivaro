@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
-import { del, get, patch, post } from '../lib/commands'
+import { del, get, patch, post, put } from '../lib/commands'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { playNotificationSound } from '../lib/notification-sound'
 import { cn, setDisplayTimezone } from '../lib/utils'
@@ -257,6 +257,119 @@ const NOTIFY_CATS: Array<{ key: string; label: string }> = [
   { key: 'system', label: 'System & digests' },
   { key: 'other', label: 'Everything else' }
 ]
+
+/** Custom profile fields (#683) — admin-defined extras (cost center, skills…),
+ *  self-served here. Renders nothing when no definitions exist. */
+export function ProfileFieldsCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: fields = [] } = useQuery({
+    queryKey: ['nvr-profile-fields'],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{
+            key: string
+            label: string
+            type: string
+            options: unknown
+            required: boolean
+            value: string | null
+          }>
+        }>(get('/profile-fields/mine'))
+        .then((r) => r.data ?? [])
+        .catch(() => [])
+  })
+  const [draft, setDraft] = useState<Record<string, string> | null>(null)
+  const save = useMutation({
+    mutationFn: (values: Record<string, string>) =>
+      client.request(put('/profile-fields/mine', { values })),
+    onSuccess: () => {
+      setDraft(null)
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-fields'] })
+    }
+  })
+  if (fields.length === 0) return null
+  const eff =
+    draft ?? Object.fromEntries(fields.map((f) => [f.key, f.value ?? '']))
+  const choicesOf = (o: unknown): string[] =>
+    Array.isArray(o)
+      ? o.map(String)
+      : Array.isArray((o as { choices?: unknown[] } | null)?.choices)
+        ? ((o as { choices: unknown[] }).choices as unknown[]).map((c) =>
+            typeof c === 'object' && c != null
+              ? String((c as { value?: unknown }).value ?? '')
+              : String(c)
+          )
+        : []
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+          Profile fields
+        </h3>
+        <p className='mt-0.5 text-[11px] text-slate-400'>
+          Extra details your organization tracks about people.
+        </p>
+      </header>
+      <div className='grid grid-cols-1 gap-3 p-4 sm:grid-cols-2'>
+        {fields.map((f) => (
+          <div key={f.key}>
+            <p className='mb-1 text-[11px] font-medium text-slate-500'>
+              {f.label}
+              {f.required && <span className='ml-0.5 text-red-500'>*</span>}
+            </p>
+            {f.type === 'boolean' ? (
+              <SimpleSelectXs
+                value={eff[f.key] || 'false'}
+                options={[
+                  { value: 'true', label: 'Yes' },
+                  { value: 'false', label: 'No' }
+                ]}
+                onChange={(v: string) => setDraft({ ...eff, [f.key]: v })}
+              />
+            ) : f.type === 'select' ? (
+              <SimpleSelectXs
+                value={eff[f.key] || ''}
+                options={[
+                  { value: '', label: '—' },
+                  ...choicesOf(f.options).map((c) => ({ value: c, label: c }))
+                ]}
+                onChange={(v: string) => setDraft({ ...eff, [f.key]: v })}
+              />
+            ) : (
+              <input
+                type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
+                value={eff[f.key] ?? ''}
+                onChange={(e) => setDraft({ ...eff, [f.key]: e.target.value })}
+                className='h-8 w-full rounded-md border border-slate-200 bg-background px-2 text-[12.5px] dark:border-border'
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      {draft && (
+        <div className='flex justify-end gap-2 border-t border-slate-100 px-4 py-2.5 dark:border-border/60'>
+          <button
+            type='button'
+            onClick={() => setDraft(null)}
+            className='h-7 rounded-md px-2.5 text-[12px] text-slate-500'
+          >
+            Cancel
+          </button>
+          <button
+            type='button'
+            disabled={save.isPending}
+            onClick={() => save.mutate(eff)}
+            className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function NotificationRulesCard() {
   const client = useNivaroClient()
@@ -1785,6 +1898,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
               }}
             />
             <ScopeDefaultsCard />
+            <ProfileFieldsCard />
             <TimezoneCard />
             <EmailDeliveryCard />
         <NotificationRulesCard />
