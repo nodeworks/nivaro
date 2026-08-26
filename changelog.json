@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T19:57:52.687Z",
+  "generated_at": "2026-08-26T23:45:57.888Z",
   "releases": [
+    {
+      "version": "0.1.150",
+      "tag": "v0.1.150",
+      "date": "2026-08-26T19:45:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "honest status + admin delete/revert on pipeline-driven addendums",
+              "hash": "83c992f6"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.149",
       "tag": "v0.1.149",
-      "date": "2026-08-26T15:57:47-04:00",
+      "date": "2026-08-26T15:57:52-04:00",
       "sections": [
         {
           "label": "Fixed",
