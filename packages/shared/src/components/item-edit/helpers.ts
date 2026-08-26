@@ -202,7 +202,7 @@ export const SYSTEM_FIELDS = new Set([
   'user_updated'
 ])
 
-export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__owners__', '__pdf__', '__subtitle__'])
+export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__referenced_by__', '__owners__', '__pdf__', '__subtitle__'])
 export const isSentinelKey = (field: string) =>
   SENTINEL_FIELDS.has(field) || (field.startsWith('__widget_') && field.endsWith('__'))
 
