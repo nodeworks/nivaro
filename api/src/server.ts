@@ -29,6 +29,7 @@ import { registerRoutes } from './routes/index.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
+import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
 import { registerDigestCrons } from './services/digest.js'
 import { trackError } from './services/error-tracking.js'
@@ -352,6 +353,7 @@ export async function buildServer() {
   await app.register(legacyCompatRoutes)
   await app.register(formRendererRoutes)
   await app.register(sharePublicRoutes)
+  await app.register(statusPublicRoutes)
 
   // ─── Serve admin static build (release image) ────────────────────────────
   const adminBuildPath = join(import.meta.dirname, '../../admin/dist')

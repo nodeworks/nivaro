@@ -130,6 +130,7 @@ import {
   PipelinePanel,
   PipelineTransitionButtons,
   RelatedRecordsPanel,
+  ReferencedByPanel,
   RevisionsPanel,
   TaskPanel,
   useItemLock,
@@ -5421,7 +5422,10 @@ export function ItemEditForm({
           />
         )}
         {!isNew && itemId && (
-          <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+          <>
+            <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            <ReferencedByPanel collection={collection} itemId={String(itemId)} />
+          </>
         )}
         {!commentsSlot && effectiveShowComments && (
           <CommentPanel
@@ -5666,7 +5670,10 @@ export function ItemEditForm({
           />
         )}
         {!isNew && itemId && (
-          <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+          <>
+            <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            <ReferencedByPanel collection={collection} itemId={String(itemId)} />
+          </>
         )}
         {!commentsSlot && effectiveShowComments && (
           <CommentPanel

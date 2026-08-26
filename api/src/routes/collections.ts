@@ -167,6 +167,17 @@ export async function collectionsRoutes(app: FastifyInstance) {
         changeReasonConfig = null
       }
     }
+    // empty_state is JSON text ({title?, message?, cta_label?, cta_url?}) —
+    // parse for consumers, same treatment as browser_config.
+    const rawEs = (col as { empty_state?: string | null }).empty_state
+    let emptyState: unknown = null
+    if (rawEs) {
+      try {
+        emptyState = JSON.parse(rawEs)
+      } catch {
+        emptyState = null
+      }
+    }
     return reply.send({
       data: {
         ...col,
@@ -174,6 +185,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
         relations,
         browser_config: browserConfig,
         change_reason_config: changeReasonConfig,
+        empty_state: emptyState,
         delete_guard: (() => {
           const rawDg = (col as { delete_guard?: string | null }).delete_guard
           if (!rawDg) return null
@@ -222,6 +234,8 @@ export async function collectionsRoutes(app: FastifyInstance) {
       change_reason_config?: unknown
       url_alias_fields?: unknown
       delete_guard?: unknown
+      slug_field?: unknown
+      empty_state?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
@@ -229,9 +243,63 @@ export async function collectionsRoutes(app: FastifyInstance) {
       change_reason_config: rawChangeReason,
       url_alias_fields: rawUrlAlias,
       delete_guard: rawDeleteGuard,
+      slug_field: rawSlugField,
+      empty_state: rawEmptyState,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
+    // #619: slug_field must name a real physical column when set — a stale or
+    // mistyped name would make every by-slug lookup 500 instead of 404.
+    if ('slug_field' in body) {
+      if (rawSlugField == null || rawSlugField === '') {
+        patch.slug_field = null
+      } else {
+        if (
+          typeof rawSlugField !== 'string' ||
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawSlugField)
+        ) {
+          return reply.code(400).send({ error: 'slug_field must be a plain column name' })
+        }
+        const cols = rawRows<{ COLUMN_NAME: string }>(
+          await db.raw(
+            `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+            [collection, rawSlugField]
+          )
+        )
+        if (cols.length === 0) {
+          return reply
+            .code(400)
+            .send({ error: `slug_field "${rawSlugField}" is not a column on ${collection}` })
+        }
+        patch.slug_field = rawSlugField
+      }
+      // by-slug resolution reads slug_field off the cached collection row.
+      svc.clearMetadataCache()
+    }
+    // #620: empty_state is a small display-config object — validate the four
+    // known string keys, cap lengths, store as JSON text (browser_config
+    // round-trip pattern).
+    if ('empty_state' in body) {
+      if (rawEmptyState == null) {
+        patch.empty_state = null
+      } else {
+        if (typeof rawEmptyState !== 'object' || Array.isArray(rawEmptyState)) {
+          return reply.code(400).send({ error: 'empty_state must be an object' })
+        }
+        const src = rawEmptyState as Record<string, unknown>
+        const cleaned: Record<string, string> = {}
+        for (const key of ['title', 'message', 'cta_label', 'cta_url'] as const) {
+          const v = src[key]
+          if (v == null || v === '') continue
+          if (typeof v !== 'string') {
+            return reply.code(400).send({ error: `empty_state.${key} must be a string` })
+          }
+          cleaned[key] = v.slice(0, 500)
+        }
+        patch.empty_state = Object.keys(cleaned).length > 0 ? JSON.stringify(cleaned) : null
+      }
+    }
     if ('picker_filter' in body) {
       patch.picker_filter = rawPickerFilter != null ? JSON.stringify(rawPickerFilter) : null
     }

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { selectInChunks } from './db-batch.js'
 
 // ─── Workflow transition condition rules ─────────────────────────────────────
 // Shared evaluator used by the pipelines routes (available-transition listing +
@@ -11,6 +12,10 @@ import { db } from '../db/index.js'
 //                      count as within, mirroring EFP's differenceInCalendarDays
 //                      <= N semantics)
 //      beyond_days   — date field is > N calendar days from today
+//      children_in_state / children_not_in_state (#674)
+//                    — field '<childCollection>:<fkField>', value = state key
+//                      or comma list; ALL children in the listed states / NONE
+//                      are. Zero children passes both (vacuous).
 //
 // Fields may be DOTTED M2O paths (up to 3 segments, e.g. 'unit.schedule_date',
 // 'project.project_type'): fetchRecordForConditions resolves each hop via
@@ -52,12 +57,20 @@ export function relatedCountKey(field: string, filter: unknown): string {
   return filter == null || filter === '' ? field : `${field}\u0001${String(filter)}`
 }
 
+// Ops whose record value is pre-resolved by fetchRecordForConditions under a
+// (field, value)-composite key rather than read off the raw row.
+const RELATED_OPS = new Set([
+  'related_some',
+  'related_none',
+  'children_in_state',
+  'children_not_in_state'
+])
+
 export function evalConditionRule(rule: ConditionRule, record: Record<string, unknown>): boolean {
-  const recordVal =
-    rule.op === 'related_some' || rule.op === 'related_none'
-      ? // Fall back to the bare field for records resolved by an older caller.
-        record[relatedCountKey(rule.field, rule.value)] ?? record[rule.field]
-      : record[rule.field]
+  const recordVal = RELATED_OPS.has(rule.op)
+    ? // Fall back to the bare field for records resolved by an older caller.
+      record[relatedCountKey(rule.field, rule.value)] ?? record[rule.field]
+    : record[rule.field]
   switch (rule.op) {
     case 'null':
       return recordVal == null || recordVal === ''
@@ -130,6 +143,22 @@ export function evalConditionRule(rule: ConditionRule, record: Record<string, un
       return Number(recordVal ?? 0) > 0
     case 'related_none':
       return Number(recordVal ?? 0) === 0
+    // #674: field = '<childCollection>:<fkField>', value = state key or comma
+    // list. Pre-resolved to { total, matched } — matched = children whose
+    // workflow instance's current state KEY is in the list.
+    case 'children_in_state': {
+      // ALL children in the listed states; zero children passes (vacuous,
+      // mirroring related_none's philosophy).
+      const v = recordVal as { total?: number; matched?: number } | undefined
+      const total = Number(v?.total ?? 0)
+      const matched = Number(v?.matched ?? 0)
+      return total === 0 || matched >= total
+    }
+    case 'children_not_in_state': {
+      // NO children in the listed states; zero children passes.
+      const v = recordVal as { total?: number; matched?: number } | undefined
+      return Number(v?.matched ?? 0) === 0
+    }
     default:
       return false
   }
@@ -222,7 +251,7 @@ export async function fetchRecordForConditions(
   for (const raw of ruleSets) {
     for (const r of parseConditionRules(raw ?? null) ?? []) {
       if (typeof r?.field !== 'string') continue
-      if (r.op === 'related_some' || r.op === 'related_none') {
+      if (RELATED_OPS.has(r.op)) {
         if (RELATED_FIELD_RE.test(r.field)) related.set(relatedCountKey(r.field, r.value), r)
       } else if (r.field.includes('.')) {
         dotted.add(r.field)
@@ -231,13 +260,49 @@ export async function fetchRecordForConditions(
   }
   // Related-row counts: '<child>:<fk>' → COUNT(child WHERE fk = id AND filter),
   // merged under the rule's literal field key for the sync evaluator.
+  // children_in_state / children_not_in_state (#674) resolve { total, matched }
+  // instead: total = child rows for this record, matched = those whose
+  // workflow instance's current state KEY is in the rule's comma list.
   for (const [key, rule] of related) {
     // key may carry the filter suffix; the collection/fk come from the rule.
     const m = RELATED_FIELD_RE.exec(rule.field)
     if (!m) continue
     const [, child, fk] = m
+    const isChildrenState = rule.op === 'children_in_state' || rule.op === 'children_not_in_state'
     if (/^nivaro_/i.test(child)) {
-      record[key] = 0
+      record[key] = isChildrenState ? { total: 0, matched: 0 } : 0
+      continue
+    }
+    if (isChildrenState) {
+      try {
+        const stateKeys = String(rule.value ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const childRows = (await db(child).where(fk, itemId).select('id')) as Array<{
+          id: unknown
+        }>
+        const total = childRows.length
+        let matched = 0
+        if (total > 0 && stateKeys.length > 0) {
+          // nivaro_workflow_instances.item is nvarchar — compare as strings.
+          const ids = childRows.map((r) => String(r.id))
+          const instRows = await selectInChunks(ids, 1000, (chunk) =>
+            db('nivaro_workflow_instances as i')
+              .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+              .where('i.collection', child)
+              .whereIn('i.item', chunk)
+              .whereIn('s.key', stateKeys)
+              .select('i.item')
+          )
+          matched = new Set(
+            (instRows as Array<{ item: unknown }>).map((r) => String(r.item))
+          ).size
+        }
+        record[key] = { total, matched }
+      } catch {
+        record[key] = { total: 0, matched: 0 }
+      }
       continue
     }
     try {

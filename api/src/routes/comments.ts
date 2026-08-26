@@ -166,17 +166,39 @@ async function resolveMentions(text: string): Promise<MentionUserRow[]> {
     // client autocomplete inserts this form; a handle matching both a person
     // and a role notifies both — mentioning is deliberately generous.
     if (users.length === 0 || handle.includes('-')) {
-      const roleName = handle.replace(/-/g, ' ')
-      const role = (await db('nivaro_roles')
-        .whereRaw('LOWER(name) = ?', [roleName])
-        .first('id')) as { id: string } | undefined
-      if (role) {
-        const members = (await db('nivaro_users')
-          .where({ role: role.id, status: 'active' })
-          .where('is_redacted', false)
+      // User-group mentions (#682): the handle's hyphenated form IS a group
+      // slug ("@field-techs"). Groups are tried FIRST — a group is more
+      // specific than a role name — and only a miss falls through to roles.
+      let groupMatched = false
+      const group = (await db('nivaro_user_groups')
+        .whereRaw('LOWER(slug) = ?', [handle])
+        .first('id')
+        .catch(() => undefined)) as { id: number } | undefined
+      if (group) {
+        const groupMembers = (await db('nivaro_user_group_members as m')
+          .join('nivaro_users as u', 'u.id', 'm.user')
+          .where('m.group_id', group.id)
+          .where('u.status', 'active')
+          .where('u.is_redacted', false)
           .limit(100)
-          .select('id', 'first_name', 'last_name', 'email')) as MentionUserRow[]
-        for (const u of members) found.set(u.id, u)
+          .select('u.id', 'u.first_name', 'u.last_name', 'u.email')) as MentionUserRow[]
+        for (const u of groupMembers) found.set(u.id, u)
+        groupMatched = true
+      }
+
+      if (!groupMatched) {
+        const roleName = handle.replace(/-/g, ' ')
+        const role = (await db('nivaro_roles')
+          .whereRaw('LOWER(name) = ?', [roleName])
+          .first('id')) as { id: string } | undefined
+        if (role) {
+          const members = (await db('nivaro_users')
+            .where({ role: role.id, status: 'active' })
+            .where('is_redacted', false)
+            .limit(100)
+            .select('id', 'first_name', 'last_name', 'email')) as MentionUserRow[]
+          for (const u of members) found.set(u.id, u)
+        }
       }
     }
   }

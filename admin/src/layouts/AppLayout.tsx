@@ -82,7 +82,7 @@ import {
   Wifi,
   Workflow,
   X as XIcon
-} from 'lucide-react'
+, Users2, ToggleLeft } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
@@ -235,6 +235,8 @@ export const navCategories: NavCategory[] = [
       { icon: HeartPulse, label: 'Health', to: '/health' },
       { icon: Database, label: 'DB & Runtime', to: '/db-health' },
       { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console' },
+      { icon: Database, label: 'Redis Keys', to: '/ops-redis' },
+      { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline' },
       { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity' },
       { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
       { icon: AlertOctagon, label: 'Issues', to: '/issues' },
@@ -254,6 +256,8 @@ export const navCategories: NavCategory[] = [
       { icon: Megaphone, label: 'Broadcasts', to: '/announcements' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
+      { icon: Users2, label: 'User Groups', to: '/user-groups' },
+      { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
       { icon: Code2, label: 'Custom Queries', to: '/custom-queries' },

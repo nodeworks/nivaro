@@ -181,3 +181,4 @@ export { setFiscalStartMonth, getFiscalStartMonth, fiscalYearOf, fiscalQuarterOf
 export { setFormulaConstants, formulaConstant, networkdaysBetween } from './lib/expression'
 export { registerLayoutSlot, getLayoutSlot, extSlotKey } from './lib/layout-slots'
 export { setTimeDisplay, setNumberFormat } from './lib/utils'
+export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'

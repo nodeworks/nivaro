@@ -149,6 +149,13 @@ import { opsDbRoutes } from './ops-db.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsLogsRoutes } from './ops-logs.js'
 import { commandCenterRoutes } from './command-center.js'
+import { featureFlagRoutes } from './feature-flags.js'
+import { eventsStreamRoutes } from './events-stream.js'
+import { apiKeyUsageRoutes } from './api-key-usage.js'
+import { opsRedisRoutes } from './ops-redis.js'
+import { cronTimelineRoutes } from './cron-timeline.js'
+import { referencedByRoutes } from './referenced-by.js'
+import { userGroupsRoutes } from './user-groups.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
@@ -375,6 +382,13 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
+  await app.register(featureFlagRoutes)
+  await app.register(eventsStreamRoutes, { prefix: '/events' })
+  await app.register(apiKeyUsageRoutes, { prefix: '/api-keys' })
+  await app.register(opsRedisRoutes, { prefix: '/ops-redis' })
+  await app.register(cronTimelineRoutes, { prefix: '/cron-timeline' })
+  await app.register(referencedByRoutes, { prefix: '/referenced-by' })
+  await app.register(userGroupsRoutes, { prefix: '/user-groups' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
   await app.register(queuesRoutes, { prefix: '/queues' })
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })

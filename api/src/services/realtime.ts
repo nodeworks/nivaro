@@ -1,5 +1,6 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
+import { publishSseEvent } from './sse-hub.js'
 
 /**
  * Best-effort broadcast that a record in `collection` changed. Consumers join
@@ -19,6 +20,8 @@ export function broadcastCollectionUpdate(
   extra?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
+  // SSE mirror (#602): /events/stream consumers get the same minimal payload.
+  publishSseEvent({ collection, item, action: extra?.action, changed_fields: extra?.changed_fields?.slice(0, 50) })
   void journaledEmit(`collection:${collection}`, 'collection:update', {
     collection,
     item,

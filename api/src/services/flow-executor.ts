@@ -752,22 +752,128 @@ async function runOperationInner(
 
 // ─── Main executor ────────────────────────────────────────────────────────────
 
+// ── Per-flow concurrency lock (#623) ─────────────────────────────────────────
+// Flows whose trigger_options carry `concurrency: 'skip'` refuse to run while
+// a previous run of the SAME flow is still going — the overlapping trigger is
+// recorded as a 'skipped' run instead of executing. Default (no option) keeps
+// the historic parallel behaviour. In-process only, like the trace buffer.
+const runningFlows = new Set<string>()
+
+// ── Flow error notifications (#622) ──────────────────────────────────────────
+// At most one notification per flow per hour, in-process.
+const lastErrorNotifyAt = new Map<string, number>()
+
+async function resolveFlowCreator(flowId: string): Promise<string | null> {
+  // nivaro_flows carries no creator column (base schema) — read one off the
+  // row defensively in case a deployment added it, then fall back to the
+  // EARLIEST flow-version snapshot's author (routes/flows.ts stamps created_by
+  // on every version), the closest available "creator".
+  try {
+    const flowRow = (await db('nivaro_flows').where({ id: flowId }).first()) as
+      | Record<string, unknown>
+      | undefined
+    const direct = flowRow?.user_created ?? flowRow?.created_by
+    if (direct != null && direct !== '') return String(direct)
+  } catch {
+    /* fall through */
+  }
+  try {
+    const v = (await db('nivaro_flow_versions')
+      .where({ flow: flowId })
+      .whereNotNull('created_by')
+      .orderBy('version', 'asc')
+      .first('created_by')) as { created_by?: string | null } | undefined
+    return v?.created_by ?? null
+  } catch {
+    return null
+  }
+}
+
+function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
+  const last = lastErrorNotifyAt.get(ctx.flowId)
+  if (last && Date.now() - last < 3_600_000) return
+  lastErrorNotifyAt.set(ctx.flowId, Date.now())
+  void (async () => {
+    const creator = await resolveFlowCreator(ctx.flowId)
+    if (!creator) return
+    // The executor holds no Fastify app — notifyUser only reads app.io, so a
+    // shim over the io-holder gives it the socket server when one is up and
+    // degrades to inbox-row-only (socket skipped) before boot completes.
+    const { notifyUser } = await import('./notification-channels.js')
+    const { getIo } = await import('./io-holder.js')
+    const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
+    const snippet = String(err).slice(0, 200)
+    await notifyUser(appShim, creator, {
+      subject: `Flow "${ctx.flowName}" failed`,
+      message: `${snippet} — /flows/${ctx.flowId}`.slice(0, 500)
+    })
+  })().catch((notifyErr) =>
+    ctx.log.warn({ err: notifyErr, flowId: ctx.flowId }, 'Flow error notification failed')
+  )
+}
+
 export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
   // Flow shadow mode (#354): a flow flagged shadow_mode runs its FULL logic
   // dry (side-effect ops render but never send/write) and records the run
   // with a 'shadow:' trigger prefix — a trial period before it acts for real.
+  let lockTracked = false
   if (!ctx.dryRun) {
     try {
       const flowRow = (await db('nivaro_flows')
         .where({ id: ctx.flowId })
-        .first('shadow_mode')) as { shadow_mode?: boolean | number } | undefined
+        .first('shadow_mode', 'trigger_options')) as
+        | { shadow_mode?: boolean | number; trigger_options?: string | null }
+        | undefined
+      // Concurrency guard (#623) — checked before the shadow flip so shadow
+      // runs (which simulate real behaviour) honour the lock too.
+      let concurrency: unknown
+      try {
+        concurrency = flowRow?.trigger_options
+          ? (JSON.parse(flowRow.trigger_options) as Record<string, unknown>).concurrency
+          : undefined
+      } catch {
+        concurrency = undefined
+      }
+      if (concurrency === 'skip' && runningFlows.has(ctx.flowId)) {
+        ctx.log.info(
+          { flowId: ctx.flowId, flowName: ctx.flowName, trigger: ctx.trigger },
+          'skipped: previous run still going'
+        )
+        try {
+          await db('nivaro_flow_runs').insert({
+            id: randomUUID(),
+            flow: ctx.flowId,
+            trigger: ctx.trigger,
+            status: 'skipped',
+            started_at: new Date(),
+            completed_at: new Date(),
+            duration_ms: 0,
+            input: JSON.stringify(ctx.payload),
+            error_message: 'skipped: previous run still going',
+            user: ctx.userId ?? null
+          })
+        } catch (runErr) {
+          ctx.log.warn({ err: runErr, flowId: ctx.flowId }, 'Failed to record skipped flow run')
+        }
+        return { ...ctx.payload, $trigger: ctx.trigger, $skipped: true }
+      }
       if (flowRow?.shadow_mode === true || flowRow?.shadow_mode === 1) {
         ctx = { ...ctx, dryRun: true, trace: ctx.trace ?? [], trigger: `shadow:${ctx.trigger}` }
       }
     } catch {
-      /* shadow lookup failure = run normally */
+      /* shadow/concurrency lookup failure = run normally */
     }
+    runningFlows.add(ctx.flowId)
+    lockTracked = true
   }
+  try {
+    return await executeFlowInner(ctx)
+  } finally {
+    if (lockTracked) runningFlows.delete(ctx.flowId)
+  }
+}
+
+async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   const operations = await db<FlowOperation>('nivaro_flow_operations')
     .where({ flow: ctx.flowId })
     .orderBy('position_y')
@@ -896,6 +1002,9 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       .catch((updErr) =>
         ctx.log.warn({ err: updErr, flowId: ctx.flowId }, 'Failed to record flow run error')
       )
+    // #622: tell the flow's creator the run errored — fire-and-forget,
+    // throttled to one notification per flow per hour.
+    notifyFlowError(ctx, err)
     throw err
   }
 }

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
+import { updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
@@ -388,6 +389,80 @@ export async function revisionsRoutes(app: FastifyInstance) {
         success: true,
         collection: activity.collection,
         item: activity.item
+      }
+    })
+  })
+
+  // POST /revisions/:id/revert-field — single-field revert (#667). Takes JUST
+  // one field's value from a revision snapshot and writes it through the items
+  // service AS THE CALLER, so RBAC/RLS/validation/hooks/activity all apply —
+  // unlike the whole-snapshot rollback above, which raw-writes deliberately.
+  app.post('/:id/revert-field', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { field } = (req.body ?? {}) as { field?: string }
+    if (!field || typeof field !== 'string') {
+      return reply.code(400).send({ error: 'field is required' })
+    }
+    if (field === 'id') {
+      return reply.code(400).send({ error: 'Cannot revert the id field' })
+    }
+
+    const revision = (await db('nivaro_revisions')
+      .where({ id: Number(id) })
+      .first()) as
+      | { id: number; activity: number; data: string | Record<string, unknown> }
+      | undefined
+    if (!revision) return reply.code(404).send({ error: 'Not found' })
+
+    let revisionData: Record<string, unknown>
+    try {
+      revisionData =
+        typeof revision.data === 'string'
+          ? (JSON.parse(revision.data) as Record<string, unknown>)
+          : (revision.data as Record<string, unknown>)
+    } catch {
+      return reply.code(400).send({ error: 'Could not parse revision data' })
+    }
+
+    const activity = (await db('nivaro_activity').where({ id: revision.activity }).first()) as
+      | { id: number; collection: string | null; item: string | null }
+      | undefined
+    if (!activity || !activity.collection || !activity.item) {
+      return reply.code(404).send({ error: 'Activity record not found for this revision' })
+    }
+    if (activity.collection.startsWith('nivaro_')) {
+      return reply.code(400).send({ error: 'Cannot revert system table fields' })
+    }
+    if (!(await can(req.user!, 'update', activity.collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (!(field in revisionData)) {
+      return reply
+        .code(400)
+        .send({ error: `Field "${field}" is not present in this revision snapshot` })
+    }
+
+    // Through the items service — validation rules, field rules, computed
+    // fields, RLS and the after-hooks (incl. a fresh revision) all apply.
+    await updateOne(req.user!, activity.collection, activity.item, {
+      [field]: revisionData[field]
+    }, req)
+
+    await logActivity({
+      action: 'revision-field-revert',
+      user: req.user?.id,
+      collection: activity.collection,
+      item: activity.item,
+      comment: JSON.stringify({ revision_id: Number(id), field }),
+      req
+    })
+
+    return reply.send({
+      data: {
+        success: true,
+        collection: activity.collection,
+        item: activity.item,
+        field
       }
     })
   })

@@ -278,6 +278,16 @@ const HealthDashboardPage = lazy(() =>
 const DbHealthPage = lazy(() =>
   import('@/pages/DbHealth').then((m) => ({ default: m.DbHealthPage }))
 )
+const OpsRedisPage = lazy(() => import('@/pages/OpsRedis').then((m) => ({ default: m.OpsRedisPage })))
+const CronTimelinePage = lazy(() =>
+  import('@/pages/CronTimeline').then((m) => ({ default: m.CronTimelinePage }))
+)
+const UserGroupsPage = lazy(() =>
+  import('@/pages/UserGroups').then((m) => ({ default: m.UserGroupsPage }))
+)
+const FeatureFlagsPage = lazy(() =>
+  import('@/pages/FeatureFlags').then((m) => ({ default: m.FeatureFlagsPage }))
+)
 const OpsConsolePage = lazy(() =>
   import('@/pages/OpsConsole').then((m) => ({ default: m.OpsConsolePage }))
 )
@@ -560,6 +570,10 @@ export default function App() {
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
+                  <Route path='ops-redis' element={<OpsRedisPage />} />
+                  <Route path='cron-timeline' element={<CronTimelinePage />} />
+                  <Route path='user-groups' element={<UserGroupsPage />} />
+                  <Route path='feature-flags' element={<FeatureFlagsPage />} />
                   <Route path='command' element={<CommandCenterPage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
                   <Route path='data-quality' element={<Navigate to='/data-integrity?tab=quality' replace />} />

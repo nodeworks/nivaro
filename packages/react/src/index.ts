@@ -255,6 +255,7 @@ export {
 // Re-export sweep (2026-08-25): shared surface that headless hosts were
 // missing — display-pref setters, the fiscal/formula/layout-slot libs,
 // field-interface registry, and the utility components/hooks below.
+export { useFeatureFlag, useFeatureFlags } from '@nivaro/shared'
 export {
   setDisplayTimezone,
   setTimeDisplay,

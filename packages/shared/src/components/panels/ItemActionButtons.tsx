@@ -31,10 +31,10 @@ export function ItemActionButtons({
   const [runningId, setRunningId] = useState<string | null>(null)
 
   const { data: actions } = useQuery({
-    queryKey: ['item-actions', collection],
+    queryKey: ['item-actions', collection, itemId],
     queryFn: () =>
       client
-        .request<{ data: ItemActionMeta[] }>(get('/item-actions/registered', { collection }))
+        .request<{ data: ItemActionMeta[] }>(get('/item-actions/registered', { collection, item: itemId }))
         .then((r) => r.data ?? []),
     staleTime: 5 * 60_000
   })

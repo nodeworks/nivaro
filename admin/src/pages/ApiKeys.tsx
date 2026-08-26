@@ -623,6 +623,8 @@ export function ApiKeysPage() {
 
               <KeyPreviewSection keyId={selected.id} collections={collections} />
 
+              <KeyUsageSection keyId={selected.id} />
+
               <div className='border-t border-slate-200 pt-4 dark:border-border'>
                 {confirm ? (
                   <div className='flex items-center gap-3'>
@@ -694,6 +696,148 @@ export function ApiKeysPage() {
   )
 }
 
+
+// ─── Per-key usage analytics (#605) ──────────────────────────────────────────
+
+interface KeyUsage {
+  key: { id: number; name: string; is_active: boolean }
+  window_days: number
+  total: number
+  errors: number
+  last_seen: string | null
+  days: { day: string; count: number; errors: number }[]
+  top_routes: {
+    method: string
+    path: string
+    count: number
+    avg_latency: number
+    errors: number
+  }[]
+}
+
+function KeyUsageSection({ keyId }: { keyId: string | number }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading } = useQuery<KeyUsage>({
+    queryKey: ['api-key-usage', keyId],
+    queryFn: () =>
+      api.get<{ data: KeyUsage }>(`/api-keys/${keyId}/usage`).then((r) => r.data.data),
+    enabled: open
+  })
+
+  const maxCount = data ? Math.max(1, ...data.days.map((d) => d.count)) : 1
+
+  return (
+    <div>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        className='flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+      >
+        <ChevronsUpDown className='h-3 w-3' />
+        Usage (last 30 days)
+      </button>
+      {open && (
+        <div className='mt-2 space-y-4'>
+          {isLoading || !data ? (
+            <div className='h-24 animate-pulse rounded-lg bg-muted' />
+          ) : data.total === 0 ? (
+            <p className='text-[12px] text-slate-400'>
+              No logged requests for this key in the last {data.window_days} days.
+            </p>
+          ) : (
+            <>
+              <div className='grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+                <MetaCell label='Requests' value={data.total.toLocaleString()} />
+                <MetaCell
+                  label='Errors'
+                  value={
+                    <span className={cn(data.errors > 0 && 'text-red-500')}>
+                      {data.errors.toLocaleString()}
+                    </span>
+                  }
+                />
+                <MetaCell
+                  label='Last seen'
+                  value={data.last_seen ? formatRelative(data.last_seen) : 'Never'}
+                />
+              </div>
+
+              <div>
+                <p className='mb-1.5 text-[11px] text-slate-400'>
+                  Daily requests <span className='text-red-400'>(errors in red)</span>
+                </p>
+                <div className='flex h-20 items-end gap-[2px] rounded-lg border border-slate-200 bg-white p-2 dark:border-border dark:bg-card'>
+                  {data.days.map((d) => {
+                    const total = Math.round((d.count / maxCount) * 100)
+                    const errPct = d.count > 0 ? Math.round((d.errors / d.count) * 100) : 0
+                    return (
+                      <div
+                        key={d.day}
+                        className='group relative flex flex-1 flex-col justify-end self-stretch'
+                        title={`${d.day}: ${d.count.toLocaleString()} requests, ${d.errors.toLocaleString()} errors`}
+                      >
+                        <div
+                          className='flex w-full flex-col justify-end overflow-hidden rounded-sm bg-[#00ceff66]'
+                          style={{ height: `${Math.max(d.count > 0 ? 3 : 0, total)}%` }}
+                        >
+                          {d.errors > 0 && (
+                            <div className='w-full bg-red-500' style={{ height: `${Math.max(8, errPct)}%` }} />
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {data.top_routes.length > 0 && (
+                <div>
+                  <p className='mb-1.5 text-[11px] text-slate-400'>Top routes</p>
+                  <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
+                    <table className='w-full bg-white text-[12px] tabular-nums dark:bg-card'>
+                      <thead>
+                        <tr className='border-b border-slate-200 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:border-border'>
+                          <th className='px-3 py-1.5'>Route</th>
+                          <th className='px-3 py-1.5 text-right'>Requests</th>
+                          <th className='px-3 py-1.5 text-right'>Avg ms</th>
+                          <th className='px-3 py-1.5 text-right'>Errors</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.top_routes.map((r) => (
+                          <tr
+                            key={`${r.method} ${r.path}`}
+                            className='border-b border-slate-100 last:border-0 dark:border-border/50'
+                          >
+                            <td className='px-3 py-1.5'>
+                              <code className='font-mono text-[11px] text-slate-600 dark:text-slate-300'>
+                                {r.method} {r.path}
+                              </code>
+                            </td>
+                            <td className='px-3 py-1.5 text-right'>{r.count.toLocaleString()}</td>
+                            <td className='px-3 py-1.5 text-right'>{r.avg_latency}</td>
+                            <td
+                              className={cn(
+                                'px-3 py-1.5 text-right',
+                                r.errors > 0 ? 'text-red-500' : 'text-slate-400'
+                              )}
+                            >
+                              {r.errors.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ─── Key visibility tester (#110): "what would this key see" ─────────────────
 

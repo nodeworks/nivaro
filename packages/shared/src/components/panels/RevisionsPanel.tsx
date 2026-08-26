@@ -136,6 +136,54 @@ function JsonKeyDiff({
   )
 }
 
+// ─── Single-field revert (#667) ──────────────────────────────────────────────
+// A changed field row can restore JUST that field's value from this revision's
+// snapshot — server-side POST /revisions/:id/revert-field goes through the
+// items service, so the whole-snapshot Rollback below stays the blunt tool.
+type FieldRevertCtl = {
+  confirmField: string | null
+  setConfirmField: (f: string | null) => void
+  revert: (f: string) => void
+  pending: boolean
+}
+
+function RevertFieldButton({ field, ctl }: { field: string; ctl: FieldRevertCtl }) {
+  if (ctl.confirmField === field) {
+    return (
+      <span className='inline-flex items-center gap-1' data-revert-field-confirm={field}>
+        <span className='text-[10px] text-slate-500'>Revert?</span>
+        <button
+          type='button'
+          disabled={ctl.pending}
+          onClick={() => ctl.revert(field)}
+          className='rounded bg-nvr-cyan px-1.5 py-px text-[10px] font-semibold text-white disabled:opacity-50'
+        >
+          Yes
+        </button>
+        <button
+          type='button'
+          onClick={() => ctl.setConfirmField(null)}
+          className='rounded border border-slate-200 px-1.5 py-px text-[10px] text-slate-500 dark:border-border'
+        >
+          Cancel
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button
+      type='button'
+      onClick={() => ctl.setConfirmField(field)}
+      className='inline-flex items-center gap-0.5 rounded px-1 py-px text-[10px] font-medium text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+      title='Set the field back to this revision’s value'
+      data-revert-field={field}
+    >
+      <RotateCcw className='h-2.5 w-2.5' />
+      Revert this field
+    </button>
+  )
+}
+
 type FieldStatus = 'added' | 'removed' | 'changed' | 'unchanged'
 const STATUS_ROW_CLS: Record<FieldStatus, string> = {
   added: 'bg-emerald-50/70 dark:bg-emerald-950/20',
@@ -146,10 +194,12 @@ const STATUS_ROW_CLS: Record<FieldStatus, string> = {
 
 function SideBySideView({
   before,
-  after
+  after,
+  fieldRevert
 }: {
   before: Record<string, unknown>
   after: Record<string, unknown>
+  fieldRevert?: FieldRevertCtl
 }) {
   const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort()
   if (fields.length === 0)
@@ -197,6 +247,11 @@ function SideBySideView({
                   )}
                 >
                   {status}
+                </span>
+              )}
+              {status === 'changed' && fieldRevert && field !== 'id' && (
+                <span className='ml-auto shrink-0'>
+                  <RevertFieldButton field={field} ctl={fieldRevert} />
                 </span>
               )}
             </div>
@@ -327,7 +382,13 @@ function WordDiff({ before, after }: { before: unknown; after: unknown }) {
   )
 }
 
-function DeltaView({ delta }: { delta: Record<string, unknown> }) {
+function DeltaView({
+  delta,
+  fieldRevert
+}: {
+  delta: Record<string, unknown>
+  fieldRevert?: FieldRevertCtl
+}) {
   const entries = Object.entries(delta)
   if (entries.length === 0) return <p className='text-[12px] text-slate-400'>No changes recorded</p>
   return (
@@ -341,7 +402,14 @@ function DeltaView({ delta }: { delta: Record<string, unknown> }) {
       <tbody>
         {entries.map(([field, value]) => (
           <tr key={field} className='border-t border-slate-100'>
-            <td className='pr-4 py-1.5 font-mono text-slate-500 align-top'>{field}</td>
+            <td className='pr-4 py-1.5 font-mono text-slate-500 align-top'>
+              {field}
+              {fieldRevert && field !== 'id' && (
+                <span className='mt-0.5 block'>
+                  <RevertFieldButton field={field} ctl={fieldRevert} />
+                </span>
+              )}
+            </td>
             <td className='py-1.5 text-slate-700 break-all align-top'>
               {value === null || value === undefined ? (
                 <span className='text-slate-400 italic'>null</span>
@@ -401,6 +469,29 @@ function RevisionRow({
   const canRollback = isUpdate || isCreate
 
   const [rolledBackAt, setRolledBackAt] = useState<string | null>(null)
+
+  const qc = useQueryClient()
+  const [confirmRevertField, setConfirmRevertField] = useState<string | null>(null)
+  const revertFieldMut = useMutation({
+    mutationFn: (field: string) =>
+      client.request(post(`/revisions/${revision.id}/revert-field`, { field })),
+    onSuccess: (_r, field) => {
+      setConfirmRevertField(null)
+      toast.success(`Reverted ${field} to this revision's value`)
+      void qc.invalidateQueries({ queryKey: ['revisions', revision.collection, revision.item] })
+      onRollback?.()
+    },
+    onError: () => toast.error('Failed to revert field')
+  })
+  const fieldRevert: FieldRevertCtl | undefined =
+    isUpdate || isCreate
+      ? {
+          confirmField: confirmRevertField,
+          setConfirmField: setConfirmRevertField,
+          revert: (f) => revertFieldMut.mutate(f),
+          pending: revertFieldMut.isPending
+        }
+      : undefined
 
   const rollbackMut = useMutation({
     mutationFn: () => client.request(post(`/revisions/${revision.id}/rollback`, {})),
@@ -492,9 +583,9 @@ function RevisionRow({
             </div>
           </div>
           {view === 'side' ? (
-            <SideBySideView before={sideBefore} after={sideAfter} />
+            <SideBySideView before={sideBefore} after={sideAfter} fieldRevert={fieldRevert} />
           ) : isUpdate && revision.delta ? (
-            <DeltaView delta={revision.delta} />
+            <DeltaView delta={revision.delta} fieldRevert={fieldRevert} />
           ) : (
             <SnapshotDataView data={revision.data} />
           )}

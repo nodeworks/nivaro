@@ -427,6 +427,47 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
   })
 
+  // #619: pretty record URLs — resolve a record by its configured slug column
+  // (nivaro_collections.slug_field, migration 278). The raw lookup only finds
+  // the id; the record itself is served through readOne so RBAC / RLS / user
+  // scopes apply exactly as on GET /:collection/:id. Case-insensitive, first
+  // match by id for determinism. 404 when the collection has no slug_field.
+  app.get('/:collection/by-slug/:slug', async (req, reply) => {
+    const { collection, slug } = req.params as { collection: string; slug: string }
+    const q = req.query as Record<string, string>
+    const fields = q.fields?.split(',')
+    try {
+      const { getCollection } = await import('../services/collections.js')
+      const col = await getCollection(collection)
+      if (!col) return reply.code(404).send({ error: 'Not found' })
+      const slugField = (col as { slug_field?: string | null }).slug_field
+      if (!slugField || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(slugField)) {
+        return reply.code(404).send({ error: 'No slug field configured for this collection' })
+      }
+      let row: { id: unknown } | undefined
+      try {
+        row = (await db(collection)
+          .whereRaw('LOWER(??) = ?', [slugField, slug.toLowerCase()])
+          .orderBy('id', 'asc')
+          .first('id')) as { id: unknown } | undefined
+      } catch {
+        row = undefined
+      }
+      if (!row || row.id == null) return reply.code(404).send({ error: 'Not found' })
+      const item = await readOne(
+        req.user!,
+        collection,
+        String(row.id),
+        req.workspaceId ?? undefined,
+        fields
+      )
+      if (!item) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: item })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
+
   // Every hop of a dotted path must be a collection the requester can read —
   // otherwise resolve-paths would leak related-collection data (e.g. a
   // line_items reader pulling vendors or nivaro_users values) past RBAC.

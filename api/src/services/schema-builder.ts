@@ -32,6 +32,11 @@ import {
   readOne,
   updateOne
 } from './items.js'
+import {
+  executeWorkflowTransition,
+  startWorkflowInstance,
+  WorkflowMutationError
+} from './workflow-mutations.js'
 
 // ─── CMS field type → GraphQL scalar mapping ──────────────────────────────────
 
@@ -194,6 +199,30 @@ function wrapError(err: unknown): never {
     throw Object.assign(new Error('Forbidden'), { extensions: { code: 'FORBIDDEN' } })
   if (err instanceof CollectionNotFoundError)
     throw Object.assign(new Error(err.message), { extensions: { code: 'NOT_FOUND' } })
+  throw err
+}
+
+// WorkflowMutationError carries an HTTP-ish status from the shared workflow
+// mutation service — map it onto GraphQL error extensions so callers can
+// branch the same way REST callers branch on status codes.
+const WORKFLOW_ERROR_CODES: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  422: 'UNPROCESSABLE'
+}
+
+function wrapWorkflowError(err: unknown): never {
+  if (err instanceof WorkflowMutationError) {
+    throw Object.assign(new Error(err.message), {
+      extensions: {
+        code: WORKFLOW_ERROR_CODES[err.statusCode] ?? 'BAD_REQUEST',
+        status: err.statusCode,
+        ...(err.extras ?? {})
+      }
+    })
+  }
   throw err
 }
 
@@ -645,6 +674,74 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   // Merge domain fields (workflow, pipeline, users, activity, files, settings)
   Object.assign(queryFields, domainQueryFields)
   Object.assign(mutationFields, domainMutationFields)
+
+  // ── Workflow mutations (#601) ──────────────────────────────────────────────
+  // Same service layer as POST /pipelines/instance/:c/:i/start|transition —
+  // every REST precondition (from-state validity, auto-transition refusal,
+  // role gate, requirements, condition-rule revalidation) applies identically.
+  mutationFields['workflow_start'] = {
+    type: GraphQLJSON,
+    description:
+      'Start the bound workflow/pipeline instance for a record. Returns the instance as JSON.',
+    args: {
+      collection: { type: new GraphQLNonNull(GraphQLString) },
+      item: { type: new GraphQLNonNull(GraphQLString) }
+    },
+    resolve: async (
+      _root,
+      { collection, item }: { collection: string; item: string },
+      ctx: GQLContext
+    ) => {
+      if (!ctx.user)
+        throw Object.assign(new Error('Unauthorized'), {
+          extensions: { code: 'UNAUTHENTICATED' }
+        })
+      try {
+        const instance = await startWorkflowInstance({
+          collection,
+          item,
+          actor: { id: ctx.user.id, role: ctx.user.role, isAdmin: ctx.isAdmin ?? false }
+        })
+        return instance ?? null
+      } catch (e) {
+        wrapWorkflowError(e)
+      }
+    }
+  }
+
+  mutationFields['workflow_transition'] = {
+    type: GraphQLJSON,
+    description:
+      'Execute a workflow transition on a record (same gates as the REST endpoint). Returns the updated instance as JSON.',
+    args: {
+      collection: { type: new GraphQLNonNull(GraphQLString) },
+      item: { type: new GraphQLNonNull(GraphQLString) },
+      transition_id: { type: new GraphQLNonNull(GraphQLString) },
+      comment: { type: GraphQLString }
+    },
+    resolve: async (
+      _root,
+      args: { collection: string; item: string; transition_id: string; comment?: string },
+      ctx: GQLContext
+    ) => {
+      if (!ctx.user)
+        throw Object.assign(new Error('Unauthorized'), {
+          extensions: { code: 'UNAUTHENTICATED' }
+        })
+      try {
+        const result = await executeWorkflowTransition({
+          collection: args.collection,
+          item: args.item,
+          transitionId: args.transition_id,
+          comment: args.comment ?? null,
+          actor: { id: ctx.user.id, role: ctx.user.role, isAdmin: ctx.isAdmin ?? false }
+        })
+        return result.instance ?? null
+      } catch (e) {
+        wrapWorkflowError(e)
+      }
+    }
+  }
 
   if (Object.keys(queryFields).length === 0) {
     queryFields._empty = { type: GraphQLBoolean, resolve: () => null }
