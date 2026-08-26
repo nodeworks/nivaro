@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T16:54:07.413Z",
+  "generated_at": "2026-08-26T19:57:52.687Z",
   "releases": [
+    {
+      "version": "0.1.149",
+      "tag": "v0.1.149",
+      "date": "2026-08-26T15:57:47-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-actions",
+              "text": "the record form reflects an action's effects immediately",
+              "hash": "30c932a4"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.148",
       "tag": "v0.1.148",
-      "date": "2026-08-26T12:54:01-04:00",
+      "date": "2026-08-26T12:54:07-04:00",
       "sections": [
         {
           "label": "Added",
