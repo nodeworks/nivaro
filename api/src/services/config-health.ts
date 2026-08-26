@@ -163,6 +163,56 @@ async function hygieneFindings(): Promise<Finding[]> {
     // fine
   }
 
+  // Suspended/redacted people still holding OWNER seats (Rob 2026-08-26):
+  // owner-group memberships and open-instance owner rows for users who can
+  // no longer act. Warn-level — these silently shrink real coverage. The fix
+  // is one click on the pipeline's Owner-cleanup bar.
+  try {
+    const dead = (await db('nivaro_users')
+      .where((qb) => {
+        qb.where('status', 'suspended').orWhere('is_redacted', true)
+      })
+      .select('id')) as Array<{ id: string }>
+    const deadIds = dead.map((u) => u.id)
+    if (deadIds.length > 0) {
+      const perTemplate = (await db('nivaro_pipeline_owner_group_users as gu')
+        .join('nivaro_pipeline_owner_groups as g', 'g.id', 'gu.group')
+        .join('nivaro_workflow_templates as t', 't.id', 'g.template')
+        .whereIn('gu.user', deadIds)
+        .groupBy('t.id', 't.name')
+        .count('gu.id as seats')
+        .select('t.id', 't.name')) as Array<{ id: string; name: string; seats: number }>
+      for (const t of perTemplate) {
+        out.push({
+          family: 'hygiene',
+          code: 'owner-dead-seats',
+          subject: `template:${t.id}`,
+          title: `${Number(t.seats)} owner seat(s) on "${t.name}" held by suspended/redacted people — remove via the pipeline's Owner-cleanup bar`,
+          severity: 'warning',
+          href: `/pipelines/${t.id}`
+        })
+      }
+      const instOwners = (await db('nivaro_pipeline_instance_owners as io')
+        .join('nivaro_workflow_instances as wi', 'wi.id', 'io.instance')
+        .whereNull('wi.completed_at')
+        .whereIn('io.user', deadIds)
+        .count('io.id as c')
+        .first()) as { c: number } | undefined
+      if (instOwners && Number(instOwners.c) > 0) {
+        out.push({
+          family: 'hygiene',
+          code: 'owner-dead-instance-seats',
+          subject: 'instance-owners',
+          title: `${Number(instOwners.c)} open record(s) list a suspended/redacted person as a manually-added owner`,
+          severity: 'warning',
+          href: '/coverage-gaps'
+        })
+      }
+    }
+  } catch {
+    // fine
+  }
+
   // Layouts with zero field assignments (an empty form).
   try {
     const layouts = (await db('nivaro_collection_layouts as l')

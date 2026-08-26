@@ -3083,6 +3083,93 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
+  // Owner cleanup (Rob 2026-08-26): the FIX for owner-lint's dead seats —
+  // removes suspended/redacted members from this template's owner groups and
+  // from OPEN instances' manually-added owner rows. Deliberate scope notes:
+  // OOO users are NOT touched (delegation handles them), and removal never
+  // deletes the group itself — an emptied group simply resolves nobody, which
+  // coverage-gaps then reports honestly.
+  app.post('/:id/owner-cleanup', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const groups = (await db('nivaro_pipeline_owner_groups')
+      .where({ template: id })
+      .select('id')) as Array<{ id: number }>
+    if (groups.length === 0) return reply.code(404).send({ error: 'Template not found or has no owner groups' })
+    const groupIds = groups.map((g) => g.id)
+
+    const deadUsers = (await db('nivaro_users')
+      .where((qb) => {
+        qb.where('status', 'suspended').orWhere('is_redacted', true)
+      })
+      .select('id', 'first_name', 'last_name', 'email')) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    if (deadUsers.length === 0) {
+      return reply.send({ data: { group_members_removed: 0, instance_owners_removed: 0, users: [] } })
+    }
+    const deadIds = deadUsers.map((u) => u.id)
+    const nameOf = new Map(
+      deadUsers.map((u) => [
+        String(u.id).toUpperCase(),
+        [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id
+      ])
+    )
+
+    // Which dead users actually sit in this template's groups (for the report).
+    const memberRows = await selectInChunks<{ user: string }, string>(
+      deadIds,
+      500,
+      (chunk) =>
+        db('nivaro_pipeline_owner_group_users')
+          .whereIn('group', groupIds)
+          .whereIn('user', chunk)
+          .select('user') as unknown as Promise<Array<{ user: string }>>
+    )
+    const removedNames = [...new Set(memberRows.map((r) => nameOf.get(String(r.user).toUpperCase()) ?? r.user))]
+
+    let groupMembersRemoved = 0
+    for (let i = 0; i < deadIds.length; i += 500) {
+      groupMembersRemoved += await db('nivaro_pipeline_owner_group_users')
+        .whereIn('group', groupIds)
+        .whereIn('user', deadIds.slice(i, i + 500))
+        .delete()
+    }
+
+    // Open-instance manual owners on this template's collections.
+    let instanceOwnersRemoved = 0
+    const openInstances = db('nivaro_workflow_instances')
+      .where({ template: id })
+      .whereNull('completed_at')
+      .select('id')
+    for (let i = 0; i < deadIds.length; i += 500) {
+      instanceOwnersRemoved += await db('nivaro_pipeline_instance_owners')
+        .whereIn('instance', openInstances.clone())
+        .whereIn('user', deadIds.slice(i, i + 500))
+        .delete()
+    }
+
+    bustOwnerGroupCache()
+
+    await logActivity({
+      action: 'owner-cleanup',
+      user: req.user?.id,
+      collection: 'nivaro_workflow_templates',
+      item: id,
+      comment: `${groupMembersRemoved} group membership(s) + ${instanceOwnersRemoved} instance owner(s) removed: ${removedNames.slice(0, 10).join(', ')}${removedNames.length > 10 ? '…' : ''}`,
+      req
+    })
+    return reply.send({
+      data: {
+        group_members_removed: groupMembersRemoved,
+        instance_owners_removed: instanceOwnersRemoved,
+        users: removedNames
+      }
+    })
+  })
+
   // Owner-matrix impact preview (#87): how many live records a proposed cell
   // (state + filters) would govern, before saving it.
   app.post('/:id/owner-impact', { preHandler: requireAdmin }, async (req, reply) => {

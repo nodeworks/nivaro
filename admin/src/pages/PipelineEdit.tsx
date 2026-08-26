@@ -4438,6 +4438,13 @@ function OwnerLintCard({ templateId }: { templateId: string }) {
       ) : (data?.findings ?? []).length === 0 ? (
         <p className='text-[12px] text-emerald-600'>Clean — nothing to fix.</p>
       ) : (
+        <>
+          {(data?.findings ?? []).some((f) => f.type === 'inactive_member') && (
+            <OwnerCleanupBar
+              templateId={templateId}
+              count={(data?.findings ?? []).filter((f) => f.type === 'inactive_member').length}
+            />
+          )}
         <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
           {data?.findings.map((f, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional
@@ -4462,6 +4469,68 @@ function OwnerLintCard({ templateId }: { templateId: string }) {
             </div>
           ))}
         </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// The FIX for owner-lint's dead seats (Rob 2026-08-26): one click removes
+// every suspended/redacted member from this template's owner groups and from
+// open instances' manual owner rows. OOO people are untouched — delegation
+// covers them.
+function OwnerCleanupBar({ templateId, count }: { templateId: string; count: number }) {
+  const qc = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const clean = useMutation({
+    mutationFn: () =>
+      api.post<{
+        data: { group_members_removed: number; instance_owners_removed: number; users: string[] }
+      }>(`/pipelines/${templateId}/owner-cleanup`),
+    onSuccess: (r) => {
+      const d = r.data.data
+      toast.success(
+        `Removed ${d.group_members_removed} group seat(s) and ${d.instance_owners_removed} instance owner(s)${d.users.length ? ` — ${d.users.slice(0, 5).join(', ')}${d.users.length > 5 ? '…' : ''}` : ''}`
+      )
+      void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
+      void qc.invalidateQueries({ queryKey: ['owner-groups', templateId] })
+    },
+    onError: () => toast.error('Cleanup failed')
+  })
+  return (
+    <div className='flex flex-wrap items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-500/30 dark:bg-violet-500/10'>
+      <span className='text-[12px] text-violet-800 dark:text-violet-300'>
+        {count} dead seat(s) held by suspended or redacted people.
+      </span>
+      {confirming ? (
+        <span className='ml-auto flex items-center gap-1.5'>
+          <span className='text-[11.5px] text-violet-700 dark:text-violet-300'>
+            Remove them from every group and open record?
+          </span>
+          <Button
+            size='sm'
+            className='h-6 bg-violet-600 px-2 text-[11px] text-white hover:bg-violet-700'
+            disabled={clean.isPending}
+            onClick={() => {
+              clean.mutate()
+              setConfirming(false)
+            }}
+          >
+            Remove
+          </Button>
+          <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={() => setConfirming(false)}>
+            Cancel
+          </Button>
+        </span>
+      ) : (
+        <Button
+          size='sm'
+          variant='outline'
+          className='ml-auto h-6 border-violet-300 px-2 text-[11px] text-violet-700 dark:text-violet-300'
+          onClick={() => setConfirming(true)}
+        >
+          Remove dead seats…
+        </Button>
       )}
     </div>
   )
