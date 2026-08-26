@@ -22,10 +22,13 @@ interface ReferencedByEntry {
 export function ReferencedByPanel({
   collection,
   itemId,
+  title,
   defaultExpanded = true
 }: {
   collection: string
   itemId: string
+  /** Layout-slot label override (#644 slot). */
+  title?: string
   defaultExpanded?: boolean
 }) {
   const client = useNivaroClient()
@@ -66,7 +69,7 @@ export function ReferencedByPanel({
         )}
         <Network className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         <span className='text-[12.5px] font-semibold text-slate-700 dark:text-slate-200'>
-          Referenced by
+          {title ?? 'Referenced by'}
         </span>
         <span className='ml-auto rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-semibold text-nvr-navy tabular-nums dark:text-nvr-cyan'>
           {totalRefs}

@@ -7726,7 +7726,7 @@ function AttributesTab({ tableName }: { tableName: string }) {
 // ─── Layout tab ──────────────────────────────────────────────────────────────
 
 // ── Page slot sentinels (special ItemEdit panels) ──
-type SlotKey = '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__'
+type SlotKey = '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__' | '__referenced_by__'
 interface SlotState {
   sort: number
   label_override: string | null
@@ -7734,12 +7734,13 @@ interface SlotState {
   default_expanded: boolean
   show_approval_chain: boolean
 }
-const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__', '__addendums__']
+const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__referenced_by__']
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
   __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
   __tasks__: { name: 'Tasks', defaultLabel: 'Tasks', editable: true },
-  __addendums__: { name: 'Addendums', defaultLabel: 'Addendums', editable: true }
+  __addendums__: { name: 'Addendums', defaultLabel: 'Addendums', editable: true },
+  __referenced_by__: { name: 'Referenced by', defaultLabel: 'Referenced by', editable: true }
 }
 // PDF Button is a special draggable field chip (not a top-level slot card): placed in groups
 // like __owners__, persisted as a field-assignment row with field = '__pdf__'.
@@ -10538,6 +10539,7 @@ const PRESET_SENTINEL_FIELDS = new Set([
   '__comments__',
   '__tasks__',
   '__addendums__',
+  '__referenced_by__',
   '__owners__',
   '__pdf__',
   '__subtitle__'
@@ -17943,6 +17945,13 @@ function FieldGroupsTab({
       is_visible: true,
       default_expanded: true,
       show_approval_chain: false
+    },
+    __referenced_by__: {
+      sort: 0,
+      label_override: null,
+      is_visible: true,
+      default_expanded: true,
+      show_approval_chain: false
     }
   }))
   const [editingSlot, setEditingSlot] = useState<SlotKey | null>(null)
@@ -18230,6 +18239,13 @@ function FieldGroupsTab({
       },
       __addendums__: {
         sort: groups.length + 4,
+        label_override: null,
+        is_visible: true,
+        default_expanded: true,
+        show_approval_chain: false
+      },
+      __referenced_by__: {
+        sort: groups.length + 5,
         label_override: null,
         is_visible: true,
         default_expanded: true,
