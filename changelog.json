@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T16:36:07.226Z",
+  "generated_at": "2026-08-26T16:54:07.413Z",
   "releases": [
+    {
+      "version": "0.1.148",
+      "tag": "v0.1.148",
+      "date": "2026-08-26T12:54:01-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "Owner coverage — one surface for gaps AND dead seats",
+              "hash": "5a5e6753"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.147",
       "tag": "v0.1.147",
-      "date": "2026-08-26T12:36:02-04:00",
+      "date": "2026-08-26T12:36:07-04:00",
       "sections": [
         {
           "label": "Added",
