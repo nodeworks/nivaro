@@ -70,8 +70,11 @@ async function getAllowedAddendumFields(
 }
 
 function formatAddendum(row: Record<string, unknown>) {
+  // revert_snapshot is server-only (migration 281): it holds prior values of
+  // parent fields the reader may not be allowed to see — never serialized.
+  const { revert_snapshot: _rs, ...rest } = row
   return {
-    ...row,
+    ...rest,
     fields_schema: parseJsonSafe(row.fields_schema),
     data: parseJsonSafe(row.data),
     attachments: parseJsonSafe(row.attachments)
@@ -330,7 +333,22 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if ('description' in body) patch.description = body.description ?? null
     if ('fields_schema' in body)
       patch.fields_schema = body.fields_schema != null ? JSON.stringify(body.fields_schema) : null
-    if ('data' in body) patch.data = body.data != null ? JSON.stringify(body.data) : null
+    if ('data' in body) {
+      // Same allow-list as create: only fields the addendum layout declares —
+      // which structurally strips __-prefixed sidecars (__line_changes,
+      // anything a client tries to smuggle toward the privileged approve path).
+      if (body.data != null) {
+        const allowed = await getAllowedAddendumFields(
+          String(existing.parent_collection),
+          (existing.addendum_layout_id as number | null) ?? null
+        )
+        patch.data = JSON.stringify(
+          Object.fromEntries(Object.entries(body.data).filter(([k]) => allowed.has(k)))
+        )
+      } else {
+        patch.data = null
+      }
+    }
     if ('cost_impact' in body) patch.cost_impact = body.cost_impact ?? null
     if ('timeline_impact_days' in body)
       patch.timeline_impact_days = body.timeline_impact_days ?? null

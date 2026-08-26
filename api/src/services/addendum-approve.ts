@@ -75,6 +75,78 @@ export async function getAllowedAddendumFields(
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/**
+ * Resolve the FK column linking a line collection to the parent record, or
+ * null when no plain M2O relation exists. Security boundary: line changes may
+ * only touch rows that BELONG to the addendum's parent — without this check a
+ * forged sidecar could patch arbitrary rows in arbitrary collections as the
+ * approver.
+ */
+async function lineParentFk(
+  lineCollection: string,
+  parentCollection: string
+): Promise<string | null> {
+  if (
+    !IDENT_RE.test(lineCollection) ||
+    /^(nivaro|directus)_/i.test(lineCollection) // system tables are never line children
+  ) {
+    return null
+  }
+  const rel = (await db('nivaro_relations')
+    .where({ many_collection: lineCollection, one_collection: parentCollection })
+    .whereNull('junction_field')
+    .first('many_field')) as { many_field: string | null } | undefined
+  return rel?.many_field && IDENT_RE.test(rel.many_field) ? rel.many_field : null
+}
+
+/** Apply row patches to a line collection with the full guard set: system
+ *  collections refused,每 row verified to belong to the parent, blocked and
+ *  underscore/dotted keys stripped. Returns applied/failed counts. */
+async function applyGuardedLineChanges(
+  actor: User,
+  lc: { collection?: string; rows?: Array<Record<string, unknown>> },
+  parentCollection: string,
+  parentId: string
+): Promise<{ applied: number; failed: number }> {
+  let applied = 0
+  let failed = 0
+  if (!lc.collection || !Array.isArray(lc.rows)) return { applied, failed }
+  const fk = await lineParentFk(lc.collection, parentCollection)
+  if (!fk) return { applied, failed: lc.rows.length }
+  const { updateOne } = await import('./items.js')
+  for (const row of lc.rows) {
+    const rowId = row.id
+    if (rowId == null) continue
+    const { id: _i, was: _w, line_number: _l, ...rest } = row as Record<string, unknown>
+    const patch = Object.fromEntries(
+      Object.entries(rest).filter(
+        ([k]) =>
+          !k.startsWith('_') &&
+          !k.includes('.') &&
+          IDENT_RE.test(k) &&
+          !PARENT_WRITE_BLOCKED_COLUMNS.has(k) &&
+          k !== fk // the parent linkage itself is never patchable
+      )
+    )
+    if (Object.keys(patch).length === 0) continue
+    try {
+      // Ownership check: the row must point at THIS parent.
+      const owner = (await db(lc.collection)
+        .where({ id: rowId })
+        .first(fk)) as Record<string, unknown> | undefined
+      if (!owner || String(owner[fk]) !== String(parentId)) {
+        failed++
+        continue
+      }
+      await updateOne(actor, lc.collection, String(rowId), patch)
+      applied++
+    } catch {
+      failed++
+    }
+  }
+  return { applied, failed }
+}
+
 export interface ApproveAddendumResult {
   ok: boolean
   error?: string
@@ -207,32 +279,48 @@ export async function applyAddendumApproval(
       const lc = data.__line_changes as
         | { collection?: string; rows?: Array<Record<string, unknown>> }
         | undefined
-      if (lc?.collection && Array.isArray(lc.rows) && IDENT_RE.test(lc.collection)) {
+      if (lc?.collection && Array.isArray(lc.rows)) {
         const approver = approverUserId
           ? ((await db('nivaro_users').where({ id: approverUserId }).first()) as User | undefined)
           : undefined
         const revertLines: Array<Record<string, unknown>> = []
-        if (approver) {
+        // SECURITY: the sidecar rides the client-writable data JSON, so it is
+        // treated as UNTRUSTED even though only server-side actions write it —
+        // system collections refused, the line collection must have a real M2O
+        // to the parent, every row must BELONG to this parent, and blocked/
+        // metadata keys are stripped before any write.
+        const fk = approver ? await lineParentFk(lc.collection, parentCollection) : null
+        if (approver && fk) {
           const { updateOne } = await import('./items.js')
           for (const row of lc.rows) {
             const rowId = row.id
             if (rowId == null) continue
             const { id: _i, was: _w, line_number: _l, ...rest } = row as Record<string, unknown>
-            // Underscore-prefixed keys are display metadata (targets, priors) —
-            // never columns to write.
             const patch = Object.fromEntries(
-              Object.entries(rest).filter(([k]) => !k.startsWith('_'))
+              Object.entries(rest).filter(
+                ([k]) =>
+                  !k.startsWith('_') &&
+                  !k.includes('.') &&
+                  IDENT_RE.test(k) &&
+                  !PARENT_WRITE_BLOCKED_COLUMNS.has(k) &&
+                  k !== fk
+              )
             )
             if (Object.keys(patch).length === 0) continue
             try {
-              // Revert snapshot: the row's prior values for exactly the keys
-              // this apply writes.
+              // Ownership + revert snapshot in one read: the row's parent FK
+              // and its prior values for exactly the keys this apply writes.
               const prior = (await db(lc.collection)
                 .where({ id: rowId })
-                .first(Object.keys(patch))
+                .first([fk, ...Object.keys(patch)])
                 .catch(() => null)) as Record<string, unknown> | null
+              if (!prior || String(prior[fk]) !== String(parentId)) {
+                lineChangesFailed++
+                continue
+              }
               await updateOne(approver, lc.collection, String(rowId), patch)
-              if (prior) revertLines.push({ id: rowId, ...prior })
+              const { [fk]: _fk, ...priorVals } = prior
+              revertLines.push({ id: rowId, ...priorVals })
               lineChangesApplied++
             } catch {
               lineChangesFailed++
@@ -253,9 +341,11 @@ export async function applyAddendumApproval(
       if (revertLineChanges) revert.line_changes = revertLineChanges
       if (Object.keys(revert).length > 0) {
         try {
+          // Server-only column (migration 281) — clients can neither read nor
+          // forge it through the addendum API.
           await db('nivaro_addendums')
             .where({ id: addendumId })
-            .update({ data: JSON.stringify({ ...data, __revert: revert }) })
+            .update({ revert_snapshot: JSON.stringify(revert) })
         } catch {
           /* best-effort — approval itself already applied */
         }
@@ -387,8 +477,7 @@ export async function revertAddendumApproval(
   if (existing.status !== 'approved') {
     return { ok: false, status: 409, error: 'Only approved addendums can be reverted' }
   }
-  const data = parseJsonSafe(existing.data) as Record<string, unknown> | null
-  const revert = (data?.__revert ?? null) as {
+  const revert = parseJsonSafe(existing.revert_snapshot) as {
     parent?: Record<string, unknown>
     sub_rows?: Record<string, unknown[]>
     line_changes?: { collection?: string; rows?: Array<Record<string, unknown>> }
@@ -444,25 +533,18 @@ export async function revertAddendumApproval(
   }
 
   // Line rows back through updateOne — revisions and stored rollups fire.
+  // Same guard set as approval even though the snapshot is server-written:
+  // schema can drift between approval and revert, and defense-in-depth costs
+  // one read per row.
   let lineChangesApplied = 0
   let lineChangesFailed = 0
   const lc = revert.line_changes
-  if (lc?.collection && Array.isArray(lc.rows) && IDENT_RE.test(lc.collection)) {
+  if (lc?.collection && Array.isArray(lc.rows)) {
     const admin = (await db('nivaro_users').where({ id: adminUserId }).first()) as User | undefined
     if (admin) {
-      const { updateOne } = await import('./items.js')
-      for (const row of lc.rows) {
-        const rowId = row.id
-        if (rowId == null) continue
-        const { id: _i, ...patch } = row as Record<string, unknown>
-        if (Object.keys(patch).length === 0) continue
-        try {
-          await updateOne(admin, lc.collection, String(rowId), patch)
-          lineChangesApplied++
-        } catch {
-          lineChangesFailed++
-        }
-      }
+      const r = await applyGuardedLineChanges(admin, lc, parentCollection, parentId)
+      lineChangesApplied = r.applied
+      lineChangesFailed = r.failed
     } else {
       lineChangesFailed = lc.rows.length
     }
