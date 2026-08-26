@@ -156,6 +156,15 @@ import { opsRedisRoutes } from './ops-redis.js'
 import { cronTimelineRoutes } from './cron-timeline.js'
 import { referencedByRoutes } from './referenced-by.js'
 import { userGroupsRoutes } from './user-groups.js'
+import { geocodeBackfillRoutes } from './geocode-backfill.js'
+import { extensionEventRoutes } from './extension-events.js'
+import { geocodeSuggestRoutes } from './geocode-suggest.js'
+import { testDataRoutes } from './test-data.js'
+import { dossierRoutes } from './dossier.js'
+import { changeSetsRoutes } from './change-sets.js'
+import { recordPromotionRoutes } from './record-promotion.js'
+import { provenanceTraceRoutes } from './provenance-trace.js'
+import { ssoProviderRoutes } from './sso-providers.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
@@ -389,6 +398,15 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(cronTimelineRoutes, { prefix: '/cron-timeline' })
   await app.register(referencedByRoutes, { prefix: '/referenced-by' })
   await app.register(userGroupsRoutes, { prefix: '/user-groups' })
+  await app.register(geocodeBackfillRoutes, { prefix: '/geocode' })
+  await app.register(extensionEventRoutes, { prefix: '/extension-events' })
+  await app.register(geocodeSuggestRoutes)
+  await app.register(testDataRoutes)
+  await app.register(dossierRoutes, { prefix: '/dossier' })
+  await app.register(changeSetsRoutes, { prefix: '/change-sets' })
+  await app.register(recordPromotionRoutes, { prefix: '/record-promotion' })
+  await app.register(provenanceTraceRoutes)
+  await app.register(ssoProviderRoutes, { prefix: '/sso-providers' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
   await app.register(queuesRoutes, { prefix: '/queues' })
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })

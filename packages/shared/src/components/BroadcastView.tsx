@@ -65,6 +65,8 @@ export function BroadcastView({ className }: { className?: string }) {
   const [email, setEmail] = useState(false)
   const [sms, setSms] = useState(false)
   const [inApp, setInApp] = useState(true)
+  // #648 — a login-page notice: shows on the sign-in screen (pre-auth, everyone).
+  const [loginNotice, setLoginNotice] = useState(false)
   const [inAppKind, setInAppKind] = useState<'banner' | 'message'>('banner')
   const [requireAck, setRequireAck] = useState(false)
   const [startsAt, setStartsAt] = useState('')
@@ -116,8 +118,9 @@ export function BroadcastView({ className }: { className?: string }) {
     if (inApp) out.push(inAppKind)
     if (email) out.push('email')
     if (sms) out.push('sms')
+    if (loginNotice) out.push('login')
     return out
-  }, [inApp, inAppKind, email, sms])
+  }, [inApp, inAppKind, email, sms, loginNotice])
 
   const cleanGroups = useMemo(
     () =>
@@ -384,6 +387,18 @@ export function BroadcastView({ className }: { className?: string }) {
               className='h-3.5 w-3.5'
             />
             Email
+          </label>
+          <label
+            className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
+            data-tip='Shows on the sign-in screen for everyone (audience filters cannot apply before login)'
+          >
+            <input
+              type='checkbox'
+              checked={loginNotice}
+              onChange={(e) => setLoginNotice(e.target.checked)}
+              className='h-3.5 w-3.5'
+            />
+            Login page
           </label>
           {config?.sms_enabled && (
             <label className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'>

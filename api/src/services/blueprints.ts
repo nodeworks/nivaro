@@ -43,7 +43,16 @@ export interface Blueprint {
 }
 
 const PHYSICAL_TYPES = new Set([
-  'string', 'text', 'integer', 'bigInteger', 'boolean', 'decimal', 'float', 'date', 'datetime', 'uuid'
+  'string',
+  'text',
+  'integer',
+  'bigInteger',
+  'boolean',
+  'decimal',
+  'float',
+  'date',
+  'datetime',
+  'uuid'
 ])
 
 function strip<T extends Record<string, unknown>>(row: T, drop: string[]): Record<string, unknown> {
@@ -54,6 +63,146 @@ function strip<T extends Record<string, unknown>>(row: T, drop: string[]): Recor
 
 export function isBlueprint(v: unknown): v is Blueprint {
   return !!v && typeof v === 'object' && (v as Blueprint).type === 'nivaro-blueprint'
+}
+
+// ─── Published packages (#661) ──────────────────────────────────────────────
+// A publish wraps the plain blueprint with a manifest so a receiving instance
+// can show what it is (and diff it) BEFORE installing. Bare blueprints stay
+// valid everywhere — unwrapBlueprint() accepts both shapes.
+
+export interface BlueprintManifest {
+  name: string
+  description: string | null
+  version: string | null
+  exported_at: string
+  nivaro_version: string
+  collections: string[]
+  counts: {
+    collections: number
+    fields: number
+    relations: number
+    workflows: number
+    layouts: number
+    queues: number
+    rules: number
+  }
+}
+
+export interface PublishedBlueprint {
+  type: 'nivaro-blueprint-package'
+  version: 1
+  manifest: BlueprintManifest
+  blueprint: Blueprint
+}
+
+export function isPublishedBlueprint(v: unknown): v is PublishedBlueprint {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    (v as PublishedBlueprint).type === 'nivaro-blueprint-package' &&
+    isBlueprint((v as PublishedBlueprint).blueprint)
+  )
+}
+
+/** Accept a bare blueprint OR a published package — null when neither. */
+export function unwrapBlueprint(v: unknown): Blueprint | null {
+  if (isPublishedBlueprint(v)) return v.blueprint
+  if (isBlueprint(v)) return v
+  return null
+}
+
+export function buildManifest(
+  bp: Blueprint,
+  meta: { description?: string | null; version?: string | null; nivaroVersion: string }
+): BlueprintManifest {
+  return {
+    name: bp.name,
+    description: meta.description?.trim() || null,
+    version: meta.version?.trim() || null,
+    exported_at: bp.exported_at,
+    nivaro_version: meta.nivaroVersion,
+    collections: bp.collections.map((c) => String(c.meta.collection ?? '')),
+    counts: {
+      collections: bp.collections.length,
+      fields: bp.collections.reduce((n, c) => n + c.fields.length, 0),
+      relations: bp.relations.length,
+      workflows: bp.workflows.length,
+      layouts: bp.layouts.length,
+      queues: bp.queues.length,
+      rules: bp.rules.length
+    }
+  }
+}
+
+export interface BlueprintDiff {
+  collections: Array<{
+    collection: string
+    exists: boolean
+    /** Fields in the bundle that this instance does not have yet. */
+    new_fields: string[]
+  }>
+  workflows: { new: number; existing: number }
+  layouts: { new: number; existing: number }
+  queues: { new: number; existing: number }
+  rules: { new: number; existing: number }
+}
+
+/** What installing this blueprint would ADD to the live instance — the same
+ *  natural keys installBlueprint() dedupes on, so the diff predicts install. */
+export async function diffBlueprintAgainstInstance(bp: Blueprint): Promise<BlueprintDiff> {
+  const diff: BlueprintDiff = {
+    collections: [],
+    workflows: { new: 0, existing: 0 },
+    layouts: { new: 0, existing: 0 },
+    queues: { new: 0, existing: 0 },
+    rules: { new: 0, existing: 0 }
+  }
+
+  for (const col of bp.collections) {
+    const name = String(col.meta.collection ?? '')
+    if (!/^[a-zA-Z0-9_]+$/.test(name) || name.startsWith('nivaro_')) continue
+    const existing = await db('nivaro_collections').where({ collection: name }).first()
+    const fieldRows = (await db('nivaro_fields')
+      .where({ collection: name })
+      .select('field')) as Array<{ field: string }>
+    const have = new Set(fieldRows.map((f) => f.field))
+    diff.collections.push({
+      collection: name,
+      exists: !!existing,
+      new_fields: col.fields.map((f) => String(f.field ?? '')).filter((f) => f && !have.has(f))
+    })
+  }
+
+  for (const wf of bp.workflows) {
+    const existing = await db('nivaro_workflow_templates')
+      .where({ id: String(wf.template.id) })
+      .first()
+    if (existing) diff.workflows.existing++
+    else diff.workflows.new++
+  }
+  for (const l of bp.layouts) {
+    const existing = await db('nivaro_collection_layouts')
+      .where({ collection: l.layout.collection as string, name: l.layout.name as string })
+      .first()
+    if (existing) diff.layouts.existing++
+    else diff.layouts.new++
+  }
+  for (const q of bp.queues) {
+    const existing = await db('nivaro_queues')
+      .where({ id: q.queue.id as string })
+      .first()
+    if (existing) diff.queues.existing++
+    else diff.queues.new++
+  }
+  for (const r of bp.rules) {
+    const existing = await db('nivaro_rules')
+      .where({ collection: r.collection as string, name: r.name as string })
+      .first()
+    if (existing) diff.rules.existing++
+    else diff.rules.new++
+  }
+
+  return diff
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────────
@@ -124,7 +273,9 @@ export async function exportBlueprint(name: string, collections: string[]): Prom
     layouts.push({
       layout: strip(layout, ['id', 'created_at', 'updated_at', 'addendum_layout_id']),
       groups: (
-        (await db('nivaro_field_groups').where({ layout_id: lid })) as Array<Record<string, unknown>>
+        (await db('nivaro_field_groups').where({ layout_id: lid })) as Array<
+          Record<string, unknown>
+        >
       ).map((g) => strip(g, ['id', 'layout_id'])),
       assignments: (
         (await db('nivaro_layout_field_assignments').where({ layout_id: lid })) as Array<
@@ -185,10 +336,9 @@ export interface InstallReport {
 }
 
 async function tableExists(name: string): Promise<boolean> {
-  const rows = (await db.raw(
-    `SELECT 1 AS x FROM information_schema.tables WHERE TABLE_NAME = ?`,
-    [name]
-  )) as Array<{ x: number }>
+  const rows = (await db.raw(`SELECT 1 AS x FROM information_schema.tables WHERE TABLE_NAME = ?`, [
+    name
+  ])) as Array<{ x: number }>
   return rows.length > 0
 }
 
@@ -200,7 +350,10 @@ async function tableColumns(name: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.name))
 }
 
-export async function installBlueprint(bp: Blueprint, ownerId: string | null): Promise<InstallReport> {
+export async function installBlueprint(
+  bp: Blueprint,
+  ownerId: string | null
+): Promise<InstallReport> {
   const report: InstallReport = {
     collections: { created: 0, skipped: 0 },
     columns: { created: 0 },
@@ -246,16 +399,36 @@ export async function installBlueprint(bp: Blueprint, ownerId: string | null): P
         if (PHYSICAL_TYPES.has(ftype) && !columns.has(fname)) {
           await db.schema.table(name, (t) => {
             switch (ftype) {
-              case 'string': t.string(fname, 255); break
-              case 'text': t.text(fname); break
-              case 'integer': t.integer(fname); break
-              case 'bigInteger': t.bigInteger(fname); break
-              case 'boolean': t.boolean(fname); break
-              case 'decimal': t.decimal(fname, 18, 4); break
-              case 'float': t.float(fname); break
-              case 'date': t.date(fname); break
-              case 'datetime': t.datetime(fname); break
-              case 'uuid': t.uuid(fname); break
+              case 'string':
+                t.string(fname, 255)
+                break
+              case 'text':
+                t.text(fname)
+                break
+              case 'integer':
+                t.integer(fname)
+                break
+              case 'bigInteger':
+                t.bigInteger(fname)
+                break
+              case 'boolean':
+                t.boolean(fname)
+                break
+              case 'decimal':
+                t.decimal(fname, 18, 4)
+                break
+              case 'float':
+                t.float(fname)
+                break
+              case 'date':
+                t.date(fname)
+                break
+              case 'datetime':
+                t.datetime(fname)
+                break
+              case 'uuid':
+                t.uuid(fname)
+                break
             }
           })
           report.columns.created++
@@ -265,7 +438,12 @@ export async function installBlueprint(bp: Blueprint, ownerId: string | null): P
           .first()
         if (existingField) report.fields.skipped++
         else {
-          await db('nivaro_fields').insert({ ...f, collection: name, created_at: now, updated_at: now })
+          await db('nivaro_fields').insert({
+            ...f,
+            collection: name,
+            created_at: now,
+            updated_at: now
+          })
           report.fields.created++
         }
       }
@@ -303,7 +481,11 @@ export async function installBlueprint(bp: Blueprint, ownerId: string | null): P
         report.workflows.skipped++
         continue
       }
-      await db('nivaro_workflow_templates').insert({ ...wf.template, created_at: now, updated_at: now })
+      await db('nivaro_workflow_templates').insert({
+        ...wf.template,
+        created_at: now,
+        updated_at: now
+      })
       for (const st of wf.states) await db('nivaro_workflow_states').insert(st)
       for (const tx of wf.transitions) await db('nivaro_workflow_transitions').insert(tx)
       for (const b of wf.bindings) {
@@ -344,7 +526,9 @@ export async function installBlueprint(bp: Blueprint, ownerId: string | null): P
   // Queues: uuid-keyed; installer becomes owner
   for (const q of bp.queues) {
     try {
-      const existing = await db('nivaro_queues').where({ id: q.queue.id as string }).first()
+      const existing = await db('nivaro_queues')
+        .where({ id: q.queue.id as string })
+        .first()
       if (existing) {
         report.queues.skipped++
         continue

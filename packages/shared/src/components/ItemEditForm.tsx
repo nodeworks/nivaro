@@ -6477,6 +6477,45 @@ export function ItemEditForm({
                                         </div>,
                                         document.body
                                       )}
+                                    {!isNew &&
+                                      itemId &&
+                                      !!(
+                                        activeLayoutData?.layout as
+                                          | { dossier_enabled?: boolean | number }
+                                          | undefined
+                                      )?.dossier_enabled && (
+                                        <button
+                                          type='button'
+                                          data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
+                                          onClick={async () => {
+                                            // #641 — server assembles the whole story; this just
+                                            // streams the PDF down with the caller's own auth.
+                                            try {
+                                              const res = await fetch(
+                                                `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
+                                                {
+                                                  headers: fetchCfg.authHeaders,
+                                                  credentials: fetchCfg.credentials
+                                                }
+                                              )
+                                              if (!res.ok) throw new Error(String(res.status))
+                                              const blob = await res.blob()
+                                              const url = URL.createObjectURL(blob)
+                                              const a = document.createElement('a')
+                                              a.href = url
+                                              a.download = `dossier-${collection}-${itemId}.pdf`
+                                              a.click()
+                                              setTimeout(() => URL.revokeObjectURL(url), 30_000)
+                                            } catch {
+                                              toast.error('Dossier export failed')
+                                            }
+                                          }}
+                                          className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 transition-colors hover:border-[#00ceff] hover:text-slate-900 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-foreground'
+                                        >
+                                          <FileDown className='h-3.5 w-3.5' />
+                                          Dossier
+                                        </button>
+                                      )}
                                     {!isNew && itemId && onDuplicate && (
                                       <button
                                         type='button'

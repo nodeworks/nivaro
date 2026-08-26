@@ -318,6 +318,69 @@ export async function rolesRoutes(app: FastifyInstance) {
     return reply.send({ data: await getPoliciesForRole(id) })
   })
 
+  // ─── Policy templates (#628) ───────────────────────────────────────────────
+  // Seed a role with a standard grant set over every business collection in
+  // one click instead of dozens of checkbox rounds. Additive only: an existing
+  // (collection, action) policy is never touched, so applying a template to a
+  // hand-tuned role fills gaps rather than rewriting it.
+  app.post<{ Params: { id: string } }>(
+    '/:id/apply-template',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id } = req.params
+      const { template } = (req.body ?? {}) as { template?: string }
+      const ACTIONS: Record<string, string[]> = {
+        read_only: ['read'],
+        contributor: ['read', 'create', 'update'],
+        manager: ['read', 'create', 'update', 'delete']
+      }
+      const actions = template ? ACTIONS[template] : undefined
+      if (!actions) {
+        return reply
+          .code(400)
+          .send({ error: `template must be one of: ${Object.keys(ACTIONS).join(', ')}` })
+      }
+      const role = await db('nivaro_roles').where({ id }).first('id')
+      if (!role) return reply.code(404).send({ error: 'Role not found' })
+
+      const collections = (await db('nivaro_collections')
+        .whereNot('collection', 'like', 'nivaro\\_%')
+        .whereNot('collection', 'like', 'directus\\_%')
+        .where((qb) => {
+          qb.where('hidden', false).orWhereNull('hidden')
+        })
+        .select('collection')) as Array<{ collection: string }>
+      const existing = (await db('nivaro_policies')
+        .where({ role: id })
+        .select('collection', 'action')) as Array<{ collection: string; action: string }>
+      const have = new Set(existing.map((p) => `${p.collection}:${p.action}`))
+
+      const rows: Array<Record<string, unknown>> = []
+      for (const c of collections) {
+        for (const action of actions) {
+          if (have.has(`${c.collection}:${action}`)) continue
+          rows.push({ role: id, collection: c.collection, action, created_at: new Date() })
+        }
+      }
+      // Chunked inserts — a template over 200 collections × 4 actions would
+      // otherwise blow the mssql bound-parameter cap.
+      for (let i = 0; i < rows.length; i += 100) {
+        await db('nivaro_policies').insert(rows.slice(i, i + 100))
+      }
+      await logActivity({
+        action: 'role-apply-template',
+        user: req.user?.id,
+        collection: 'nivaro_roles',
+        item: id,
+        comment: `${template}: ${rows.length} policies added`,
+        req
+      })
+      return reply.send({
+        data: { template, added: rows.length, skipped_existing: have.size }
+      })
+    }
+  )
+
   app.post('/:id/policies', async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as {

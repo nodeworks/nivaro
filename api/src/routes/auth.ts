@@ -1,14 +1,22 @@
 import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
-import { buildLoginUrl, generateCodeVerifier, generateState, handleCallback } from '../auth/oidc.js'
+import {
+  buildDynamicLoginUrl,
+  buildLoginUrl,
+  type DynamicOidcProvider,
+  generateCodeVerifier,
+  generateState,
+  handleCallback,
+  handleDynamicCallback
+} from '../auth/oidc.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import { recordLogin } from '../services/security.js'
+import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
 
 // Validate returnTo against all configured allowed origins (admin + any APP_URLS).
@@ -80,6 +88,38 @@ declare module '@fastify/session' {
   interface FastifySessionObject {
     /** Set after a successful IdP login when the user still needs to pass TOTP. */
     pendingTotpUserId?: string
+    /** Multi-IdP (#538): nivaro_sso_providers row id the login started against.
+     *  Absent = the primary env-configured issuer. */
+    oidcProviderId?: number
+  }
+}
+
+/** Load an active additional provider by numeric id or key slug. */
+async function loadSsoProvider(idOrKey: string | number): Promise<DynamicOidcProvider | null> {
+  try {
+    const q = db('nivaro_sso_providers').where({ is_active: true })
+    if (/^\d+$/.test(String(idOrKey))) q.where({ id: Number(idOrKey) })
+    else q.where({ key: String(idOrKey) })
+    const row = (await q.first()) as
+      | {
+          id: number
+          issuer: string
+          client_id: string
+          client_secret: string | null
+          scopes: string | null
+        }
+      | undefined
+    if (!row?.issuer || !row.client_id) return null
+    return {
+      id: row.id,
+      issuer: row.issuer,
+      client_id: row.client_id,
+      client_secret: row.client_secret,
+      scopes: row.scopes
+    }
+  } catch {
+    // Pre-migration database — the primary flow must keep working.
+    return null
   }
 }
 
@@ -111,9 +151,14 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
-        .first('project_name', 'project_color', 'brand_logo', 'brand_login_title', 'brand_login_message', 'login_links')) as
-        | Record<string, unknown>
-        | undefined
+        .first(
+          'project_name',
+          'project_color',
+          'brand_logo',
+          'brand_login_title',
+          'brand_login_message',
+          'login_links'
+        )) as Record<string, unknown> | undefined
       return {
         data: {
           name: (row?.project_name as string | null) ?? null,
@@ -138,15 +183,60 @@ export async function authRoutes(app: FastifyInstance) {
             } catch {
               return []
             }
+          })(),
+          // Scheduled login notices (#648): announcement rows carrying the
+          // 'login' channel, window-filtered. Pre-auth surface, so ONLY the
+          // display text ships — no ids beyond what dismissal-free banners
+          // need, no audience details (audience cannot apply before login).
+          notices: await (async () => {
+            try {
+              const now = new Date()
+              const rows = (await db('nivaro_announcements')
+                .where({ is_active: true })
+                .where((qb) => {
+                  qb.whereNull('starts_at').orWhere('starts_at', '<=', now)
+                })
+                .where((qb) => {
+                  qb.whereNull('ends_at').orWhere('ends_at', '>=', now)
+                })
+                .where('channels', 'like', '%login%')
+                .orderBy('created_at', 'desc')
+                .limit(3)
+                .select('id', 'subject', 'message', 'severity')) as Array<Record<string, unknown>>
+              return rows.map((r) => ({
+                id: r.id,
+                subject: String(r.subject ?? ''),
+                body: String(r.message ?? '').slice(0, 1000),
+                severity: String(r.severity ?? 'info')
+              }))
+            } catch {
+              return []
+            }
           })()
         }
       }
     } catch {
-      return { data: { name: null, color: null, logo_url: null, login_title: null, login_message: null } }
+      return {
+        data: { name: null, color: null, logo_url: null, login_title: null, login_message: null }
+      }
     }
   })
 
   app.get('/providers', async (_req, reply) => {
+    // Additional OIDC providers (#538) — public list is display data only
+    // (id/key/label), never issuer or client config.
+    const sso = await db('nivaro_sso_providers')
+      .where({ is_active: true })
+      .orderBy('sort', 'asc')
+      .select('id', 'key', 'label')
+      .then((rows) =>
+        (rows as Array<{ id: number; key: string; label: string }>).map((r) => ({
+          id: r.id,
+          key: r.key,
+          label: r.label
+        }))
+      )
+      .catch(() => [] as Array<{ id: number; key: string; label: string }>)
     return reply.send({
       data: {
         oidc: {
@@ -157,7 +247,8 @@ export async function authRoutes(app: FastifyInstance) {
           enabled: samlEnabled(),
           label: process.env.SAML_PROVIDER_LABEL ?? 'SSO'
         },
-        password: { enabled: true }
+        password: { enabled: true },
+        sso
       }
     })
   })
@@ -181,6 +272,28 @@ export async function authRoutes(app: FastifyInstance) {
     const redirectUri = `${cbOrigin}/api/auth/callback`
     req.session.oidcRedirectUri = redirectUri
 
+    // Multi-IdP (#538): ?provider=<id|key> runs the same PKCE flow against an
+    // admin-configured nivaro_sso_providers row. No param = the primary
+    // env-configured issuer, exactly as before.
+    const providerParam = (req.query as Record<string, string>).provider
+    if (providerParam) {
+      const provider = await loadSsoProvider(providerParam)
+      if (!provider) {
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
+      }
+      try {
+        const url = await buildDynamicLoginUrl(provider, state, codeVerifier, redirectUri)
+        req.session.oidcProviderId = provider.id
+        return reply.redirect(url.href)
+      } catch (err) {
+        // Discovery/config failure — misconfigured provider must not strand
+        // the user on a broken IdP redirect.
+        app.log.error({ err, provider: provider.id }, 'SSO provider login error')
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
+      }
+    }
+
+    req.session.oidcProviderId = undefined
     const url = await buildLoginUrl(state, codeVerifier, redirectUri)
     return reply.redirect(url.href)
   })
@@ -196,12 +309,24 @@ export async function authRoutes(app: FastifyInstance) {
       // Token exchange validates redirect_uri — reconstruct the callback URL on
       // the origin the login actually used, not a fixed configured one.
       const requestUrl = new URL(req.url, req.session.oidcRedirectUri ?? config.PUBLIC_URL)
-      const profile = await handleCallback(requestUrl, oidcState, codeVerifier)
+      // Multi-IdP (#538): a login started via ?provider= exchanges against that
+      // provider's config; the session carries which one. findOrCreateFromOIDC
+      // is unchanged — both paths produce the same claims contract.
+      const providerId = req.session.oidcProviderId
+      let profile: Awaited<ReturnType<typeof handleCallback>>
+      if (providerId != null) {
+        const provider = await loadSsoProvider(providerId)
+        if (!provider) throw new Error(`SSO provider ${providerId} is missing or inactive`)
+        profile = await handleDynamicCallback(provider, requestUrl, oidcState, codeVerifier)
+      } else {
+        profile = await handleCallback(requestUrl, oidcState, codeVerifier)
+      }
       const user = (await findOrCreateFromOIDC(profile)) as UserWithTotp
 
       req.session.oidcState = undefined
       req.session.codeVerifier = undefined
       req.session.oidcRedirectUri = undefined
+      req.session.oidcProviderId = undefined
 
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
@@ -350,18 +475,19 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'token and password (min 8 chars) required' })
     }
 
-    const user = await db('nivaro_users')
+    const user = (await db('nivaro_users')
       .where({ static_token: token, status: 'active' })
-      .first() as (User & { password_hash?: string | null }) | undefined
+      .first()) as (User & { password_hash?: string | null }) | undefined
 
     if (!user) return reply.code(401).send({ error: 'Invalid or expired setup token' })
-    if (user.password_hash) return reply.code(409).send({ error: 'Password already set. Use /api/auth/login.' })
+    if (user.password_hash)
+      return reply.code(409).send({ error: 'Password already set. Use /api/auth/login.' })
 
     const hash = await hashPassword(password)
     await db('nivaro_users').where({ id: user.id }).update({
       password_hash: hash,
       static_token: null,
-      updated_at: new Date(),
+      updated_at: new Date()
     })
 
     req.session.userId = user.id
@@ -375,9 +501,9 @@ export async function authRoutes(app: FastifyInstance) {
     const { email, password } = req.body as { email?: string; password?: string }
     if (!email || !password) return reply.code(400).send({ error: 'email and password required' })
 
-    const user = await db('nivaro_users')
+    const user = (await db('nivaro_users')
       .where({ email: email.toLowerCase().trim(), status: 'active' })
-      .first() as (UserWithTotp & { password_hash?: string | null }) | undefined
+      .first()) as (UserWithTotp & { password_hash?: string | null }) | undefined
 
     if (!user?.password_hash) {
       // Constant-time rejection to avoid user enumeration

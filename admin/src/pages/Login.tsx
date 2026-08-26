@@ -207,6 +207,8 @@ export function LoginPage() {
   const [providers, setProviders] = useState<{
     oidc: { enabled: boolean; label: string }
     saml: { enabled: boolean; label: string }
+    /** Additional admin-configured OIDC providers (#538). */
+    sso?: Array<{ id: number; key: string; label: string }>
   } | null>(null)
   useEffect(() => {
     fetch('/api/auth/providers')
@@ -222,6 +224,7 @@ export function LoginPage() {
     login_title: string | null
     login_message: string | null
     login_links?: Array<{ label: string; url: string }>
+    notices?: Array<{ id: number; subject: string; body: string; severity: string }>
   } | null>(null)
   useEffect(() => {
     fetch('/api/auth/branding')
@@ -338,6 +341,34 @@ export function LoginPage() {
           >
             {branding?.login_message || 'Headless CMS'}
           </p>
+
+          {/* Scheduled login notices (#648) — announcement rows on the 'login'
+              channel, window-filtered server-side. Maintenance heads-up before
+              anyone signs in. */}
+          {(branding?.notices?.length ?? 0) > 0 && (
+            <div
+              className='mt-5 w-full max-w-[420px] space-y-2'
+              style={{ animation: 'login-fade 0.8s ease 0.2s both' }}
+            >
+              {branding?.notices?.map((n) => (
+                <div
+                  key={n.id}
+                  className={`rounded-lg border px-3.5 py-2.5 text-left backdrop-blur ${
+                    n.severity === 'critical'
+                      ? 'border-red-400/40 bg-red-500/15'
+                      : n.severity === 'warn'
+                        ? 'border-amber-400/40 bg-amber-500/15'
+                        : 'border-white/20 bg-white/10'
+                  }`}
+                >
+                  <p className='text-[12.5px] font-semibold text-white'>{n.subject}</p>
+                  {n.body && (
+                    <p className='mt-0.5 text-[12px] leading-snug text-white/70'>{n.body}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Configurable help/support links (#347) — Settings → Project. */}
           {(branding?.login_links?.length ?? 0) > 0 && (
@@ -490,6 +521,18 @@ export function LoginPage() {
                       Continue with {providers.saml.label}
                     </a>
                   )}
+                  {/* Additional OIDC providers (#538) — same PKCE flow against
+                      admin-configured issuers (Settings → Sign-in providers). */}
+                  {(providers?.sso ?? []).map((p) => (
+                    <a
+                      key={p.id}
+                      href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
+                      className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                    >
+                      <KeyIcon dark />
+                      Continue with {p.label}
+                    </a>
+                  ))}
                   <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-400'>
                     Access is restricted to authorized users. If you need access, contact your
                     administrator.

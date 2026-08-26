@@ -1,6 +1,4 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { registerDigestSection } from '../services/daily-digest.js'
-import { registerReadinessCheck } from '../services/readiness.js'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -18,9 +16,16 @@ import {
 } from '../flows/registry.js'
 import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
 import { logActivity } from '../services/activity.js'
+import { registerDigestSection } from '../services/daily-digest.js'
+import {
+  type ExtensionEventHandler,
+  publishExtensionEvent,
+  registerExtensionEventHandler
+} from '../services/extension-events.js'
+import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
 import { registerMailTemplateRoot } from '../services/mail.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
 import { type DashboardWidgetDef, dashboardWidgetRegistry } from './dashboard-widgets.js'
@@ -56,9 +61,18 @@ export interface ExtensionContext {
   database: Database
   inngest: Inngest
   logger: FastifyInstance['log']
-  /** Admin-editable extension settings (#112) — declared on the export. */
+  /** Admin-editable extension settings (#112/#505) — declared on the export.
+   *  Values are parsed by the declared type (number/boolean), 30s cache. */
   settings?: {
-    get(key: string): Promise<string | null>
+    get(key: string): Promise<string | number | boolean | null>
+    getAll(): Promise<Record<string, string | number | boolean | null>>
+  }
+  /** Durable event outbox (#504) — publish inserts a pending row delivered by
+   *  the sweep cron; `on` registers a delivery handler for this extension's
+   *  events ('*' = every type). Delivery retries with exponential backoff. */
+  events: {
+    publish(eventType: string, payload?: unknown): Promise<number | null>
+    on(eventType: string | '*', fn: ExtensionEventHandler): void
   }
   /** Call a configured external API by name or numeric ID. Auth resolved automatically. */
   callExternalApi(nameOrId: string | number, options?: CallOptions): Promise<CallResult>
@@ -197,14 +211,22 @@ export interface Extension {
   requires?: string[]
   /** Command-palette entries (#260) served to the admin palette. */
   palette?: Array<{ label: string; path: string }>
-  /** Admin-editable settings (#112), stored in nivaro_extension_settings. */
+  /** Admin-editable settings (#112/#505), stored in nivaro_extension_settings.
+   *  type 'secret' (or the legacy `secret: true` flag) masks the value on read
+   *  and preserves the stored value when the mask is re-submitted. */
   settings?: Array<{
     key: string
     label: string
-    type?: 'string' | 'number' | 'boolean'
+    type?: 'string' | 'number' | 'boolean' | 'secret'
+    description?: string
     default?: string
     secret?: boolean
   }>
+  /** Capability manifest (#660): freeform declared capabilities (e.g.
+   *  'routes','cron','hooks','flows','item-actions'). The loader ALSO records
+   *  which ctx members register() actually touched — the Extensions page shows
+   *  observed-but-undeclared capabilities amber. */
+  capabilities?: string[]
   /** Health probe (#262): quick self-check surfaced on the Extensions page. */
   healthCheck?(): Promise<{ ok: boolean; note?: string }>
 }
@@ -229,6 +251,9 @@ export interface ExtensionEntry {
   palette?: Array<{ label: string; path: string }>
   has_settings?: boolean
   has_health_check?: boolean
+  /** Capability manifest (#660) — declared list from the export; observed
+   *  actuals live in the module map, composed by GET /extensions. */
+  declared_capabilities?: string[]
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -259,34 +284,90 @@ function writeConfig(config: Record<string, boolean>): void {
 
 export const extensionRegistry = new Map<string, ExtensionEntry>()
 
-// ── Extension settings (#112) ────────────────────────────────────────────────
+// ── Extension settings (#112/#505) ───────────────────────────────────────────
+
+export interface ExtensionSettingDecl {
+  key: string
+  label: string
+  /** Normalized: 'secret' folds in the legacy `secret: true` flag. */
+  type: 'string' | 'number' | 'boolean' | 'secret'
+  description?: string
+  default?: string
+}
+
 export const extensionSettingsDecls = new Map<string, NonNullable<Extension['settings']>>()
-const settingsCache = new Map<string, { values: Record<string, string | null>; at: number }>()
+
+/** The declared settings schema for an extension, types normalized (#505). */
+export function getExtensionSettingsSchema(extId: string): ExtensionSettingDecl[] {
+  return (extensionSettingsDecls.get(extId) ?? []).map((d) => ({
+    key: d.key,
+    label: d.label,
+    type: d.type === 'secret' || d.secret ? 'secret' : (d.type ?? 'string'),
+    ...(d.description ? { description: d.description } : {}),
+    ...(d.default !== undefined ? { default: d.default } : {})
+  }))
+}
+
+type SettingValue = string | number | boolean | null
+
+const settingsCache = new Map<string, { values: Record<string, SettingValue>; at: number }>()
 export function bustExtensionSettingsCache(extId?: string): void {
   if (extId) settingsCache.delete(extId)
   else settingsCache.clear()
 }
-async function readExtensionSettings(extId: string): Promise<Record<string, string | null>> {
+
+function parseSettingValue(raw: string | null, type: ExtensionSettingDecl['type']): SettingValue {
+  if (raw == null) return null
+  if (type === 'number') {
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  }
+  if (type === 'boolean') return raw === 'true' || raw === '1'
+  return raw
+}
+
+async function readExtensionSettings(extId: string): Promise<Record<string, SettingValue>> {
   const hit = settingsCache.get(extId)
-  if (hit && Date.now() - hit.at < 60_000) return hit.values
+  if (hit && Date.now() - hit.at < 30_000) return hit.values
   const { db } = await import('../db/index.js')
-  const decls = extensionSettingsDecls.get(extId) ?? []
-  const values: Record<string, string | null> = {}
-  for (const d of decls) values[d.key] = d.default ?? null
+  const decls = getExtensionSettingsSchema(extId)
+  const raw: Record<string, string | null> = {}
+  for (const d of decls) raw[d.key] = d.default ?? null
   try {
     const rows = (await db('nivaro_extension_settings')
       .where({ extension_id: extId })
       .select('key', 'value')) as Array<{ key: string; value: string | null }>
-    for (const r of rows) values[r.key] = r.value
+    for (const r of rows) raw[r.key] = r.value
   } catch {
     /* table missing pre-migration — declared defaults stand */
+  }
+  const typeByKey = new Map(decls.map((d) => [d.key, d.type]))
+  const values: Record<string, SettingValue> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    values[key] = parseSettingValue(value, typeByKey.get(key) ?? 'string')
   }
   settingsCache.set(extId, { values, at: Date.now() })
   return values
 }
 
+// ── Capability manifest (#660) ───────────────────────────────────────────────
+// Observed actuals — which ctx members register() (and later runtime code)
+// actually touched, recorded by thin wrappers in loadExtension.
+const observedCapabilities = new Map<string, Set<string>>()
+export function getObservedCapabilities(extId: string): string[] {
+  return Array.from(observedCapabilities.get(extId) ?? []).sort()
+}
+function noteCapability(extId: string, cap: string): void {
+  const set = observedCapabilities.get(extId) ?? new Set<string>()
+  set.add(cap)
+  observedCapabilities.set(extId, set)
+}
+
 // ── Health probes (#262) ─────────────────────────────────────────────────────
-export const extensionHealthChecks = new Map<string, () => Promise<{ ok: boolean; note?: string }>>()
+export const extensionHealthChecks = new Map<
+  string,
+  () => Promise<{ ok: boolean; note?: string }>
+>()
 
 // ── Log channels (#427) ──────────────────────────────────────────────────────
 // Per-extension ring buffer of recent log lines — served by
@@ -299,7 +380,17 @@ export function getExtensionLogs(extId: string): Array<{ at: string; level: stri
 function pushExtLog(extId: string, level: string, args: unknown[]): void {
   const list = extensionLogs.get(extId) ?? []
   const msg = args
-    .map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a) } catch { return String(a) } })()))
+    .map((a) =>
+      typeof a === 'string'
+        ? a
+        : (() => {
+            try {
+              return JSON.stringify(a)
+            } catch {
+              return String(a)
+            }
+          })()
+    )
     .join(' ')
     .slice(0, 500)
   list.push({ at: new Date().toISOString(), level, msg })
@@ -339,6 +430,7 @@ async function loadExtension(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'events'
     | 'chatBot'
     | 'digest'
     | 'readiness'
@@ -400,76 +492,159 @@ async function loadExtension(
 
     const extId = ext.id
 
+    // Capability manifest (#660): the ctx members register() touches are noted
+    // as observed capabilities, compared against the declared list in the UI.
+    const note = (cap: string) => noteCapability(extId, cap)
+    // app.register → 'routes': a minimal Proxy intercepting ONLY `register`;
+    // every other property passes through to the real instance untouched.
+    const observedApp = new Proxy(ctx.app, {
+      get(target, prop) {
+        if (prop === 'register') {
+          return (...args: unknown[]) => {
+            note('routes')
+            return (target.register as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        }
+        return Reflect.get(target, prop)
+      }
+    }) as FastifyInstance
+
     // Scoped hooks + cron context — all entries are tagged with this extension's id
     const scopedCtx: ExtensionContext = {
       ...ctx,
+      app: observedApp,
       // Log channels (#427): every line tagged {extension} + ring-buffered.
       logger: channelLogger(ctx.logger, extId),
       settings: {
-        get: async (key: string) => (await readExtensionSettings(extId))[key] ?? null
+        get: async (key: string) => (await readExtensionSettings(extId))[key] ?? null,
+        getAll: () => readExtensionSettings(extId)
       },
-      callExternalApi,
-      logActivity: (entry) =>
-        logActivity({
+      events: {
+        publish: (eventType, payload) => {
+          note('events')
+          return publishExtensionEvent(extId, eventType, payload)
+        },
+        on: (eventType, fn) => {
+          note('events')
+          registerExtensionEventHandler(extId, eventType, fn)
+        }
+      },
+      callExternalApi: (nameOrId, options) => {
+        note('external-apis')
+        return callExternalApi(nameOrId, options)
+      },
+      logActivity: (entry) => {
+        note('activity')
+        return logActivity({
           action: `${extId}:${entry.action}`,
           user: entry.user ?? null,
           collection: entry.collection,
           item: entry.item != null ? String(entry.item) : undefined,
           comment: entry.comment
-        }),
+        })
+      },
       auth: { authenticate, requireAuth, requireAdmin },
       hooks: {
-        before: (collection, action, fn) =>
-          hooks.before(collection, action, fn, { extensionId: extId }),
-        after: (collection, action, fn) =>
+        before: (collection, action, fn) => {
+          note('hooks')
+          hooks.before(collection, action, fn, { extensionId: extId })
+        },
+        after: (collection, action, fn) => {
+          note('hooks')
           hooks.after(collection, action, fn, { extensionId: extId })
+        }
       },
       cron: {
-        schedule: (id, expression, fn) =>
-          ctx.app.cron.schedule(`ext:${extId}:${id}`, expression, fn, { extensionId: extId }),
+        schedule: (id, expression, fn) => {
+          note('cron')
+          ctx.app.cron.schedule(`ext:${extId}:${id}`, expression, fn, { extensionId: extId })
+        },
         unschedule: (id) => ctx.app.cron.unschedule(`ext:${extId}:${id}`)
       },
       bulkActions: {
-        register: (def) => bulkActionRegistry.register(def)
+        register: (def) => {
+          note('bulk-actions')
+          bulkActionRegistry.register(def)
+        }
       },
       itemActions: {
-        register: (def) => itemActionRegistry.register(def)
+        register: (def) => {
+          note('item-actions')
+          itemActionRegistry.register(def)
+        }
       },
       notificationChannels: {
-        register: (def) => notificationChannelRegistry.register(def)
+        register: (def) => {
+          note('notification-channels')
+          notificationChannelRegistry.register(def)
+        }
       },
       dashboardWidgets: {
-        register: (def) => dashboardWidgetRegistry.register(def)
+        register: (def) => {
+          note('dashboard-widgets')
+          dashboardWidgetRegistry.register(def)
+        }
       },
       storage: {
-        register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
+        register: (name, adapter) => {
+          note('storage')
+          storageAdapterRegistry.register(name, adapter)
+        },
         setActive: (name) => storageAdapterRegistry.setActive(name)
       },
       fieldTypes: {
-        register: (def) => fieldTypeRegistry.register(def)
+        register: (def) => {
+          note('field-types')
+          fieldTypeRegistry.register(def)
+        }
       },
       collectionViews: {
-        register: (def) => collectionViewRegistry.register(def)
+        register: (def) => {
+          note('collection-views')
+          collectionViewRegistry.register(def)
+        }
       },
       importParsers: {
-        register: (def) => importParserRegistry.register(def)
+        register: (def) => {
+          note('import-parsers')
+          importParserRegistry.register(def)
+        }
       },
       validators: {
-        register: (def) => validatorRegistry.register(def)
+        register: (def) => {
+          note('validators')
+          validatorRegistry.register(def)
+        }
       },
       digest: {
-        registerSection: (fn) => registerDigestSection(fn)
+        registerSection: (fn) => {
+          note('digest')
+          registerDigestSection(fn)
+        }
       },
       readiness: {
-        registerCheck: (check) => registerReadinessCheck(check)
+        registerCheck: (check) => {
+          note('readiness')
+          registerReadinessCheck(check)
+        }
       },
       flows: {
-        registerOperation: (op) => registerOp(op),
-        registerTrigger: (trigger) => registerTrigger(trigger),
-        emit: (triggerType, payload) => emitTrigger(triggerType, payload, ctx.logger)
+        registerOperation: (op) => {
+          note('flows')
+          registerOp(op)
+        },
+        registerTrigger: (trigger) => {
+          note('flows')
+          registerTrigger(trigger)
+        },
+        emit: (triggerType, payload) => {
+          note('flows')
+          emitTrigger(triggerType, payload, ctx.logger)
+        }
       },
       chatBot: {
         registerTool: (def) => {
+          note('chat-bot')
           void import('../services/chat-bot.js')
             .then(({ registerBotTool }) => registerBotTool(def))
             .catch(() => {})
@@ -503,7 +678,10 @@ async function loadExtension(
             .slice(0, 20)
         : undefined,
       has_settings: Array.isArray(ext.settings) && ext.settings.length > 0,
-      has_health_check: typeof ext.healthCheck === 'function'
+      has_health_check: typeof ext.healthCheck === 'function',
+      declared_capabilities: Array.isArray(ext.capabilities)
+        ? ext.capabilities.map(String).slice(0, 30)
+        : undefined
     })
 
     // Load optional manifest.json for UI plugin support
@@ -569,6 +747,7 @@ export async function loadExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'events'
     | 'chatBot'
     | 'digest'
     | 'readiness'
@@ -692,6 +871,7 @@ export async function loadCloudExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'events'
     | 'chatBot'
     | 'bulkActions'
     | 'itemActions'
@@ -753,6 +933,10 @@ export async function loadCloudExtensions(
       const scopedCtx: ExtensionContext = {
         ...ctx,
         callExternalApi,
+        events: {
+          publish: (eventType, payload) => publishExtensionEvent(extId, eventType, payload),
+          on: (eventType, fn) => registerExtensionEventHandler(extId, eventType, fn)
+        },
         digest: {
           registerSection: (fn) => registerDigestSection(fn)
         },
@@ -907,6 +1091,7 @@ export async function scanNewExtensions(
     | 'logActivity'
     | 'auth'
     | 'flows'
+    | 'events'
     | 'chatBot'
     | 'bulkActions'
     | 'itemActions'

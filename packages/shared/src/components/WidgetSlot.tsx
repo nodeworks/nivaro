@@ -1,4 +1,3 @@
-import { QueryTable, type QueryTableConfig } from './QueryTable'
 import {
   Activity,
   AlertCircle,
@@ -65,9 +64,10 @@ import {
   Zap
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { useApiFetchConfig, useDrilldown } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
+import { useStagedRelations } from './item-edit/O2MStagingContext'
+import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
 import {
   DropdownMenu,
@@ -75,6 +75,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from './ui/dropdown-menu'
+import {
+  type ReportSlotPayload,
+  ReportSlotWidget,
+  reportSlotScalar
+} from './widgets/ReportSlotWidget'
 import {
   type ReviewListConfig,
   type ReviewListResult,
@@ -1049,7 +1054,11 @@ export function WidgetSlot({
     const cfg = widget.config as { collection?: string } | undefined
     const target = cfg?.collection
     if (!target) return null
-    const merged = { created: [] as Record<string, unknown>[], updated: [] as Array<{ id: string | number; values: Record<string, unknown> }>, deleted: [] as Array<string | number> }
+    const merged = {
+      created: [] as Record<string, unknown>[],
+      updated: [] as Array<{ id: string | number; values: Record<string, unknown> }>,
+      deleted: [] as Array<string | number>
+    }
     for (const byCollection of stagedRels.byGrid.values()) {
       const ops = byCollection[target]
       if (!ops) continue
@@ -1060,7 +1069,10 @@ export function WidgetSlot({
     if (!merged.created.length && !merged.updated.length && !merged.deleted.length) return null
     return merged
   }, [widget, stagedRels])
-  const rollupStagedKey = useMemo(() => (rollupStaged ? JSON.stringify(rollupStaged) : ''), [rollupStaged])
+  const rollupStagedKey = useMemo(
+    () => (rollupStaged ? JSON.stringify(rollupStaged) : ''),
+    [rollupStaged]
+  )
 
   // Config-driven drill-down: a widget may declare which record its numbers
   // describe, making the whole cell clickable into the standard record sheet.
@@ -1259,6 +1271,16 @@ export function WidgetSlot({
 
   const title = label || widget?.name || `Widget ${widgetId}`
 
+  // Report-widget payloads nest their numbers under `data` — reduce to the
+  // flat {value, display} shape the strip/pill/stat cells render.
+  const displayRenderData =
+    widget?.widget_type === 'report_widget' && renderData
+      ? (reportSlotScalar(renderData as unknown as ReportSlotPayload) as unknown as Record<
+          string,
+          unknown
+        >)
+      : renderData
+
   // review_list/rollup have no meaning for a record that doesn't exist yet
   // (no rows to reach via the relation path) — render nothing rather than
   // surfacing the render endpoint's 400 for a missing record_id. Mirrors the
@@ -1316,7 +1338,7 @@ export function WidgetSlot({
       {
         const strip = (
           <StripDisplay
-            data={renderLoading ? null : (renderData ?? null)}
+            data={renderLoading ? null : (displayRenderData ?? null)}
             label={label || widget!.name}
             loading={renderLoading}
             widgetConfig={widget!.config}
@@ -1352,7 +1374,7 @@ export function WidgetSlot({
       {
         const pill = (
           <PillDisplay
-            data={renderLoading ? null : (renderData ?? null)}
+            data={renderLoading ? null : (displayRenderData ?? null)}
             label={label || widget!.name}
             style={compactStyle as 'pill-dark' | 'pill-light'}
             loading={renderLoading}
@@ -1377,7 +1399,9 @@ export function WidgetSlot({
 
     // Default compact style — show label skeleton while def loads, value skeleton while rendering
     if (defLoading) {
-      return <div className='animate-pulse h-4 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+      return (
+        <div className='animate-pulse h-4 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+      )
     }
     return (
       <div className='flex items-center gap-1.5'>
@@ -1392,6 +1416,9 @@ export function WidgetSlot({
               {(widget.widget_type === 'stat' ||
                 (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
                 <StatDisplay data={renderData} />
+              )}
+              {widget.widget_type === 'report_widget' && displayRenderData && (
+                <StatDisplay data={displayRenderData} />
               )}
               {widget.widget_type === 'custom-query' && 'values' in renderData && (
                 <MultiStatDisplay data={renderData} />
@@ -1494,6 +1521,9 @@ export function WidgetSlot({
             config={(widget.config ?? {}) as unknown as RollupConfig}
           />
         )}
+        {widget.widget_type === 'report_widget' && (
+          <ReportSlotWidget payload={renderData as unknown as ReportSlotPayload} />
+        )}
         {widget.widget_type === 'action-buttons' && (
           <ActionButtonsDisplay
             data={renderData}
@@ -1519,7 +1549,8 @@ export function WidgetSlot({
           'custom-query',
           'button-group',
           'review_list',
-          'rollup'
+          'rollup',
+          'report_widget'
         ].includes(widget.widget_type) && (
           <pre className='whitespace-pre-wrap text-[11px] text-slate-500'>
             {JSON.stringify(renderData, null, 2)}

@@ -105,6 +105,13 @@ function labelFieldFor(meta: CollectionMeta | undefined): string {
   return 'id'
 }
 interface CollectionMeta {
+  /** #620 — per-collection custom empty state (nivaro_collections.empty_state). */
+  empty_state?: {
+    title?: string | null
+    message?: string | null
+    cta_label?: string | null
+    cta_url?: string | null
+  } | null
   browser_config?: CollectionBrowserConfig | null
   collection: string
   color?: string | null
@@ -6045,6 +6052,44 @@ export function CollectionBrowserView({
                 ) : rows.length === 0 ? (
                   <tr>
                     <td colSpan={effectiveColumns.length + extraCols} className='py-16'>
+                      {(() => {
+                        // #620 — a collection with zero rows and no active
+                        // narrowing shows its configured empty state (what this
+                        // collection is for + where to start), not a search tip.
+                        const noNarrowing =
+                          filters.length === 0 &&
+                          Object.keys(colFilters).length === 0 &&
+                          !Object.values(appliedQuick).some((v) => v.length > 0) &&
+                          !appliedSearch
+                        const es = meta?.empty_state
+                        if (noNarrowing && es && (es.title || es.message)) {
+                          const ctaHref = es.cta_url ?? ''
+                          const internal = ctaHref.startsWith('/')
+                          const safeExternal = /^https?:\/\//.test(ctaHref)
+                          return (
+                            <div className='flex flex-col items-center gap-2 text-center'>
+                              <p className='text-[14px] font-semibold text-slate-700 dark:text-slate-200'>
+                                {es.title || 'Nothing here yet'}
+                              </p>
+                              {es.message && (
+                                <p className='max-w-[52ch] text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+                                  {es.message}
+                                </p>
+                              )}
+                              {es.cta_label && (internal || safeExternal) && (
+                                <a
+                                  href={ctaHref}
+                                  target={internal ? undefined : '_blank'}
+                                  rel={internal ? undefined : 'noreferrer'}
+                                  className='mt-1 inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white'
+                                >
+                                  {es.cta_label}
+                                </a>
+                              )}
+                            </div>
+                          )
+                        }
+                        return (
                       <div className='flex flex-col items-center gap-2 text-center'>
                         <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
                           <Search aria-hidden className='h-4.5 w-4.5 h-5 w-5 text-slate-400' />
@@ -6075,6 +6120,8 @@ export function CollectionBrowserView({
                           </button>
                         )}
                       </div>
+                        )
+                      })()}
                     </td>
                   </tr>
                 ) : (

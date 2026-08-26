@@ -1,18 +1,33 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
-import { type RelRow, type ReviewListConfig, resolveReviewListRows, validateReviewListConfig } from '../services/review-list.js'
+import {
+  type DateRange,
+  type EntityFilter,
+  resolveWidgetDataFull,
+  type WidgetQueryConfig
+} from '../services/report-studio.js'
+import {
+  type RelRow,
+  type ReviewListConfig,
+  resolveReviewListRows,
+  validateReviewListConfig
+} from '../services/review-list.js'
 import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
 import type { User } from '../types.js'
-import { emitTrigger } from '../flows/registry.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function parseJson(v: unknown): unknown {
   if (typeof v === 'string') {
-    try { return JSON.parse(v) } catch { return null }
+    try {
+      return JSON.parse(v)
+    } catch {
+      return null
+    }
   }
   return v ?? null
 }
@@ -26,7 +41,10 @@ function substituteFilters(filters: unknown, inputs: Record<string, unknown>): u
   if (Array.isArray(filters)) return filters.map((f) => substituteFilters(f, inputs))
   if (filters && typeof filters === 'object') {
     return Object.fromEntries(
-      Object.entries(filters as Record<string, unknown>).map(([k, v]) => [k, substituteFilters(v, inputs)])
+      Object.entries(filters as Record<string, unknown>).map(([k, v]) => [
+        k,
+        substituteFilters(v, inputs)
+      ])
     )
   }
   return filters
@@ -40,7 +58,40 @@ async function collectionHasWorkspaceId(collection: string): Promise<boolean> {
 }
 
 async function fetchRelRows(): Promise<RelRow[]> {
-  return (await db('nivaro_relations').select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')) as RelRow[]
+  return (await db('nivaro_relations').select(
+    'many_collection',
+    'many_field',
+    'one_collection',
+    'one_field',
+    'junction_field'
+  )) as RelRow[]
+}
+
+// Mirrors canReadReport in routes/report-studio.ts (not exported there):
+// admin, or owner, or shared with no role scope / a matching role.
+function callerCanReadReport(
+  report: { owner: string; is_shared: unknown; role_id: string | null },
+  user: User,
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return true
+  if (report.owner === user.id) return true
+  if (!report.is_shared) return false
+  return !report.role_id || report.role_id === (user.role ?? null)
+}
+
+function validateReportWidgetConfig(config: unknown): string | null {
+  const c = (config ?? {}) as Record<string, unknown>
+  if (typeof c.report_id !== 'string' || !c.report_id.trim()) {
+    return 'report_widget config requires report_id'
+  }
+  if (typeof c.widget_id !== 'string' || !c.widget_id.trim()) {
+    return 'report_widget config requires widget_id'
+  }
+  if (c.entity_filter_field != null && typeof c.entity_filter_field !== 'string') {
+    return 'entity_filter_field must be a string'
+  }
+  return null
 }
 
 // Only allow relative paths — blocks javascript:, data:, open-redirect to external hosts
@@ -100,9 +151,20 @@ async function renderWidget(
       return { value: row?.[field] ?? null, display: config.display ?? {} }
     }
 
-    const aggFns: Record<string, string> = { sum: 'sum', count: 'count', avg: 'avg', min: 'min', max: 'max' }
+    const aggFns: Record<string, string> = {
+      sum: 'sum',
+      count: 'count',
+      avg: 'avg',
+      min: 'min',
+      max: 'max'
+    }
     const fn = aggFns[aggregation] ?? 'count'
-    const result = await (query as unknown as Record<string, (col: string, alias: string) => Promise<Record<string, unknown>[]>>)[fn](field, 'value')
+    const result = await (
+      query as unknown as Record<
+        string,
+        (col: string, alias: string) => Promise<Record<string, unknown>[]>
+      >
+    )[fn](field, 'value')
     const value = result[0]?.value ?? 0
     return { value, display: config.display ?? {} }
   }
@@ -120,7 +182,9 @@ async function renderWidget(
     const orderField = config.order_field as string | undefined
     const orderDir = (config.order_dir as 'asc' | 'desc') ?? 'asc'
 
-    let query = db(collection).select(fields.length ? fields : ['*']).limit(limit)
+    let query = db(collection)
+      .select(fields.length ? fields : ['*'])
+      .limit(limit)
     for (const [col, cond] of Object.entries(rawFilters)) {
       if (cond && typeof cond === 'object' && '_eq' in (cond as object)) {
         query = query.where(col, (cond as Record<string, unknown>)._eq as string)
@@ -166,29 +230,138 @@ async function renderWidget(
     const rawStaged = inputs.staged
     const staged =
       rawStaged && typeof rawStaged === 'object' && !Array.isArray(rawStaged)
-        ? (rawStaged as { created?: Array<Record<string, unknown>>; updated?: Array<{ id: string | number; values: Record<string, unknown> }>; deleted?: Array<string | number> })
+        ? (rawStaged as {
+            created?: Array<Record<string, unknown>>
+            updated?: Array<{ id: string | number; values: Record<string, unknown> }>
+            deleted?: Array<string | number>
+          })
         : undefined
 
     return await resolveRollupRows(db, cfg, String(recordId), undefined, staged)
   }
 
+  if (type === 'report_widget') {
+    const configError = validateReportWidgetConfig(config)
+    if (configError) throw Object.assign(new Error(configError), { statusCode: 400 })
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+
+    const reportId = String(config.report_id)
+    const report = (await db('nivaro_report_defs').where({ id: reportId }).first()) as
+      | {
+          id: string
+          owner: string
+          is_shared: unknown
+          role_id: string | null
+          global_filters: string | null
+        }
+      | undefined
+    if (!report) throw Object.assign(new Error('Report not found'), { statusCode: 404 })
+    // Resolves AS THE CALLER — report visibility first, then resolveWidgetData's
+    // own per-collection can() checks bind everything below it.
+    if (!callerCanReadReport(report, user, isAdmin)) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
+    }
+
+    const rw = (await db('nivaro_report_widgets')
+      .where({ id: String(config.widget_id), report: report.id })
+      .first()) as
+      | {
+          id: string
+          type: string
+          title: string
+          collection: string | null
+          config: string | null
+        }
+      | undefined
+    if (!rw) throw Object.assign(new Error('Report widget not found'), { statusCode: 404 })
+
+    const innerConfig = parseJson(rw.config) as WidgetQueryConfig | null
+    const base = {
+      type: 'report_widget',
+      widget_type: rw.type,
+      title: rw.title,
+      config: innerConfig
+    }
+
+    // AI insight narratives are report-scoped (and billed) — never resolved per
+    // record view. Honest refusal instead of a confusing empty card.
+    if (rw.type === 'ai_insight') {
+      return {
+        ...base,
+        unsupported: 'AI insight widgets are not supported in record slots',
+        data: null
+      }
+    }
+
+    const entityFilters: EntityFilter[] = []
+    const filterField =
+      typeof config.entity_filter_field === 'string' && config.entity_filter_field.trim()
+        ? config.entity_filter_field.trim()
+        : null
+    if (filterField) {
+      // Explicit binding key first, then a same-named resolved input (the slot
+      // auto-includes scalar draft fields, so matching names bind with zero config).
+      const bound = inputs.entity_filter_value ?? inputs[filterField]
+      if (bound == null || bound === '') {
+        // A configured scope with no value yet must NEVER fall back to
+        // unscoped data — report the gap and render nothing.
+        return { ...base, awaiting_filter: true, data: null }
+      }
+      entityFilters.push({ field: filterField, values: [bound as string | number] })
+    }
+
+    const dateRange =
+      (parseJson(report.global_filters) as { date_range?: DateRange } | null)?.date_range ?? null
+    const data = await resolveWidgetDataFull(
+      user,
+      report.id,
+      { id: rw.id, type: rw.type, collection: rw.collection, config: innerConfig },
+      dateRange,
+      entityFilters
+    )
+    return { ...base, data }
+  }
+
   if (type === 'custom-query') {
     const queryId = config.query_id as string
-    const paramBindings = (config.param_bindings as Array<{ param: string; input_key: string; default_value?: string }>) ?? []
+    const paramBindings =
+      (config.param_bindings as Array<{
+        param: string
+        input_key: string
+        default_value?: string
+      }>) ?? []
     const cq = await db('nivaro_custom_queries').where({ id: queryId }).first()
     if (!cq) throw new Error('Custom query not found')
     // Mirror the access gate from POST /custom-queries/:slug/run
     const VALID_ACCESS = new Set(['admin', 'authenticated', 'public'])
-    if (!VALID_ACCESS.has(cq.access)) { const e = new Error('Forbidden'); (e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403; throw e }
-    if (cq.access === 'admin' && !isAdmin) { const e = new Error('Forbidden'); (e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403; throw e }
-    if (cq.access === 'authenticated' && !user) { const e = new Error('Unauthorized'); (e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 401; throw e }
+    if (!VALID_ACCESS.has(cq.access)) {
+      const e = new Error('Forbidden')
+      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403
+      throw e
+    }
+    if (cq.access === 'admin' && !isAdmin) {
+      const e = new Error('Forbidden')
+      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403
+      throw e
+    }
+    if (cq.access === 'authenticated' && !user) {
+      const e = new Error('Unauthorized')
+      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 401
+      throw e
+    }
 
     const params: Record<string, unknown> = {}
     let unresolvedParam = false
     for (const b of paramBindings) {
       const v = inputs[b.input_key]
-      const paramKey = typeof b.param === 'string' && b.param.startsWith(':') ? b.param.slice(1) : String(b.param)
-      const resolved = (v != null && v !== '') ? v : (b.default_value != null && b.default_value !== '' ? b.default_value : null)
+      const paramKey =
+        typeof b.param === 'string' && b.param.startsWith(':') ? b.param.slice(1) : String(b.param)
+      const resolved =
+        v != null && v !== ''
+          ? v
+          : b.default_value != null && b.default_value !== ''
+            ? b.default_value
+            : null
       if (resolved == null) unresolvedParam = true
       params[paramKey] = resolved
     }
@@ -197,7 +370,15 @@ async function renderWidget(
     // project is chosen) — running the query would return UNSCOPED results.
     // Return an empty render (null value chips) instead of querying.
     if (unresolvedParam) {
-      const vf = config.value_fields as Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }> | undefined
+      const vf = config.value_fields as
+        | Array<{
+            field: string
+            label?: string
+            prefix?: string
+            suffix?: string
+            format?: string
+          }>
+        | undefined
       if (vf && vf.length > 0) {
         return {
           values: vf.map((f) => ({
@@ -226,15 +407,25 @@ async function renderWidget(
     })
     // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
     const knexClient = (db as any).client
-    const Driver = knexClient._driver() as { Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown }
-    const conn = await knexClient.acquireConnection() as { execSqlBatch(r: unknown): void }
+    const Driver = knexClient._driver() as {
+      Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
+    }
+    const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
     const rows: unknown[] = await new Promise<unknown[]>((resolve, reject) => {
       let settled = false
-      const done = (fn: () => void) => { if (!settled) { settled = true; fn() } }
+      const done = (fn: () => void) => {
+        if (!settled) {
+          settled = true
+          fn()
+        }
+      }
       const req = new Driver.Request(resolvedSql, (err: Error | null) => {
         if (err) done(() => reject(err))
       }) as {
-        on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
+        on(
+          ev: 'row',
+          h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
+        ): unknown
         on(ev: 'error', h: (e: Error) => void): unknown
         once(ev: 'requestCompleted', h: () => void): unknown
       }
@@ -248,10 +439,12 @@ async function renderWidget(
       req.on('error', (e) => done(() => reject(e)))
       conn.execSqlBatch(req)
     }).finally(() => knexClient.releaseConnection(conn))
-    const valueFields = config.value_fields as Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }> | undefined
+    const valueFields = config.value_fields as
+      | Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }>
+      | undefined
     if (valueFields && valueFields.length > 0) {
       const firstRow = (rows[0] ?? {}) as Record<string, unknown>
-      const values = valueFields.map(vf => ({
+      const values = valueFields.map((vf) => ({
         value: firstRow[vf.field] ?? null,
         label: vf.label ?? vf.field,
         display: { prefix: vf.prefix ?? '', suffix: vf.suffix ?? '', format: vf.format ?? '' }
@@ -277,57 +470,65 @@ async function renderWidget(
 
   if (type === 'button-group') {
     const layout = (config.layout as string) ?? 'flat'
-    const buttons = await Promise.all(((config.buttons as unknown[]) ?? []).map(async (b) => {
-      const btn = b as Record<string, unknown>
-      const resolved: Record<string, unknown> = {
-        id: btn.id,
-        label: btn.label,
-        icon: btn.icon,
-        variant: btn.variant ?? 'secondary',
-        action: btn.action,
-        color: btn.color ?? '',
-      }
-      if (btn.action === 'open-url') {
-        resolved.url = btn.url ? substituteInputs(String(btn.url), inputs) : ''
-        resolved.new_tab = btn.new_tab ?? false
-      } else if (btn.action === 'email') {
-        resolved.email_to = btn.email_to ? substituteInputs(String(btn.email_to), inputs) : ''
-        if (btn.email_subject) resolved.email_subject = substituteInputs(String(btn.email_subject), inputs)
-        if (btn.email_body) resolved.email_body = substituteInputs(String(btn.email_body), inputs)
-      } else if (btn.action === 'copy') {
-        const key = String(btn.copy_input ?? '')
-        resolved.copy_value = key ? String(inputs[key] ?? '') : ''
-      } else if (btn.action === 'open-sidebar') {
-        resolved.sidebar_collection = btn.sidebar_collection
-        const idKey = String(btn.sidebar_id_input ?? '')
-        resolved.sidebar_id = idKey ? String(inputs[idKey] ?? '') : ''
-      } else if (btn.action === 'toggle') {
-        const acConf = (btn.action_config ?? {}) as Record<string, unknown>
-        const tCollection = (acConf.collection as string) || ''
-        const tField = (acConf.field as string) || ''
-        const tIdInput = (acConf.id_input as string) || 'id'
-        const tOnValue = (btn.toggle_on_value as string) || (acConf.on_value as string) || '1'
-        const normBitR = (v: unknown) => (v === true || v === 1) ? '1' : (v === false || v === 0) ? '0' : String(v ?? '')
-        resolved.toggle_input = btn.toggle_input || acConf.toggle_input || tField || ''
-        resolved.label_on = btn.label_on ?? ''
-        resolved.label_off = btn.label_off ?? ''
-        resolved.variant_on = btn.variant_on ?? 'destructive'
-        resolved.variant_off = btn.variant_off ?? 'default'
-        resolved.toggle_on_value = tOnValue
-        resolved.action_config = acConf
-        // resolve current state from DB so display doesn't depend on inputs (reliable for bit fields)
-        if (tCollection && tField) {
-          const itemId = inputs[tIdInput]
-          if (itemId) {
-            try {
-              const row = await db(tCollection).where('id', itemId).select(tField).first() as Record<string, unknown> | undefined
-              if (row) resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
-            } catch { /* non-blocking — falls back to client-side inputs check */ }
+    const buttons = await Promise.all(
+      ((config.buttons as unknown[]) ?? []).map(async (b) => {
+        const btn = b as Record<string, unknown>
+        const resolved: Record<string, unknown> = {
+          id: btn.id,
+          label: btn.label,
+          icon: btn.icon,
+          variant: btn.variant ?? 'secondary',
+          action: btn.action,
+          color: btn.color ?? ''
+        }
+        if (btn.action === 'open-url') {
+          resolved.url = btn.url ? substituteInputs(String(btn.url), inputs) : ''
+          resolved.new_tab = btn.new_tab ?? false
+        } else if (btn.action === 'email') {
+          resolved.email_to = btn.email_to ? substituteInputs(String(btn.email_to), inputs) : ''
+          if (btn.email_subject)
+            resolved.email_subject = substituteInputs(String(btn.email_subject), inputs)
+          if (btn.email_body) resolved.email_body = substituteInputs(String(btn.email_body), inputs)
+        } else if (btn.action === 'copy') {
+          const key = String(btn.copy_input ?? '')
+          resolved.copy_value = key ? String(inputs[key] ?? '') : ''
+        } else if (btn.action === 'open-sidebar') {
+          resolved.sidebar_collection = btn.sidebar_collection
+          const idKey = String(btn.sidebar_id_input ?? '')
+          resolved.sidebar_id = idKey ? String(inputs[idKey] ?? '') : ''
+        } else if (btn.action === 'toggle') {
+          const acConf = (btn.action_config ?? {}) as Record<string, unknown>
+          const tCollection = (acConf.collection as string) || ''
+          const tField = (acConf.field as string) || ''
+          const tIdInput = (acConf.id_input as string) || 'id'
+          const tOnValue = (btn.toggle_on_value as string) || (acConf.on_value as string) || '1'
+          const normBitR = (v: unknown) =>
+            v === true || v === 1 ? '1' : v === false || v === 0 ? '0' : String(v ?? '')
+          resolved.toggle_input = btn.toggle_input || acConf.toggle_input || tField || ''
+          resolved.label_on = btn.label_on ?? ''
+          resolved.label_off = btn.label_off ?? ''
+          resolved.variant_on = btn.variant_on ?? 'destructive'
+          resolved.variant_off = btn.variant_off ?? 'default'
+          resolved.toggle_on_value = tOnValue
+          resolved.action_config = acConf
+          // resolve current state from DB so display doesn't depend on inputs (reliable for bit fields)
+          if (tCollection && tField) {
+            const itemId = inputs[tIdInput]
+            if (itemId) {
+              try {
+                const row = (await db(tCollection).where('id', itemId).select(tField).first()) as
+                  | Record<string, unknown>
+                  | undefined
+                if (row) resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
+              } catch {
+                /* non-blocking — falls back to client-side inputs check */
+              }
+            }
           }
         }
-      }
-      return resolved
-    }))
+        return resolved
+      })
+    )
     return { buttons, layout }
   }
 
@@ -352,9 +553,13 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
 
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const row = await db('nivaro_widgets').where({ id: Number(id) }).first()
+    const row = await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    return reply.send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
+    return reply.send({
+      data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) }
+    })
   })
 
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
@@ -365,6 +570,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     }
     if (body.widget_type === 'rollup') {
       const configError = validateRollupConfig(body.config, await fetchRelRows())
+      if (configError) return reply.code(400).send({ error: configError })
+    }
+    if (body.widget_type === 'report_widget') {
+      const configError = validateReportWidgetConfig(body.config)
       if (configError) return reply.code(400).send({ error: configError })
     }
     await db('nivaro_widgets').insert({
@@ -386,7 +595,9 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       comment: String(body.name ?? ''),
       req
     })
-    return reply.code(201).send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
+    return reply
+      .code(201)
+      .send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
   })
 
   app.patch('/:id', { preHandler: requireAdmin }, async (req, reply) => {
@@ -405,7 +616,9 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     if ('config' in body) {
       let effectiveType = body.widget_type as string | undefined
       if (effectiveType === undefined) {
-        const existing = await db('nivaro_widgets').where({ id: Number(id) }).first()
+        const existing = await db('nivaro_widgets')
+          .where({ id: Number(id) })
+          .first()
         if (!existing) return reply.code(404).send({ error: 'Not found' })
         effectiveType = existing.widget_type as string
       }
@@ -417,10 +630,18 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         const configError = validateRollupConfig(body.config, await fetchRelRows())
         if (configError) return reply.code(400).send({ error: configError })
       }
+      if (effectiveType === 'report_widget') {
+        const configError = validateReportWidgetConfig(body.config)
+        if (configError) return reply.code(400).send({ error: configError })
+      }
     }
 
-    await db('nivaro_widgets').where({ id: Number(id) }).update(p)
-    const row = await db('nivaro_widgets').where({ id: Number(id) }).first()
+    await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .update(p)
+    const row = await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'update',
@@ -430,12 +651,16 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       comment: Object.keys(p).join(', '),
       req
     })
-    return reply.send({ data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) } })
+    return reply.send({
+      data: { ...row, inputs: parseJson(row.inputs), config: parseJson(row.config) }
+    })
   })
 
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const removed = await db('nivaro_widgets').where({ id: Number(id) }).delete()
+    const removed = await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .delete()
     if (removed > 0) {
       await logActivity({
         action: 'delete',
@@ -451,14 +676,18 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
   app.post('/:id/render', async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as Record<string, unknown>
-    const widget = await db('nivaro_widgets').where({ id: Number(id) }).first()
+    const widget = await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .first()
     if (!widget) return reply.code(404).send({ error: 'Not found' })
 
     // Start with client-resolved inputs as the base
     const inputs: Record<string, unknown> = { ...((body.inputs as Record<string, unknown>) ?? {}) }
 
     // Server-side resolution for dotted-path item_field bindings
-    const bindings = body.bindings as Array<{ key: string; binding_type: string; binding_value: string }> | undefined
+    const bindings = body.bindings as
+      | Array<{ key: string; binding_type: string; binding_value: string }>
+      | undefined
     const draft = body.draft as Record<string, unknown> | undefined
     const itemCollection = body.item_collection as string | undefined
     if (bindings && draft && itemCollection) {
@@ -472,23 +701,38 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         if (parts.length < 2) continue
         const [fkField, ...remainingParts] = parts
         const fkValue = draft[fkField]
-        if (fkValue == null) { inputs[b.key] = null; continue }
+        if (fkValue == null) {
+          inputs[b.key] = null
+          continue
+        }
         // Look up M2O relation to find target collection
         const rel = await db('nivaro_relations')
           .where({ many_collection: itemCollection, many_field: fkField })
           .whereNull('junction_field')
           .whereNotNull('one_collection')
           .first()
-        if (!rel?.one_collection) { inputs[b.key] = null; continue }
+        if (!rel?.one_collection) {
+          inputs[b.key] = null
+          continue
+        }
         // Guard: caller must be able to read the related collection
-        if (req.user && !(await can(req.user, 'read', rel.one_collection))) { inputs[b.key] = null; continue }
+        if (req.user && !(await can(req.user, 'read', rel.one_collection))) {
+          inputs[b.key] = null
+          continue
+        }
         // Restrict selectable fields to registered nivaro_fields only — reject arbitrary column names
         const registeredFields = (await db('nivaro_fields')
           .where({ collection: rel.one_collection })
-          .pluck('field') as string[])
-        const safeFields = remainingParts.filter(p => registeredFields.includes(p))
-        if (safeFields.length === 0) { inputs[b.key] = null; continue }
-        const relatedRow = await db(rel.one_collection).where('id', fkValue).select(safeFields).first()
+          .pluck('field')) as string[]
+        const safeFields = remainingParts.filter((p) => registeredFields.includes(p))
+        if (safeFields.length === 0) {
+          inputs[b.key] = null
+          continue
+        }
+        const relatedRow = await db(rel.one_collection)
+          .where('id', fkValue)
+          .select(safeFields)
+          .first()
         // Walk safe fields into the fetched row
         let val: unknown = relatedRow
         for (const p of safeFields) {
@@ -514,7 +758,9 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     const buttonIndex = Number(body.button_index ?? 0)
     const inputs = (body.inputs as Record<string, unknown>) ?? {}
 
-    const widget = await db('nivaro_widgets').where({ id: Number(id) }).first()
+    const widget = await db('nivaro_widgets')
+      .where({ id: Number(id) })
+      .first()
     if (!widget) return reply.code(404).send({ error: 'Not found' })
     const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
     const buttons = (config.buttons as Array<Record<string, unknown>>) ?? []
@@ -540,9 +786,12 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const itemId = inputs[idInput]
       if (!itemId) return reply.code(400).send({ error: `Missing input: ${idInput}` })
 
-      const wsScoped = req.workspaceId && await collectionHasWorkspaceId(collection)
+      const wsScoped = req.workspaceId && (await collectionHasWorkspaceId(collection))
       let existQ = db(collection).where('id', itemId).select('id')
-      if (wsScoped) existQ = existQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      if (wsScoped)
+        existQ = existQ.where(function () {
+          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
+        })
       const existing = await existQ.first()
       if (!existing) return reply.code(404).send({ error: 'Record not found' })
 
@@ -552,7 +801,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         fieldUpdates[k] = typeof v === 'string' ? substituteInputs(v, inputs) : v
       }
       let updQ = db(collection).where('id', itemId)
-      if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      if (wsScoped)
+        updQ = updQ.where(function () {
+          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
+        })
       await updQ.update(fieldUpdates)
       // Raw update bypasses the items service, so log directly.
       await logActivity({
@@ -569,7 +821,10 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     if (actionType === 'navigate') {
       const raw = substituteInputs(String(actionConfig.url ?? ''), inputs)
       const safe = validateRedirectUrl(raw)
-      if (!safe) return reply.code(400).send({ error: 'Invalid redirect URL — must be a relative path starting with /' })
+      if (!safe)
+        return reply
+          .code(400)
+          .send({ error: 'Invalid redirect URL — must be a relative path starting with /' })
       return reply.send({ data: { redirect_url: safe } })
     }
 
@@ -602,19 +857,26 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
 
       const onValue = (actionConfig.on_value as string) || '1'
       const offValue = (actionConfig.off_value as string) || '0'
-      const normBit = (v: unknown) => (v === true || v === 1) ? '1' : (v === false || v === 0) ? '0' : String(v ?? '')
+      const normBit = (v: unknown) =>
+        v === true || v === 1 ? '1' : v === false || v === 0 ? '0' : String(v ?? '')
 
       // always read current value from DB — inputs reflect the context item, not the target record
-      const wsScoped = req.workspaceId && await collectionHasWorkspaceId(collection)
+      const wsScoped = req.workspaceId && (await collectionHasWorkspaceId(collection))
       let existQ = db(collection).where('id', itemId).select('id', field)
-      if (wsScoped) existQ = existQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
-      const existing = await existQ.first() as Record<string, unknown> | undefined
+      if (wsScoped)
+        existQ = existQ.where(function () {
+          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
+        })
+      const existing = (await existQ.first()) as Record<string, unknown> | undefined
       if (!existing) return reply.code(404).send({ error: 'Record not found' })
       const currentRaw = existing[field]
       const newValue = normBit(currentRaw) === normBit(onValue) ? offValue : onValue
 
       let updQ = db(collection).where('id', itemId)
-      if (wsScoped) updQ = updQ.where(function () { this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id') })
+      if (wsScoped)
+        updQ = updQ.where(function () {
+          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
+        })
       await updQ.update({ [field]: newValue })
       // Raw update bypasses the items service, so log directly.
       await logActivity({

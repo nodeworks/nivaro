@@ -57305,6 +57305,9 @@
           },
           "warehouses": {
             "type": "string"
+          },
+          "shipped_qty": {
+            "type": "number"
           }
         },
         "required": []

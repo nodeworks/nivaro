@@ -33,6 +33,8 @@ async function fireSubscriptionNotifications(
         'ns.filter_value',
         'ns.label',
         'ns.digest_frequency',
+        'ns.notify_inapp',
+        'ns.notify_email',
         'u.email',
         'u.first_name'
       )
@@ -89,36 +91,44 @@ async function fireSubscriptionNotifications(
         message = templated.message || message
       }
 
-      const [notif] = await db('nivaro_notifications')
-        .insert({
-          recipient: sub.user,
-          subject: subject.slice(0, 255),
-          status: 'inbox',
-          timestamp: now,
-          sender: actorUserId ?? null,
-          message: message.slice(0, 500),
-          collection,
-          item
-        })
-        .returning('*')
+      // Per-subscription channels (#649): notify_inapp / notify_email are
+      // migration-278 columns; NULL means "on" so every historic row keeps its
+      // exact prior behavior.
+      const wantInapp = channelOn(sub.notify_inapp)
+      const wantEmail = channelOn(sub.notify_email)
 
-      if (_app?.io) {
-        emitNotification(_app.io, sub.user, {
-          id: notif?.id ?? null,
-          subject: subject.slice(0, 255),
-          message: message.slice(0, 200),
-          collection,
-          item,
-          sender: actorUserId ?? null,
-          timestamp: now
-        })
+      if (wantInapp) {
+        const [notif] = await db('nivaro_notifications')
+          .insert({
+            recipient: sub.user,
+            subject: subject.slice(0, 255),
+            status: 'inbox',
+            timestamp: now,
+            sender: actorUserId ?? null,
+            message: message.slice(0, 500),
+            collection,
+            item
+          })
+          .returning('*')
+
+        if (_app?.io) {
+          emitNotification(_app.io, sub.user, {
+            id: notif?.id ?? null,
+            subject: subject.slice(0, 255),
+            message: message.slice(0, 200),
+            collection,
+            item,
+            sender: actorUserId ?? null,
+            timestamp: now
+          })
+        }
       }
 
       // Immediate email only for instant subscriptions — daily/weekly are
       // batched by the digest cron (services/digest.ts). In-app notification
       // above is always inserted regardless of digest frequency.
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
-      if (frequency === 'instant' && sub.email) {
+      if (frequency === 'instant' && wantEmail && sub.email) {
         await sendMail({
           collection,
           item,
@@ -144,6 +154,11 @@ async function fireSubscriptionNotifications(
     // Non-fatal — log and continue
     console.warn('[notification-subscriptions] error:', err)
   }
+}
+
+/** Channel column truthiness (#649): NULL = on (historic rows), mssql bit 0/false = off. */
+function channelOn(v: unknown): boolean {
+  return v !== false && v !== 0
 }
 
 export type SubFilterOp = 'eq' | 'in' | 'intersects' | 'null' | 'nnull'
@@ -209,6 +224,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
         'ns.filters',
         'ns.label',
         'ns.digest_frequency',
+        'ns.notify_inapp',
+        'ns.notify_email',
         'u.email',
         'u.first_name'
       )
@@ -300,33 +317,38 @@ export async function fireWorkflowStateSubscriptions(opts: {
         message = templated.message || message
       }
 
-      const [notif] = await db('nivaro_notifications')
-        .insert({
-          recipient: sub.user,
-          subject: subject.slice(0, 255),
-          status: 'inbox',
-          timestamp: now,
-          sender: opts.actorUserId ?? null,
-          message: message.slice(0, 500),
-          collection: opts.collection,
-          item: opts.item
-        })
-        .returning('*')
+      const wantInapp = channelOn(sub.notify_inapp)
+      const wantEmail = channelOn(sub.notify_email)
 
-      if (_app?.io) {
-        emitNotification(_app.io, sub.user, {
-          id: notif?.id ?? null,
-          subject: subject.slice(0, 255),
-          message: message.slice(0, 200),
-          collection: opts.collection,
-          item: opts.item,
-          sender: opts.actorUserId ?? null,
-          timestamp: now
-        })
+      if (wantInapp) {
+        const [notif] = await db('nivaro_notifications')
+          .insert({
+            recipient: sub.user,
+            subject: subject.slice(0, 255),
+            status: 'inbox',
+            timestamp: now,
+            sender: opts.actorUserId ?? null,
+            message: message.slice(0, 500),
+            collection: opts.collection,
+            item: opts.item
+          })
+          .returning('*')
+
+        if (_app?.io) {
+          emitNotification(_app.io, sub.user, {
+            id: notif?.id ?? null,
+            subject: subject.slice(0, 255),
+            message: message.slice(0, 200),
+            collection: opts.collection,
+            item: opts.item,
+            sender: opts.actorUserId ?? null,
+            timestamp: now
+          })
+        }
       }
 
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
-      if (frequency === 'instant' && sub.email) {
+      if (frequency === 'instant' && wantEmail && sub.email) {
         await sendMail({
           collection: opts.collection,
           item: opts.item,

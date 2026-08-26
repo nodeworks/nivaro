@@ -25,7 +25,10 @@ export async function buildLoginUrl(state: string, codeVerifier: string, redirec
     // MailboxSettings.Read Presence.Read GroupMember.Read.All". Requesting an
     // UNconsented scope fails the whole login, so this stays opt-in config.
     scope: isMicrosoftIssuer()
-      ? ['openid profile email User.Read', (process.env.OIDC_EXTRA_SCOPES ?? '').replace(/,/g, ' ').trim()]
+      ? [
+          'openid profile email User.Read',
+          (process.env.OIDC_EXTRA_SCOPES ?? '').replace(/,/g, ' ').trim()
+        ]
           .filter(Boolean)
           .join(' ')
       : 'openid profile email',
@@ -37,6 +40,88 @@ export async function buildLoginUrl(state: string, codeVerifier: string, redirec
 
 function isMicrosoftIssuer() {
   return /microsoftonline\.com|windows\.net/i.test(config.OIDC_ISSUER)
+}
+
+// ─── Additional OIDC providers (#538) ────────────────────────────────────────
+// nivaro_sso_providers rows drive extra "Continue with <label>" buttons. Each
+// provider runs the SAME PKCE flow as the primary env-configured issuer; only
+// the discovery/client config differs. Discovery metadata is cached per row
+// with a TTL so an admin edit (or IdP rotation) takes effect without restart.
+
+export interface DynamicOidcProvider {
+  id: number
+  issuer: string
+  client_id: string
+  client_secret: string | null
+  scopes: string | null
+}
+
+const DYN_DISCOVERY_TTL_MS = 5 * 60 * 1000
+const _dynConfigs = new Map<
+  number,
+  { sig: string; fetched: number; cfg: Awaited<ReturnType<typeof oidc.discovery>> }
+>()
+
+/** Drop cached discovery metadata — called by the sso-providers CRUD routes. */
+export function bustDynamicOidcCache(id?: number) {
+  if (id == null) _dynConfigs.clear()
+  else _dynConfigs.delete(id)
+}
+
+async function getDynamicOIDCConfig(p: DynamicOidcProvider) {
+  const sig = `${p.issuer}|${p.client_id}|${p.client_secret ?? ''}`
+  const hit = _dynConfigs.get(p.id)
+  if (hit && hit.sig === sig && Date.now() - hit.fetched < DYN_DISCOVERY_TTL_MS) return hit.cfg
+  const cfg = await oidc.discovery(new URL(p.issuer), p.client_id, p.client_secret ?? undefined)
+  _dynConfigs.set(p.id, { sig, fetched: Date.now(), cfg })
+  return cfg
+}
+
+function dynamicScopes(p: DynamicOidcProvider): string {
+  // Comma or space separated list; 'openid' is always required for an ID token.
+  const parts = (p.scopes ?? '').replace(/,/g, ' ').split(/\s+/).filter(Boolean)
+  const set = new Set(parts.length > 0 ? parts : ['openid', 'profile', 'email'])
+  set.add('openid')
+  return [...set].join(' ')
+}
+
+export async function buildDynamicLoginUrl(
+  provider: DynamicOidcProvider,
+  state: string,
+  codeVerifier: string,
+  redirectUri: string
+) {
+  const cfg = await getDynamicOIDCConfig(provider)
+  const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier)
+  return oidc.buildAuthorizationUrl(cfg, {
+    redirect_uri: redirectUri,
+    scope: dynamicScopes(provider),
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  })
+}
+
+/**
+ * Callback exchange against an additional provider. Same claims contract as
+ * the primary `handleCallback` — findOrCreateFromOIDC consumes the result
+ * unchanged. Graph enrichment only runs when the provider itself is a
+ * Microsoft issuer (the access token is useless against Graph otherwise).
+ */
+export async function handleDynamicCallback(
+  provider: DynamicOidcProvider,
+  requestUrl: URL,
+  state: string,
+  codeVerifier: string
+) {
+  const cfg = await getDynamicOIDCConfig(provider)
+  const tokens = await oidc.authorizationCodeGrant(cfg, requestUrl, {
+    pkceCodeVerifier: codeVerifier,
+    expectedState: state,
+    idTokenExpected: true
+  })
+  const providerIsMicrosoft = /microsoftonline\.com|windows\.net/i.test(provider.issuer)
+  return buildProfileFromTokens(tokens, providerIsMicrosoft)
 }
 
 export interface GraphOrgProfile {
@@ -173,7 +258,14 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     expectedState: state,
     idTokenExpected: true
   })
+  return buildProfileFromTokens(tokens, isMicrosoftIssuer())
+}
 
+/** Shared claims → profile mapping for the primary and dynamic (#538) flows. */
+async function buildProfileFromTokens(
+  tokens: Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>,
+  microsoft: boolean
+) {
   const claims = tokens.claims()
 
   // Identity claims — security constraints (account-takeover surface):
@@ -189,12 +281,13 @@ export async function handleCallback(requestUrl: URL, state: string, codeVerifie
     typeof v === 'string' && /.+@.+\..+/.test(v) ? v : null
   const emailClaim = claims?.email_verified === false ? null : emailish(claims?.email)
 
-  const [graph, avatar] = tokens.access_token
-    ? await Promise.all([
-        fetchGraphProfile(tokens.access_token),
-        fetchGraphPhoto(tokens.access_token)
-      ])
-    : [null, null]
+  const [graph, avatar] =
+    microsoft && tokens.access_token
+      ? await Promise.all([
+          fetchGraphProfile(tokens.access_token),
+          fetchGraphPhoto(tokens.access_token)
+        ])
+      : [null, null]
 
   return {
     sub: claims?.sub ?? '',

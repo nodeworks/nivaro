@@ -1,3 +1,4 @@
+import { SlugResolverPage } from '@/pages/SlugResolver'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
@@ -119,6 +120,8 @@ const WallboardPage = lazy(() =>
 const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
+const ChangeSetsPage = lazy(() => import('@/pages/ChangeSets').then((m) => ({ default: m.ChangeSetsPage })))
+const ProvenanceTracePage = lazy(() => import('@/pages/ProvenanceTrace').then((m) => ({ default: m.ProvenanceTracePage })))
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
 const ReportStudioPage = lazy(() =>
   import('@/pages/ReportStudio').then((m) => ({ default: m.ReportStudioPage }))
@@ -460,6 +463,7 @@ export default function App() {
                   <Route path='collections' element={<CollectionsPage />} />
                   <Route path='collections/:collection' element={<CollectionBrowserV2Page />} />
                   <Route path='collections/:collection/classic' element={<CollectionBrowserPage />} />
+                  <Route path='collections/:collection/s/:slug' element={<SlugResolverPage />} />
                   <Route path='collections/:collection/:id' element={<ItemEditPage />} />
                   <Route path='users' element={<UsersPage />} />
                   <Route path='users/:id' element={<UserEditPage />} />
@@ -516,6 +520,8 @@ export default function App() {
                   <Route path='revision-search' element={<RevisionSearch />} />
                   <Route path='automation-tests' element={<AutomationTests />} />
                   <Route path='blueprints' element={<BlueprintsPage />} />
+                  <Route path='change-sets' element={<ChangeSetsPage />} />
+                  <Route path='provenance' element={<ProvenanceTracePage />} />
                   <Route path='trash' element={<TrashPage />} />
                   <Route path='session-replays' element={<SessionReplaysPage />} />
                   <Route path='report-studio' element={<ReportStudioPage />} />

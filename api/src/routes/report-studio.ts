@@ -380,7 +380,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       'stats',
       'scatter',
       'hot_records',
-      'metric'
+      'metric',
+      'pivot',
+      'ai_insight'
     ])
     const rows = incoming.map((w, i) => ({
       id: w.id && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
@@ -416,7 +418,8 @@ export async function reportStudioRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string; widgetId: string }
-    Body: { date_range?: DateRange | null; entity_filters?: EntityFilter[] }
+    Querystring: { fresh?: string }
+    Body: { date_range?: DateRange | null; entity_filters?: EntityFilter[]; fresh?: unknown }
   }>('/:id/widgets/:widgetId/data', { preHandler: requireAuth }, async (req, reply) => {
     const report = await loadReport(req.params.id)
     if (!report) return reply.code(404).send({ error: 'Report not found' })
@@ -446,7 +449,11 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         req.body?.date_range ??
           parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ??
           null,
-        Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : []
+        Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : [],
+        0,
+        // AI insight cache-bust: ?fresh=1 or a truthy body flag (SDK bodies
+        // pass through wholesale, so headless hosts can ride the body).
+        { freshAi: req.query?.fresh === '1' || !!req.body?.fresh }
       )
       return reply.send({ data })
     } catch (err) {

@@ -4,14 +4,12 @@ import {
   AddressField,
   applyInputMask,
   ChecklistField,
-  ColorField,
   CountdownChip,
   DateRangeField,
   DurationField,
   FiscalPeriodField,
   maskFor,
   RangeSliderField,
-  RatingField,
   RepeaterField,
   smartParseDate
 } from './PolishFields'
@@ -25,6 +23,16 @@ import { Label } from '../ui/label'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import {
+  AddressAutocompleteField,
+  ChecklistReadOnly,
+  ColorPackField,
+  DurationReadOnly,
+  EmailField,
+  PhoneField,
+  ProgressField,
+  RatingScaleField
+} from './FieldPack'
 import { CatalogPickerField, type CatalogModeConfig } from './CatalogPickerField'
 import { FilePickerField, FileM2MField } from './FilePickerField'
 import {
@@ -438,6 +446,18 @@ export function FieldRenderer({
         </div>
       )
     }
+    // Structured interfaces keep their real rendering in read-only mode —
+    // a checklist as raw JSON or a progress as a bare number reads as broken.
+    if (iface === 'progress') return <ProgressField value={value} onChange={onChange} readOnly />
+    if (iface === 'rating') {
+      const max = parseJson<{ rating_max?: number }>(field.options)?.rating_max
+      return <RatingScaleField value={value} onChange={onChange} max={max ?? 5} readOnly />
+    }
+    if (iface === 'duration') return <DurationReadOnly value={value} />
+    if (iface === 'checklist') return <ChecklistReadOnly value={value} />
+    if (iface === 'color')
+      return <ColorPackField field={field} value={value} onChange={onChange} readOnly />
+    if (iface === 'phone') return <PhoneField value={value} onChange={onChange} readOnly />
     const display =
       value === null || value === undefined ? (
         <span className='text-muted-foreground italic text-sm'>—</span>
@@ -722,9 +742,32 @@ export function FieldRenderer({
 
   // Tags (#92): free-entry chips stored as a JSON string array. Optional
   // suggested values via options.tag_options (string list).
-  // ── Structured interfaces (Field Types sprint) ──────────────────────────
-  if (iface === 'color') return <ColorField value={value} onChange={onChange} />
-  if (iface === 'rating') return <RatingField value={value} onChange={onChange} />
+  // ── Structured interfaces (Field Types sprint + #663 field interface pack) ─
+  if (iface === 'color') return <ColorPackField field={field} value={value} onChange={onChange} />
+  if (iface === 'rating') {
+    const max = parseJson<{ rating_max?: number }>(field.options)?.rating_max
+    return <RatingScaleField value={value} onChange={onChange} max={max ?? 5} />
+  }
+  if (iface === 'progress') return <ProgressField value={value} onChange={onChange} />
+  if (iface === 'phone') {
+    return <PhoneField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+  }
+  if (iface === 'email') {
+    return <EmailField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+  }
+  if (iface === 'address-autocomplete') {
+    return (
+      <AddressAutocompleteField
+        field={field}
+        value={value}
+        onChange={onChange}
+        apiBase={apiCfg?.apiBase}
+        authHeaders={apiCfg?.authHeaders}
+        credentials={apiCfg?.credentials}
+        placeholder={field.placeholder ?? undefined}
+      />
+    )
+  }
   if (iface === 'duration') return <DurationField value={value} onChange={onChange} />
   if (iface === 'fiscal_period') return <FiscalPeriodField value={value} onChange={onChange} />
   if (iface === 'checklist') return <ChecklistField value={value} onChange={onChange} />

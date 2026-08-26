@@ -27,10 +27,15 @@ function makeDbChain(result: unknown) {
     whereIn: vi.fn().mockReturnThis(),
     whereNotNull: vi.fn().mockReturnThis(),
     whereNull: vi.fn().mockReturnThis(),
+    whereRaw: vi.fn().mockReturnThis(),
+    whereExists: vi.fn().mockReturnThis(),
+    whereNotExists: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     leftJoin: vi.fn().mockReturnThis(),
     join: vi.fn().mockReturnThis(),
-    select: vi.fn().mockResolvedValue(result),
+    // select stays CHAINABLE (the state pushdown appends whereExists after
+    // .select('id')); awaiting the chain resolves via the thenable below.
+    select: vi.fn().mockReturnThis(),
     first: vi.fn().mockResolvedValue(result),
     // biome-ignore lint/suspicious/noThenProperty: deliberate thenable mock simulating Knex's awaitable query builder for unit tests
     then: (resolve: (v: unknown) => void) => resolve(result)
@@ -83,9 +88,14 @@ describe('applySanityCeiling', () => {
 
 describe('resolveCollectionSource — state_values filters the full match set, not a capped slice', () => {
   it('returns only items in the configured state, with an accurate matchedCount', async () => {
+    // Since the 2026-08-13 pushdown, include-mode state filtering happens in
+    // SQL (whereExists on the BASE query) — the mock therefore returns the
+    // ids the database WOULD have kept, and the test asserts the pushdown
+    // actually ran instead of re-deriving state membership in JS.
+    const articlesChain = makeDbChain([{ id: '2' }, { id: '4' }])
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
       if (table === 'articles') {
-        return makeDbChain([{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }, { id: '5' }])
+        return articlesChain
       }
       if (table === 'nivaro_workflow_bindings') {
         return makeDbChain({ id: 1, template: 'wf1' })
@@ -149,6 +159,7 @@ describe('resolveCollectionSource — state_values filters the full match set, n
 
     const result = await resolveCollectionSource(source(), makeAdminUser())
 
+    expect(articlesChain.whereExists).toHaveBeenCalledTimes(1)
     expect(result.items.map((i) => i.item_id).sort()).toEqual(['2', '4'])
     expect(result.matchedCount).toBe(2)
     expect(result.truncated).toBe(false)

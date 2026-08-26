@@ -3,10 +3,12 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+import { useQuery } from '@tanstack/react-query'
 import {
   Bold,
   Check,
   Code,
+  FileSymlink,
   Heading1,
   Heading2,
   Heading3,
@@ -15,6 +17,7 @@ import {
   Link as LinkIcon,
   List,
   ListOrdered,
+  Loader2,
   Minus,
   Quote,
   Strikethrough,
@@ -22,7 +25,9 @@ import {
   X
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { useApiFetchConfig, useItemNavigation } from '../../context'
 import { cn } from '../../lib/utils'
+import { SimpleSelect } from '../ui/SimpleSelect'
 
 // ─── EditorJS JSON → HTML ──────────────────────────────────────────────────────
 
@@ -119,7 +124,10 @@ export function RichTextEditor({
 }) {
   const [linkInputOpen, setLinkInputOpen] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
+  const [recordLinkOpen, setRecordLinkOpen] = useState(false)
   const linkInputRef = useRef<HTMLInputElement>(null)
+  const apiCfg = useApiFetchConfig()
+  const itemNav = useItemNavigation()
 
   const initialHtml = useMemo(() => {
     if (!value) return ''
@@ -133,7 +141,9 @@ export function RichTextEditor({
       StarterKit.configure({ bulletList: { keepMarks: true }, orderedList: { keepMarks: true } }),
       Underline,
       Placeholder.configure({ placeholder: placeholder ?? 'Start writing…' }),
-      Link.configure({ openOnClick: false, autolink: true })
+      // 'record' protocol (#666): record://<collection>/<id> links survive the
+      // Link extension's allowed-URI validation and render as record chips.
+      Link.configure({ openOnClick: false, autolink: true, protocols: ['record'] })
     ],
     content: initialHtml,
     editable: !disabled,
@@ -295,6 +305,16 @@ export function RichTextEditor({
                 <Link2Off className='h-3.5 w-3.5' />
               </TiptapToolbarButton>
             )}
+            <TiptapToolbarButton
+              title='Link record'
+              active={recordLinkOpen}
+              onClick={() => {
+                setRecordLinkOpen((v) => !v)
+                setLinkInputOpen(false)
+              }}
+            >
+              <FileSymlink className='h-3.5 w-3.5' />
+            </TiptapToolbarButton>
           </div>
           {linkInputOpen && (
             <div className='flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5'>
@@ -341,12 +361,206 @@ export function RichTextEditor({
               </button>
             </div>
           )}
+          {recordLinkOpen && (
+            <RecordLinkPanel
+              apiBase={apiCfg.apiBase}
+              authHeaders={apiCfg.authHeaders}
+              credentials={apiCfg.credentials}
+              onInsert={(label, href) => {
+                editor
+                  .chain()
+                  .focus()
+                  .insertContent([
+                    { type: 'text', text: label, marks: [{ type: 'link', attrs: { href } }] },
+                    { type: 'text', text: ' ' }
+                  ])
+                  .run()
+                setRecordLinkOpen(false)
+              }}
+              onClose={() => setRecordLinkOpen(false)}
+            />
+          )}
         </>
       )}
+      {/* Record link chips (#666) — record://<collection>/<id> hrefs. Styled via
+          a scoped stylesheet since attribute selectors don't fit Tailwind
+          arbitrary variants cleanly; clicks route through NavigationContext. */}
+      <style>{`
+        .nivaro-rich-text a { color: #00a5cc; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+        .nivaro-rich-text a[href^="record://"] {
+          display: inline-block; text-decoration: none; cursor: pointer;
+          background: rgba(0, 206, 255, 0.12); color: inherit;
+          border-radius: 9999px; padding: 0 8px; font-weight: 500; font-size: 0.92em;
+        }
+        .nivaro-rich-text a[href^="record://"]::before { content: '↗ '; opacity: 0.55; }
+      `}</style>
       <EditorContent
+        onClick={(e) => {
+          const a = (e.target as HTMLElement).closest?.('a')
+          const href = a?.getAttribute('href') ?? ''
+          if (href.startsWith('record://')) {
+            e.preventDefault()
+            const [collection, itemId] = href.slice('record://'.length).split('/')
+            if (collection && itemId) itemNav.open({ collection, itemId })
+          }
+        }}
         editor={editor}
         className='nivaro-rich-text min-h-[120px] px-3 py-2 text-[13px] [&_.tiptap]:outline-none [&_.tiptap]:min-h-[100px] [&_.tiptap_p]:my-1 [&_.tiptap_h1]:text-xl [&_.tiptap_h2]:text-lg [&_.tiptap_h3]:text-base [&_.tiptap_h1,&_.tiptap_h2,&_.tiptap_h3]:font-semibold [&_.tiptap_ul]:list-disc [&_.tiptap_ol]:list-decimal [&_.tiptap_ul,&_.tiptap_ol]:pl-5 [&_.tiptap_blockquote]:border-l-2 [&_.tiptap_blockquote]:border-slate-300 [&_.tiptap_blockquote]:pl-3 [&_.tiptap_blockquote]:text-slate-500 [&_.tiptap_code]:bg-slate-100 [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1 [&_.tiptap_pre]:bg-slate-100 [&_.tiptap_pre]:rounded [&_.tiptap_pre]:p-2 [&_.tiptap_pre]:font-mono [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-400 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0'
       />
+    </div>
+  )
+}
+
+// ─── Record link panel (#666) ──────────────────────────────────────────────────
+// Pick a collection, search its records, insert a record://<collection>/<id>
+// link with the record's display label as text. Read access is enforced by the
+// /collections and /items endpoints themselves — a collection the viewer can't
+// read never lists, a record they can't read never matches.
+
+type RecordLinkCollection = {
+  collection: string
+  display_name?: string | null
+  hidden?: boolean
+  display_template?: string | null
+}
+
+function renderPlainTemplate(template: string | null | undefined, row: Record<string, unknown>): string {
+  if (!template) return ''
+  return template
+    .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token: string) => {
+      if (token.includes('.')) return ''
+      const v = row[token]
+      return v == null ? '' : String(v)
+    })
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function recordLabel(row: Record<string, unknown>, template?: string | null): string {
+  const fromTemplate = renderPlainTemplate(template, row)
+  if (fromTemplate) return fromTemplate
+  for (const k of ['name', 'title', 'label', 'subject']) {
+    const v = row[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return `#${String(row.id ?? '')}`
+}
+
+function RecordLinkPanel({
+  apiBase,
+  authHeaders,
+  credentials,
+  onInsert,
+  onClose
+}: {
+  apiBase: string
+  authHeaders: Record<string, string>
+  credentials: RequestCredentials
+  onInsert: (label: string, href: string) => void
+  onClose: () => void
+}) {
+  const [collection, setCollection] = useState('')
+  const [search, setSearch] = useState('')
+  const [debounced, setDebounced] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const jsonFetch = (path: string) =>
+    fetch(`${apiBase}${path}`, {
+      headers: authHeaders,
+      credentials
+    }).then((r) => {
+      if (!r.ok) throw new Error(String(r.status))
+      return r.json()
+    })
+
+  const { data: collections } = useQuery<RecordLinkCollection[]>({
+    queryKey: ['rte-record-link-collections'],
+    queryFn: () =>
+      jsonFetch('/collections').then((d: { data?: RecordLinkCollection[] }) =>
+        (Array.isArray(d?.data) ? d.data : []).filter(
+          (c) => !c.hidden && !c.collection.startsWith('nivaro_')
+        )
+      ),
+    staleTime: 5 * 60_000
+  })
+  const selected = collections?.find((c) => c.collection === collection)
+
+  const { data: results, isFetching } = useQuery<Array<Record<string, unknown>>>({
+    queryKey: ['rte-record-link-search', collection, debounced],
+    enabled: !!collection && debounced.trim().length > 0,
+    queryFn: () =>
+      jsonFetch(
+        `/items/${collection}?limit=10&search=${encodeURIComponent(debounced.trim())}`
+      ).then((d: { data?: Array<Record<string, unknown>> }) => (Array.isArray(d?.data) ? d.data : []))
+  })
+
+  return (
+    <div className='space-y-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5'>
+      <div className='flex items-center gap-1.5'>
+        <SimpleSelect
+          value={collection}
+          onChange={setCollection}
+          ariaLabel='Collection'
+          className='h-6 w-44 rounded border-slate-200 bg-white text-[12px]'
+          options={[
+            { value: '', label: 'Collection…' },
+            ...(collections ?? []).map((c) => ({
+              value: c.collection,
+              label: c.display_name || c.collection
+            }))
+          ]}
+        />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && onClose()}
+          placeholder={collection ? 'Search records…' : 'Pick a collection first'}
+          disabled={!collection}
+          aria-label='Search records'
+          className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] disabled:opacity-50'
+        />
+        {isFetching && <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />}
+        <button
+          type='button'
+          title='Close'
+          onMouseDown={(e) => {
+            e.preventDefault()
+            onClose()
+          }}
+          className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100'
+        >
+          <X className='h-3.5 w-3.5' />
+        </button>
+      </div>
+      {collection && debounced.trim() && (results?.length ?? 0) === 0 && !isFetching && (
+        <p className='px-1 text-[11px] text-slate-400'>No matching records.</p>
+      )}
+      {(results?.length ?? 0) > 0 && (
+        <div className='max-h-40 overflow-y-auto rounded border border-slate-200 bg-white'>
+          {(results ?? []).map((row) => {
+            const label = recordLabel(row, selected?.display_template)
+            const id = String(row.id ?? '')
+            return (
+              <button
+                key={id}
+                type='button'
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  if (id) onInsert(label, `record://${collection}/${id}`)
+                }}
+                className='flex w-full items-center gap-1.5 px-2 py-1 text-left text-[12px] text-slate-700 hover:bg-muted'
+              >
+                <FileSymlink className='h-3 w-3 shrink-0 text-[#00a5cc]' />
+                <span className='min-w-0 flex-1 truncate'>{label}</span>
+                <span className='shrink-0 font-mono text-[10.5px] text-slate-400'>#{id}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

@@ -6,8 +6,11 @@ import {
   Database,
   Download,
   Globe,
+  HardDrive,
+  KeyRound,
   Mail,
   MessageSquare,
+  Palette,
   Plus,
   Radio,
   Send,
@@ -34,6 +37,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSSettings, type Role } from '@/lib/api'
 import { ADMIN_LOCALES, useLocale } from '@/lib/i18n'
+import { applyThemeSettings, THEME_RADIUS_PRESETS } from '@/lib/theme-settings'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'
 
@@ -127,6 +131,7 @@ const SMS_PROVIDERS: Array<{
 
 type Section =
   | 'project'
+  | 'appearance'
   | 'localization'
   | 'microsoft'
   | 'ai'
@@ -135,11 +140,14 @@ type Section =
   | 'content'
   | 'email'
   | 'sms'
+  | 'sso'
+  | 'storage'
   | 'backups'
   | 'instance'
 
 const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'project', label: 'Project', icon: <Settings2 className='h-3.5 w-3.5' /> },
+  { id: 'appearance', label: 'Appearance', icon: <Palette className='h-3.5 w-3.5' /> },
   { id: 'localization', label: 'Localization', icon: <Globe className='h-3.5 w-3.5' /> },
   { id: 'microsoft', label: 'Microsoft', icon: <MessageSquare className='h-3.5 w-3.5' /> },
   { id: 'ai', label: 'AI Features', icon: <BrainCircuit className='h-3.5 w-3.5' /> },
@@ -148,6 +156,8 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'content', label: 'Content', icon: <Database className='h-3.5 w-3.5' /> },
   { id: 'email', label: 'Email', icon: <Mail className='h-3.5 w-3.5' /> },
   { id: 'sms', label: 'SMS', icon: <MessageSquare className='h-3.5 w-3.5' /> },
+  { id: 'sso', label: 'Sign-in providers', icon: <KeyRound className='h-3.5 w-3.5' /> },
+  { id: 'storage', label: 'File storage', icon: <HardDrive className='h-3.5 w-3.5' /> },
   { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> },
   { id: 'instance', label: 'This Instance', icon: <Server className='h-3.5 w-3.5' /> }
 ]
@@ -197,7 +207,6 @@ function SectionWrap({
     </div>
   )
 }
-
 
 // ─── Per-instance overrides section ──────────────────────────────────────────
 // Several instances (local dev + staging) can share ONE database and therefore
@@ -249,7 +258,9 @@ function InstanceOverridesSection() {
   const [rows, setRows] = useState<Array<{ key: string; value: string }>>([])
   const [hydrated, setHydrated] = useState(false)
   if (data && !hydrated) {
-    setRows(Object.entries(data.overrides).map(([key, v]) => ({ key, value: v == null ? '' : String(v) })))
+    setRows(
+      Object.entries(data.overrides).map(([key, v]) => ({ key, value: v == null ? '' : String(v) }))
+    )
     setHydrated(true)
   }
   const save = useMutation({
@@ -270,7 +281,10 @@ function InstanceOverridesSection() {
   return (
     <SectionWrap title='This Instance' onSave={() => save.mutate()} saving={save.isPending}>
       <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-        Overrides for <span className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11.5px] text-slate-700 dark:bg-muted dark:text-slate-300'>{data?.instance_key ?? '…'}</span>{' '}
+        Overrides for{' '}
+        <span className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11.5px] text-slate-700 dark:bg-muted dark:text-slate-300'>
+          {data?.instance_key ?? '…'}
+        </span>{' '}
         only. When several environments share this database, values set here win over the shared
         settings on this instance — e.g. a local mail server while staging keeps its relay. Leave a
         value blank to force the setting back to this instance's env-var fallback.
@@ -281,7 +295,9 @@ function InstanceOverridesSection() {
             <div className='w-52 shrink-0'>
               <Select
                 value={r.key}
-                onValueChange={(v) => setRows((rs) => rs.map((x, j) => (j === i ? { ...x, key: v } : x)))}
+                onValueChange={(v) =>
+                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, key: v } : x)))
+                }
               >
                 <SelectTrigger className='h-8 text-[12px]'>
                   <SelectValue placeholder='Setting…' />
@@ -394,6 +410,567 @@ function BackupsSection() {
   )
 }
 
+// ─── Sign-in providers section (#538) ────────────────────────────────────────
+// Additional OIDC providers beyond the primary env-configured issuer. Each
+// active row is a "Continue with <label>" button on the login page.
+
+interface SsoProvider {
+  id: number
+  key: string
+  label: string
+  issuer: string
+  client_id: string
+  client_secret: string | null
+  scopes: string | null
+  is_active: boolean
+  sort: number
+}
+
+const EMPTY_SSO_DRAFT = {
+  key: '',
+  label: '',
+  issuer: '',
+  client_id: '',
+  client_secret: '',
+  scopes: 'openid profile email',
+  is_active: true
+}
+
+function SsoProvidersSection() {
+  const queryClient = useQueryClient()
+  const { data: providers = [], isLoading } = useQuery<SsoProvider[]>({
+    queryKey: ['sso-providers'],
+    queryFn: () => api.get<{ data: SsoProvider[] }>('/sso-providers').then((r) => r.data.data)
+  })
+  const [editingId, setEditingId] = useState<number | 'new' | null>(null)
+  const [draft, setDraft] = useState(EMPTY_SSO_DRAFT)
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null)
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['sso-providers'] })
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const body = {
+        key: draft.key.trim(),
+        label: draft.label.trim(),
+        issuer: draft.issuer.trim(),
+        client_id: draft.client_id.trim(),
+        client_secret: draft.client_secret || null,
+        scopes: draft.scopes.trim() || null,
+        is_active: draft.is_active
+      }
+      if (editingId === 'new') await api.post('/sso-providers', body)
+      else await api.patch(`/sso-providers/${editingId}`, body)
+    },
+    onSuccess: () => {
+      invalidate()
+      setEditingId(null)
+      setDraft(EMPTY_SSO_DRAFT)
+      toast.success('Sign-in provider saved')
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Failed to save provider')
+  })
+
+  const remove = useMutation({
+    mutationFn: (id: number) => api.delete(`/sso-providers/${id}`),
+    onSuccess: () => {
+      invalidate()
+      setPendingDelete(null)
+      toast.success('Provider removed')
+    },
+    onError: () => toast.error('Failed to remove provider')
+  })
+
+  const toggleActive = useMutation({
+    mutationFn: (p: SsoProvider) =>
+      api.patch(`/sso-providers/${p.id}`, { is_active: !p.is_active }),
+    onSuccess: invalidate,
+    onError: () => toast.error('Failed to update provider')
+  })
+
+  function startEdit(p: SsoProvider) {
+    setEditingId(p.id)
+    setDraft({
+      key: p.key,
+      label: p.label,
+      issuer: p.issuer,
+      client_id: p.client_id,
+      client_secret: p.client_secret ?? '',
+      scopes: p.scopes ?? '',
+      is_active: p.is_active
+    })
+  }
+
+  return (
+    <div className='p-8'>
+      <div className='max-w-lg'>
+        <h2 className='mb-2 text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+          Sign-in providers
+        </h2>
+        <p className='mb-6 text-[12px] text-muted-foreground'>
+          Additional OIDC identity providers beyond the primary one this deployment is configured
+          with. Each active provider becomes a "Continue with …" button on the login page and runs
+          the same PKCE flow. Register the callback URL{' '}
+          <span className='font-mono text-[11px]'>{window.location.origin}/api/auth/callback</span>{' '}
+          with the identity provider.
+        </p>
+
+        <div className='space-y-2'>
+          {isLoading && <Skeleton className='h-12 w-full rounded-lg' />}
+          {!isLoading && providers.length === 0 && editingId === null && (
+            <p className='rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-[12px] text-slate-400 dark:border-border'>
+              No additional providers configured. The primary sign-in button is unaffected.
+            </p>
+          )}
+          {providers.map((p) => (
+            <div
+              key={p.id}
+              className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
+            >
+              <div className='flex items-center gap-2'>
+                <div className='min-w-0 flex-1'>
+                  <p className='truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                    {p.label}
+                    <span className='ml-2 font-mono text-[10.5px] text-slate-400'>{p.key}</span>
+                  </p>
+                  <p className='truncate text-[11px] text-slate-400'>{p.issuer}</p>
+                </div>
+                <Switch
+                  checked={p.is_active}
+                  onCheckedChange={() => toggleActive.mutate(p)}
+                  aria-label={`${p.label} active`}
+                />
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7 px-2 text-[11.5px]'
+                  onClick={() => startEdit(p)}
+                >
+                  Edit
+                </Button>
+                {pendingDelete === p.id ? (
+                  <>
+                    <Button
+                      size='sm'
+                      variant='destructive'
+                      className='h-7 px-2 text-[11.5px]'
+                      onClick={() => remove.mutate(p.id)}
+                    >
+                      Confirm
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 px-2 text-[11.5px]'
+                      onClick={() => setPendingDelete(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 px-2 text-slate-400 hover:text-red-500'
+                    onClick={() => setPendingDelete(p.id)}
+                    aria-label={`Remove ${p.label}`}
+                  >
+                    <Trash2 className='h-3.5 w-3.5' />
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {editingId === null ? (
+          <Button
+            size='sm'
+            variant='outline'
+            className='mt-4 gap-1.5'
+            onClick={() => {
+              setEditingId('new')
+              setDraft(EMPTY_SSO_DRAFT)
+            }}
+          >
+            <Plus className='h-3.5 w-3.5' />
+            Add provider
+          </Button>
+        ) : (
+          <div className='mt-4 space-y-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+            <p className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
+              {editingId === 'new' ? 'New provider' : 'Edit provider'}
+            </p>
+            <Field label='Name' hint='Shown on the login button — "Continue with <name>".'>
+              <Input
+                value={draft.label}
+                onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+                placeholder='Okta'
+                className='h-8 text-[13px]'
+              />
+            </Field>
+            <Field
+              label='Key'
+              hint='URL slug for the login link. Lowercase letters, digits, dashes.'
+            >
+              <Input
+                value={draft.key}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    key: e.target.value.toLowerCase().replace(/\s+/g, '-')
+                  }))
+                }
+                placeholder='okta'
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <Field
+              label='Issuer URL'
+              hint='The OIDC issuer — discovery runs against <issuer>/.well-known/openid-configuration.'
+            >
+              <Input
+                value={draft.issuer}
+                onChange={(e) => setDraft((d) => ({ ...d, issuer: e.target.value }))}
+                placeholder='https://your-org.okta.com'
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <Field label='Client ID'>
+              <Input
+                value={draft.client_id}
+                onChange={(e) => setDraft((d) => ({ ...d, client_id: e.target.value }))}
+                className='h-8 font-mono text-[13px]'
+                autoComplete='off'
+              />
+            </Field>
+            <Field
+              label='Client secret'
+              hint={
+                editingId !== 'new' && draft.client_secret === '••••••'
+                  ? 'Configured. Enter a new value to replace.'
+                  : 'Optional for providers using PKCE-only public clients.'
+              }
+            >
+              <Input
+                type='password'
+                value={draft.client_secret}
+                onChange={(e) => setDraft((d) => ({ ...d, client_secret: e.target.value }))}
+                placeholder='••••••••'
+                className='h-8 font-mono text-[13px]'
+                autoComplete='new-password'
+              />
+            </Field>
+            <Field label='Scopes' hint='Space or comma separated. "openid" is always requested.'>
+              <Input
+                value={draft.scopes}
+                onChange={(e) => setDraft((d) => ({ ...d, scopes: e.target.value }))}
+                placeholder='openid profile email'
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <div className='flex items-center justify-between'>
+              <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                Active
+              </span>
+              <Switch
+                checked={draft.is_active}
+                onCheckedChange={(v) => setDraft((d) => ({ ...d, is_active: v }))}
+              />
+            </div>
+            <div className='flex gap-2 border-t border-slate-100 pt-3 dark:border-border'>
+              <Button
+                size='sm'
+                onClick={() => save.mutate()}
+                disabled={
+                  save.isPending ||
+                  !draft.label.trim() ||
+                  !draft.key.trim() ||
+                  !draft.issuer.trim() ||
+                  !draft.client_id.trim()
+                }
+              >
+                {save.isPending ? 'Saving…' : editingId === 'new' ? 'Add provider' : 'Save changes'}
+              </Button>
+              <Button
+                size='sm'
+                variant='ghost'
+                onClick={() => {
+                  setEditingId(null)
+                  setDraft(EMPTY_SSO_DRAFT)
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── File storage section (#527) ─────────────────────────────────────────────
+
+const STORAGE_MASK = '••••••'
+
+function FileStorageSection() {
+  const queryClient = useQueryClient()
+  const { data: stored, isLoading } = useQuery<{
+    driver: string
+    config: Record<string, unknown> | null
+  }>({
+    queryKey: ['storage-config'],
+    queryFn: () =>
+      api
+        .get<{ data: { driver: string; config: Record<string, unknown> | null } }>(
+          '/files/storage-config'
+        )
+        .then((r) => r.data.data)
+  })
+
+  const [driver, setDriver] = useState<'local' | 's3' | 'azure-blob'>('local')
+  const [s3, setS3] = useState({
+    bucket: '',
+    region: '',
+    access_key_id: '',
+    secret_access_key: '',
+    endpoint: ''
+  })
+  const [az, setAz] = useState({ account: '', container: '', account_key: '' })
+  const [hydrated, setHydrated] = useState(false)
+  const [testing, setTesting] = useState(false)
+  if (stored && !hydrated) {
+    const d = stored.driver === 's3' || stored.driver === 'azure-blob' ? stored.driver : 'local'
+    setDriver(d)
+    const c = stored.config ?? {}
+    if (d === 's3') {
+      setS3({
+        bucket: String(c.bucket ?? ''),
+        region: String(c.region ?? ''),
+        access_key_id: String(c.access_key_id ?? ''),
+        secret_access_key: String(c.secret_access_key ?? ''),
+        endpoint: String(c.endpoint ?? '')
+      })
+    } else if (d === 'azure-blob') {
+      setAz({
+        account: String(c.account ?? ''),
+        container: String(c.container ?? ''),
+        account_key: String(c.account_key ?? '')
+      })
+    }
+    setHydrated(true)
+  }
+
+  function currentConfig(): Record<string, unknown> | null {
+    if (driver === 's3') {
+      return {
+        bucket: s3.bucket.trim(),
+        region: s3.region.trim() || undefined,
+        access_key_id: s3.access_key_id.trim(),
+        secret_access_key: s3.secret_access_key,
+        endpoint: s3.endpoint.trim() || undefined
+      }
+    }
+    if (driver === 'azure-blob') {
+      return {
+        account: az.account.trim(),
+        container: az.container.trim(),
+        account_key: az.account_key
+      }
+    }
+    return null
+  }
+
+  const save = useMutation({
+    mutationFn: () => api.put('/files/storage-config', { driver, config: currentConfig() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['storage-config'] })
+      toast.success('Storage settings saved')
+    },
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Failed to save storage settings')
+  })
+
+  async function testConnection() {
+    setTesting(true)
+    try {
+      const r = await api.post<{ data: { ok: boolean; error?: string } }>('/files/storage-test', {
+        driver,
+        config: currentConfig()
+      })
+      if (r.data.data.ok)
+        toast.success('Storage connection OK — probe object written and read back')
+      else
+        toast.error(`Storage test failed: ${r.data.data.error ?? 'unknown error'}`, {
+          duration: 9000
+        })
+    } catch (e) {
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Test failed'
+      )
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className='p-8'>
+      <div className='max-w-lg'>
+        <h2 className='mb-2 text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+          File storage
+        </h2>
+        <p className='mb-6 text-[12px] text-muted-foreground'>
+          Where uploaded files are stored. Switching drivers affects{' '}
+          <strong>new uploads only</strong> — existing files are not migrated; reads fall back to
+          the previous storage so history keeps serving either way.
+        </p>
+
+        {isLoading ? (
+          <Skeleton className='h-24 w-full rounded-lg' />
+        ) : (
+          <div className='space-y-5'>
+            <Field label='Driver'>
+              <Select value={driver} onValueChange={(v) => setDriver(v as typeof driver)}>
+                <SelectTrigger className='h-8 text-[13px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='local'>Local disk (default)</SelectItem>
+                  <SelectItem value='s3'>S3-compatible (AWS S3, Cloudflare R2, MinIO)</SelectItem>
+                  <SelectItem value='azure-blob'>Azure Blob Storage</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+
+            {driver === 's3' && (
+              <>
+                <Field label='Bucket'>
+                  <Input
+                    value={s3.bucket}
+                    onChange={(e) => setS3((p) => ({ ...p, bucket: e.target.value }))}
+                    placeholder='my-bucket'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+                <Field label='Region' hint='Default us-east-1. Use "auto" for Cloudflare R2.'>
+                  <Input
+                    value={s3.region}
+                    onChange={(e) => setS3((p) => ({ ...p, region: e.target.value }))}
+                    placeholder='us-east-1'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+                <Field label='Access key ID'>
+                  <Input
+                    value={s3.access_key_id}
+                    onChange={(e) => setS3((p) => ({ ...p, access_key_id: e.target.value }))}
+                    placeholder='AKIA…'
+                    className='h-8 font-mono text-[13px]'
+                    autoComplete='off'
+                  />
+                </Field>
+                <Field
+                  label='Secret access key'
+                  hint={
+                    s3.secret_access_key === STORAGE_MASK
+                      ? 'Configured. Enter a new value to replace.'
+                      : undefined
+                  }
+                >
+                  <Input
+                    type='password'
+                    value={s3.secret_access_key}
+                    onChange={(e) => setS3((p) => ({ ...p, secret_access_key: e.target.value }))}
+                    placeholder='••••••••'
+                    className='h-8 font-mono text-[13px]'
+                    autoComplete='new-password'
+                  />
+                </Field>
+                <Field
+                  label='Endpoint'
+                  hint='Optional — custom endpoint for R2 / MinIO. Leave blank for AWS S3.'
+                >
+                  <Input
+                    value={s3.endpoint}
+                    onChange={(e) => setS3((p) => ({ ...p, endpoint: e.target.value }))}
+                    placeholder='https://<account>.r2.cloudflarestorage.com'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+              </>
+            )}
+
+            {driver === 'azure-blob' && (
+              <>
+                <Field label='Storage account'>
+                  <Input
+                    value={az.account}
+                    onChange={(e) => setAz((p) => ({ ...p, account: e.target.value }))}
+                    placeholder='mystorageaccount'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+                <Field label='Container'>
+                  <Input
+                    value={az.container}
+                    onChange={(e) => setAz((p) => ({ ...p, container: e.target.value }))}
+                    placeholder='files'
+                    className='h-8 font-mono text-[13px]'
+                  />
+                </Field>
+                <Field
+                  label='Account key'
+                  hint={
+                    az.account_key === STORAGE_MASK
+                      ? 'Configured. Enter a new value to replace.'
+                      : "Shared Key from the storage account's Access keys blade."
+                  }
+                >
+                  <Input
+                    type='password'
+                    value={az.account_key}
+                    onChange={(e) => setAz((p) => ({ ...p, account_key: e.target.value }))}
+                    placeholder='••••••••'
+                    className='h-8 font-mono text-[13px]'
+                    autoComplete='new-password'
+                  />
+                </Field>
+              </>
+            )}
+
+            {driver === 'local' && (
+              <p className='rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[12px] text-slate-500 dark:border-border dark:bg-muted/30'>
+                Files are written to this server's disk (or whatever the STORAGE_PROVIDER env var
+                configures) — the historic behavior.
+              </p>
+            )}
+
+            <div className='flex gap-2 border-t border-slate-100 pt-5 dark:border-border'>
+              <Button size='sm' onClick={() => save.mutate()} disabled={save.isPending}>
+                {save.isPending ? 'Saving…' : 'Save changes'}
+              </Button>
+              {driver !== 'local' && (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  onClick={testConnection}
+                  disabled={testing}
+                  className='gap-1.5'
+                >
+                  <Check className='h-3.5 w-3.5' />
+                  {testing ? 'Testing…' : 'Test connection'}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Field row helper ─────────────────────────────────────────────────────────
 
 function Field({
@@ -458,6 +1035,9 @@ export function SettingsPage() {
   const [brandLoginMessage, setBrandLoginMessage] = useState('')
   // Login help/support links (#347) — [{label, url}] JSON on settings.
   const [loginLinks, setLoginLinks] = useState<Array<{ label: string; url: string }>>([])
+  // Theme studio (#662)
+  const [themeRadius, setThemeRadius] = useState<string>('')
+  const [themeFont, setThemeFont] = useState<string>('')
   const [defaultLanguage, setDefaultLanguage] = useState('en-US')
   const [availableLocales, setAvailableLocales] = useState<string[]>(['en'])
   const [newLocale, setNewLocale] = useState('')
@@ -514,13 +1094,17 @@ export function SettingsPage() {
     setProjectColor(settings.project_color ?? '#00ceff')
     setBrandLogo((settings as { brand_logo?: string | null }).brand_logo ?? null)
     setBrandLoginTitle((settings as { brand_login_title?: string | null }).brand_login_title ?? '')
-    setBrandLoginMessage((settings as { brand_login_message?: string | null }).brand_login_message ?? '')
+    setBrandLoginMessage(
+      (settings as { brand_login_message?: string | null }).brand_login_message ?? ''
+    )
     try {
       const raw = JSON.parse((settings as { login_links?: string | null }).login_links ?? '[]')
       setLoginLinks(Array.isArray(raw) ? raw : [])
     } catch {
       setLoginLinks([])
     }
+    setThemeRadius((settings as { theme_radius?: string | null }).theme_radius ?? '')
+    setThemeFont((settings as { theme_font?: string | null }).theme_font ?? '')
     setDefaultLanguage(settings.default_language ?? 'en-US')
     setAvailableLocales(toLocaleArray((settings as Record<string, unknown>).available_locales))
     setTeamsWebhook(settings.teams_webhook_url ?? '')
@@ -594,6 +1178,20 @@ export function SettingsPage() {
       brand_login_message: brandLoginMessage.trim() || null,
       login_links: JSON.stringify(loginLinks.filter((l) => l.label.trim() && l.url.trim()))
     })
+  }
+
+  function saveAppearance() {
+    mutation.mutate(
+      {
+        theme_radius: themeRadius || null,
+        theme_font: themeFont || null
+      } as unknown as Partial<CMSSettings>,
+      {
+        onSuccess: () =>
+          // Instant feedback — AppLayout re-applies on the settings refetch too.
+          applyThemeSettings({ theme_radius: themeRadius || null, theme_font: themeFont || null })
+      }
+    )
   }
 
   function saveLocalization() {
@@ -933,10 +1531,7 @@ export function SettingsPage() {
                       className='h-8 text-[13px]'
                     />
                   </Field>
-                  <Field
-                    label='Login page message'
-                    hint='The line under the headline.'
-                  >
+                  <Field label='Login page message' hint='The line under the headline.'>
                     <Input
                       value={brandLoginMessage}
                       onChange={(e) => setBrandLoginMessage(e.target.value)}
@@ -992,6 +1587,112 @@ export function SettingsPage() {
                       )}
                     </div>
                   </Field>
+                </SectionWrap>
+              )}
+
+              {activeSection === 'appearance' && (
+                <SectionWrap title='Appearance' onSave={saveAppearance} saving={mutation.isPending}>
+                  <Field
+                    label='Corner radius'
+                    hint='How rounded cards, buttons and inputs render across the whole admin.'
+                  >
+                    <div className='flex flex-wrap gap-2'>
+                      {[
+                        { value: '', label: 'Default', px: '6px' },
+                        { value: 'sharp', label: 'Sharp', px: THEME_RADIUS_PRESETS.sharp },
+                        { value: 'soft', label: 'Soft', px: THEME_RADIUS_PRESETS.soft },
+                        { value: 'round', label: 'Round', px: THEME_RADIUS_PRESETS.round }
+                      ].map((opt) => (
+                        <button
+                          key={opt.value || 'default'}
+                          type='button'
+                          onClick={() => setThemeRadius(opt.value)}
+                          className={cn(
+                            'flex items-center gap-2 border px-3 py-2 text-[12.5px] transition-colors',
+                            themeRadius === opt.value
+                              ? 'border-nvr-cyan bg-nvr-cyan/10 font-medium text-slate-900 dark:text-foreground'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted/50'
+                          )}
+                          style={{ borderRadius: opt.px }}
+                        >
+                          <span
+                            className='inline-block h-4 w-4 border border-slate-300 bg-slate-100 dark:border-border dark:bg-muted'
+                            style={{ borderRadius: opt.px }}
+                          />
+                          {opt.label}
+                          <span className='text-[10.5px] text-slate-400'>{opt.px}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field
+                    label='Font pairing'
+                    hint='Only zero-download stacks are offered — code surfaces keep JetBrains Mono.'
+                  >
+                    <div className='flex flex-col gap-2'>
+                      {[
+                        {
+                          value: '',
+                          label: 'DM Sans',
+                          note: 'Default — bundled with the admin',
+                          stack: `'DM Sans', system-ui, sans-serif`
+                        },
+                        {
+                          value: 'system-ui',
+                          label: 'System UI',
+                          note: 'Your operating system’s native font',
+                          stack: `system-ui, -apple-system, 'Segoe UI', sans-serif`
+                        },
+                        {
+                          value: 'serif',
+                          label: 'Serif',
+                          note: 'Georgia — editorial feel, no download',
+                          stack: `Georgia, 'Times New Roman', serif`
+                        }
+                      ].map((opt) => (
+                        <button
+                          key={opt.value || 'dm-sans'}
+                          type='button'
+                          onClick={() => setThemeFont(opt.value)}
+                          className={cn(
+                            'flex items-baseline justify-between rounded-lg border px-3 py-2.5 text-left transition-colors',
+                            themeFont === opt.value
+                              ? 'border-nvr-cyan bg-nvr-cyan/10'
+                              : 'border-slate-200 hover:bg-slate-50 dark:border-border dark:hover:bg-muted/50'
+                          )}
+                        >
+                          <span>
+                            <span
+                              className='block text-[13.5px] font-medium text-slate-800 dark:text-foreground'
+                              style={{ fontFamily: opt.stack }}
+                            >
+                              {opt.label}
+                            </span>
+                            <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+                              {opt.note}
+                            </span>
+                          </span>
+                          <span
+                            className='text-[15px] text-slate-500 dark:text-muted-foreground'
+                            style={{ fontFamily: opt.stack }}
+                          >
+                            Aa
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                  <p className='text-[11.5px] text-slate-400 dark:text-muted-foreground'>
+                    The accent color is configured under{' '}
+                    <button
+                      type='button'
+                      onClick={() => setActiveSection('project')}
+                      className='font-medium text-nvr-navy underline decoration-dotted dark:text-nvr-cyan'
+                    >
+                      Project
+                    </button>
+                    .
+                  </p>
                 </SectionWrap>
               )}
 
@@ -1872,6 +2573,10 @@ export function SettingsPage() {
                     </SectionWrap>
                   )
                 })()}
+
+              {activeSection === 'sso' && <SsoProvidersSection />}
+
+              {activeSection === 'storage' && <FileStorageSection />}
 
               {activeSection === 'backups' && <BackupsSection />}
 

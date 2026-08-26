@@ -27,6 +27,7 @@ export * from './sections/overview.js'
 export * from './sections/platform.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
+export * from './sections/platform-additions.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -63,6 +64,12 @@ import {
   opsConsoleDocs
 } from './sections/ops-observability.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
+import {
+  adminOpsAdditions,
+  eventsAndFlags,
+  recordToolkit,
+  reportingAdditions
+} from './sections/platform-additions.js'
 import {
   collabApprovals,
   collabChat,
@@ -538,7 +545,8 @@ export const navSections: NavGroup[] = [
       extPluginManifest,
       extPluginSlots,
       extPluginBuildGuide,
-      extPluginIntegrationTypes
+      extPluginIntegrationTypes,
+      eventsAndFlags
     ]
   },
   {
@@ -560,6 +568,7 @@ export const navSections: NavGroup[] = [
     label: 'Monitoring & Automation',
     items: [
       reportStudioDocs,
+      reportingAdditions,
       scheduledReportsDocs,
       slaScheduleDocs,
       submissionFormsGuide,
@@ -628,6 +637,7 @@ export const navSections: NavGroup[] = [
       contentOpsRollback,
       contentOpsFieldHistory,
       recordInsightsDocs,
+      recordToolkit,
       contentOpsAddendums,
       contentOpsPercentComplete,
       contentOpsPolymorphicRelations,
@@ -719,6 +729,7 @@ export const navSections: NavGroup[] = [
     id: 'admin-ux',
     label: 'Admin UX & Search',
     items: [
+      adminOpsAdditions,
       adminI18nDocs,
       adminUxGlobalSearch,
       adminUxSavedViews,

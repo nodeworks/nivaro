@@ -132,6 +132,18 @@ export function applyValidationRule(
       const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
       return re.test(String(value)) ? null : (rule.message ?? `${label} must be a valid email`)
     }
+    case 'phone': {
+      // Mirrors normalizePhone in packages/shared/src/lib/validation-rules.ts
+      // (#520) — same acceptance rule, no drift: NANP 10 digits (or 11 with a
+      // leading 1), or an explicit + with 8-15 digits.
+      const s = String(value).trim()
+      const hadPlus = s.startsWith('+')
+      const digits = s.replace(/\D/g, '')
+      const isNanp =
+        (digits.length === 10 && !hadPlus) || (digits.length === 11 && digits.startsWith('1'))
+      const isIntl = hadPlus && digits.length >= 8 && digits.length <= 15
+      return isNanp || isIntl ? null : (rule.message ?? `${label} must be a valid phone number`)
+    }
     case 'url': {
       try {
         new URL(String(value))

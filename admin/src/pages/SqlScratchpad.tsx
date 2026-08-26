@@ -1,8 +1,29 @@
 import { useMutation } from '@tanstack/react-query'
-import { Play, Plus, Sparkles, TerminalSquare, Wand2, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { BarChart3, Play, Plus, Sparkles, Table2, TerminalSquare, Wand2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts'
 import { toast } from 'sonner'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { formatSql } from '@/lib/format-sql'
 
@@ -28,6 +49,53 @@ interface ScratchTab {
   name: string
   sql: string
   history: string[]
+}
+
+// ─── Result charts (#696) ─────────────────────────────────────────────────────
+
+const CHART_COLORS = [
+  '#00ceff',
+  '#6366f1',
+  '#10b981',
+  '#f59e0b',
+  '#f43f5e',
+  '#8b5cf6',
+  '#14b8a6',
+  '#f97316'
+]
+const CHART_POINT_CAP = 100
+// Always-dark tooltip — recharts' default is a white panel with theme-inherited
+// text (unreadable in dark mode; documented convention).
+const CHART_TOOLTIP_STYLE = {
+  fontSize: 12,
+  backgroundColor: '#0f172a',
+  border: '1px solid #334155',
+  borderRadius: 8,
+  color: '#f1f5f9'
+} as const
+
+function isNumericValue(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isFinite(v)
+  if (typeof v === 'string') return v.trim() !== '' && /^-?\d+(\.\d+)?$/.test(v.trim())
+  return false
+}
+
+/** Classify result columns: numeric (chartable series) vs text-ish (X axis). */
+function classifyColumns(rows: Array<Record<string, unknown>>): {
+  textCols: string[]
+  numCols: string[]
+} {
+  const cols = rows[0] ? Object.keys(rows[0]) : []
+  const sample = rows.slice(0, 50)
+  const textCols: string[] = []
+  const numCols: string[] = []
+  for (const c of cols) {
+    const values = sample.map((r) => r[c]).filter((v) => v != null)
+    if (values.length === 0) continue
+    if (values.every(isNumericValue)) numCols.push(c)
+    else textCols.push(c)
+  }
+  return { textCols, numCols }
 }
 
 function loadTabs(): ScratchTab[] {
@@ -74,12 +142,22 @@ export default function SqlScratchpad() {
   const patchActive = (patch: Partial<ScratchTab>) =>
     persist(tabs.map((t) => (t.id === active?.id ? { ...t, ...patch } : t)))
 
+  // Chart view (#696) — ephemeral per-tab session state, never persisted.
+  const [resultView, setResultView] = useState<'table' | 'chart'>('table')
+  const [chartType, setChartType] = useState<'bar' | 'line' | 'donut'>('bar')
+  const [chartX, setChartX] = useState<string | null>(null)
+  const [chartY, setChartY] = useState<string | null>(null)
+
   const run = useMutation({
     mutationFn: (q: string) =>
       api.post<{ data: RunResult }>('/sql-scratchpad/run', { sql: q }).then((r) => r.data.data),
     onSuccess: (d, q) => {
       setResult(d)
       setError(null)
+      // New result → table default, columns re-defaulted for the new shape.
+      setResultView('table')
+      setChartX(null)
+      setChartY(null)
       patchActive({ history: [q, ...(active?.history ?? []).filter((x) => x !== q)].slice(0, 20) })
     },
     onError: (e: { response?: { data?: { error?: string } } }) => {
@@ -107,7 +185,8 @@ export default function SqlScratchpad() {
       if (r.data.data.text) toast.info(r.data.data.text, { duration: 9000 })
     } catch (e) {
       toast.error(
-        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'AI call failed'
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'AI call failed'
       )
     } finally {
       setAiBusy(null)
@@ -175,6 +254,20 @@ export default function SqlScratchpad() {
 
   const cols = result?.rows[0] ? Object.keys(result.rows[0]) : []
 
+  // Chart eligibility (#696): ≥1 text-ish column + ≥1 numeric column.
+  const { textCols, numCols } = useMemo(() => classifyColumns(result?.rows ?? []), [result])
+  const chartable = textCols.length > 0 && numCols.length > 0
+  const xCol = chartX && textCols.includes(chartX) ? chartX : textCols[0]
+  const yCol = chartY && numCols.includes(chartY) ? chartY : numCols[0]
+  const chartData = useMemo(() => {
+    if (!result || !xCol || !yCol) return []
+    return result.rows.slice(0, CHART_POINT_CAP).map((r) => ({
+      name: r[xCol] == null ? '—' : String(r[xCol]),
+      value: Number(r[yCol]) || 0
+    }))
+  }, [result, xCol, yCol])
+  const chartTruncated = (result?.rows.length ?? 0) > CHART_POINT_CAP
+
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
@@ -185,8 +278,8 @@ export default function SqlScratchpad() {
               SQL Scratchpad
             </h1>
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Read-only queries against the live database. SELECT only — writes are rejected —
-              and every run lands in the activity log.
+              Read-only queries against the live database. SELECT only — writes are rejected — and
+              every run lands in the activity log.
             </p>
           </div>
         </div>
@@ -238,7 +331,12 @@ export default function SqlScratchpad() {
                 const id = `t${Date.now().toString(36)}`
                 persist([
                   ...tabs,
-                  { id, name: `Query ${tabs.length + 1}`, sql: 'SELECT TOP 25 * FROM ', history: [] }
+                  {
+                    id,
+                    name: `Query ${tabs.length + 1}`,
+                    sql: 'SELECT TOP 25 * FROM ',
+                    history: []
+                  }
                 ])
                 setActiveId(id)
                 setResult(null)
@@ -356,7 +454,159 @@ export default function SqlScratchpad() {
             </div>
           )}
 
-          {result && (
+          {/* Result view toggle (#696) — chart offered when the shape supports it */}
+          {result && chartable && (
+            <div className='mt-4 flex flex-wrap items-center gap-2'>
+              <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                <button
+                  type='button'
+                  onClick={() => setResultView('table')}
+                  className={`flex items-center gap-1 px-2.5 py-1 text-[11.5px] ${
+                    resultView === 'table'
+                      ? 'bg-nvr-cyan/10 font-medium text-slate-800 dark:text-foreground'
+                      : 'text-slate-500 hover:bg-muted'
+                  }`}
+                >
+                  <Table2 className='h-3 w-3' /> Table
+                </button>
+                <button
+                  type='button'
+                  onClick={() => setResultView('chart')}
+                  className={`flex items-center gap-1 border-l border-slate-200 px-2.5 py-1 text-[11.5px] dark:border-border ${
+                    resultView === 'chart'
+                      ? 'bg-nvr-cyan/10 font-medium text-slate-800 dark:text-foreground'
+                      : 'text-slate-500 hover:bg-muted'
+                  }`}
+                >
+                  <BarChart3 className='h-3 w-3' /> Chart
+                </button>
+              </div>
+              {resultView === 'chart' && (
+                <>
+                  <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+                    {(['bar', 'line', 'donut'] as const).map((t, i) => (
+                      <button
+                        key={t}
+                        type='button'
+                        onClick={() => setChartType(t)}
+                        className={`px-2.5 py-1 text-[11.5px] capitalize ${i > 0 ? 'border-l border-slate-200 dark:border-border' : ''} ${
+                          chartType === t
+                            ? 'bg-nvr-cyan/10 font-medium text-slate-800 dark:text-foreground'
+                            : 'text-slate-500 hover:bg-muted'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  <span className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+                    X
+                    <Select value={xCol ?? ''} onValueChange={setChartX}>
+                      <SelectTrigger className='h-6 w-auto min-w-[110px] px-2 text-[11.5px]'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {textCols.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </span>
+                  <span className='flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+                    Value
+                    <Select value={yCol ?? ''} onValueChange={setChartY}>
+                      <SelectTrigger className='h-6 w-auto min-w-[110px] px-2 text-[11.5px]'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {numCols.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </span>
+                  {chartTruncated && (
+                    <span className='text-[11px] text-amber-600 dark:text-amber-400'>
+                      Charting the first {CHART_POINT_CAP} of {result.rows.length} rows
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {result && resultView === 'chart' && chartable && (
+            <div className='mt-2 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+              <ResponsiveContainer width='100%' height={320}>
+                {chartType === 'bar' ? (
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray='3 3' stroke='#94a3b833' />
+                    <XAxis dataKey='name' tick={{ fontSize: 10 }} interval='preserveStartEnd' />
+                    <YAxis tick={{ fontSize: 10 }} width={70} />
+                    <Tooltip
+                      contentStyle={CHART_TOOLTIP_STYLE}
+                      labelStyle={{ color: '#f1f5f9' }}
+                      itemStyle={{ color: '#e2e8f0' }}
+                    />
+                    <Bar
+                      dataKey='value'
+                      name={yCol ?? 'value'}
+                      fill='#00ceff'
+                      radius={[3, 3, 0, 0]}
+                    />
+                  </BarChart>
+                ) : chartType === 'line' ? (
+                  <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray='3 3' stroke='#94a3b833' />
+                    <XAxis dataKey='name' tick={{ fontSize: 10 }} interval='preserveStartEnd' />
+                    <YAxis tick={{ fontSize: 10 }} width={70} />
+                    <Tooltip
+                      contentStyle={CHART_TOOLTIP_STYLE}
+                      labelStyle={{ color: '#f1f5f9' }}
+                      itemStyle={{ color: '#e2e8f0' }}
+                    />
+                    <Line
+                      type='monotone'
+                      dataKey='value'
+                      name={yCol ?? 'value'}
+                      stroke='#00ceff'
+                      strokeWidth={2}
+                      dot={chartData.length <= 40}
+                    />
+                  </LineChart>
+                ) : (
+                  <PieChart>
+                    <Tooltip
+                      contentStyle={CHART_TOOLTIP_STYLE}
+                      labelStyle={{ color: '#f1f5f9' }}
+                      itemStyle={{ color: '#e2e8f0' }}
+                    />
+                    <Pie
+                      data={chartData}
+                      dataKey='value'
+                      nameKey='name'
+                      innerRadius='55%'
+                      outerRadius='85%'
+                      paddingAngle={1}
+                    >
+                      {chartData.map((entry, i) => (
+                        <Cell
+                          key={`${entry.name}-${i}`}
+                          fill={CHART_COLORS[i % CHART_COLORS.length]}
+                        />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {result && (resultView === 'table' || !chartable) && (
             <div className='mt-4 overflow-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               <table className='w-full text-[11.5px] tabular-nums'>
                 <thead>
@@ -388,7 +638,10 @@ export default function SqlScratchpad() {
                   ))}
                   {result.rows.length === 0 && (
                     <tr>
-                      <td className='px-3 py-6 text-center text-slate-400' colSpan={Math.max(1, cols.length)}>
+                      <td
+                        className='px-3 py-6 text-center text-slate-400'
+                        colSpan={Math.max(1, cols.length)}
+                      >
                         Query returned no rows.
                       </td>
                     </tr>

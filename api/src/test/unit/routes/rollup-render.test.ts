@@ -105,7 +105,13 @@ describe('POST /widgets-internal/:id/render — rollup dispatch', () => {
 
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body)).toEqual({ data: expected })
-    expect(vi.mocked(resolveRollupRows)).toHaveBeenCalledWith(db, rollupConfig, '373944')
+    expect(vi.mocked(resolveRollupRows)).toHaveBeenCalledWith(
+      db,
+      rollupConfig,
+      '373944',
+      undefined,
+      undefined
+    )
   })
 
   it('403s when the caller lacks read permission on config.collection', async () => {

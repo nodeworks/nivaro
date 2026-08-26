@@ -35,8 +35,42 @@ interface SubRow {
   filter_field: string | null
   filter_value: string | null
   state_label?: string | null
+  notify_inapp?: boolean
+  notify_email?: boolean
   /** Server-resolved human filter criteria — "Zone: Zone 1", "Project type: Commercial". */
   criteria?: string[] | null
+}
+
+/** Channel toggle chips (#649) — per-subscription In-app / Email switches. */
+function ChannelChips({
+  sub,
+  onPatch
+}: {
+  sub: SubRow
+  onPatch: (body: Record<string, unknown>) => void
+}) {
+  const inapp = sub.notify_inapp !== false
+  const email = sub.notify_email !== false
+  const chip = (on: boolean, label: string, body: Record<string, unknown>) => (
+    <button
+      type='button'
+      data-tip={on ? `${label} on — click to turn off` : `${label} off — click to turn on`}
+      onClick={() => onPatch(body)}
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] leading-none transition-colors ${
+        on
+          ? 'border-nvr-cyan/40 bg-nvr-cyan/10 font-medium text-nvr-navy dark:text-nvr-cyan'
+          : 'border-slate-200 text-slate-400 line-through dark:border-border'
+      }`}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <span className='flex items-center gap-1'>
+      {chip(inapp, 'In-app', { notify_inapp: !inapp })}
+      {chip(email, 'Email', { notify_email: !email })}
+    </span>
+  )
 }
 
 interface Sources {
@@ -522,21 +556,29 @@ export function NotificationSourcesCard() {
                   }
                   description={
                     r.criteria && r.criteria.length > 0
-                      ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(true, true, r.digest_frequency)}`
-                      : deliveryPhrase(true, true, r.digest_frequency)
+                      ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
+                      : deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)
                   }
                   meta={r.is_active ? null : 'paused'}
                   controls={
-                    <SimpleSelectXs
-                      value={r.digest_frequency ?? 'instant'}
-                      options={digestOptions}
-                      onChange={(v: string) =>
-                        patchPath.mutate({
-                          path: `/notification-subscriptions/${r.id}`,
-                          body: { digest_frequency: v }
-                        })
-                      }
-                    />
+                    <span className='flex items-center gap-1.5'>
+                      <ChannelChips
+                        sub={r}
+                        onPatch={(body) =>
+                          patchPath.mutate({ path: `/notification-subscriptions/${r.id}`, body })
+                        }
+                      />
+                      <SimpleSelectXs
+                        value={r.digest_frequency ?? 'instant'}
+                        options={digestOptions}
+                        onChange={(v: string) =>
+                          patchPath.mutate({
+                            path: `/notification-subscriptions/${r.id}`,
+                            body: { digest_frequency: v }
+                          })
+                        }
+                      />
+                    </span>
                   }
                   onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
                   removing={busy}

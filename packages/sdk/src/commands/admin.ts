@@ -837,6 +837,8 @@ export type ReportWidgetType =
   | 'scatter'
   | 'hot_records'
   | 'metric'
+  | 'pivot'
+  | 'ai_insight'
 
 export interface ReportWidget {
   id: UUID

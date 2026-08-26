@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { db } from '../db/index.js'
 import type { FastifyInstance } from 'fastify'
 import mime from 'mime-types'
 import sharp from 'sharp'
+import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
@@ -17,6 +17,12 @@ import {
   uploadFile
 } from '../services/files.js'
 import { getStorage } from '../services/storage/index.js'
+import {
+  bustStorageDriverCache,
+  normalizeDriverName,
+  readStorageSettings,
+  testStorageDriver
+} from '../services/storage-drivers.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
@@ -119,6 +125,93 @@ export async function filesRoutes(app: FastifyInstance) {
     }
   })
 
+  // ─── Storage driver config (#527) ──────────────────────────────────────────
+  // Settings for where NEW uploads land (local disk / S3-compatible / Azure
+  // Blob). Lives here rather than the settings PATCH so secrets get the
+  // masked-resubmit-preserves treatment and saves bust the driver cache.
+
+  const STORAGE_MASK = '••••••'
+  const STORAGE_SECRET_KEYS = new Set(['secret_access_key', 'account_key'])
+
+  function maskStorageConfig(cfg: Record<string, unknown> | null): Record<string, unknown> | null {
+    if (!cfg) return null
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(cfg)) {
+      out[k] = STORAGE_SECRET_KEYS.has(k) && v ? STORAGE_MASK : v
+    }
+    return out
+  }
+
+  app.get('/storage-config', { preHandler: requireAdmin }, async (_req, reply) => {
+    const { driver, config } = await readStorageSettings()
+    return reply.send({ data: { driver, config: maskStorageConfig(config) } })
+  })
+
+  app.put('/storage-config', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { driver?: string; config?: Record<string, unknown> | null }
+    const driver = normalizeDriverName(body.driver)
+    if (body.driver && !['local', 's3', 'azure-blob', 'azure'].includes(String(body.driver))) {
+      return reply.code(400).send({ error: 'driver must be local, s3 or azure-blob' })
+    }
+
+    // Masked-resubmit-preserves: a secret field carrying the mask keeps the
+    // stored value (external-apis precedent).
+    const { config: stored } = await readStorageSettings()
+    let config: Record<string, unknown> | null = null
+    if (body.config && typeof body.config === 'object' && !Array.isArray(body.config)) {
+      config = {}
+      for (const [k, v] of Object.entries(body.config)) {
+        if (STORAGE_SECRET_KEYS.has(k) && v === STORAGE_MASK) {
+          config[k] = stored?.[k] ?? null
+        } else {
+          config[k] = v
+        }
+      }
+    }
+
+    await db('nivaro_settings')
+      .where({ id: 1 })
+      .update({
+        storage_driver: driver,
+        storage_config: config ? JSON.stringify(config) : null
+      })
+    bustStorageDriverCache()
+    await logActivity({
+      action: 'storage-config-update',
+      user: req.user?.id,
+      collection: 'nivaro_settings',
+      item: '1',
+      comment: `storage driver → ${driver}`,
+      req
+    })
+    return reply.send({ data: { driver, config: maskStorageConfig(config) } })
+  })
+
+  /** Probe write+read+delete against a candidate config (body) or, with no
+   *  body, the currently saved one. Returns {ok} / {ok:false, error} — never
+   *  a 500 for a bad bucket. */
+  app.post('/storage-test', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { driver?: string; config?: Record<string, unknown> | null }
+    let driver = normalizeDriverName(body.driver)
+    let config = body.config ?? null
+    const { driver: storedDriver, config: storedConfig } = await readStorageSettings()
+    if (!body.driver) {
+      driver = storedDriver
+      config = storedConfig
+    } else if (config) {
+      // Fill masked secrets from the stored config so "Test connection" works
+      // without retyping the secret.
+      const merged: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(config)) {
+        merged[k] =
+          STORAGE_SECRET_KEYS.has(k) && v === STORAGE_MASK ? (storedConfig?.[k] ?? null) : v
+      }
+      config = merged
+    }
+    const result = await testStorageDriver(driver, config)
+    return reply.send({ data: result })
+  })
+
   // Where is this file referenced? FK-driven scan — see services/file-usage.ts
   app.get('/:id/usage', async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -132,9 +225,10 @@ export async function filesRoutes(app: FastifyInstance) {
   // File usage counts (#200): "used on N records" per file, batched for the
   // browser's visible page (FK-driven, same scan as single-file usage).
   app.post('/usage/counts', async (req, reply) => {
-    const ids = (Array.isArray((req.body as { ids?: unknown[] })?.ids)
-      ? (req.body as { ids: unknown[] }).ids
-      : []
+    const ids = (
+      Array.isArray((req.body as { ids?: unknown[] })?.ids)
+        ? (req.body as { ids: unknown[] }).ids
+        : []
     )
       .map(String)
       .slice(0, 100)

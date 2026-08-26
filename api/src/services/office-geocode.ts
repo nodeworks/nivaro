@@ -65,6 +65,12 @@ async function matchKnownLocation(addr: string): Promise<{ lat: number; lng: num
   }
 }
 
+/** Resolve one free-text address: known-locations street match first, Nominatim
+ *  fallback. Exported for the collection geocoding backfill (#645). */
+export async function geocodeAddress(addr: string): Promise<{ lat: number; lng: number } | null> {
+  return (await matchKnownLocation(addr)) ?? (await nominatim(addr))
+}
+
 async function nominatim(addr: string): Promise<{ lat: number; lng: number } | null> {
   try {
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(addr)}`

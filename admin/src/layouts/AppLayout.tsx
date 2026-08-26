@@ -1,3 +1,5 @@
+import { InstanceSwitcher } from '@/components/InstanceSwitcher'
+import { applyThemeSettings } from '@/lib/theme-settings'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -27,6 +29,7 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
+  ClipboardList,
   GitCompare,
   Globe,
   Grid3x3,
@@ -237,6 +240,7 @@ export const navCategories: NavCategory[] = [
       { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console' },
       { icon: Database, label: 'Redis Keys', to: '/ops-redis' },
       { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline' },
+      { icon: GitBranch, label: 'Value Provenance', to: '/provenance' },
       { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity' },
       { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
       { icon: AlertOctagon, label: 'Issues', to: '/issues' },
@@ -255,6 +259,7 @@ export const navCategories: NavCategory[] = [
       { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness' },
       { icon: Megaphone, label: 'Broadcasts', to: '/announcements' },
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
+      { icon: ClipboardList, label: 'Change Sets', to: '/change-sets' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
       { icon: Users2, label: 'User Groups', to: '/user-groups' },
       { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags' },
@@ -641,7 +646,9 @@ export function AppLayout() {
       el.style.setProperty('--nvr-cyan-rgb', rgb)
       el.style.setProperty('--nvr-cyan-dark-rgb', rgb)
     }
-  }, [settings?.project_color, workspaceColor])
+    // Theme studio (#662): radius + font follow the same settings effect.
+    applyThemeSettings(settings as Record<string, unknown> | undefined)
+  }, [settings?.project_color, workspaceColor, settings])
 
   useEffect(() => {
     // Following a favourite keeps you in Favourites. The panel otherwise jumps
@@ -888,6 +895,7 @@ export function AppLayout() {
                 </TooltipTrigger>
                 <TooltipContent side='right'>Changelog</TooltipContent>
               </Tooltip>
+              <InstanceSwitcher collapsed />
               <ThemeSwitcher collapsed />
               <Tooltip>
                 <TooltipTrigger asChild>

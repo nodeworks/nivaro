@@ -344,6 +344,13 @@ export async function usersRoutes(app: FastifyInstance) {
         .slice(0, 30)
       patch.nav_favorites = clean
     }
+    if ('notification_sound' in body) {
+      // #684 — client-side chirp when an in-app notification lands.
+      if (!['off', 'subtle', 'chime'].includes(String(body.notification_sound))) {
+        return reply.code(400).send({ error: "notification_sound must be 'off', 'subtle' or 'chime'" })
+      }
+      patch.notification_sound = body.notification_sound
+    }
     if ('notification_prefs' in body) {
       // Quiet hours + per-category channel matrix (see notification-channels).
       const raw = body.notification_prefs

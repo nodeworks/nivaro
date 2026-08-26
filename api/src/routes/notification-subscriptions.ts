@@ -32,6 +32,8 @@ function serialize(row: Record<string, unknown>) {
     label: row.label ?? null,
     is_active: !!row.is_active,
     digest_frequency: (row.digest_frequency as string | undefined) ?? 'instant',
+    notify_inapp: row.notify_inapp !== false && row.notify_inapp !== 0,
+    notify_email: row.notify_email !== false && row.notify_email !== 0,
     created_at: row.created_at
   }
 }
@@ -107,6 +109,8 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       label?: string
       is_active?: boolean
       digest_frequency?: string
+      notify_inapp?: boolean
+      notify_email?: boolean
       filters?: Array<{ field: string; op: string; value?: unknown }>
     }
 
@@ -197,6 +201,8 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
             : null,
         is_active: body.is_active !== false,
         digest_frequency: (body.digest_frequency as DigestFrequency | undefined) ?? 'instant',
+        notify_inapp: body.notify_inapp !== false,
+        notify_email: body.notify_email !== false,
         created_at: new Date()
       })
       .returning('*')
@@ -223,6 +229,8 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       filter_value?: string | null
       is_active?: boolean
       digest_frequency?: string
+      notify_inapp?: boolean
+      notify_email?: boolean
       filters?: Array<{ field: string; op: string; value?: unknown }> | null
     }
 
@@ -254,6 +262,8 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     if ('filter_value' in body) updates.filter_value = body.filter_value?.trim() || null
     if ('is_active' in body) updates.is_active = !!body.is_active
     if ('digest_frequency' in body) updates.digest_frequency = body.digest_frequency
+    if ('notify_inapp' in body) updates.notify_inapp = body.notify_inapp !== false
+    if ('notify_email' in body) updates.notify_email = body.notify_email !== false
     if ('filters' in body) {
       updates.filters =
         Array.isArray(body.filters) && body.filters.length ? JSON.stringify(body.filters) : null

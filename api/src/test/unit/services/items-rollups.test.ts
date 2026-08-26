@@ -50,7 +50,7 @@ describe('parseRollupFormula', () => {
         JSON.stringify({
           related_collection: 'x',
           fk_field: 'y',
-          aggregate: 'median',
+          aggregate: 'bogus',
           value_field: 'z'
         })
       )

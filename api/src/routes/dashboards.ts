@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { computeWidgetData } from '../services/dashboard-widgets.js'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  computeWidgetData,
+  normalizeWidgetFilters,
+  registeredFieldSet
+} from '../services/dashboard-widgets.js'
+import { readItems } from '../services/items.js'
+import { getLabels } from '../services/queues.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -13,6 +19,7 @@ interface DashboardRow {
   user: string | null
   is_shared: boolean | number
   role_id?: string | null
+  global_filters?: string | null
   created_at: Date
   updated_at: Date
 }
@@ -54,6 +61,8 @@ interface UpdateDashboardBody {
   role_id?: string | null
   name?: string
   is_shared?: boolean
+  /** #635 — saved global filter bar (WidgetFilter[] shape, validated client-side + per-widget at resolve). */
+  global_filters?: Array<{ field: string; value: unknown; op?: string }> | null
 }
 
 interface UpdateWidgetBody {
@@ -98,6 +107,14 @@ function formatDashboard(d: DashboardRow, widgets: WidgetRow[] = []) {
     ...d,
     is_shared: Boolean(d.is_shared),
     role_id: d.role_id ?? null,
+    global_filters: (() => {
+      try {
+        const parsed = d.global_filters ? JSON.parse(d.global_filters) : null
+        return Array.isArray(parsed) ? parsed : null
+      } catch {
+        return null
+      }
+    })(),
     widgets: widgets.map(formatWidget)
   }
 }
@@ -220,6 +237,12 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       updates.role_id = req.body.role_id || null
       if (req.body.role_id) updates.is_shared = true
     }
+    if (req.body.global_filters !== undefined) {
+      updates.global_filters =
+        Array.isArray(req.body.global_filters) && req.body.global_filters.length
+          ? JSON.stringify(req.body.global_filters.slice(0, 20))
+          : null
+    }
 
     await db('nivaro_dashboards').where('id', row.id).update(updates)
     const updated = (await db('nivaro_dashboards').where('id', row.id).first()) as DashboardRow
@@ -273,9 +296,16 @@ export async function dashboardsRoutes(app: FastifyInstance) {
       .select('collection')
       .limit(80)) as Array<{ collection: string }>
     const fields = (await db('nivaro_fields')
-      .whereIn('collection', collections.map((c) => c.collection))
+      .whereIn(
+        'collection',
+        collections.map((c) => c.collection)
+      )
       .whereIn('type', ['integer', 'decimal', 'float', 'number', 'string', 'date', 'datetime'])
-      .select('collection', 'field', 'type')) as Array<{ collection: string; field: string; type: string }>
+      .select('collection', 'field', 'type')) as Array<{
+      collection: string
+      field: string
+      type: string
+    }>
     const catalog = collections
       .map((c) => {
         const fs = fields.filter((f) => f.collection === c.collection).slice(0, 20)
@@ -382,7 +412,15 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
 
       // 'report_preset' = a Report Studio catalog widget rendered client-side
       // (field holds the preset id; the /data endpoint is never used for it)
-      const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart', 'report_preset']
+      const VALID_TYPES = [
+        'count',
+        'sum',
+        'avg',
+        'latest',
+        'bar_chart',
+        'line_chart',
+        'report_preset'
+      ]
       if (!VALID_TYPES.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${VALID_TYPES.join(', ')}` })
       }
@@ -452,7 +490,15 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       const { type, title, collection, field, filters, col, row, width, height } = req.body
 
       if (type !== undefined) {
-        const VALID_TYPES = ['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart', 'report_preset']
+        const VALID_TYPES = [
+          'count',
+          'sum',
+          'avg',
+          'latest',
+          'bar_chart',
+          'line_chart',
+          'report_preset'
+        ]
         if (!VALID_TYPES.includes(type))
           return reply.code(400).send({ error: 'Invalid widget type' })
         updates.type = type
@@ -523,7 +569,42 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
   })
 
   // ── GET /widgets/:widgetId/data ───────────────────────────────────────────
-  app.get<{ Params: { widgetId: string } }>('/widgets/:widgetId/data', async (req, reply) => {
+  // ?extra_filters=<JSON> — dashboard-level global filters (#635), merged into
+  // the widget's own filters; a filter only binds widgets whose collection has
+  // the field (report-studio entity-filter semantics, enforced in the service).
+  app.get<{ Params: { widgetId: string }; Querystring: { extra_filters?: string } }>(
+    '/widgets/:widgetId/data',
+    async (req, reply) => {
+      const userId = req.user!.id
+      const widget = (await db('nivaro_dashboard_widgets')
+        .where('id', req.params.widgetId)
+        .first()) as WidgetRow | undefined
+
+      if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+
+      const dashboard = (await db('nivaro_dashboards').where('id', widget.dashboard).first()) as
+        | DashboardRow
+        | undefined
+      if (!dashboard) return reply.code(404).send({ error: 'Dashboard not found' })
+      if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+
+      const extraFilters = normalizeWidgetFilters(req.query.extra_filters)
+      const result = await computeWidgetData(widget, extraFilters)
+      if ('error' in result) return reply.code(result.status).send({ error: result.error })
+      return { data: result.data }
+    }
+  )
+
+  // ── POST /widgets/:widgetId/drill — records behind a widget number (#636) ──
+  // Reads via readItems AS THE VIEWER, so RBAC/RLS/User Scopes bind exactly
+  // like any other list read — the aggregate a viewer saw may count rows the
+  // drill won't show them, and that asymmetry is deliberate.
+  app.post<{
+    Params: { widgetId: string }
+    Body: { segment?: { field?: string; value?: unknown } | null; extra_filters?: unknown }
+  }>('/widgets/:widgetId/drill', async (req, reply) => {
     const userId = req.user!.id
     const widget = (await db('nivaro_dashboard_widgets')
       .where('id', req.params.widgetId)
@@ -538,9 +619,73 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
     if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    if (!widget.collection) return reply.code(400).send({ error: 'Widget has no collection' })
 
-    const result = await computeWidgetData(widget)
-    if ('error' in result) return reply.code(result.status).send({ error: result.error })
-    return { data: result.data }
+    const fieldSet = await registeredFieldSet(widget.collection)
+    const conds = [
+      ...normalizeWidgetFilters(widget.filters),
+      ...normalizeWidgetFilters(req.body?.extra_filters)
+    ].filter((f) => fieldSet.has(f.field))
+
+    const OP_MAP: Record<string, string> = {
+      eq: '_eq',
+      neq: '_neq',
+      gt: '_gt',
+      gte: '_gte',
+      lt: '_lt',
+      lte: '_lte',
+      contains: '_contains',
+      in: '_in'
+    }
+    const and: Array<Record<string, unknown>> = conds.map((f) => ({
+      [f.field]: { [OP_MAP[f.op ?? 'eq'] ?? '_eq']: f.value }
+    }))
+
+    const seg = req.body?.segment
+    if (seg && typeof seg.field === 'string' && seg.value !== undefined && seg.value !== null) {
+      if (seg.field === 'date') {
+        // Built-in charts bucket by CAST(created_at AS DATE) — a clicked bar's
+        // "date" segment means that calendar day, not a physical column.
+        const day = String(seg.value).slice(0, 10)
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+          const next = new Date(`${day}T00:00:00Z`)
+          next.setUTCDate(next.getUTCDate() + 1)
+          and.push({ created_at: { _gte: day } })
+          and.push({ created_at: { _lt: next.toISOString().slice(0, 10) } })
+        }
+      } else if (fieldSet.has(seg.field)) {
+        and.push({ [seg.field]: { _eq: seg.value } })
+      } else {
+        return reply.code(400).send({ error: 'Unknown segment field' })
+      }
+    }
+
+    try {
+      const res = await readItems(req.user!, widget.collection, {
+        fields: ['id'],
+        filter: and.length ? { _and: and } : undefined,
+        limit: 100
+      })
+      const ids = (res.data ?? []).map((r: Record<string, unknown>) => String(r.id))
+      const labels = ids.length
+        ? await getLabels(new Map([[widget.collection, new Set(ids)]]))
+        : ({} as Record<string, string>)
+      return {
+        data: {
+          collection: widget.collection,
+          total: res.total ?? ids.length,
+          capped: ids.length >= 100,
+          records: ids.map((id) => ({
+            id,
+            label: labels[`${widget.collection}:${id}`] ?? `#${id}`
+          }))
+        }
+      }
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500
+      return reply
+        .code(status)
+        .send({ error: status === 403 ? 'Forbidden' : 'Failed to resolve records' })
+    }
   })
 }

@@ -72,7 +72,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  */
 
 
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative' | 'pareto' | 'stats' | 'scatter' | 'hot_records' | 'metric'
+type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative' | 'pareto' | 'stats' | 'scatter' | 'hot_records' | 'metric' | 'pivot' | 'ai_insight'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
@@ -230,6 +230,11 @@ interface QueryWidgetCfg {
 interface WidgetConfig {
   metric?: { aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string }
   dimension?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  /** Pivot (#688): row × column matrix over the metric. */
+  row_dim?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  col_dim?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  /** AI insight (#690): optional focus folded into the prompt. */
+  instructions?: string
   filters?: WidgetFilter[]
   date_field?: string | null
   limit?: number
@@ -320,6 +325,18 @@ interface WidgetDataShape {
   }>
 }
 
+/** Pivot (#688) server payload — rides the widget data as `pivot`. */
+interface PivotDataShape {
+  rows: string[]
+  cols: string[]
+  cells: Record<string, Record<string, number>>
+  row_totals: Record<string, number>
+  col_totals: Record<string, number>
+  grand_total: number
+  truncated_rows: number
+  truncated_cols: number
+}
+
 const NUMERIC_TYPES = new Set(['integer', 'bigInteger', 'decimal', 'float', 'number'])
 const DATE_TYPES = new Set(['date', 'datetime', 'dateTime', 'timestamp'])
 const CHART_COLORS = ['#00ceff', '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b']
@@ -359,6 +376,8 @@ const WIDGET_TYPES: Array<{ id: WidgetType; label: string }> = [
   { id: 'scatter', label: 'Scatter' },
   { id: 'hot_records', label: 'Hot records' },
   { id: 'metric', label: 'Metric (catalog)' },
+  { id: 'pivot', label: 'Pivot Table' },
+  { id: 'ai_insight', label: 'AI Insight' },
   { id: 'divider', label: 'Divider' }
 ]
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'null', 'nnull']
@@ -609,6 +628,9 @@ function WidgetBody({
   entityFilters: EntityFilter[]
   reportId?: string
 }) {
+  // AI insight (#690): a fresh post overwrites the server's daily cache, then
+  // the normal refetch picks the regenerated narrative up.
+  const [aiBusy, setAiBusy] = useState(false)
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: [
       'rs-widget',
@@ -623,7 +645,7 @@ function WidgetBody({
       // Calc widgets reference SIBLING widgets, which only the saved report
       // knows — resolve through the report-scoped data route instead of the
       // stateless preview.
-      widget.type === 'calc' || widget.type === 'narrative'
+      widget.type === 'calc' || widget.type === 'narrative' || widget.type === 'ai_insight'
         ? api
             .post<{ data: WidgetDataShape }>(
               `/report-studio/${reportId}/widgets/${widget.id}/data`,
@@ -645,10 +667,25 @@ function WidgetBody({
       (!!widget.collection ||
         widget.type === 'kpi_group' ||
         widget.type === 'queue' ||
-        ((widget.type === 'calc' || widget.type === 'narrative') && !!reportId)),
+        ((widget.type === 'calc' || widget.type === 'narrative' || widget.type === 'ai_insight') &&
+          !!reportId)),
     staleTime: 60_000,
     retry: false
   })
+  const refreshAiInsight = async () => {
+    if (!reportId) return
+    setAiBusy(true)
+    try {
+      await api.post(`/report-studio/${reportId}/widgets/${widget.id}/data?fresh=1`, {
+        date_range: dateRange || null,
+        entity_filters: entityFilters
+      })
+      await refetch()
+    } catch {
+      /* the previous narrative stays up */
+    }
+    setAiBusy(false)
+  }
 
   if (widget.type === 'divider') return null
   if (widget.type === 'query') {
@@ -667,7 +704,8 @@ function WidgetBody({
     !widget.collection &&
     widget.type !== 'kpi_group' &&
     widget.type !== 'calc' &&
-    widget.type !== 'narrative'
+    widget.type !== 'narrative' &&
+    widget.type !== 'ai_insight'
   ) {
     return <p className='px-1 text-[12px] text-slate-400'>Configure this widget to see data.</p>
   }
@@ -686,6 +724,93 @@ function WidgetBody({
           {String((data as { narrative?: string }).narrative ?? '')}
         </div>
       )
+    } else if (widget.type === 'ai_insight') {
+      body = (
+        <div className='flex h-full min-h-0 flex-col px-1'>
+          <div className='mb-1 flex items-center gap-1.5'>
+            <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
+            <span className='text-[10px] uppercase tracking-wide text-slate-400'>AI-generated</span>
+            <button
+              type='button'
+              title='Regenerate this summary'
+              disabled={aiBusy}
+              onClick={() => void refreshAiInsight()}
+              className='ml-auto rounded p-0.5 text-slate-300 hover:text-nvr-cyan disabled:opacity-50'
+            >
+              <RefreshCw className={cn('h-3 w-3', aiBusy && 'animate-spin')} />
+            </button>
+          </div>
+          <div className='min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+            {aiBusy ? 'Regenerating…' : String((data as { narrative?: string }).narrative ?? '')}
+          </div>
+        </div>
+      )
+    } else if (widget.type === 'pivot') {
+      const pv = (data as { pivot?: PivotDataShape }).pivot
+      body =
+        !pv || pv.rows.length === 0 ? (
+          <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+        ) : (
+          <div className='flex h-full min-h-0 flex-col'>
+            <div className='min-h-0 flex-1 overflow-auto'>
+              <table className='w-full border-collapse text-[10.5px]'>
+                <thead>
+                  <tr>
+                    <th className='sticky left-0 top-0 z-[2] bg-white dark:bg-card' />
+                    {pv.cols.map((c) => (
+                      <th key={c} className='sticky top-0 z-[1] whitespace-nowrap bg-white px-1.5 pb-1 text-right font-medium text-slate-400 dark:bg-card'>
+                        {c}
+                      </th>
+                    ))}
+                    <th className='sticky top-0 z-[1] bg-white px-1.5 pb-1 text-right font-semibold text-slate-500 dark:bg-card dark:text-slate-300'>
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pv.rows.map((r) => (
+                    <tr key={r} className='hover:bg-muted'>
+                      <td className='sticky left-0 z-[1] max-w-[150px] truncate bg-white pr-1.5 text-slate-500 dark:bg-card dark:text-slate-400'>
+                        {r}
+                      </td>
+                      {pv.cols.map((c) => {
+                        const v = pv.cells[r]?.[c]
+                        return (
+                          <td key={c} className='px-1.5 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-300'>
+                            {v == null ? '' : fmtValue(v, widget.config?.format)}
+                          </td>
+                        )
+                      })}
+                      <td className='px-1.5 py-0.5 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-200'>
+                        {fmtValue(pv.row_totals[r] ?? 0, widget.config?.format)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className='border-t border-slate-200 dark:border-border'>
+                    <td className='sticky left-0 z-[1] bg-white pr-1.5 font-semibold text-slate-600 dark:bg-card dark:text-slate-300'>
+                      Total
+                    </td>
+                    {pv.cols.map((c) => (
+                      <td key={c} className='px-1.5 py-0.5 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-200'>
+                        {fmtValue(pv.col_totals[c] ?? 0, widget.config?.format)}
+                      </td>
+                    ))}
+                    <td className='px-1.5 py-0.5 text-right font-semibold tabular-nums text-slate-900 dark:text-foreground'>
+                      {fmtValue(pv.grand_total, widget.config?.format)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            {(pv.truncated_rows > 0 || pv.truncated_cols > 0) && (
+              <p className='mt-1 shrink-0 px-1 text-[10px] text-amber-600 dark:text-amber-400'>
+                Showing the {pv.rows.length}×{pv.cols.length} largest groups — totals cover the visible cells only.
+              </p>
+            )}
+          </div>
+        )
     } else if (widget.type === 'heatmap') {
       const cells = ((data as { cells?: Array<{ dim: string; dim2: string; value: number }> }).cells ?? [])
       const rowsD = [...new Set(cells.map((c) => c.dim))]
@@ -1245,7 +1370,24 @@ function ConfigSheet({
             </div>
           )}
 
-          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && widget.type !== 'narrative' && (
+          {widget.type === 'ai_insight' && (
+            <div className='space-y-1.5'>
+              <Label className='text-[11.5px]'>Focus (optional)</Label>
+              <textarea
+                value={cfg.instructions ?? ''}
+                onChange={(e) => setCfg({ instructions: e.target.value })}
+                rows={3}
+                placeholder='e.g. Call out anything trending down'
+                className='w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+              />
+              <p className='text-[10.5px] text-slate-400'>
+                Summarizes the report's other widgets in plain language. Regenerates once a day,
+                or on the widget's refresh button.
+              </p>
+            </div>
+          )}
+
+          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && widget.type !== 'narrative' && widget.type !== 'ai_insight' && (
             <>
               <div className='space-y-1.5'>
                 <Label className='text-[11.5px]'>Collection</Label>
@@ -1334,6 +1476,45 @@ function ConfigSheet({
                   </div>
                 </div>
               )}
+
+              {widget.type === 'pivot' &&
+                (['row_dim', 'col_dim'] as const).map((k) => {
+                  const d = cfg[k]
+                  return (
+                    <div key={k} className='space-y-1.5'>
+                      <Label className='text-[11.5px]'>
+                        {k === 'row_dim' ? 'Rows (dimension)' : 'Columns (dimension)'}
+                      </Label>
+                      <Combo
+                        value={d?.field}
+                        options={fieldOpts}
+                        placeholder='Dimension field'
+                        onChange={(v) =>
+                          setCfg({ [k]: v ? { field: v, bucket: d?.bucket } : null } as never)
+                        }
+                      />
+                      {d?.field && (
+                        <div className='flex gap-1'>
+                          {([undefined, 'day', 'week', 'month'] as const).map((b) => (
+                            <button
+                              key={b ?? 'none'}
+                              type='button'
+                              onClick={() => setCfg({ [k]: { field: d.field, bucket: b } } as never)}
+                              className={cn(
+                                'rounded-full border px-2 py-0.5 text-[11px]',
+                                (d.bucket ?? undefined) === b
+                                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                                  : 'border-slate-200 text-slate-400 dark:border-border'
+                              )}
+                            >
+                              {b ?? 'values'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
 
               {widget.type === 'bar' && (
                 <div className='flex items-center gap-2'>
@@ -3476,7 +3657,11 @@ export function ReportStudioEditPage() {
                 ? 'Calculated KPI'
                 : type === 'movers'
                   ? 'Top movers'
-                  : `New ${type}`,
+                  : type === 'pivot'
+                    ? 'Pivot table'
+                    : type === 'ai_insight'
+                      ? 'AI insight'
+                      : `New ${type}`,
         collection: null,
         config:
           type === 'kpi_group'
@@ -3489,7 +3674,9 @@ export function ReportStudioEditPage() {
                   ? ({ text: 'Spend reached {{a}} this period.', refs: {} } as never)
                   : type === 'movers'
                     ? { metric: { aggregate: 'count' }, compare: 'previous_period', limit: 5 }
-                    : { metric: { aggregate: 'count' } },
+                    : type === 'ai_insight'
+                      ? {}
+                      : { metric: { aggregate: 'count' } },
         x: 0,
         y: maxY,
         w: type === 'kpi' || type === 'calc' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,
@@ -3500,7 +3687,7 @@ export function ReportStudioEditPage() {
               ? 1
               : type === 'kpi_group'
                 ? 2
-                : type === 'query'
+                : type === 'query' || type === 'pivot'
                   ? 4
                   : 3
       }

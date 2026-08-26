@@ -8,6 +8,7 @@ import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
+import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
 
 const ulid = monotonicFactory()
 
@@ -77,8 +78,12 @@ export async function uploadFileBuffer(
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
   const diskName = buildDiskName(diskId, ext)
 
-  const provider = getStorageProviderName()
-  await getStorage().put(diskName, buffer, String(mimeType))
+  // Settings-driven driver (#527): NEW uploads go to whatever
+  // nivaro_settings.storage_driver selects ('local' default = the historic
+  // env-driven provider). Reads fall back to local, so history keeps serving.
+  const activeDriver = await getActiveStorageDriver()
+  const provider = activeDriver.name === 'local' ? getStorageProviderName() : activeDriver.name
+  await activeDriver.put(diskName, buffer, String(mimeType))
 
   await db('nivaro_files').insert({
     id: fileId,
@@ -193,10 +198,12 @@ export async function getFile(
     .first()
 }
 
-/** Read the raw bytes of a file from whichever storage provider holds it. */
+/** Read the raw bytes of a file from whichever storage provider holds it.
+ *  Tries the active settings-driven driver first, then falls back to the
+ *  env/local provider — flipping the storage driver never 404s history. */
 export async function readFileBuffer(file: StoredFile): Promise<Buffer> {
   if (!file.filename_disk) throw new Error('File has no stored object')
-  return getStorage().get(file.filename_disk)
+  return readStoredObject(file.filename_disk)
 }
 
 export async function listFiles(
@@ -232,7 +239,7 @@ export async function listFiles(
     })
   }
   if (tag) {
-    q.where('f.tags', 'like', `%"${tag.replace(/[%_[\"]/g, '')}"%`)
+    q.where('f.tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
   const countQ = db('nivaro_files')
   if (folder) countQ.where({ folder })
@@ -244,7 +251,7 @@ export async function listFiles(
     })
   }
   if (tag) {
-    countQ.where('tags', 'like', `%"${tag.replace(/[%_[\"]/g, '')}"%`)
+    countQ.where('tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
   const [files, [{ count }]] = await Promise.all([q, countQ.count('id as count')])
   // Attachment source badges (#413): how each file arrived, derived — a
@@ -313,9 +320,9 @@ export async function deleteFile(id: string): Promise<void> {
   if (!file) return
   await db('nivaro_files').where({ id }).delete()
   if (file.filename_disk) {
-    await getStorage()
-      .delete(file.filename_disk)
-      .catch(() => null)
+    // Deletes hit the active driver AND the env/local provider — the object
+    // may predate the current storage driver selection.
+    await deleteStoredObject(file.filename_disk).catch(() => null)
   }
   await deleteTransforms(id).catch(() => null)
 

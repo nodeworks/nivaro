@@ -246,7 +246,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
   })
 
   // Type-change dry-run (#153): which values won't survive the cast.
-  app.post<{ Params: { table: string; col: string }; Body: { to_type?: string } }>(
+  // #510: optional max_length shapes the string target so the preview judges
+  // the EXACT type the convert executes with — a 255 preview against a 50
+  // execute would report the wrong failures.
+  app.post<{ Params: { table: string; col: string }; Body: { to_type?: string; max_length?: number } }>(
     '/:table/columns/:col/cast-check',
     async (req, reply) => {
       const { table, col } = req.params
@@ -263,8 +266,12 @@ export async function dataModelRoutes(app: FastifyInstance) {
         string: 'NVARCHAR(255)',
         text: 'NVARCHAR(MAX)'
       }
-      const sqlType = SQL_TYPES[toType]
+      let sqlType = SQL_TYPES[toType]
       if (!sqlType) return reply.code(400).send({ error: `Unknown target type "${toType}"` })
+      const maxLen = Number(req.body?.max_length)
+      if (toType === 'string' && Number.isInteger(maxLen) && maxLen > 0 && maxLen <= 4000) {
+        sqlType = `NVARCHAR(${maxLen})`
+      }
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) {
         return reply.code(400).send({ error: 'Invalid identifier' })
       }
@@ -1783,7 +1790,15 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.post('/collections/:collection/fields/:field/change-type', async (req, reply) => {
     const { collection, field } = req.params as { collection: string; field: string }
-    const body = req.body as { new_type?: string; max_length?: number; force?: boolean }
+    const body = req.body as {
+      new_type?: string
+      max_length?: number
+      force?: boolean
+      // #510: the failure count the operator SAW in the preview — if the live
+      // count has drifted since (concurrent writes), 409 instead of silently
+      // nulling values nobody reviewed.
+      expected_failures?: number
+    }
 
     if (isSystemTable(collection)) {
       return reply.code(403).send({ error: 'Cannot modify CMS system tables' })
@@ -1818,6 +1833,60 @@ export async function dataModelRoutes(app: FastifyInstance) {
           .send({ error: `Column "${field}" not found on table "${collection}"` })
       }
 
+      // ── Refusals (#510) — conversions that would corrupt more than data ──
+      // Primary key: identity/PK columns anchor every FK and layout — never.
+      const pkRows = rawRows<{ COLUMN_NAME: string }>(await db.raw(
+        `SELECT kcu.COLUMN_NAME AS "COLUMN_NAME"
+           FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+           JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+             ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND kcu.TABLE_NAME = tc.TABLE_NAME
+          WHERE tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND kcu.COLUMN_NAME = ?`,
+        [collection, field]
+      ))
+      if (pkRows.length > 0) {
+        return reply.code(400).send({ error: 'Cannot convert a primary key column' })
+      }
+      // FK-constrained (either side): the constraint's type must match its
+      // counterpart — drop the FK deliberately first if this is really wanted.
+      const fkRows = rawRows<{ fk_name: string }>(await db.raw(
+        `SELECT fk.name AS "fk_name"
+           FROM sys.foreign_key_columns fkc
+           JOIN sys.foreign_keys fk ON fk.object_id = fkc.constraint_object_id
+           JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+           JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+          WHERE (fkc.parent_object_id = OBJECT_ID(?) AND pc.name = ?)
+             OR (fkc.referenced_object_id = OBJECT_ID(?) AND rc.name = ?)`,
+        [collection, field, collection, field]
+      ))
+      if (fkRows.length > 0) {
+        return reply.code(400).send({
+          error: `Column is bound by foreign key constraint "${fkRows[0].fk_name}" — drop the constraint first`
+        })
+      }
+      // Computed / auto-id fields: the value is machine-derived; converting the
+      // column under the generator produces garbage on the next recompute.
+      const fmRow = (await db('nivaro_fields')
+        .where({ collection, field })
+        .select('computed_type', 'options')
+        .first()) as { computed_type?: string | null; options?: string | null } | undefined
+      if (fmRow?.computed_type) {
+        return reply
+          .code(400)
+          .send({ error: 'Cannot convert a computed field — remove the formula first' })
+      }
+      if (fmRow?.options) {
+        try {
+          const opts = JSON.parse(fmRow.options) as { auto_id?: unknown }
+          if (opts?.auto_id) {
+            return reply
+              .code(400)
+              .send({ error: 'Cannot convert an auto-ID field — remove the ID pattern first' })
+          }
+        } catch {
+          /* unparseable options never block */
+        }
+      }
+
       // Preserve current nullability
       const colMeta = rawRows<{ IS_NULLABLE: string }>(await db.raw(
         `SELECT IS_NULLABLE AS "IS_NULLABLE" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
@@ -1830,6 +1899,17 @@ export async function dataModelRoutes(app: FastifyInstance) {
         `SELECT COUNT(*) AS cnt FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
       ))
       const failingCount = Number(failRows[0]?.cnt ?? 0)
+      if (
+        body.expected_failures != null &&
+        Number.isFinite(Number(body.expected_failures)) &&
+        Number(body.expected_failures) !== failingCount
+      ) {
+        return reply.code(409).send({
+          error: `Failure count changed since the preview (${body.expected_failures} → ${failingCount}) — re-run the preview`,
+          code: 'CAST_DRIFT',
+          failures: failingCount
+        })
+      }
       if (failingCount > 0 && !body.force) {
         const samples = rawRows<Record<string, unknown>>(await db.raw(
           `SELECT TOP 5 [${field}] AS value FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
@@ -1858,7 +1938,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
       })
 
       await logActivity({
-        action: 'update',
+        action: 'field-type-convert',
         collection: 'schema',
         item: `${collection}.${field}`,
         user: req.user?.id,

@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CronBuilder } from '@nivaro/shared'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
   ArrowLeft,
@@ -25,10 +25,10 @@ import {
   X,
   Zap
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
+import { FlowRunsPanel } from '@/components/flow-runs-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -51,8 +51,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { FlowRunsPanel } from '@/components/flow-runs-panel'
 import { api, exportFlow } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn, formatRelative } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -914,412 +914,433 @@ function EditOperationDialog({
         <form onSubmit={handleSubmit}>
           <DialogBody>
             <div className='space-y-4'>
-            <div className='space-y-1.5'>
-              <Label>Name</Label>
-              <Input
-                value={opName}
-                onChange={(e) => setOpName(e.target.value)}
-                placeholder='Operation name'
-              />
-            </div>
-            <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
-              <div>
-                <Label className='cursor-pointer'>Asynchronous</Label>
-                <p className='text-[11px] text-slate-400'>
-                  Fire and forget — chain continues down resolve path immediately without waiting
-                  for this op to finish.
-                </p>
+              <div className='space-y-1.5'>
+                <Label>Name</Label>
+                <Input
+                  value={opName}
+                  onChange={(e) => setOpName(e.target.value)}
+                  placeholder='Operation name'
+                />
               </div>
-              <Switch
-                checked={(optsState.async as boolean) ?? false}
-                onCheckedChange={(v) => setOpt('async', v)}
-              />
-            </div>
-            {op.type === 'log' && (
-              <>
-                <div className='space-y-1.5'>
-                  <Label>Message</Label>
-                  <Input
-                    value={(optsState.message as string) ?? ''}
-                    onChange={(e) => setOpt('message', e.target.value)}
-                    placeholder='{{$trigger}} fired — {{collection}}'
-                  />
-                  <p className='text-[11px] text-slate-400'>Supports {'{{variable}}'} templates.</p>
+              <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
+                <div>
+                  <Label className='cursor-pointer'>Asynchronous</Label>
+                  <p className='text-[11px] text-slate-400'>
+                    Fire and forget — chain continues down resolve path immediately without waiting
+                    for this op to finish.
+                  </p>
                 </div>
-                <div className='space-y-1.5'>
-                  <Label>Log Level</Label>
-                  <Select
-                    value={(optsState.level as string) ?? 'info'}
-                    onValueChange={(v) => setOpt('level', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value='debug'>debug</SelectItem>
-                      <SelectItem value='info'>info</SelectItem>
-                      <SelectItem value='warn'>warn</SelectItem>
-                      <SelectItem value='error'>error</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </>
-            )}
-            {op.type === 'condition' && (
-              <>
-                <div className='rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400'>
-                  <strong>true</strong> → resolve path. <strong>false</strong> → reject path.
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Field Path</Label>
-                  <Input
-                    value={(optsState.field as string) ?? ''}
-                    onChange={(e) => setOpt('field', e.target.value)}
-                    placeholder='payload.status or $data.amount'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Operator</Label>
-                  <Select value={operator} onValueChange={(v) => setOpt('operator', v)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CONDITION_OPERATORS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {!noValueOps.has(operator) && (
+                <Switch
+                  checked={(optsState.async as boolean) ?? false}
+                  onCheckedChange={(v) => setOpt('async', v)}
+                />
+              </div>
+              {op.type === 'log' && (
+                <>
                   <div className='space-y-1.5'>
-                    <Label>Compare Value</Label>
+                    <Label>Message</Label>
                     <Input
-                      value={(optsState.value as string) ?? ''}
-                      onChange={(e) => setOpt('value', e.target.value)}
-                      placeholder='e.g. active'
+                      value={(optsState.message as string) ?? ''}
+                      onChange={(e) => setOpt('message', e.target.value)}
+                      placeholder='{{$trigger}} fired — {{collection}}'
                     />
-                  </div>
-                )}
-              </>
-            )}
-            {op.type === 'exec-script' && (
-              <>
-                <div className='rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 px-3 py-2 text-[11px] text-violet-700 dark:text-violet-400'>
-                  <Code className='inline h-3 w-3 mr-1' />
-                  Available: <code className='font-mono'>data</code> (flow data),{' '}
-                  <code className='font-mono'>log</code> (logger). Return{' '}
-                  <code className='font-mono'>data</code> to pass downstream.
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>JavaScript Code</Label>
-                  <Textarea
-                    value={(optsState.code as string) ?? ''}
-                    onChange={(e) => setOpt('code', e.target.value)}
-                    className='font-mono text-[12px] resize-y'
-                    rows={12}
-                    spellCheck={false}
-                    placeholder={`// Modify data and return it\ndata.computed = data.payload?.amount * 1.1;\nreturn data;`}
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Timeout (ms)</Label>
-                  <Input
-                    type='number'
-                    value={(optsState.timeout_ms as number) ?? 5000}
-                    onChange={(e) => setOpt('timeout_ms', Number(e.target.value))}
-                    min={100}
-                    max={30000}
-                    className='w-32'
-                  />
-                </div>
-              </>
-            )}
-            {op.type === 'webhook' && (
-              <>
-                <div className='space-y-1.5'>
-                  <Label>
-                    URL <span className='text-red-500'>*</span>
-                  </Label>
-                  <Input
-                    value={(optsState.url as string) ?? ''}
-                    onChange={(e) => setOpt('url', e.target.value)}
-                    placeholder='https://example.com/webhook'
-                  />
-                  <p className='text-[11px] text-slate-400'>Supports {'{{variable}}'} templates.</p>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Method</Label>
-                  <Select
-                    value={(optsState.method as string) ?? 'POST'}
-                    onValueChange={(v) => setOpt('method', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
-                  <div>
-                    <Label className='cursor-pointer'>Asynchronous</Label>
                     <p className='text-[11px] text-slate-400'>
-                      Fire and forget; don't wait for response.
+                      Supports {'{{variable}}'} templates.
                     </p>
                   </div>
-                  <Switch
-                    checked={(optsState.async as boolean) ?? false}
-                    onCheckedChange={(v) => setOpt('async', v)}
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Additional Headers (JSON)</Label>
-                  <Textarea
-                    defaultValue={
-                      typeof optsState.headers === 'object'
-                        ? JSON.stringify(optsState.headers, null, 2)
-                        : ((optsState.headers as string) ?? '{}')
-                    }
-                    onChange={(e) => {
-                      try {
-                        setOpt('headers', JSON.parse(e.target.value))
-                      } catch {
-                        /* allow typing */
-                      }
-                    }}
-                    className='font-mono text-[12px] resize-y'
-                    rows={3}
-                    spellCheck={false}
-                  />
-                </div>
-              </>
-            )}
-            {op.type === 'mail' && (
-              <>
-                <div className='rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/20 px-3 py-2 text-[11px] text-sky-700 dark:text-sky-400'>
-                  <Mail className='inline h-3 w-3 mr-1' />
-                  Supports <code className='font-mono'>{'{{variable}}'}</code> templates. Requires
-                  SMTP in Settings.
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>
-                    To <span className='text-red-500'>*</span>
-                  </Label>
-                  <Input
-                    value={(optsState.to as string) ?? ''}
-                    onChange={(e) => setOpt('to', e.target.value)}
-                    placeholder='user@example.com or {{$data.email}}'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>From (override)</Label>
-                  <Input
-                    value={(optsState.from as string) ?? ''}
-                    onChange={(e) => setOpt('from', e.target.value)}
-                    placeholder='Leave blank to use MAIL_FROM setting'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Subject</Label>
-                  <Input
-                    value={(optsState.subject as string) ?? ''}
-                    onChange={(e) => setOpt('subject', e.target.value)}
-                    placeholder='New item {{$trigger}}d in {{$collection}}'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Body (HTML)</Label>
-                  <Textarea
-                    value={(optsState.body as string) ?? ''}
-                    onChange={(e) => setOpt('body', e.target.value)}
-                    className='font-mono text-[12px] resize-y'
-                    rows={8}
-                    spellCheck={false}
-                    placeholder='<p>Hello {{name}}</p>'
-                  />
-                </div>
-              </>
-            )}
-            {op.type === 'item-read' && (
-              <>
-                <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
-                  <Database className='inline h-3 w-3 mr-1' />
-                  Reads one record and merges it into flow data under the result key. Dotted
-                  fields (e.g. <code className='font-mono'>creator.email</code>) resolve through
-                  M2O relations and land as flat keys — reference them downstream as{' '}
-                  <code className='font-mono'>{'{{record.creator.email}}'}</code>.
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>
-                    Collection <span className='text-red-500'>*</span>
-                  </Label>
-                  <Input
-                    value={(optsState.collection as string) ?? ''}
-                    onChange={(e) => setOpt('collection', e.target.value)}
-                    placeholder='{{collection}} or a fixed name'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>
-                    Record ID <span className='text-red-500'>*</span>
-                  </Label>
-                  <Input
-                    value={(optsState.id as string) ?? ''}
-                    onChange={(e) => setOpt('id', e.target.value)}
-                    placeholder='{{item}}'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Relation fields (comma-separated dotted paths)</Label>
-                  <Input
-                    value={
-                      Array.isArray(optsState.fields)
-                        ? (optsState.fields as string[]).join(', ')
-                        : ''
-                    }
-                    onChange={(e) =>
-                      setOpt(
-                        'fields',
-                        e.target.value
-                          .split(',')
-                          .map((v) => v.trim())
-                          .filter(Boolean)
-                      )
-                    }
-                    placeholder='creator.email, additional_contact.email'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Result key</Label>
-                  <Input
-                    value={(optsState.result_key as string) ?? ''}
-                    onChange={(e) => setOpt('result_key', e.target.value)}
-                    placeholder='record'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-              </>
-            )}
-            {op.type === 'notification' && (
-              <>
-                <div className='rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400'>
-                  <Bell className='inline h-3 w-3 mr-1' />
-                  Sends an in-app notification. Supports{' '}
-                  <code className='font-mono'>{'{{variable}}'}</code> templates.
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>
-                    Recipient (User ID) <span className='text-red-500'>*</span>
-                  </Label>
-                  <Input
-                    value={(optsState.recipient as string) ?? ''}
-                    onChange={(e) => setOpt('recipient', e.target.value)}
-                    placeholder='User UUID or {{$data.user_id}}'
-                    className='font-mono text-[13px]'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Subject</Label>
-                  <Input
-                    value={(optsState.subject as string) ?? ''}
-                    onChange={(e) => setOpt('subject', e.target.value)}
-                    placeholder='Item {{$trigger}}d'
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Message</Label>
-                  <Textarea
-                    value={(optsState.message as string) ?? ''}
-                    onChange={(e) => setOpt('message', e.target.value)}
-                    rows={3}
-                    placeholder='Item {{id}} was updated by {{user}}.'
-                  />
-                </div>
-              </>
-            )}
-            {op.type === 'transform' && (
-              <>
-                <p className='text-[11px] text-slate-400'>
-                  Map, set, template-render, or delete fields. Applied in order.
-                </p>
-                <div className='space-y-2'>
-                  {mappings.map((m, idx) => (
-                    <div
-                      key={idx}
-                      className='rounded-lg border border-slate-200 dark:border-slate-700 p-2.5 space-y-2'
+                  <div className='space-y-1.5'>
+                    <Label>Log Level</Label>
+                    <Select
+                      value={(optsState.level as string) ?? 'info'}
+                      onValueChange={(v) => setOpt('level', v)}
                     >
-                      <div className='grid grid-cols-[1fr_130px] gap-2'>
-                        <div className='space-y-1'>
-                          <span className='text-[10px] text-slate-400'>
-                            {m.operation === 'delete' ? 'Path to delete' : 'Source / from'}
-                          </span>
-                          <Input
-                            value={m.from}
-                            onChange={(e) => {
-                              const n = [...mappings]
-                              n[idx] = { ...m, from: e.target.value }
-                              setOpt('mappings', n)
-                            }}
-                            placeholder='payload.status'
-                            className='font-mono text-[12px] h-7'
-                          />
-                        </div>
-                        <div className='space-y-1'>
-                          <span className='text-[10px] text-slate-400'>Operation</span>
-                          <Select
-                            value={m.operation}
-                            onValueChange={(v) => {
-                              const n = [...mappings]
-                              n[idx] = { ...m, operation: v as TransformMapping['operation'] }
-                              setOpt('mappings', n)
-                            }}
-                          >
-                            <SelectTrigger className='h-7 text-[12px]'>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value='copy'>→ copy to</SelectItem>
-                              <SelectItem value='set'>→ set value</SelectItem>
-                              <SelectItem value='template'>→ template</SelectItem>
-                              <SelectItem value='delete'>delete</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      {m.operation !== 'delete' && (
-                        <div className='space-y-1'>
-                          <span className='text-[10px] text-slate-400'>
-                            {m.operation === 'copy'
-                              ? 'Target path'
-                              : m.operation === 'template'
-                                ? 'Template ({{var}} syntax)'
-                                : 'Value to set'}
-                          </span>
-                          <div className='flex items-center gap-2'>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='debug'>debug</SelectItem>
+                        <SelectItem value='info'>info</SelectItem>
+                        <SelectItem value='warn'>warn</SelectItem>
+                        <SelectItem value='error'>error</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+              {op.type === 'condition' && (
+                <>
+                  <div className='rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400'>
+                    <strong>true</strong> → resolve path. <strong>false</strong> → reject path.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Field Path</Label>
+                    <Input
+                      value={(optsState.field as string) ?? ''}
+                      onChange={(e) => setOpt('field', e.target.value)}
+                      placeholder='payload.status or $data.amount'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Operator</Label>
+                    <Select value={operator} onValueChange={(v) => setOpt('operator', v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CONDITION_OPERATORS.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {!noValueOps.has(operator) && (
+                    <div className='space-y-1.5'>
+                      <Label>Compare Value</Label>
+                      <Input
+                        value={(optsState.value as string) ?? ''}
+                        onChange={(e) => setOpt('value', e.target.value)}
+                        placeholder='e.g. active'
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+              {op.type === 'exec-script' && (
+                <>
+                  <div className='rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 px-3 py-2 text-[11px] text-violet-700 dark:text-violet-400'>
+                    <Code className='inline h-3 w-3 mr-1' />
+                    Available: <code className='font-mono'>data</code> (flow data),{' '}
+                    <code className='font-mono'>log</code> (logger). Return{' '}
+                    <code className='font-mono'>data</code> to pass downstream.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>JavaScript Code</Label>
+                    <Textarea
+                      value={(optsState.code as string) ?? ''}
+                      onChange={(e) => setOpt('code', e.target.value)}
+                      className='font-mono text-[12px] resize-y'
+                      rows={12}
+                      spellCheck={false}
+                      placeholder={`// Modify data and return it\ndata.computed = data.payload?.amount * 1.1;\nreturn data;`}
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Timeout (ms)</Label>
+                    <Input
+                      type='number'
+                      value={(optsState.timeout_ms as number) ?? 5000}
+                      onChange={(e) => setOpt('timeout_ms', Number(e.target.value))}
+                      min={100}
+                      max={30000}
+                      className='w-32'
+                    />
+                  </div>
+                </>
+              )}
+              {op.type === 'webhook' && (
+                <>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      URL <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.url as string) ?? ''}
+                      onChange={(e) => setOpt('url', e.target.value)}
+                      placeholder='https://example.com/webhook'
+                    />
+                    <p className='text-[11px] text-slate-400'>
+                      Supports {'{{variable}}'} templates.
+                    </p>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Method</Label>
+                    <Select
+                      value={(optsState.method as string) ?? 'POST'}
+                      onValueChange={(v) => setOpt('method', v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
+                    <div>
+                      <Label className='cursor-pointer'>Asynchronous</Label>
+                      <p className='text-[11px] text-slate-400'>
+                        Fire and forget; don't wait for response.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={(optsState.async as boolean) ?? false}
+                      onCheckedChange={(v) => setOpt('async', v)}
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Additional Headers (JSON)</Label>
+                    <Textarea
+                      defaultValue={
+                        typeof optsState.headers === 'object'
+                          ? JSON.stringify(optsState.headers, null, 2)
+                          : ((optsState.headers as string) ?? '{}')
+                      }
+                      onChange={(e) => {
+                        try {
+                          setOpt('headers', JSON.parse(e.target.value))
+                        } catch {
+                          /* allow typing */
+                        }
+                      }}
+                      className='font-mono text-[12px] resize-y'
+                      rows={3}
+                      spellCheck={false}
+                    />
+                  </div>
+                </>
+              )}
+              {op.type === 'mail' && (
+                <>
+                  <div className='rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/20 px-3 py-2 text-[11px] text-sky-700 dark:text-sky-400'>
+                    <Mail className='inline h-3 w-3 mr-1' />
+                    Supports <code className='font-mono'>{'{{variable}}'}</code> templates. Requires
+                    SMTP in Settings.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      To <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.to as string) ?? ''}
+                      onChange={(e) => setOpt('to', e.target.value)}
+                      placeholder='user@example.com or {{$data.email}}'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>From (override)</Label>
+                    <Input
+                      value={(optsState.from as string) ?? ''}
+                      onChange={(e) => setOpt('from', e.target.value)}
+                      placeholder='Leave blank to use MAIL_FROM setting'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Subject</Label>
+                    <Input
+                      value={(optsState.subject as string) ?? ''}
+                      onChange={(e) => setOpt('subject', e.target.value)}
+                      placeholder='New item {{$trigger}}d in {{$collection}}'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Body (HTML)</Label>
+                    <Textarea
+                      value={(optsState.body as string) ?? ''}
+                      onChange={(e) => setOpt('body', e.target.value)}
+                      className='font-mono text-[12px] resize-y'
+                      rows={8}
+                      spellCheck={false}
+                      placeholder='<p>Hello {{name}}</p>'
+                    />
+                  </div>
+                </>
+              )}
+              {op.type === 'item-read' && (
+                <>
+                  <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
+                    <Database className='inline h-3 w-3 mr-1' />
+                    Reads one record and merges it into flow data under the result key. Dotted
+                    fields (e.g. <code className='font-mono'>creator.email</code>) resolve through
+                    M2O relations and land as flat keys — reference them downstream as{' '}
+                    <code className='font-mono'>{'{{record.creator.email}}'}</code>.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Collection <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.collection as string) ?? ''}
+                      onChange={(e) => setOpt('collection', e.target.value)}
+                      placeholder='{{collection}} or a fixed name'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Record ID <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.id as string) ?? ''}
+                      onChange={(e) => setOpt('id', e.target.value)}
+                      placeholder='{{item}}'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Relation fields (comma-separated dotted paths)</Label>
+                    <Input
+                      value={
+                        Array.isArray(optsState.fields)
+                          ? (optsState.fields as string[]).join(', ')
+                          : ''
+                      }
+                      onChange={(e) =>
+                        setOpt(
+                          'fields',
+                          e.target.value
+                            .split(',')
+                            .map((v) => v.trim())
+                            .filter(Boolean)
+                        )
+                      }
+                      placeholder='creator.email, additional_contact.email'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Result key</Label>
+                    <Input
+                      value={(optsState.result_key as string) ?? ''}
+                      onChange={(e) => setOpt('result_key', e.target.value)}
+                      placeholder='record'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                </>
+              )}
+              {op.type === 'notification' && (
+                <>
+                  <div className='rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400'>
+                    <Bell className='inline h-3 w-3 mr-1' />
+                    Sends an in-app notification. Supports{' '}
+                    <code className='font-mono'>{'{{variable}}'}</code> templates.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Recipient (User ID) <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.recipient as string) ?? ''}
+                      onChange={(e) => setOpt('recipient', e.target.value)}
+                      placeholder='User UUID or {{$data.user_id}}'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Subject</Label>
+                    <Input
+                      value={(optsState.subject as string) ?? ''}
+                      onChange={(e) => setOpt('subject', e.target.value)}
+                      placeholder='Item {{$trigger}}d'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Message</Label>
+                    <Textarea
+                      value={(optsState.message as string) ?? ''}
+                      onChange={(e) => setOpt('message', e.target.value)}
+                      rows={3}
+                      placeholder='Item {{id}} was updated by {{user}}.'
+                    />
+                  </div>
+                </>
+              )}
+              {op.type === 'transform' && (
+                <>
+                  <p className='text-[11px] text-slate-400'>
+                    Map, set, template-render, or delete fields. Applied in order.
+                  </p>
+                  <div className='space-y-2'>
+                    {mappings.map((m, idx) => (
+                      <div
+                        key={idx}
+                        className='rounded-lg border border-slate-200 dark:border-slate-700 p-2.5 space-y-2'
+                      >
+                        <div className='grid grid-cols-[1fr_130px] gap-2'>
+                          <div className='space-y-1'>
+                            <span className='text-[10px] text-slate-400'>
+                              {m.operation === 'delete' ? 'Path to delete' : 'Source / from'}
+                            </span>
                             <Input
-                              value={m.operation === 'copy' ? m.to : m.value}
+                              value={m.from}
                               onChange={(e) => {
                                 const n = [...mappings]
-                                n[idx] =
-                                  m.operation === 'copy'
-                                    ? { ...m, to: e.target.value }
-                                    : { ...m, value: e.target.value, to: m.from }
+                                n[idx] = { ...m, from: e.target.value }
                                 setOpt('mappings', n)
                               }}
-                              className='font-mono text-[12px] h-7 flex-1'
+                              placeholder='payload.status'
+                              className='font-mono text-[12px] h-7'
                             />
+                          </div>
+                          <div className='space-y-1'>
+                            <span className='text-[10px] text-slate-400'>Operation</span>
+                            <Select
+                              value={m.operation}
+                              onValueChange={(v) => {
+                                const n = [...mappings]
+                                n[idx] = { ...m, operation: v as TransformMapping['operation'] }
+                                setOpt('mappings', n)
+                              }}
+                            >
+                              <SelectTrigger className='h-7 text-[12px]'>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value='copy'>→ copy to</SelectItem>
+                                <SelectItem value='set'>→ set value</SelectItem>
+                                <SelectItem value='template'>→ template</SelectItem>
+                                <SelectItem value='delete'>delete</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        {m.operation !== 'delete' && (
+                          <div className='space-y-1'>
+                            <span className='text-[10px] text-slate-400'>
+                              {m.operation === 'copy'
+                                ? 'Target path'
+                                : m.operation === 'template'
+                                  ? 'Template ({{var}} syntax)'
+                                  : 'Value to set'}
+                            </span>
+                            <div className='flex items-center gap-2'>
+                              <Input
+                                value={m.operation === 'copy' ? m.to : m.value}
+                                onChange={(e) => {
+                                  const n = [...mappings]
+                                  n[idx] =
+                                    m.operation === 'copy'
+                                      ? { ...m, to: e.target.value }
+                                      : { ...m, value: e.target.value, to: m.from }
+                                  setOpt('mappings', n)
+                                }}
+                                className='font-mono text-[12px] h-7 flex-1'
+                              />
+                              <button
+                                type='button'
+                                onClick={() =>
+                                  setOpt(
+                                    'mappings',
+                                    mappings.filter((_, i) => i !== idx)
+                                  )
+                                }
+                                className='text-slate-400 hover:text-red-500 shrink-0'
+                              >
+                                <Trash2 className='h-3.5 w-3.5' />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {m.operation === 'delete' && (
+                          <div className='flex justify-end'>
                             <button
                               type='button'
                               onClick={() =>
@@ -1328,403 +1349,391 @@ function EditOperationDialog({
                                   mappings.filter((_, i) => i !== idx)
                                 )
                               }
-                              className='text-slate-400 hover:text-red-500 shrink-0'
+                              className='text-slate-400 hover:text-red-500'
                             >
                               <Trash2 className='h-3.5 w-3.5' />
                             </button>
                           </div>
-                        </div>
-                      )}
-                      {m.operation === 'delete' && (
-                        <div className='flex justify-end'>
-                          <button
-                            type='button'
-                            onClick={() =>
-                              setOpt(
-                                'mappings',
-                                mappings.filter((_, i) => i !== idx)
-                              )
-                            }
-                            className='text-slate-400 hover:text-red-500'
-                          >
-                            <Trash2 className='h-3.5 w-3.5' />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type='button'
-                    onClick={() =>
-                      setOpt('mappings', [
-                        ...mappings,
-                        { from: '', to: '', operation: 'copy', value: '' }
-                      ])
-                    }
-                    className='flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 dark:border-slate-600 py-2 text-[12px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan'
-                  >
-                    <Plus className='h-3.5 w-3.5' /> Add Mapping
-                  </button>
-                </div>
-              </>
-            )}
-            {op.type === 'run-flow' && (
-              <>
-                <div className='space-y-1.5'>
-                  <Label>
-                    Flow to Run <span className='text-red-500'>*</span>
-                  </Label>
-                  <Select
-                    value={(optsState.flow_id as string) ?? ''}
-                    onValueChange={(v) => setOpt('flow_id', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder='Select a flow…' />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(flowsData ?? [])
-                        .filter((f) => f.id !== flowId)
-                        .map((f) => (
-                          <SelectItem key={f.id} value={f.id}>
-                            {f.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
-                  <div>
-                    <Label className='cursor-pointer'>Wait for Completion</Label>
-                    <p className='text-[11px] text-slate-400'>Block until the sub-flow finishes.</p>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      type='button'
+                      onClick={() =>
+                        setOpt('mappings', [
+                          ...mappings,
+                          { from: '', to: '', operation: 'copy', value: '' }
+                        ])
+                      }
+                      className='flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 dark:border-slate-600 py-2 text-[12px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan'
+                    >
+                      <Plus className='h-3.5 w-3.5' /> Add Mapping
+                    </button>
                   </div>
-                  <Switch
-                    checked={(optsState.wait as boolean) ?? true}
-                    onCheckedChange={(v) => setOpt('wait', v)}
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <div className='flex items-center justify-between'>
-                    <Label>Payload Override (JSON)</Label>
-                    <Badge variant='outline' className='font-mono text-[10px]'>
-                      JSON
-                    </Badge>
+                </>
+              )}
+              {op.type === 'run-flow' && (
+                <>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Flow to Run <span className='text-red-500'>*</span>
+                    </Label>
+                    <Select
+                      value={(optsState.flow_id as string) ?? ''}
+                      onValueChange={(v) => setOpt('flow_id', v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder='Select a flow…' />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(flowsData ?? [])
+                          .filter((f) => f.id !== flowId)
+                          .map((f) => (
+                            <SelectItem key={f.id} value={f.id}>
+                              {f.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <Textarea
-                    value={(optsState.payload as string) ?? ''}
-                    onChange={(e) => setOpt('payload', e.target.value)}
-                    className='font-mono text-[12px] resize-y'
-                    rows={4}
-                    spellCheck={false}
-                    placeholder={'{\n  "source": "{{$trigger}}"\n}'}
-                  />
-                </div>
-              </>
-            )}
-            {registeredOpMeta && (
-              <div className='rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 px-3 py-2 text-[11px] text-slate-500 dark:text-slate-400'>
-                Extension operation:{' '}
-                <span className='font-semibold text-slate-700 dark:text-foreground'>
-                  {registeredOpMeta.label}
-                </span>
-                {registeredOpMeta.description && (
-                  <span className='ml-1'>— {registeredOpMeta.description}</span>
-                )}
-              </div>
-            )}
-            {registeredOpMeta?.fields &&
-              registeredOpMeta.fields.length > 0 &&
-              registeredOpMeta.fields.map((field) =>
-                field.type === 'boolean' ? (
-                  <div
-                    key={field.key}
-                    className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'
-                  >
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
                     <div>
-                      <Label className='cursor-pointer'>{field.label}</Label>
+                      <Label className='cursor-pointer'>Wait for Completion</Label>
+                      <p className='text-[11px] text-slate-400'>
+                        Block until the sub-flow finishes.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={(optsState.wait as boolean) ?? true}
+                      onCheckedChange={(v) => setOpt('wait', v)}
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <div className='flex items-center justify-between'>
+                      <Label>Payload Override (JSON)</Label>
+                      <Badge variant='outline' className='font-mono text-[10px]'>
+                        JSON
+                      </Badge>
+                    </div>
+                    <Textarea
+                      value={(optsState.payload as string) ?? ''}
+                      onChange={(e) => setOpt('payload', e.target.value)}
+                      className='font-mono text-[12px] resize-y'
+                      rows={4}
+                      spellCheck={false}
+                      placeholder={'{\n  "source": "{{$trigger}}"\n}'}
+                    />
+                  </div>
+                </>
+              )}
+              {registeredOpMeta && (
+                <div className='rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 px-3 py-2 text-[11px] text-slate-500 dark:text-slate-400'>
+                  Extension operation:{' '}
+                  <span className='font-semibold text-slate-700 dark:text-foreground'>
+                    {registeredOpMeta.label}
+                  </span>
+                  {registeredOpMeta.description && (
+                    <span className='ml-1'>— {registeredOpMeta.description}</span>
+                  )}
+                </div>
+              )}
+              {registeredOpMeta?.fields &&
+                registeredOpMeta.fields.length > 0 &&
+                registeredOpMeta.fields.map((field) =>
+                  field.type === 'boolean' ? (
+                    <div
+                      key={field.key}
+                      className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'
+                    >
+                      <div>
+                        <Label className='cursor-pointer'>{field.label}</Label>
+                        {field.description && (
+                          <p className='text-[11px] text-slate-400'>{field.description}</p>
+                        )}
+                      </div>
+                      <Switch
+                        checked={
+                          (optsState[field.key] as boolean) ??
+                          (field.defaultValue as boolean) ??
+                          false
+                        }
+                        onCheckedChange={(v) => setOpt(field.key, v)}
+                      />
+                    </div>
+                  ) : (
+                    <div key={field.key} className='space-y-1.5'>
+                      <Label>
+                        {field.label}
+                        {field.required && <span className='text-red-500 ml-0.5'>*</span>}
+                      </Label>
+                      {field.type === 'select' ? (
+                        <Select
+                          value={String(optsState[field.key] ?? field.defaultValue ?? '')}
+                          onValueChange={(v) => setOpt(field.key, v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={field.placeholder} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(field.options ?? []).map((o) => (
+                              <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : field.type === 'textarea' || field.type === 'json' ? (
+                        <Textarea
+                          value={String(optsState[field.key] ?? field.defaultValue ?? '')}
+                          onChange={(e) => setOpt(field.key, e.target.value)}
+                          placeholder={field.placeholder}
+                          className={cn(
+                            'resize-y',
+                            field.type === 'json' && 'font-mono text-[12px]'
+                          )}
+                          rows={4}
+                          spellCheck={false}
+                        />
+                      ) : field.type === 'number' ? (
+                        <Input
+                          type='number'
+                          value={String(optsState[field.key] ?? field.defaultValue ?? '')}
+                          onChange={(e) => setOpt(field.key, Number(e.target.value))}
+                          placeholder={field.placeholder}
+                        />
+                      ) : (
+                        <Input
+                          value={String(optsState[field.key] ?? field.defaultValue ?? '')}
+                          onChange={(e) => setOpt(field.key, e.target.value)}
+                          placeholder={field.placeholder}
+                        />
+                      )}
                       {field.description && (
                         <p className='text-[11px] text-slate-400'>{field.description}</p>
                       )}
                     </div>
-                    <Switch
-                      checked={
-                        (optsState[field.key] as boolean) ??
-                        (field.defaultValue as boolean) ??
-                        false
-                      }
-                      onCheckedChange={(v) => setOpt(field.key, v)}
-                    />
-                  </div>
-                ) : (
-                  <div key={field.key} className='space-y-1.5'>
-                    <Label>
-                      {field.label}
-                      {field.required && <span className='text-red-500 ml-0.5'>*</span>}
-                    </Label>
-                    {field.type === 'select' ? (
-                      <Select
-                        value={String(optsState[field.key] ?? field.defaultValue ?? '')}
-                        onValueChange={(v) => setOpt(field.key, v)}
+                  )
+                )}
+              {op.type === 'external-api' && (
+                <>
+                  {/* Mode toggle */}
+                  <div className='flex gap-1 rounded-lg border border-slate-200 dark:border-slate-700 p-1'>
+                    {(['predefined', 'custom'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type='button'
+                        onClick={() => setOpt('mode', m)}
+                        className={cn(
+                          'flex-1 rounded py-1 text-[11px] font-medium transition-colors',
+                          (optsState.mode ?? 'predefined') === m
+                            ? 'bg-teal-600 text-white'
+                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                        )}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder={field.placeholder} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(field.options ?? []).map((o) => (
-                            <SelectItem key={o.value} value={o.value}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : field.type === 'textarea' || field.type === 'json' ? (
-                      <Textarea
-                        value={String(optsState[field.key] ?? field.defaultValue ?? '')}
-                        onChange={(e) => setOpt(field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                        className={cn('resize-y', field.type === 'json' && 'font-mono text-[12px]')}
-                        rows={4}
-                        spellCheck={false}
-                      />
-                    ) : field.type === 'number' ? (
-                      <Input
-                        type='number'
-                        value={String(optsState[field.key] ?? field.defaultValue ?? '')}
-                        onChange={(e) => setOpt(field.key, Number(e.target.value))}
-                        placeholder={field.placeholder}
-                      />
-                    ) : (
-                      <Input
-                        value={String(optsState[field.key] ?? field.defaultValue ?? '')}
-                        onChange={(e) => setOpt(field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                      />
-                    )}
-                    {field.description && (
-                      <p className='text-[11px] text-slate-400'>{field.description}</p>
-                    )}
+                        {m === 'predefined' ? 'Predefined Config' : 'Custom URL'}
+                      </button>
+                    ))}
                   </div>
-                )
-              )}
-            {op.type === 'external-api' && (
-              <>
-                {/* Mode toggle */}
-                <div className='flex gap-1 rounded-lg border border-slate-200 dark:border-slate-700 p-1'>
-                  {(['predefined', 'custom'] as const).map((m) => (
-                    <button
-                      key={m}
-                      type='button'
-                      onClick={() => setOpt('mode', m)}
-                      className={cn(
-                        'flex-1 rounded py-1 text-[11px] font-medium transition-colors',
-                        (optsState.mode ?? 'predefined') === m
-                          ? 'bg-teal-600 text-white'
-                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                      )}
-                    >
-                      {m === 'predefined' ? 'Predefined Config' : 'Custom URL'}
-                    </button>
-                  ))}
-                </div>
 
-                {(optsState.mode ?? 'predefined') === 'predefined' ? (
-                  <>
-                    <div className='space-y-1.5'>
-                      <Label>
-                        API Config <span className='text-red-500'>*</span>
-                      </Label>
-                      <Select
-                        value={String(optsState.api_id ?? '')}
-                        onValueChange={(v) => {
-                          setOpt('api_id', Number(v))
-                          setOpt('endpoint', undefined)
-                          setExtApiEndpoints([])
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder='Select an API…' />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(extApisData ?? []).map((a) => (
-                            <SelectItem key={a.id} value={String(a.id)}>
-                              {a.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {extApiEndpoints.length > 0 && (
+                  {(optsState.mode ?? 'predefined') === 'predefined' ? (
+                    <>
                       <div className='space-y-1.5'>
-                        <Label>Endpoint</Label>
+                        <Label>
+                          API Config <span className='text-red-500'>*</span>
+                        </Label>
                         <Select
-                          value={String(optsState.endpoint ?? '')}
-                          onValueChange={(v) =>
-                            setOpt('endpoint', v === '__none__' ? undefined : Number(v))
-                          }
+                          value={String(optsState.api_id ?? '')}
+                          onValueChange={(v) => {
+                            setOpt('api_id', Number(v))
+                            setOpt('endpoint', undefined)
+                            setExtApiEndpoints([])
+                          }}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder='Use base URL (no endpoint)' />
+                            <SelectValue placeholder='Select an API…' />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value='__none__'>— none (base URL) —</SelectItem>
-                            {extApiEndpoints.map((ep) => (
-                              <SelectItem key={ep.id} value={String(ep.id)}>
-                                <span className='font-mono text-[11px] text-slate-400 mr-1.5'>
-                                  {ep.method}
-                                </span>
-                                {ep.name}
-                                <span className='ml-1.5 font-mono text-[10px] text-slate-400'>
-                                  {ep.path}
-                                </span>
+                            {(extApisData ?? []).map((a) => (
+                              <SelectItem key={a.id} value={String(a.id)}>
+                                {a.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
-                    )}
-                    <div className='space-y-1.5'>
-                      <Label>Method Override</Label>
-                      <Select
-                        value={(optsState.method_override as string) ?? '__inherit__'}
-                        onValueChange={(v) =>
-                          setOpt('method_override', v === '__inherit__' ? undefined : v)
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value='__inherit__'>— inherit from config —</SelectItem>
-                          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
-                            <SelectItem key={m} value={m}>
-                              {m}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>Path Override</Label>
-                      <Input
-                        value={(optsState.path_override as string) ?? ''}
-                        onChange={(e) => setOpt('path_override', e.target.value || undefined)}
-                        placeholder='/items/{{id}}'
-                        className='font-mono text-[13px]'
-                      />
-                      <p className='text-[11px] text-slate-400'>
-                        Overrides the endpoint path. Supports {'{{variable}}'} templates.
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className='space-y-1.5'>
-                      <Label>
-                        URL <span className='text-red-500'>*</span>
-                      </Label>
-                      <Input
-                        value={(optsState.url as string) ?? ''}
-                        onChange={(e) => setOpt('url', e.target.value)}
-                        placeholder='https://api.example.com/items/{{id}}'
-                      />
-                      <p className='text-[11px] text-slate-400'>
-                        Supports {'{{variable}}'} templates.
-                      </p>
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>Method</Label>
-                      <Select
-                        value={(optsState.method as string) ?? 'GET'}
-                        onValueChange={(v) => setOpt('method', v)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
-                            <SelectItem key={m} value={m}>
-                              {m}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>Headers (JSON)</Label>
-                      <Textarea
-                        defaultValue={
-                          typeof optsState.headers === 'object'
-                            ? JSON.stringify(optsState.headers, null, 2)
-                            : ((optsState.headers as string) ?? '{}')
-                        }
-                        onChange={(e) => {
-                          try {
-                            setOpt('headers', JSON.parse(e.target.value))
-                          } catch {
-                            /* allow typing */
+                      {extApiEndpoints.length > 0 && (
+                        <div className='space-y-1.5'>
+                          <Label>Endpoint</Label>
+                          <Select
+                            value={String(optsState.endpoint ?? '')}
+                            onValueChange={(v) =>
+                              setOpt('endpoint', v === '__none__' ? undefined : Number(v))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder='Use base URL (no endpoint)' />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value='__none__'>— none (base URL) —</SelectItem>
+                              {extApiEndpoints.map((ep) => (
+                                <SelectItem key={ep.id} value={String(ep.id)}>
+                                  <span className='font-mono text-[11px] text-slate-400 mr-1.5'>
+                                    {ep.method}
+                                  </span>
+                                  {ep.name}
+                                  <span className='ml-1.5 font-mono text-[10px] text-slate-400'>
+                                    {ep.path}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      <div className='space-y-1.5'>
+                        <Label>Method Override</Label>
+                        <Select
+                          value={(optsState.method_override as string) ?? '__inherit__'}
+                          onValueChange={(v) =>
+                            setOpt('method_override', v === '__inherit__' ? undefined : v)
                           }
-                        }}
-                        className='font-mono text-[12px] resize-y'
-                        rows={3}
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>Timeout (ms)</Label>
-                      <Input
-                        type='number'
-                        value={(optsState.timeout_ms as number) ?? 10000}
-                        onChange={(e) => setOpt('timeout_ms', Number(e.target.value))}
-                        min={500}
-                        max={60000}
-                        className='w-32'
-                      />
-                    </div>
-                  </>
-                )}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='__inherit__'>— inherit from config —</SelectItem>
+                            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+                              <SelectItem key={m} value={m}>
+                                {m}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Path Override</Label>
+                        <Input
+                          value={(optsState.path_override as string) ?? ''}
+                          onChange={(e) => setOpt('path_override', e.target.value || undefined)}
+                          placeholder='/items/{{id}}'
+                          className='font-mono text-[13px]'
+                        />
+                        <p className='text-[11px] text-slate-400'>
+                          Overrides the endpoint path. Supports {'{{variable}}'} templates.
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className='space-y-1.5'>
+                        <Label>
+                          URL <span className='text-red-500'>*</span>
+                        </Label>
+                        <Input
+                          value={(optsState.url as string) ?? ''}
+                          onChange={(e) => setOpt('url', e.target.value)}
+                          placeholder='https://api.example.com/items/{{id}}'
+                        />
+                        <p className='text-[11px] text-slate-400'>
+                          Supports {'{{variable}}'} templates.
+                        </p>
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Method</Label>
+                        <Select
+                          value={(optsState.method as string) ?? 'GET'}
+                          onValueChange={(v) => setOpt('method', v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+                              <SelectItem key={m} value={m}>
+                                {m}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Headers (JSON)</Label>
+                        <Textarea
+                          defaultValue={
+                            typeof optsState.headers === 'object'
+                              ? JSON.stringify(optsState.headers, null, 2)
+                              : ((optsState.headers as string) ?? '{}')
+                          }
+                          onChange={(e) => {
+                            try {
+                              setOpt('headers', JSON.parse(e.target.value))
+                            } catch {
+                              /* allow typing */
+                            }
+                          }}
+                          className='font-mono text-[12px] resize-y'
+                          rows={3}
+                          spellCheck={false}
+                        />
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Timeout (ms)</Label>
+                        <Input
+                          type='number'
+                          value={(optsState.timeout_ms as number) ?? 10000}
+                          onChange={(e) => setOpt('timeout_ms', Number(e.target.value))}
+                          min={500}
+                          max={60000}
+                          className='w-32'
+                        />
+                      </div>
+                    </>
+                  )}
 
-                {/* Common fields */}
-                <div className='space-y-1.5'>
-                  <Label>Request Body (JSON)</Label>
-                  <Textarea
-                    value={(optsState.body as string) ?? ''}
-                    onChange={(e) => setOpt('body', e.target.value)}
-                    className='font-mono text-[12px] resize-y'
-                    rows={5}
-                    spellCheck={false}
-                    placeholder={'{\n  "id": "{{item_id}}"\n}'}
-                  />
-                  <p className='text-[11px] text-slate-400'>
-                    Supports {'{{variable}}'} templates. Leave blank to send no body.
-                  </p>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Result Key</Label>
-                  <Input
-                    value={(optsState.result_key as string) ?? '$ext_response'}
-                    onChange={(e) => setOpt('result_key', e.target.value || '$ext_response')}
-                    className='font-mono text-[13px]'
-                    placeholder='$ext_response'
-                  />
-                  <p className='text-[11px] text-slate-400'>
-                    Flow data key where <code className='font-mono'>{'{ status, body }'}</code> is
-                    stored.
-                  </p>
-                </div>
-                <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
-                  <div>
-                    <Label className='cursor-pointer'>Fail on non-2xx</Label>
+                  {/* Common fields */}
+                  <div className='space-y-1.5'>
+                    <Label>Request Body (JSON)</Label>
+                    <Textarea
+                      value={(optsState.body as string) ?? ''}
+                      onChange={(e) => setOpt('body', e.target.value)}
+                      className='font-mono text-[12px] resize-y'
+                      rows={5}
+                      spellCheck={false}
+                      placeholder={'{\n  "id": "{{item_id}}"\n}'}
+                    />
                     <p className='text-[11px] text-slate-400'>
-                      Take reject path when response status ≥ 400.
+                      Supports {'{{variable}}'} templates. Leave blank to send no body.
                     </p>
                   </div>
-                  <Switch
-                    checked={(optsState.fail_on_error as boolean) ?? true}
-                    onCheckedChange={(v) => setOpt('fail_on_error', v)}
-                  />
-                </div>
-              </>
-            )}
-          </div>
+                  <div className='space-y-1.5'>
+                    <Label>Result Key</Label>
+                    <Input
+                      value={(optsState.result_key as string) ?? '$ext_response'}
+                      onChange={(e) => setOpt('result_key', e.target.value || '$ext_response')}
+                      className='font-mono text-[13px]'
+                      placeholder='$ext_response'
+                    />
+                    <p className='text-[11px] text-slate-400'>
+                      Flow data key where <code className='font-mono'>{'{ status, body }'}</code> is
+                      stored.
+                    </p>
+                  </div>
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5'>
+                    <div>
+                      <Label className='cursor-pointer'>Fail on non-2xx</Label>
+                      <p className='text-[11px] text-slate-400'>
+                        Take reject path when response status ≥ 400.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={(optsState.fail_on_error as boolean) ?? true}
+                      onCheckedChange={(v) => setOpt('fail_on_error', v)}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </DialogBody>
           <DialogFooter>
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>
@@ -1813,67 +1822,67 @@ function AddOperationDialog({
         <form onSubmit={handleSubmit}>
           <DialogBody>
             <div className='space-y-4'>
-            <div className='space-y-1.5'>
-              <Label htmlFor='op-name'>
-                Name <span className='text-red-500'>*</span>
-              </Label>
-              <Input
-                id='op-name'
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder='e.g. Send notification'
-                required
-              />
-            </div>
-            <div className='space-y-1.5'>
-              <Label htmlFor='op-key'>
-                Key <span className='text-red-500'>*</span>
-              </Label>
-              <Input
-                id='op-key'
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder='e.g. send_notification'
-                className='font-mono text-[13px]'
-                required
-              />
-              <p className='text-[11px] text-slate-400'>Unique — lowercase, underscores only.</p>
-            </div>
-            <div className='space-y-1.5'>
-              <Label htmlFor='op-type'>Type</Label>
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger id='op-type'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='condition'>Condition — branch on a field value</SelectItem>
-                  <SelectItem value='exec-script'>Script — run JavaScript</SelectItem>
-                  <SelectItem value='log'>Log — write to server log</SelectItem>
-                  <SelectItem value='mail'>Mail — send an email</SelectItem>
-                  <SelectItem value='notification'>Notification — in-app alert</SelectItem>
-                  <SelectItem value='webhook'>Webhook — call external URL</SelectItem>
-                  <SelectItem value='transform'>Transform — map/set/delete fields</SelectItem>
-                  <SelectItem value='run-flow'>Run Flow — trigger another flow</SelectItem>
-                  <SelectItem value='item-read'>
-                    Read Item — fetch a record (+ relation fields) into flow data
-                  </SelectItem>
-                  <SelectItem value='external-api'>
-                    External API — call predefined or custom endpoint
-                  </SelectItem>
-                  {(registeredOpsForAdd ?? []).length > 0 && (
-                    <>
-                      <div className='my-1 border-t border-slate-100 dark:border-border' />
-                      {(registeredOpsForAdd ?? []).map((o) => (
-                        <SelectItem key={o.type} value={o.type}>
-                          {o.label}
-                          {o.description ? ` — ${o.description}` : ''}
-                        </SelectItem>
-                      ))}
-                    </>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
+              <div className='space-y-1.5'>
+                <Label htmlFor='op-name'>
+                  Name <span className='text-red-500'>*</span>
+                </Label>
+                <Input
+                  id='op-name'
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder='e.g. Send notification'
+                  required
+                />
+              </div>
+              <div className='space-y-1.5'>
+                <Label htmlFor='op-key'>
+                  Key <span className='text-red-500'>*</span>
+                </Label>
+                <Input
+                  id='op-key'
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder='e.g. send_notification'
+                  className='font-mono text-[13px]'
+                  required
+                />
+                <p className='text-[11px] text-slate-400'>Unique — lowercase, underscores only.</p>
+              </div>
+              <div className='space-y-1.5'>
+                <Label htmlFor='op-type'>Type</Label>
+                <Select value={type} onValueChange={setType}>
+                  <SelectTrigger id='op-type'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='condition'>Condition — branch on a field value</SelectItem>
+                    <SelectItem value='exec-script'>Script — run JavaScript</SelectItem>
+                    <SelectItem value='log'>Log — write to server log</SelectItem>
+                    <SelectItem value='mail'>Mail — send an email</SelectItem>
+                    <SelectItem value='notification'>Notification — in-app alert</SelectItem>
+                    <SelectItem value='webhook'>Webhook — call external URL</SelectItem>
+                    <SelectItem value='transform'>Transform — map/set/delete fields</SelectItem>
+                    <SelectItem value='run-flow'>Run Flow — trigger another flow</SelectItem>
+                    <SelectItem value='item-read'>
+                      Read Item — fetch a record (+ relation fields) into flow data
+                    </SelectItem>
+                    <SelectItem value='external-api'>
+                      External API — call predefined or custom endpoint
+                    </SelectItem>
+                    {(registeredOpsForAdd ?? []).length > 0 && (
+                      <>
+                        <div className='my-1 border-t border-slate-100 dark:border-border' />
+                        {(registeredOpsForAdd ?? []).map((o) => (
+                          <SelectItem key={o.type} value={o.type}>
+                            {o.label}
+                            {o.description ? ` — ${o.description}` : ''}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </DialogBody>
           <DialogFooter>
@@ -2220,6 +2229,93 @@ function OperationNode({
   )
 }
 
+// ─── Canvas minimap (#624) ────────────────────────────────────────────────────
+
+const MINIMAP_W = 160
+const MINIMAP_H = Math.round((MINIMAP_W * CANVAS_H) / CANVAS_W) // preserves aspect
+
+function CanvasMinimap({
+  triggerPos,
+  ops,
+  viewport,
+  scale,
+  onNavigate
+}: {
+  triggerPos: { x: number; y: number }
+  ops: Array<{ x: number; y: number }>
+  viewport: { l: number; t: number; w: number; h: number }
+  scale: number
+  onNavigate: (canvasX: number, canvasY: number) => void
+}) {
+  const mm = MINIMAP_W / CANVAS_W
+  const ref = useRef<HTMLDivElement>(null)
+  const dragging = useRef(false)
+
+  function navigateTo(e: React.PointerEvent) {
+    const rect = ref.current?.getBoundingClientRect()
+    if (!rect) return
+    const canvasX = Math.max(0, Math.min(CANVAS_W, (e.clientX - rect.left) / mm))
+    const canvasY = Math.max(0, Math.min(CANVAS_H, (e.clientY - rect.top) / mm))
+    onNavigate(canvasX, canvasY)
+  }
+
+  const vp = {
+    left: (viewport.l / scale) * mm,
+    top: (viewport.t / scale) * mm,
+    width: Math.min(MINIMAP_W, (viewport.w / scale) * mm),
+    height: Math.min(MINIMAP_H, (viewport.h / scale) * mm)
+  }
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: spatial navigation widget
+    <div
+      ref={ref}
+      className='absolute bottom-4 right-4 z-10 overflow-hidden rounded-lg border border-slate-200 bg-white/90 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-card/90'
+      style={{ width: MINIMAP_W, height: MINIMAP_H, cursor: 'pointer', touchAction: 'none' }}
+      onPointerDown={(e) => {
+        e.stopPropagation()
+        dragging.current = true
+        ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+        navigateTo(e)
+      }}
+      onPointerMove={(e) => {
+        if (dragging.current) navigateTo(e)
+      }}
+      onPointerUp={() => {
+        dragging.current = false
+      }}
+      title='Minimap — click or drag to move the viewport'
+    >
+      {/* Trigger */}
+      <div
+        className='absolute rounded-[1px] bg-[#00ceff]'
+        style={{
+          left: triggerPos.x * mm,
+          top: triggerPos.y * mm,
+          width: Math.max(3, TRIGGER_W * mm),
+          height: Math.max(3, TRIGGER_H * mm)
+        }}
+      />
+      {/* Operations */}
+      {ops.map((p, i) => (
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: positional dots, no stable id needed
+          key={i}
+          className='absolute rounded-[1px] bg-slate-400 dark:bg-slate-500'
+          style={{
+            left: p.x * mm,
+            top: p.y * mm,
+            width: Math.max(3, OP_W * mm),
+            height: Math.max(2, OP_H * mm)
+          }}
+        />
+      ))}
+      {/* Viewport window */}
+      <div className='absolute rounded-[2px] border border-[#00ceff] bg-[#00ceff]/10' style={vp} />
+    </div>
+  )
+}
+
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 
 type AddOpState = {
@@ -2268,6 +2364,146 @@ function FlowCanvas({ flow, flowId }: { flow: Flow; flowId: string }) {
       return { x: TRIGGER_X, y: TRIGGER_Y }
     }
   })
+
+  // ─── Zoom / pan / minimap (#624) ────────────────────────────────────────────
+  const ZOOM_KEY = `nivaro-canvas-zoom-${flowId}`
+  const MIN_ZOOM = 0.4
+  const MAX_ZOOM = 1.6
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scale, setScale] = useState(() => {
+    const v = Number(localStorage.getItem(ZOOM_KEY))
+    return Number.isFinite(v) && v >= MIN_ZOOM && v <= MAX_ZOOM ? v : 1
+  })
+  const scaleRef = useRef(scale)
+  scaleRef.current = scale
+  const [viewport, setViewport] = useState({ l: 0, t: 0, w: 0, h: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const panState = useRef<{
+    startX: number
+    startY: number
+    startL: number
+    startT: number
+  } | null>(null)
+  // Applied in a layout effect AFTER the scaled sizing div re-renders — setting
+  // scroll before the new size exists clamps it to the old extents.
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null)
+
+  function bumpViewport() {
+    const el = scrollRef.current
+    if (!el) return
+    setViewport((v) =>
+      v.l === el.scrollLeft &&
+      v.t === el.scrollTop &&
+      v.w === el.clientWidth &&
+      v.h === el.clientHeight
+        ? v
+        : { l: el.scrollLeft, t: el.scrollTop, w: el.clientWidth, h: el.clientHeight }
+    )
+  }
+
+  /** Zoom keeping the given viewport point (default: center) fixed under the cursor. */
+  function applyZoom(next: number, clientX?: number, clientY?: number) {
+    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
+    const cur = scaleRef.current
+    if (clamped === cur) return
+    const el = scrollRef.current
+    if (el) {
+      const rect = el.getBoundingClientRect()
+      const vx = clientX != null ? clientX - rect.left : el.clientWidth / 2
+      const vy = clientY != null ? clientY - rect.top : el.clientHeight / 2
+      const px = (el.scrollLeft + vx) / cur // canvas-space anchor
+      const py = (el.scrollTop + vy) / cur
+      pendingScrollRef.current = { left: px * clamped - vx, top: py * clamped - vy }
+    }
+    setScale(clamped)
+    try {
+      localStorage.setItem(ZOOM_KEY, String(clamped))
+    } catch {
+      /* private mode */
+    }
+  }
+
+  /** Fit every node (trigger + ops) into the viewport. */
+  function fitView() {
+    const el = scrollRef.current
+    if (!el) return
+    const xs = [triggerPos.x, triggerPos.x + TRIGGER_W]
+    const ys = [triggerPos.y, triggerPos.y + TRIGGER_H]
+    for (const op of flow.operations) {
+      const p = getOpPos(op)
+      xs.push(p.x, p.x + OP_W)
+      ys.push(p.y, p.y + OP_H)
+    }
+    const margin = 60
+    const minX = Math.max(0, Math.min(...xs) - margin)
+    const minY = Math.max(0, Math.min(...ys) - margin)
+    const bw = Math.max(...xs) + margin - minX
+    const bh = Math.max(...ys) + margin - minY
+    const next = Math.min(
+      MAX_ZOOM,
+      Math.max(MIN_ZOOM, Math.min(el.clientWidth / bw, el.clientHeight / bh, 1))
+    )
+    pendingScrollRef.current = {
+      left: minX * next - Math.max(0, (el.clientWidth - bw * next) / 2),
+      top: minY * next - Math.max(0, (el.clientHeight - bh * next) / 2)
+    }
+    setScale(next)
+    try {
+      localStorage.setItem(ZOOM_KEY, String(next))
+    } catch {
+      /* private mode */
+    }
+  }
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRef.current
+    const el = scrollRef.current
+    if (pending && el) {
+      el.scrollLeft = Math.max(0, pending.left)
+      el.scrollTop = Math.max(0, pending.top)
+      pendingScrollRef.current = null
+    }
+    bumpViewport()
+  }, [scale])
+
+  // Ctrl/Cmd + wheel (and trackpad pinch, which arrives as ctrl+wheel) zooms
+  // around the cursor. Native listener — React's synthetic wheel handlers are
+  // passive, so preventDefault would be ignored and the page would zoom too.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const factor = Math.exp(-e.deltaY * 0.0022)
+      applyZoom(scaleRef.current * factor, e.clientX, e.clientY)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    bumpViewport()
+    const onResize = () => bumpViewport()
+    window.addEventListener('resize', onResize)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      window.removeEventListener('resize', onResize)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** Pan on empty canvas — node pointerdowns stopPropagation, so this only
+   *  fires on the background (the edge SVG is pointer-events: none). */
+  function handleCanvasPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0 && e.button !== 1) return
+    const el = scrollRef.current
+    if (!el) return
+    panState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startL: el.scrollLeft,
+      startT: el.scrollTop
+    }
+    setIsPanning(true)
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
 
   const [localPositions, setLocalPositions] = useState<Record<string, { x: number; y: number }>>({})
   const dragState = useRef<
@@ -2344,9 +2580,19 @@ function FlowCanvas({ flow, flowId }: { flow: Flow; flowId: string }) {
 
   function handlePointerMove(e: React.PointerEvent) {
     const ds = dragState.current
-    if (!ds) return
-    const dx = e.clientX - ds.startMouseX
-    const dy = e.clientY - ds.startMouseY
+    if (!ds) {
+      // Background pan (#624) — translate the scroll container.
+      const ps = panState.current
+      const el = scrollRef.current
+      if (ps && el) {
+        el.scrollLeft = ps.startL - (e.clientX - ps.startX)
+        el.scrollTop = ps.startT - (e.clientY - ps.startY)
+      }
+      return
+    }
+    // Node drags live in canvas space — screen deltas shrink/grow with zoom.
+    const dx = (e.clientX - ds.startMouseX) / scaleRef.current
+    const dy = (e.clientY - ds.startMouseY) / scaleRef.current
     if (ds.kind === 'op') {
       setLocalPositions((prev) => ({
         ...prev,
@@ -2364,10 +2610,14 @@ function FlowCanvas({ flow, flowId }: { flow: Flow; flowId: string }) {
   }
 
   function handlePointerUp(e: React.PointerEvent) {
+    if (panState.current) {
+      panState.current = null
+      setIsPanning(false)
+    }
     const ds = dragState.current
     if (!ds) return
-    const dx = e.clientX - ds.startMouseX
-    const dy = e.clientY - ds.startMouseY
+    const dx = (e.clientX - ds.startMouseX) / scaleRef.current
+    const dy = (e.clientY - ds.startMouseY) / scaleRef.current
     if (ds.kind === 'op') {
       const finalPos = { x: Math.max(0, ds.startNodeX + dx), y: Math.max(0, ds.startNodeY + dy) }
       patchPos.mutate({ opId: ds.opId, x: finalPos.x, y: finalPos.y })
@@ -2427,204 +2677,272 @@ function FlowCanvas({ flow, flowId }: { flow: Flow; flowId: string }) {
     <>
       <div className='relative flex-1 overflow-hidden flex flex-col'>
         <div
+          ref={scrollRef}
           className='relative flex-1 overflow-auto'
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.10) 1px, transparent 1px)',
-            backgroundSize: '20px 20px',
-            backgroundColor: '#f8fafc'
+            backgroundSize: `${20 * scale}px ${20 * scale}px`,
+            backgroundColor: '#f8fafc',
+            cursor: isPanning ? 'grabbing' : 'default'
           }}
+          onScroll={bumpViewport}
+          onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
+          {/* Sizing shell — scaled extents so the scrollbars track the zoom. */}
           <div
             style={{
               position: 'relative',
-              width: CANVAS_W,
-              height: CANVAS_H,
+              width: CANVAS_W * scale,
+              height: CANVAS_H * scale,
               minWidth: '100%',
               minHeight: '100%'
             }}
           >
-            {/* SVG edges */}
-            <svg
-              aria-hidden='true'
+            <div
               style={{
                 position: 'absolute',
-                inset: 0,
+                left: 0,
+                top: 0,
                 width: CANVAS_W,
                 height: CANVAS_H,
-                pointerEvents: 'none',
-                overflow: 'visible'
+                transform: `scale(${scale})`,
+                transformOrigin: '0 0'
               }}
             >
-              <defs>
-                <marker
-                  id='arrow-slate'
-                  markerWidth='6'
-                  markerHeight='6'
-                  refX='5'
-                  refY='3'
-                  orient='auto'
-                >
-                  <path d='M0,0 L0,6 L6,3 z' fill='#94a3b8' />
-                </marker>
-                <marker
-                  id='arrow-cyan'
-                  markerWidth='6'
-                  markerHeight='6'
-                  refX='5'
-                  refY='3'
-                  orient='auto'
-                >
-                  <path d='M0,0 L0,6 L6,3 z' fill='#00ceff' />
-                </marker>
-                <marker
-                  id='arrow-rose'
-                  markerWidth='6'
-                  markerHeight='6'
-                  refX='5'
-                  refY='3'
-                  orient='auto'
-                >
-                  <path d='M0,0 L0,6 L6,3 z' fill='#f43f5e' />
-                </marker>
-              </defs>
+              {/* SVG edges */}
+              <svg
+                aria-hidden='true'
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: CANVAS_W,
+                  height: CANVAS_H,
+                  pointerEvents: 'none',
+                  overflow: 'visible'
+                }}
+              >
+                <defs>
+                  <marker
+                    id='arrow-slate'
+                    markerWidth='6'
+                    markerHeight='6'
+                    refX='5'
+                    refY='3'
+                    orient='auto'
+                  >
+                    <path d='M0,0 L0,6 L6,3 z' fill='#94a3b8' />
+                  </marker>
+                  <marker
+                    id='arrow-cyan'
+                    markerWidth='6'
+                    markerHeight='6'
+                    refX='5'
+                    refY='3'
+                    orient='auto'
+                  >
+                    <path d='M0,0 L0,6 L6,3 z' fill='#00ceff' />
+                  </marker>
+                  <marker
+                    id='arrow-rose'
+                    markerWidth='6'
+                    markerHeight='6'
+                    refX='5'
+                    refY='3'
+                    orient='auto'
+                  >
+                    <path d='M0,0 L0,6 L6,3 z' fill='#f43f5e' />
+                  </marker>
+                </defs>
 
-              {/* Trigger → root ops (fan-out) */}
-              {rootOps.map((rootOp) => {
-                const rp = getOpPos(rootOp)
-                const tIsH = triggerDir === 'h'
-                const rIsH = getOpDir(rootOp.id) === 'h'
-                const x1 = triggerPos.x + (tIsH ? TRIGGER_W : TRIGGER_W / 2)
-                const y1 = triggerPos.y + (tIsH ? TRIG_OUT_DY : TRIGGER_H)
-                const x2 = rp.x + (rIsH ? OP_IN_DX : OP_W / 2)
-                const y2 = rp.y + (rIsH ? OP_IN_DY : 0)
-                return (
-                  <path
-                    key={rootOp.id}
-                    d={bezierPath(x1, y1, x2, y2)}
-                    fill='none'
-                    stroke='#94a3b8'
-                    strokeWidth='1.5'
-                    markerEnd='url(#arrow-slate)'
-                  />
-                )
-              })}
-
-              {/* Op → resolve/reject edges */}
-              {flow.operations.map((op) => {
-                const sp = getOpPos(op)
-                const sIsH = getOpDir(op.id) === 'h'
-                return (
-                  <g key={op.id}>
-                    {op.resolve &&
-                      opMap.has(op.resolve) &&
-                      (() => {
-                        const tp = getOpPos(opMap.get(op.resolve)!)
-                        const tIsH = getOpDir(op.resolve) === 'h'
-                        const x1 = sp.x + (sIsH ? OP_RES_DX : Math.round(OP_W * 0.3))
-                        const y1 = sp.y + (sIsH ? OP_RES_DY : OP_H)
-                        return (
-                          <path
-                            d={bezierPath(
-                              x1,
-                              y1,
-                              tp.x + (tIsH ? OP_IN_DX : OP_W / 2),
-                              tp.y + (tIsH ? OP_IN_DY : 0)
-                            )}
-                            fill='none'
-                            stroke='#00ceff'
-                            strokeWidth='1.5'
-                            markerEnd='url(#arrow-cyan)'
-                          />
-                        )
-                      })()}
-                    {op.reject &&
-                      opMap.has(op.reject) &&
-                      (() => {
-                        const tp = getOpPos(opMap.get(op.reject)!)
-                        const tIsH = getOpDir(op.reject) === 'h'
-                        const x1 = sp.x + (sIsH ? OP_REJ_DX : Math.round(OP_W * 0.65))
-                        const y1 = sp.y + (sIsH ? OP_REJ_DY : OP_H)
-                        return (
-                          <path
-                            d={bezierPath(
-                              x1,
-                              y1,
-                              tp.x + (tIsH ? OP_IN_DX : OP_W / 2),
-                              tp.y + (tIsH ? OP_IN_DY : 0)
-                            )}
-                            fill='none'
-                            stroke='#f43f5e'
-                            strokeWidth='1.5'
-                            markerEnd='url(#arrow-rose)'
-                          />
-                        )
-                      })()}
-                  </g>
-                )
-              })}
-            </svg>
-
-            {/* Trigger node */}
-            <TriggerNode
-              trigger={flow.trigger}
-              triggerOptions={flow.trigger_options}
-              status={flow.status}
-              triggerPos={triggerPos}
-              nodeDir={triggerDir}
-              onDirChange={changeTriggerDir}
-              onAddFirst={addFirstOp}
-              onPointerDown={handleTriggerPointerDown}
-            />
-
-            {/* Operation nodes */}
-            {flow.operations.map((op) => {
-              const pos = getOpPos(op)
-              return (
-                <div key={op.id} className='group'>
-                  {pendingDelete === op.id ? (
-                    <div
-                      style={{ position: 'absolute', left: pos.x, top: pos.y, width: OP_W }}
-                      className='rounded-lg border border-red-200 bg-white dark:bg-card shadow-sm p-3 flex flex-col gap-2'
-                    >
-                      <p className='text-[12px] text-slate-700 font-medium'>
-                        Remove <span className='font-semibold'>{op.name}</span>?
-                      </p>
-                      <div className='flex gap-1.5'>
-                        <button
-                          type='button'
-                          onClick={() => deleteOp.mutate(op.id)}
-                          className='flex-1 rounded bg-red-500 py-1 text-[11px] font-medium text-white hover:bg-red-600'
-                        >
-                          Remove
-                        </button>
-                        <button
-                          type='button'
-                          onClick={() => setPendingDelete(null)}
-                          className='flex-1 rounded border py-1 text-[11px] hover:bg-slate-50 dark:hover:bg-muted'
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <OperationNode
-                      op={{ ...op, ...pos }}
-                      nodeDir={getOpDir(op.id)}
-                      onDirChange={(d) => changeOpDir(op.id, d)}
-                      onEdit={() => setEditingOp(op)}
-                      onDelete={() => setPendingDelete(op.id)}
-                      onAddResolve={() => addFromHandle(op.id, 'resolve')}
-                      onAddReject={() => addFromHandle(op.id, 'reject')}
-                      onPointerDown={(e) => handlePointerDown(e, op)}
+                {/* Trigger → root ops (fan-out) */}
+                {rootOps.map((rootOp) => {
+                  const rp = getOpPos(rootOp)
+                  const tIsH = triggerDir === 'h'
+                  const rIsH = getOpDir(rootOp.id) === 'h'
+                  const x1 = triggerPos.x + (tIsH ? TRIGGER_W : TRIGGER_W / 2)
+                  const y1 = triggerPos.y + (tIsH ? TRIG_OUT_DY : TRIGGER_H)
+                  const x2 = rp.x + (rIsH ? OP_IN_DX : OP_W / 2)
+                  const y2 = rp.y + (rIsH ? OP_IN_DY : 0)
+                  return (
+                    <path
+                      key={rootOp.id}
+                      d={bezierPath(x1, y1, x2, y2)}
+                      fill='none'
+                      stroke='#94a3b8'
+                      strokeWidth='1.5'
+                      markerEnd='url(#arrow-slate)'
                     />
-                  )}
-                </div>
-              )
-            })}
+                  )
+                })}
+
+                {/* Op → resolve/reject edges */}
+                {flow.operations.map((op) => {
+                  const sp = getOpPos(op)
+                  const sIsH = getOpDir(op.id) === 'h'
+                  return (
+                    <g key={op.id}>
+                      {op.resolve &&
+                        opMap.has(op.resolve) &&
+                        (() => {
+                          const tp = getOpPos(opMap.get(op.resolve)!)
+                          const tIsH = getOpDir(op.resolve) === 'h'
+                          const x1 = sp.x + (sIsH ? OP_RES_DX : Math.round(OP_W * 0.3))
+                          const y1 = sp.y + (sIsH ? OP_RES_DY : OP_H)
+                          return (
+                            <path
+                              d={bezierPath(
+                                x1,
+                                y1,
+                                tp.x + (tIsH ? OP_IN_DX : OP_W / 2),
+                                tp.y + (tIsH ? OP_IN_DY : 0)
+                              )}
+                              fill='none'
+                              stroke='#00ceff'
+                              strokeWidth='1.5'
+                              markerEnd='url(#arrow-cyan)'
+                            />
+                          )
+                        })()}
+                      {op.reject &&
+                        opMap.has(op.reject) &&
+                        (() => {
+                          const tp = getOpPos(opMap.get(op.reject)!)
+                          const tIsH = getOpDir(op.reject) === 'h'
+                          const x1 = sp.x + (sIsH ? OP_REJ_DX : Math.round(OP_W * 0.65))
+                          const y1 = sp.y + (sIsH ? OP_REJ_DY : OP_H)
+                          return (
+                            <path
+                              d={bezierPath(
+                                x1,
+                                y1,
+                                tp.x + (tIsH ? OP_IN_DX : OP_W / 2),
+                                tp.y + (tIsH ? OP_IN_DY : 0)
+                              )}
+                              fill='none'
+                              stroke='#f43f5e'
+                              strokeWidth='1.5'
+                              markerEnd='url(#arrow-rose)'
+                            />
+                          )
+                        })()}
+                    </g>
+                  )
+                })}
+              </svg>
+
+              {/* Trigger node */}
+              <TriggerNode
+                trigger={flow.trigger}
+                triggerOptions={flow.trigger_options}
+                status={flow.status}
+                triggerPos={triggerPos}
+                nodeDir={triggerDir}
+                onDirChange={changeTriggerDir}
+                onAddFirst={addFirstOp}
+                onPointerDown={handleTriggerPointerDown}
+              />
+
+              {/* Operation nodes */}
+              {flow.operations.map((op) => {
+                const pos = getOpPos(op)
+                return (
+                  <div key={op.id} className='group'>
+                    {pendingDelete === op.id ? (
+                      <div
+                        style={{ position: 'absolute', left: pos.x, top: pos.y, width: OP_W }}
+                        className='rounded-lg border border-red-200 bg-white dark:bg-card shadow-sm p-3 flex flex-col gap-2'
+                      >
+                        <p className='text-[12px] text-slate-700 font-medium'>
+                          Remove <span className='font-semibold'>{op.name}</span>?
+                        </p>
+                        <div className='flex gap-1.5'>
+                          <button
+                            type='button'
+                            onClick={() => deleteOp.mutate(op.id)}
+                            className='flex-1 rounded bg-red-500 py-1 text-[11px] font-medium text-white hover:bg-red-600'
+                          >
+                            Remove
+                          </button>
+                          <button
+                            type='button'
+                            onClick={() => setPendingDelete(null)}
+                            className='flex-1 rounded border py-1 text-[11px] hover:bg-slate-50 dark:hover:bg-muted'
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <OperationNode
+                        op={{ ...op, ...pos }}
+                        nodeDir={getOpDir(op.id)}
+                        onDirChange={(d) => changeOpDir(op.id, d)}
+                        onEdit={() => setEditingOp(op)}
+                        onDelete={() => setPendingDelete(op.id)}
+                        onAddResolve={() => addFromHandle(op.id, 'resolve')}
+                        onAddReject={() => addFromHandle(op.id, 'reject')}
+                        onPointerDown={(e) => handlePointerDown(e, op)}
+                      />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
+
+        {/* Zoom controls (#624) */}
+        <div className='absolute bottom-4 left-4 z-10 flex items-center overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-card'>
+          <button
+            type='button'
+            onClick={() => applyZoom(scale - 0.1)}
+            className='px-2.5 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 dark:hover:bg-muted'
+            aria-label='Zoom out'
+          >
+            −
+          </button>
+          <button
+            type='button'
+            onClick={() => applyZoom(1)}
+            title='Reset zoom to 100%'
+            className='min-w-[46px] border-x border-slate-100 px-1.5 py-1.5 text-center text-[11px] tabular-nums text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-muted'
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <button
+            type='button'
+            onClick={() => applyZoom(scale + 0.1)}
+            className='px-2.5 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50 dark:hover:bg-muted'
+            aria-label='Zoom in'
+          >
+            +
+          </button>
+          <button
+            type='button'
+            onClick={fitView}
+            title='Fit all nodes in view'
+            className='border-l border-slate-100 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-muted'
+          >
+            Fit
+          </button>
+        </div>
+
+        {/* Minimap (#624) — scaled node rects + draggable viewport window. */}
+        <CanvasMinimap
+          triggerPos={triggerPos}
+          ops={flow.operations.map((op) => getOpPos(op))}
+          viewport={viewport}
+          scale={scale}
+          onNavigate={(canvasX, canvasY) => {
+            const el = scrollRef.current
+            if (!el) return
+            el.scrollLeft = canvasX * scale - el.clientWidth / 2
+            el.scrollTop = canvasY * scale - el.clientHeight / 2
+          }}
+        />
+
         {flow.operations.length === 0 && (
           <div className='pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 select-none rounded-full border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-card/80 backdrop-blur-sm px-4 py-2 text-[12px] text-slate-400 whitespace-nowrap'>
             Click{' '}
@@ -2758,7 +3076,7 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
     },
     onError: (err) =>
       toast.error(
-        ((err as { response?: { data?: { error?: string } } }).response?.data?.error) ??
+        (err as { response?: { data?: { error?: string } } }).response?.data?.error ??
           'Preview failed'
       )
   })
@@ -2772,12 +3090,14 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
       setResult(data)
       setConfirming(false)
       queryClient.invalidateQueries({ queryKey: ['flow-runs', flowId] })
-      toast.success(`Replayed ${data.executed} write(s)${data.failed ? ` — ${data.failed} failed` : ''}`)
+      toast.success(
+        `Replayed ${data.executed} write(s)${data.failed ? ` — ${data.failed} failed` : ''}`
+      )
     },
     onError: (err) => {
       setConfirming(false)
       toast.error(
-        ((err as { response?: { data?: { error?: string } } }).response?.data?.error) ??
+        (err as { response?: { data?: { error?: string } } }).response?.data?.error ??
           'Replay failed'
       )
     }
@@ -2803,9 +3123,8 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
       {open && (
         <div className='space-y-3 border-t border-slate-100 dark:border-border p-5'>
           <p className='text-[11px] leading-relaxed text-slate-500 dark:text-slate-400'>
-            Re-run this flow for every matching write in a time window — catch-up after the flow
-            was broken or inactive. Records are replayed with their CURRENT values; deletes are
-            skipped.
+            Re-run this flow for every matching write in a time window — catch-up after the flow was
+            broken or inactive. Records are replayed with their CURRENT values; deletes are skipped.
           </p>
           <div className='grid grid-cols-2 gap-2'>
             <label className='space-y-1'>
@@ -2957,7 +3276,13 @@ function FlowTesterSection({ flowId, trigger }: { flowId: string; trigger: strin
         )
       : trigger === 'event'
         ? JSON.stringify(
-            { collection: 'my_collection', action: 'create', keys: [], payload: {}, previousData: {} },
+            {
+              collection: 'my_collection',
+              action: 'create',
+              keys: [],
+              payload: {},
+              previousData: {}
+            },
             null,
             2
           )
@@ -3346,8 +3671,10 @@ export function FlowEditPage() {
                 onClick={() =>
                   setForm((p) => ({
                     ...p,
-                    shadow_mode: !((p as { shadow_mode?: boolean }).shadow_mode ??
-                      (flow as { shadow_mode?: boolean }).shadow_mode)
+                    shadow_mode: !(
+                      (p as { shadow_mode?: boolean }).shadow_mode ??
+                      (flow as { shadow_mode?: boolean }).shadow_mode
+                    )
                   }))
                 }
                 data-tip='Shadow mode: the flow runs log-only (dry) — a trial period before it acts for real'
@@ -3360,7 +3687,7 @@ export function FlowEditPage() {
                 )}
               >
                 {((form as { shadow_mode?: boolean }).shadow_mode ??
-                  (flow as { shadow_mode?: boolean }).shadow_mode)
+                (flow as { shadow_mode?: boolean }).shadow_mode)
                   ? 'Shadow (dry)'
                   : 'Shadow off'}
               </button>
@@ -3453,7 +3780,11 @@ export function FlowEditPage() {
                       <>
                         <div className='my-1 border-t border-slate-100 dark:border-border' />
                         {(registeredTriggers ?? []).map((t) => (
-                          <SelectItem key={t.type} value={t.type} title={t.description || undefined}>
+                          <SelectItem
+                            key={t.type}
+                            value={t.type}
+                            title={t.description || undefined}
+                          >
                             {t.label}
                           </SelectItem>
                         ))}
@@ -3515,10 +3846,12 @@ export function FlowEditPage() {
                 return (
                   <div className='space-y-1 rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 px-3 py-2 text-[11px] text-slate-500'>
                     <p>
-                      Extension trigger: <span className='font-semibold'>{extTrigger.label}</span>. No
-                      configuration required.
+                      Extension trigger: <span className='font-semibold'>{extTrigger.label}</span>.
+                      No configuration required.
                     </p>
-                    {extTrigger.description && <p className='text-slate-400'>{extTrigger.description}</p>}
+                    {extTrigger.description && (
+                      <p className='text-slate-400'>{extTrigger.description}</p>
+                    )}
                   </div>
                 )
               return (

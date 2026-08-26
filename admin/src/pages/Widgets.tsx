@@ -849,6 +849,7 @@ interface InternalWidget {
     | 'button-group'
     | 'review_list'
     | 'rollup'
+    | 'report_widget'
   inputs: unknown[] | null
   config: unknown | null
   is_active: boolean
@@ -863,7 +864,8 @@ const WIDGET_TYPE_OPTIONS = [
   { value: 'button-group', label: 'Button Group (client)' },
   { value: 'external-api', label: 'External API' },
   { value: 'review_list', label: 'Review List' },
-  { value: 'rollup', label: 'Rollup' }
+  { value: 'rollup', label: 'Rollup' },
+  { value: 'report_widget', label: 'Report Widget (embed)' }
 ] as const
 
 interface InternalWidgetFormData {

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  Inbox,
   Package,
   Puzzle,
   RefreshCw,
@@ -34,6 +35,21 @@ type Extension = {
   requires?: string[]
   has_settings?: boolean
   has_health_check?: boolean
+  /** Capability manifest (#660): declared by the export vs observed by the loader. */
+  capabilities?: { declared: string[]; observed: string[] }
+}
+
+type ExtensionEvent = {
+  id: number
+  extension: string
+  event_type: string
+  payload: string | null
+  status: 'pending' | 'delivered' | 'failed' | 'dead'
+  attempts: number
+  last_error: string | null
+  next_attempt_at: string | null
+  created_at: string
+  delivered_at: string | null
 }
 
 type MarketplaceExtension = {
@@ -226,6 +242,210 @@ function MarketplaceTab() {
   )
 }
 
+// ─── Extension event outbox tab (#504) ───────────────────────────────────────
+
+const EVENT_STATUSES = ['all', 'pending', 'failed', 'dead', 'delivered'] as const
+
+const EVENT_BADGE: Record<ExtensionEvent['status'], 'success' | 'warning' | 'destructive'> = {
+  delivered: 'success',
+  pending: 'warning',
+  failed: 'warning',
+  dead: 'destructive'
+}
+
+function EventsTab() {
+  const qc = useQueryClient()
+  const [status, setStatus] = useState<(typeof EVENT_STATUSES)[number]>('all')
+  const [page, setPage] = useState(1)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['extension-events', status, page],
+    queryFn: () =>
+      api
+        .get<{ data: ExtensionEvent[]; total: number; limit: number }>('/extension-events', {
+          params: { ...(status !== 'all' ? { status } : {}), page, limit: 50 }
+        })
+        .then((r) => r.data),
+    refetchInterval: 15_000
+  })
+
+  const act = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: 'retry' | 'discard' }) =>
+      api.post(`/extension-events/${id}/${action}`),
+    onSuccess: (_r, v) => {
+      toast.success(v.action === 'retry' ? 'Queued for redelivery' : 'Discarded')
+      void qc.invalidateQueries({ queryKey: ['extension-events'] })
+    },
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Action failed')
+    }
+  })
+
+  const rows = data?.data ?? []
+  const total = data?.total ?? 0
+  const pages = Math.max(1, Math.ceil(total / (data?.limit ?? 50)))
+
+  return (
+    <div>
+      <div className='mb-4 flex items-center gap-1.5'>
+        {EVENT_STATUSES.map((s) => (
+          <button
+            key={s}
+            type='button'
+            onClick={() => {
+              setStatus(s)
+              setPage(1)
+            }}
+            className={cn(
+              'rounded-full px-2.5 py-1 text-[11.5px] font-medium capitalize transition-colors',
+              status === s
+                ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                : 'text-slate-500 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+            )}
+          >
+            {s}
+          </button>
+        ))}
+        <span className='ml-auto text-[11.5px] text-slate-400 dark:text-muted-foreground'>
+          {total} event{total === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      {isLoading ? (
+        <div className='space-y-px overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
+          {[1, 2, 3].map((k) => (
+            <Skeleton key={k} className='h-11 rounded-none' />
+          ))}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className='flex flex-col items-center justify-center py-20 text-center'>
+          <Inbox className='mb-3 h-9 w-9 text-slate-300 dark:text-slate-600' />
+          <p className='text-[13px] font-medium text-slate-600 dark:text-foreground'>
+            No {status === 'all' ? '' : `${status} `}extension events
+          </p>
+          <p className='mt-1 max-w-md text-[12px] text-slate-400 dark:text-muted-foreground'>
+            Extensions publish durable events via{' '}
+            <code className='font-mono'>ctx.events.publish()</code>; delivery attempts, backoff and
+            dead letters land here.
+          </p>
+        </div>
+      ) : (
+        <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
+          <table className='w-full text-[12.5px]'>
+            <thead>
+              <tr className='border-b border-slate-100 bg-slate-50 dark:border-border dark:bg-muted/30'>
+                {['Event', 'Status', 'Attempts', 'Created', 'Next attempt', ''].map((h) => (
+                  <th
+                    key={h}
+                    className='px-4 py-2.5 text-left text-[11px] font-medium text-slate-400 dark:text-muted-foreground'
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className='divide-y divide-slate-100 dark:divide-border'>
+              {rows.map((ev) => (
+                <tr key={ev.id} className='bg-white dark:bg-card'>
+                  <td className='px-4 py-3'>
+                    <code className='font-mono text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+                      {ev.extension}
+                      <span className='text-slate-400'>:</span>
+                      {ev.event_type}
+                    </code>
+                    {ev.last_error && (
+                      <p
+                        className='mt-0.5 line-clamp-1 font-mono text-[10.5px] text-red-500'
+                        data-tip={ev.last_error}
+                      >
+                        {ev.last_error}
+                      </p>
+                    )}
+                  </td>
+                  <td className='px-4 py-3'>
+                    <Badge variant={EVENT_BADGE[ev.status]} className='text-[10.5px] capitalize'>
+                      {ev.status}
+                    </Badge>
+                  </td>
+                  <td className='px-4 py-3 tabular-nums text-slate-500 dark:text-muted-foreground'>
+                    {ev.attempts}
+                  </td>
+                  <td
+                    className='px-4 py-3 text-[11.5px] text-slate-400 dark:text-muted-foreground'
+                    data-tip={ev.created_at}
+                  >
+                    {new Date(ev.created_at).toLocaleString()}
+                  </td>
+                  <td className='px-4 py-3 text-[11.5px] text-slate-400 dark:text-muted-foreground'>
+                    {ev.status === 'delivered' && ev.delivered_at
+                      ? `delivered ${new Date(ev.delivered_at).toLocaleTimeString()}`
+                      : ev.next_attempt_at
+                        ? new Date(ev.next_attempt_at).toLocaleString()
+                        : '—'}
+                  </td>
+                  <td className='px-4 py-3 text-right'>
+                    {ev.status !== 'delivered' && (
+                      <span className='inline-flex items-center gap-1.5'>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          className='h-6 text-[11px]'
+                          disabled={act.isPending}
+                          onClick={() => act.mutate({ id: ev.id, action: 'retry' })}
+                        >
+                          Retry
+                        </Button>
+                        {ev.status !== 'dead' && (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-6 text-[11px] text-red-600 hover:text-red-700'
+                            disabled={act.isPending}
+                            onClick={() => act.mutate({ id: ev.id, action: 'discard' })}
+                          >
+                            Discard
+                          </Button>
+                        )}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {pages > 1 && (
+        <div className='mt-3 flex items-center justify-end gap-2 text-[12px] text-slate-500'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 text-[11px]'
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            Prev
+          </Button>
+          <span>
+            {page} / {pages}
+          </span>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 text-[11px]'
+            disabled={page >= pages}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ExtensionsPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = usePersistedTab<string>('nvr_tab_extensions', 'installed')
@@ -330,6 +550,10 @@ export function ExtensionsPage() {
                   <Store className='h-3 w-3' />
                   Marketplace
                 </TabsTrigger>
+                <TabsTrigger value='events' className='gap-1.5 text-[12px]'>
+                  <Inbox className='h-3 w-3' />
+                  Events
+                </TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
@@ -373,6 +597,10 @@ export function ExtensionsPage() {
       {tab === 'marketplace' ? (
         <div className='flex-1 overflow-y-auto p-6'>
           <MarketplaceTab />
+        </div>
+      ) : tab === 'events' ? (
+        <div className='flex-1 overflow-y-auto p-6'>
+          <EventsTab />
         </div>
       ) : (
         <div className='flex-1 overflow-y-auto p-6'>
@@ -467,6 +695,41 @@ export function ExtensionsPage() {
                             ))}
                           </div>
                         )}
+                        {(() => {
+                          // Capability manifest (#660): declared vs observed —
+                          // observed-but-undeclared chips render amber.
+                          const declared = ext.capabilities?.declared ?? []
+                          const observed = ext.capabilities?.observed ?? []
+                          const all = Array.from(new Set([...declared, ...observed])).sort()
+                          if (all.length === 0) return null
+                          return (
+                            <div className='mt-1 flex flex-wrap gap-1'>
+                              {all.map((cap) => {
+                                const undeclared = !declared.includes(cap)
+                                return (
+                                  <span
+                                    key={cap}
+                                    className={cn(
+                                      'rounded px-1.5 py-px font-mono text-[10px]',
+                                      undeclared
+                                        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                                        : 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                    )}
+                                    data-tip={
+                                      undeclared
+                                        ? 'Used but not declared — add it to the extension’s `capabilities` list'
+                                        : observed.includes(cap)
+                                          ? 'Declared capability, observed at load'
+                                          : 'Declared capability (not observed this boot)'
+                                    }
+                                  >
+                                    {cap}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                         {(ext.requires?.length ?? 0) > 0 && (
                           <p className='mt-0.5 text-[10.5px] text-slate-400'>
                             requires: {ext.requires?.join(', ')}
@@ -610,24 +873,35 @@ export function ExtensionsPage() {
   )
 }
 
-// ─── Extension settings sheet (#112) ─────────────────────────────────────────
+// ─── Extension settings sheet (#112/#505) — rendered FROM the declared schema ─
+type SettingDecl = {
+  key: string
+  label: string
+  type: 'string' | 'number' | 'boolean' | 'secret'
+  description?: string
+  default?: string
+  value: string | null
+}
+
 function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient()
-  const { data: decls = [], isLoading } = useQuery<
-    Array<{ key: string; label: string; type?: string; secret?: boolean; value: string | null }>
-  >({
+  const { data: decls = [], isLoading } = useQuery<SettingDecl[]>({
     queryKey: ['extension-settings', id],
     queryFn: () => api.get(`/extensions/${id}/settings`).then((r) => r.data.data)
   })
   const [draft, setDraft] = useState<Record<string, string>>({})
+  const effective = (d: SettingDecl) => draft[d.key] ?? (d.value == null ? '' : String(d.value))
   const save = useMutation({
     mutationFn: () => api.put(`/extensions/${id}/settings`, { values: draft }),
     onSuccess: () => {
-      toast.success('Settings saved — live within a minute (60s cache)')
+      toast.success('Settings saved — live within ~30s (settings cache)')
       void qc.invalidateQueries({ queryKey: ['extension-settings', id] })
       onClose()
     },
-    onError: () => toast.error('Save failed')
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Save failed')
+    }
   })
   return (
     <div className='fixed inset-0 z-[120] flex justify-end bg-black/30' onClick={onClose}>
@@ -645,20 +919,60 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
           <p className='mt-4 text-[12.5px] text-slate-400'>Loading…</p>
         ) : (
           <div className='mt-4 space-y-3'>
-            {decls.map((d) => (
-              <label key={d.key} className='block'>
-                <span className='text-[12px] font-medium text-slate-600 dark:text-slate-300'>
-                  {d.label}
-                </span>
-                <input
-                  type={d.secret ? 'password' : 'text'}
-                  defaultValue={d.value ?? ''}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, [d.key]: e.target.value }))}
-                  className='mt-1 h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
-                />
-                <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>{d.key}</span>
-              </label>
-            ))}
+            {decls.map((d) =>
+              d.type === 'boolean' ? (
+                <div key={d.key} className='flex items-start justify-between gap-3'>
+                  <div>
+                    <span className='text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+                      {d.label}
+                    </span>
+                    {d.description && (
+                      <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+                        {d.description}
+                      </p>
+                    )}
+                    <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>
+                      {d.key}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={effective(d) === 'true' || effective(d) === '1'}
+                    onCheckedChange={(checked) =>
+                      setDraft((prev) => ({ ...prev, [d.key]: checked ? 'true' : 'false' }))
+                    }
+                    aria-label={d.label}
+                  />
+                </div>
+              ) : (
+                <label key={d.key} className='block'>
+                  <span className='text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+                    {d.label}
+                  </span>
+                  {d.description && (
+                    <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+                      {d.description}
+                    </p>
+                  )}
+                  <input
+                    type={
+                      d.type === 'secret' ? 'password' : d.type === 'number' ? 'number' : 'text'
+                    }
+                    defaultValue={d.value ?? ''}
+                    placeholder={d.default ?? undefined}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, [d.key]: e.target.value }))}
+                    className='mt-1 h-8 w-full rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+                  />
+                  <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>
+                    {d.key}
+                    {d.type === 'secret' && d.value === '••••••' && (
+                      <span className='ml-1.5 text-slate-300'>
+                        — leaving the mask keeps the stored value
+                      </span>
+                    )}
+                  </span>
+                </label>
+              )
+            )}
             <div className='flex justify-end gap-2 pt-2'>
               <Button size='sm' variant='outline' onClick={onClose}>
                 Cancel

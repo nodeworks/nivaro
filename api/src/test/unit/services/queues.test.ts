@@ -110,7 +110,8 @@ describe('computeStats', () => {
       unowned: 2,
       sla_warning: 0,
       sla_breached: 0,
-      at_risk: 0
+      at_risk: 0,
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
     })
   })
 
@@ -121,7 +122,8 @@ describe('computeStats', () => {
       unowned: 1,
       sla_warning: 0,
       sla_breached: 0,
-      at_risk: 0
+      at_risk: 0,
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
     })
   })
 
@@ -132,7 +134,8 @@ describe('computeStats', () => {
       unowned: 0,
       sla_warning: 0,
       sla_breached: 0,
-      at_risk: 0
+      at_risk: 0,
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
     })
   })
 

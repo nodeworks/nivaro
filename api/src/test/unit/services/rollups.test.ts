@@ -32,6 +32,12 @@ function throwingFieldsChain() {
 function aggregateChain(value: number | null) {
   return {
     where: vi.fn().mockReturnThis(),
+    // The filter hook (#rollup source filter) runs through .modify — the chain
+    // must honor it or the whole aggregate falls into the null catch.
+    modify: vi.fn(function (this: unknown, cb: (q: unknown) => void) {
+      cb(this)
+      return this
+    }),
     count: vi.fn().mockReturnThis(),
     sum: vi.fn().mockReturnThis(),
     avg: vi.fn().mockReturnThis(),

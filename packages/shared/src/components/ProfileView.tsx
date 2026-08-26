@@ -34,6 +34,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { SimpleSelectXs } from './ui/SimpleSelect'
+import { playNotificationSound } from '../lib/notification-sound'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
@@ -342,6 +343,24 @@ export function NotificationRulesCard() {
               Clear
             </button>
           )}
+        </div>
+        <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          Sound:
+          <SimpleSelectXs
+            value={String(prefs?.notification_sound ?? 'off')}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'subtle', label: 'Subtle blip' },
+              { value: 'chime', label: 'Chime' }
+            ]}
+            onChange={(v: string) => {
+              playNotificationSound(v)
+              saveRaw.mutate({ notification_sound: v })
+            }}
+          />
+          <span className='text-[11px] text-slate-400'>
+            plays when an in-app notification arrives
+          </span>
         </div>
         <table className='w-full text-[12px]'>
           <thead>

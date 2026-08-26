@@ -1,15 +1,15 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
-import { bustFormulaContextCache } from '../services/formula-context.js'
 import { logActivity } from '../services/activity.js'
+import { bustFormulaContextCache } from '../services/formula-context.js'
 import { sendRawMail } from '../services/mail.js'
-import { sendSms } from '../services/sms.js'
 import {
   bustInstanceOverridesCache,
   envOverrideKeys,
   instanceKey
 } from '../services/settings-overrides.js'
+import { sendSms } from '../services/sms.js'
 
 const MASK = '••••••'
 
@@ -88,7 +88,10 @@ const allowedSettingsKeys = [
   'lock_takeover_roles',
   'lock_idle_release_minutes',
   'default_timezone',
-  'ai_disabled_features'
+  'ai_disabled_features',
+  // Theme studio (#662)
+  'theme_radius',
+  'theme_font'
 ]
 
 export async function settingsRoutes(app: FastifyInstance) {

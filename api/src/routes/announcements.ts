@@ -17,7 +17,7 @@ import { sendSms } from '../services/sms.js'
  * Zone-1 banner.
  */
 
-const CHANNELS = ['banner', 'message', 'email', 'sms'] as const
+const CHANNELS = ['banner', 'message', 'email', 'sms', 'login'] as const
 type Channel = (typeof CHANNELS)[number]
 
 /** One audience group: ANDed scope conditions ({division: [2], project_type: [35]}
@@ -362,7 +362,7 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       delivered_count: delivered,
       sent_at: new Date(),
       // Banner rows become visible AT delivery, not at compose.
-      is_active: channels.includes('banner'),
+      is_active: channels.includes('banner') || channels.includes('login'),
       updated_at: new Date()
     })
   return delivered
@@ -666,7 +666,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         // Only banner rows stay "active" — send-only broadcasts are history.
         // A scheduled row stays INACTIVE until delivery flips it, so a banner
         // scheduled for Monday cannot show up Friday.
-        is_active: channels.includes('banner') && !scheduledAt,
+        is_active: (channels.includes('banner') || channels.includes('login')) && !scheduledAt,
         scheduled_send_at: scheduledAt,
         sent_at: scheduledAt ? null : new Date(),
         created_by: req.user?.id ?? null,

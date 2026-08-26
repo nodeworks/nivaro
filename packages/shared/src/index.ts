@@ -182,3 +182,4 @@ export { setFormulaConstants, formulaConstant, networkdaysBetween } from './lib/
 export { registerLayoutSlot, getLayoutSlot, extSlotKey } from './lib/layout-slots'
 export { setTimeDisplay, setNumberFormat } from './lib/utils'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
+export { playNotificationSound, type NotificationSound } from './lib/notification-sound'

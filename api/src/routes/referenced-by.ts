@@ -67,25 +67,30 @@ export async function referencedByRoutes(app: FastifyInstance) {
         })
         .slice(0, MAX_RELATIONS)
 
+      // Counts and samples resolve THROUGH readItems as the caller: a
+      // referencing collection the user cannot read contributes nothing (its
+      // existence is not disclosed), and RLS row filters + User Scopes bound
+      // both the count and the sample ids — a raw count here would leak rows
+      // the user's own list views hide.
+      const { readItems } = await import('../services/items.js')
       const resolved = (
         await Promise.all(
           candidates.map(async (rel) => {
             try {
-              const cnt = (await db(rel.many_collection)
-                .where({ [rel.many_field]: id })
-                .count<{ c: number }[]>('* as c')) as Array<{ c: number }>
-              const count = Number(cnt[0]?.c ?? 0)
+              if (!req.isAdmin && !(await can(req.user!, 'read', rel.many_collection))) return null
+              const page = await readItems(req.user!, rel.many_collection, {
+                filter: { [rel.many_field]: { _eq: id } },
+                fields: ['id'],
+                sort: ['-id'],
+                limit: MAX_SAMPLES
+              })
+              const count = Number(page.total ?? 0)
               if (count === 0) return null
-              const sampleRows = (await db(rel.many_collection)
-                .where({ [rel.many_field]: id })
-                .orderBy('id', 'desc')
-                .limit(MAX_SAMPLES)
-                .select('id')) as Array<{ id: string | number }>
               return {
                 collection: rel.many_collection,
                 field: rel.many_field,
                 count,
-                sample_ids: sampleRows.map((r) => String(r.id))
+                sample_ids: (page.data as Array<{ id: string | number }>).map((r) => String(r.id))
               }
             } catch {
               // Stale relation row / unreadable table — skip, never fail the panel.

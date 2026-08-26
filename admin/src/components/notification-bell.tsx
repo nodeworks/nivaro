@@ -1,3 +1,4 @@
+import { playNotificationSound } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, ExternalLink } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -105,13 +106,15 @@ export function NotificationBell({
     socket.on('notification:new', (notification: CMSNotification) => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] })
       toast.info(notification.title)
+      const prefs = (user?.preferences ?? {}) as { notification_sound?: string }
+      playNotificationSound(prefs.notification_sound)
     })
 
     return () => {
       socket.disconnect()
       socketRef.current = null
     }
-  }, [user?.static_token, queryClient])
+  }, [user?.static_token, user?.preferences, queryClient])
 
   const navigate = useNavigate()
   const [tab, setTab] = useState<'unread' | 'all'>('unread')

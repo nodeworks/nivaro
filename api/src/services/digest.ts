@@ -131,6 +131,11 @@ export async function runDigests(frequency: 'daily' | 'weekly'): Promise<void> {
     users = (await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
       .where({ 'ns.is_active': true, 'ns.digest_frequency': frequency })
+      // #649: a subscription whose email channel is off never earns a digest
+      // send on its own (NULL = on, so historic rows are unaffected).
+      .where((qb) => {
+        qb.whereNull('ns.notify_email').orWhere('ns.notify_email', true)
+      })
       .distinct('u.id', 'u.email', 'u.first_name', 'u.last_digest_at')) as DigestUser[]
   } catch (err) {
     console.warn('[digest] failed to load digest users:', err)

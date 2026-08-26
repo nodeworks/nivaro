@@ -627,6 +627,89 @@ export async function aiRoutes(app: FastifyInstance) {
    * prompt). Admin only; the result is a draft for the editor, never
    * executed here.
    */
+  // ─── AI schema editing (#550) ───────────────────────────────────────────
+  // "Add a priority dropdown and a due date to tasks" → a PROPOSED operations
+  // array in the change-set dialect (#653). Nothing is ever applied here —
+  // the proposal flows into POST /change-sets/plan for impact preview and an
+  // explicit admin APPLY. The model only proposes; humans commit schema.
+  app.post('/schema', { preHandler: requireAdmin }, async (req, reply) => {
+    const client = await getClient()
+    if (!client) {
+      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+    }
+    const b = req.body as { prompt?: string; collection?: string }
+    if (!b.prompt?.trim()) return reply.code(400).send({ error: 'prompt is required' })
+
+    const collections = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .select('collection')) as Array<{ collection: string }>
+    const names = collections.map((c) => c.collection)
+    // Column detail for the target collection + any collection the prompt mentions.
+    const wanted = new Set<string>()
+    if (b.collection && names.includes(b.collection)) wanted.add(b.collection)
+    const hay = b.prompt.toLowerCase()
+    for (const n of names) if (hay.includes(n.toLowerCase())) wanted.add(n)
+    const blocks: string[] = []
+    for (const t of [...wanted].slice(0, 8)) {
+      try {
+        const cols = (await db('information_schema.columns')
+          .where({ table_name: t })
+          .orderBy('ordinal_position')
+          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+        blocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
+      } catch {
+        /* skip */
+      }
+    }
+
+    const { model } = await getAiSettings()
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 1200,
+        system: `You translate plain-language schema requests into a JSON operations array for a headless CMS on Microsoft SQL Server. Existing collections: ${names.join(', ')}.\n\nKnown column detail:\n${blocks.join('\n')}\n\nAllowed operation shapes (return ONLY a JSON array of these, in a fenced json code block):\n[{"op":"add_column","collection":"...","field":"snake_case_name","type":"string|text|integer|decimal|boolean|date|datetime","options":{"choices":[{"value":"...","text":"..."}]?}},{"op":"add_collection","collection":"snake_case_name"},{"op":"rename_column","collection":"...","field":"...","new_name":"..."},{"op":"drop_column","collection":"...","field":"..."}]\nRules: never touch nivaro_* tables; never propose drops unless the request explicitly asks to remove something; a dropdown = type string with options.choices; prefer add over rename over drop; field names snake_case.`,
+        messages: [
+          {
+            role: 'user',
+            content: `${b.collection ? `Target collection: ${b.collection}\n` : ''}Request: ${b.prompt}`
+          }
+        ]
+      })
+      const text = msg.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('\n')
+      const jsonMatch = text.match(/```json\n?([\s\S]*?)```/) ?? text.match(/(\[[\s\S]*\])/)
+      let operations: unknown[] = []
+      try {
+        const parsed = JSON.parse(jsonMatch?.[1] ?? '[]')
+        if (Array.isArray(parsed)) operations = parsed
+      } catch {
+        /* fall through to empty */
+      }
+      // Server-side belt: refuse system tables and non-identifier names in the
+      // PROPOSAL itself so the client never even displays a dangerous op.
+      const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+      operations = operations.filter((o) => {
+        const op = o as { op?: string; collection?: string; field?: string; new_name?: string }
+        if (!op?.op || !op.collection) return false
+        if (!IDENT.test(op.collection) || /^(nivaro|directus)_/i.test(op.collection)) return false
+        for (const f of [op.field, op.new_name]) if (f && !IDENT.test(f)) return false
+        return true
+      })
+      await logActivity({ action: 'ai-schema', user: req.user?.id, comment: b.prompt.slice(0, 200), req })
+      return {
+        data: {
+          operations,
+          text: text.replace(/```json[\s\S]*?```/, '').trim().slice(0, 800)
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, 'ai schema failed')
+      return reply.code(502).send({ error: 'AI request failed' })
+    }
+  })
+
   app.post('/sql', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {

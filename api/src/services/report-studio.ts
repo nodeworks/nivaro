@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { getAiClient, getAiModelSettings } from './ai-client.js'
 import { runCustomQueryBySlug } from './custom-query-exec.js'
 import type { User } from '../types.js'
 import { can } from './permissions.js'
@@ -63,6 +65,11 @@ export interface WidgetQueryConfig {
   hot_days?: number
   /** Metric catalog (#250): nivaro_metric_definitions.metric_key. */
   metric_key?: string
+  /** Pivot (#688): row × column matrix over one metric. */
+  row_dim?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  col_dim?: { field: string; bucket?: 'day' | 'week' | 'month' } | null
+  /** AI insight (#690): optional focus folded into the prompt. */
+  instructions?: string
   filters?: WidgetFilter[]
   date_field?: string | null
   limit?: number
@@ -295,6 +302,17 @@ export interface WidgetData {
   }
   /** Narrative widgets: rendered text with values substituted. */
   narrative?: string
+  /** Pivot: labeled row/col keys + the cell matrix with totals. */
+  pivot?: {
+    rows: string[]
+    cols: string[]
+    cells: Record<string, Record<string, number>>
+    row_totals: Record<string, number>
+    col_totals: Record<string, number>
+    grand_total: number
+    truncated_rows: number
+    truncated_cols: number
+  }
   row_count?: number
   tiles?: Array<{
     label: string
@@ -354,6 +372,13 @@ export function normalizeWidgetConfig(
     const a = cfg.aggregate
     if (['count', 'sum', 'avg', 'min', 'max'].includes(a)) {
       cfg.metric = { aggregate: a as never, field: cfg.field }
+    }
+  }
+  // Pivot dialect: metric may arrive as { field, agg } — fold agg → aggregate.
+  const rawMetric = cfg.metric as { aggregate?: string; agg?: string; field?: string } | undefined
+  if (rawMetric && !rawMetric.aggregate && rawMetric.agg) {
+    if (['count', 'sum', 'avg', 'min', 'max'].includes(rawMetric.agg)) {
+      cfg.metric = { aggregate: rawMetric.agg as never, field: rawMetric.field }
     }
   }
   if (cfg.metrics) {
@@ -737,6 +762,125 @@ export async function resolveWidgetData(
       value: Number(r.value)
     }))
     return { cells, row_count: cells.length }
+  }
+
+  // Pivot (#688) — row dim × column dim × one metric, both dims labelized,
+  // capped 40×40 keeping the largest totals with an honest truncation count.
+  if (widget.type === 'pivot') {
+    const rd = cfg.row_dim
+    const cd = cfg.col_dim
+    if (!rd?.field || !valid.has(rd.field) || !cd?.field || !valid.has(cd.field)) {
+      throw Object.assign(new Error('Pivot widgets need valid row and column dimension fields'), {
+        statusCode: 400
+      })
+    }
+    const q = base()
+    const addDim = (alias: string, d: { field: string; bucket?: 'day' | 'week' | 'month' }) => {
+      if (d.bucket === 'week') {
+        const expr = `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2))`
+        q.select(db.raw(`${expr} as ${alias}`, [d.field, d.field]))
+        q.groupBy(db.raw(expr, [d.field, d.field]))
+      } else if (d.bucket) {
+        const fmtStr = d.bucket === 'day' ? 'yyyy-MM-dd' : 'yyyy-MM'
+        q.select(db.raw(`FORMAT(??, '${fmtStr}') as ${alias}`, [d.field]))
+        q.groupBy(db.raw(`FORMAT(??, '${fmtStr}')`, [d.field]))
+      } else {
+        q.select({ [alias]: d.field })
+        q.groupBy(d.field)
+      }
+    }
+    addDim('rdim', rd)
+    addDim('cdim', cd)
+    const rowsRaw = (await aggSelect(q.limit(5000))) as unknown as Array<{
+      rdim: unknown
+      cdim: unknown
+      value: number | string
+    }>
+    // Labelize FK dims; bucketed dims are already stable date-key strings.
+    const rLab = rd.bucket
+      ? rowsRaw.map((r) => ({ dim: r.rdim == null ? '(none)' : String(r.rdim) }))
+      : await labelizeDimension(
+          collection,
+          rd.field,
+          rowsRaw.map((r) => ({ dim: r.rdim, value: 0 }))
+        )
+    const cLab = cd.bucket
+      ? rowsRaw.map((r) => ({ dim: r.cdim == null ? '(none)' : String(r.cdim) }))
+      : await labelizeDimension(
+          collection,
+          cd.field,
+          rowsRaw.map((r) => ({ dim: r.cdim, value: 0 }))
+        )
+    // Cell matrix keyed by label — twin ids labelizing identically merge by sum.
+    const cellAcc = new Map<string, Map<string, number>>()
+    rowsRaw.forEach((r, i) => {
+      const rk = rLab[i].dim
+      const ck = cLab[i].dim
+      const m = cellAcc.get(rk) ?? new Map<string, number>()
+      m.set(ck, (m.get(ck) ?? 0) + Number(r.value))
+      cellAcc.set(rk, m)
+    })
+    const CAP = 40
+    const fullRowTotal = new Map<string, number>()
+    const fullColTotal = new Map<string, number>()
+    for (const [rk, m] of cellAcc) {
+      for (const [ck, v] of m) {
+        fullRowTotal.set(rk, (fullRowTotal.get(rk) ?? 0) + v)
+        fullColTotal.set(ck, (fullColTotal.get(ck) ?? 0) + v)
+      }
+    }
+    const orderKeys = (
+      totals: Map<string, number>,
+      bucketed: boolean
+    ): { kept: string[]; dropped: number } => {
+      const all = [...totals.keys()]
+      const ranked = bucketed
+        ? [...all].sort()
+        : [...all].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
+      if (ranked.length <= CAP) return { kept: ranked, dropped: 0 }
+      // Keep the CAP largest even on a bucketed axis, then restore axis order.
+      const largest = new Set(
+        [...all]
+          .sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
+          .slice(0, CAP)
+      )
+      return { kept: ranked.filter((k) => largest.has(k)), dropped: ranked.length - CAP }
+    }
+    const rowPick = orderKeys(fullRowTotal, !!rd.bucket)
+    const colPick = orderKeys(fullColTotal, !!cd.bucket)
+    const keptCols = new Set(colPick.kept)
+    // Totals recomputed over the KEPT matrix so the visible math self-agrees;
+    // the truncation counts tell the reader the rest exists.
+    const cells: Record<string, Record<string, number>> = {}
+    const row_totals: Record<string, number> = {}
+    const col_totals: Record<string, number> = {}
+    let grand_total = 0
+    for (const rk of rowPick.kept) {
+      const m = cellAcc.get(rk)
+      if (!m) continue
+      const out: Record<string, number> = {}
+      for (const [ck, v] of m) {
+        if (!keptCols.has(ck)) continue
+        out[ck] = v
+        row_totals[rk] = (row_totals[rk] ?? 0) + v
+        col_totals[ck] = (col_totals[ck] ?? 0) + v
+        grand_total += v
+      }
+      cells[rk] = out
+    }
+    return {
+      pivot: {
+        rows: rowPick.kept,
+        cols: colPick.kept,
+        cells,
+        row_totals,
+        col_totals,
+        grand_total,
+        truncated_rows: rowPick.dropped,
+        truncated_cols: colPick.dropped
+      },
+      row_count: rowsRaw.length
+    }
   }
 
   // Waterfall — the movers computation shaped as a bridge
@@ -1192,6 +1336,11 @@ export async function resolveWidgetData(
   return { series }
 }
 
+// AI insight (#690): one narrative per (report, widget, config, day) — viewing
+// never re-bills; ?fresh=1 recomputes and overwrites. In-process by design
+// (same posture as the request-trace buffer — per replica, bounded).
+const aiInsightCache = new Map<string, string>()
+
 /**
  * Report-scoped widget resolution: handles the types that need SIBLING
  * widgets — 'calc' (a formula over other widgets' derived metrics) and
@@ -1204,8 +1353,98 @@ export async function resolveWidgetDataFull(
   widget: { id?: string; type: string; collection: string | null; config: WidgetQueryConfig | null },
   dateRange: DateRange | null,
   entityFilters: EntityFilter[] = [],
-  depth = 0
+  depth = 0,
+  opts?: { freshAi?: boolean }
 ): Promise<WidgetData> {
+  // AI insight (#690): summarize what the report's OTHER widgets show. Never
+  // resolved as a sibling reference (calc/narrative refs read it as empty),
+  // and it skips other ai_insight widgets itself — no recursion, ever.
+  if (widget.type === 'ai_insight') {
+    if (depth > 0) return { narrative: '' }
+    const day = new Date().toISOString().slice(0, 10)
+    const cfgHash = createHash('sha256')
+      .update(JSON.stringify(widget.config ?? {}))
+      .digest('hex')
+      .slice(0, 16)
+    const cacheKey = `${reportId}:${widget.id ?? ''}:${cfgHash}:${day}`
+    if (!opts?.freshAi) {
+      const hit = aiInsightCache.get(cacheKey)
+      if (hit != null) return { narrative: hit }
+    }
+    const siblings = (
+      (await db('nivaro_report_widgets')
+        .where({ report: reportId })
+        .orderBy('sort', 'asc')) as WidgetRow[]
+    )
+      .filter((w) => w.id !== widget.id && w.type !== 'divider' && w.type !== 'ai_insight')
+      .slice(0, 12)
+    const summaries: Array<Record<string, unknown>> = []
+    for (const sib of siblings) {
+      try {
+        const sub = await resolveWidgetDataFull(
+          user,
+          reportId,
+          { id: sib.id, type: sib.type, collection: sib.collection, config: parseJson(sib.config) },
+          dateRange,
+          entityFilters,
+          depth + 1
+        )
+        const s: Record<string, unknown> = { title: sib.title, type: sib.type }
+        if (sub.value != null) s.value = sub.value
+        if (sub.prev_value != null) s.prev_value = sub.prev_value
+        if (sub.change_pct != null) s.change_pct = sub.change_pct
+        if (sub.series?.length) {
+          s.top = sub.series.slice(0, 8).map((pt) => ({ dim: pt.dim, value: pt.value }))
+        }
+        if (sub.tiles?.length) {
+          s.tiles = sub.tiles.map((t) => ({ label: t.label, value: t.value }))
+        }
+        if (sub.row_count != null) s.row_count = sub.row_count
+        summaries.push(s)
+      } catch {
+        /* a broken sibling contributes nothing rather than failing the insight */
+      }
+    }
+    if (summaries.length === 0) {
+      return {
+        narrative:
+          'Add some data widgets to this report and the AI summary will describe what stands out.'
+      }
+    }
+    const client = await getAiClient()
+    if (!client) return { narrative: 'AI is not configured for this instance.' }
+    const { model } = await getAiModelSettings()
+    const focus = String(widget.config?.instructions ?? '').slice(0, 500)
+    const prompt = [
+      'You are summarizing a business report dashboard for its viewers.',
+      'Here is each widget on the report with its current numbers, as JSON:',
+      JSON.stringify(summaries).slice(0, 6000),
+      focus ? `Focus especially on: ${focus}` : '',
+      'In at most 160 words of plain language, describe what stands out — the biggest numbers, notable changes, and anything that looks unusual. Plain prose only, no headings, no bullet lists, no preamble.'
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    try {
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 400,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      const text = msg.content
+        .filter((b) => b.type === 'text')
+        .map((b) => ('text' in b ? b.text : ''))
+        .join('')
+        .trim()
+      if (!text) return { narrative: 'The model returned no narrative — try Refresh.' }
+      // Only successes cache; a size guard keeps the map bounded per replica.
+      if (aiInsightCache.size > 300) aiInsightCache.clear()
+      aiInsightCache.set(cacheKey, text)
+      return { narrative: text }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error'
+      return { narrative: `AI request failed — try Refresh. (${detail.slice(0, 200)})` }
+    }
+  }
   // Narrative — markdown-lite text with {{token}} refs substituted by sibling
   // widgets' formatted values. Commentary that can never go stale.
   if (widget.type === 'narrative') {

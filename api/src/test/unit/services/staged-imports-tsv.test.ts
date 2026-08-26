@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { describe, it } from 'vitest'
 import { toTsv } from '../../../services/staged-imports.js'
 
 // BULK INSERT has no text qualifier: it splits on the terminators and stores

@@ -1,3 +1,4 @@
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, ChevronsUpDown, Copy, Filter, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
 import { useState } from 'react'
@@ -45,7 +46,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate'
+type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare'
 
 const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
   cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
@@ -764,6 +765,182 @@ function UiPermissionsTab({
   )
 }
 
+// ─── Policy templates (#628) ─────────────────────────────────────────────────
+// One-click standard grant sets; server is additive (never rewrites existing
+// policies), so this fills gaps on a hand-tuned role rather than resetting it.
+
+function TemplateBar({ roleId }: { roleId: string }) {
+  const qc = useQueryClient()
+  const apply = useMutation({
+    mutationFn: (template: string) => api.post(`/roles/${roleId}/apply-template`, { template }),
+    onSuccess: (r) => {
+      const d = r.data.data as { template: string; added: number }
+      toast.success(
+        d.added === 0
+          ? 'Nothing to add — role already covers this template'
+          : `${d.added} policies added (${d.template})`
+      )
+      void qc.invalidateQueries({ queryKey: ['role', roleId] })
+    },
+    onError: () => toast.error('Failed to apply template')
+  })
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const TEMPLATES: Array<{ key: string; label: string; hint: string }> = [
+    { key: 'read_only', label: 'Read-only', hint: 'read on every collection' },
+    { key: 'contributor', label: 'Contributor', hint: 'read + create + update' },
+    { key: 'manager', label: 'Manager', hint: 'full CRUD' }
+  ]
+  return (
+    <div className='mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/20'>
+      <span className='text-[11.5px] font-medium text-slate-500'>Apply template:</span>
+      {TEMPLATES.map((t) =>
+        confirming === t.key ? (
+          <span key={t.key} className='flex items-center gap-1.5'>
+            <span className='text-[11.5px] text-amber-600'>
+              Add {t.hint} to all business collections?
+            </span>
+            <Button
+              size='sm'
+              className='h-6 px-2 text-[11px]'
+              disabled={apply.isPending}
+              onClick={() => {
+                apply.mutate(t.key)
+                setConfirming(null)
+              }}
+            >
+              Apply
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='h-6 px-2 text-[11px]'
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+          </span>
+        ) : (
+          <button
+            key={t.key}
+            type='button'
+            title={t.hint}
+            onClick={() => setConfirming(t.key)}
+            className='rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11.5px] text-slate-600 transition-colors hover:border-[#00ceff] hover:text-nvr-navy dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-[#00ceff]'
+          >
+            {t.label}
+          </button>
+        )
+      )}
+      <span className='ml-auto text-[10.5px] text-slate-400'>additive — existing policies untouched</span>
+    </div>
+  )
+}
+
+// ─── Role compare (#627) ─────────────────────────────────────────────────────
+// Side-by-side policy diff against any other role — answers "what can B do
+// that A can't" without eyeballing two permission matrices.
+
+function CompareTab({ roleId, policies }: { roleId: string; policies: Policy[] }) {
+  const [otherId, setOtherId] = useState<string>('')
+  const { data: roles = [] } = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => api.get<{ data: Role[] }>('/roles').then((r) => r.data.data)
+  })
+  const { data: other } = useQuery({
+    queryKey: ['role', otherId],
+    enabled: !!otherId,
+    queryFn: () =>
+      api
+        .get<{ data: Role & { policies: Policy[] } }>(`/roles/${otherId}`)
+        .then((r) => r.data.data)
+  })
+  const mine = new Set(policies.map((p) => `${p.collection}:${p.action}`))
+  const theirs = new Set((other?.policies ?? []).map((p) => `${p.collection}:${p.action}`))
+  const allKeys = [...new Set([...mine, ...theirs])].sort()
+  const onlyMine = allKeys.filter((k) => mine.has(k) && !theirs.has(k))
+  const onlyTheirs = allKeys.filter((k) => !mine.has(k) && theirs.has(k))
+  const shared = allKeys.filter((k) => mine.has(k) && theirs.has(k))
+  const fmt = (k: string) => {
+    const [col, action] = k.split(':')
+    return (
+      <span>
+        <span className='font-medium text-slate-700 dark:text-foreground'>
+          {col.replace(/_/g, ' ')}
+        </span>
+        <span className='ml-1 text-slate-400'>{action}</span>
+      </span>
+    )
+  }
+  return (
+    <div className='max-w-[860px]'>
+      <div className='mb-4 flex items-center gap-2'>
+        <span className='text-[12.5px] text-slate-500'>Compare with:</span>
+        <Select value={otherId} onValueChange={setOtherId}>
+          <SelectTrigger className='h-8 w-56 text-[12.5px]'>
+            <SelectValue placeholder='Choose a role…' />
+          </SelectTrigger>
+          <SelectContent>
+            {roles
+              .filter((r) => r.id !== roleId)
+              .map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.name}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {!otherId ? (
+        <p className='text-[12.5px] text-slate-400'>
+          Pick a role to see where their permission sets diverge.
+        </p>
+      ) : !other ? (
+        <p className='text-[12.5px] text-slate-400'>Loading…</p>
+      ) : other.admin_access ? (
+        <p className='text-[12.5px] text-slate-500'>
+          {other.name} has admin access — it bypasses policies entirely, so there is nothing to
+          diff.
+        </p>
+      ) : (
+        <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+          <div className='rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-500/30 dark:bg-amber-500/5'>
+            <p className='mb-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400'>
+              Only this role ({onlyMine.length})
+            </p>
+            {onlyMine.length === 0 ? (
+              <p className='text-[12px] text-slate-400'>Nothing exclusive</p>
+            ) : (
+              <ul className='space-y-1 text-[12px]'>
+                {onlyMine.map((k) => (
+                  <li key={k}>{fmt(k)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className='rounded-lg border border-[#00ceff]/30 bg-[#00ceff]/5 p-3'>
+            <p className='mb-2 text-[11px] font-semibold uppercase tracking-wide text-nvr-navy dark:text-[#00ceff]'>
+              Only {other.name} ({onlyTheirs.length})
+            </p>
+            {onlyTheirs.length === 0 ? (
+              <p className='text-[12px] text-slate-400'>Nothing exclusive</p>
+            ) : (
+              <ul className='space-y-1 text-[12px]'>
+                {onlyTheirs.map((k) => (
+                  <li key={k}>{fmt(k)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className='md:col-span-2 text-[11.5px] text-slate-400'>
+            {shared.length} shared permission{shared.length === 1 ? '' : 's'}. Field lists and row
+            filters are not diffed here — open each policy for those.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Role detail panel ────────────────────────────────────────────────────────
 
 function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
@@ -848,7 +1025,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate'] as ActiveTab[]).map((tab) => (
+        {(['permissions', 'members', 'ui', 'simulate', 'compare'] as ActiveTab[]).map((tab) => (
           <button
             key={tab}
             type='button'
@@ -860,7 +1037,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
             )}
           >
-            {tab === 'ui' ? 'UI Access' : tab === 'simulate' ? 'Simulator' : tab}
+            {tab === 'ui' ? 'UI Access' : tab === 'simulate' ? 'Simulator' : tab === 'compare' ? 'Compare' : tab}
           </button>
         ))}
       </div>
@@ -876,13 +1053,18 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               ))}
             </div>
           ) : (
-            <PermissionsMatrix
-              roleId={role.id}
-              isAdmin={role.admin_access}
-              policies={policies}
-              collections={collections}
-            />
+            <>
+              {!role.admin_access && <TemplateBar roleId={role.id} />}
+              <PermissionsMatrix
+                roleId={role.id}
+                isAdmin={role.admin_access}
+                policies={policies}
+                collections={collections}
+              />
+            </>
           )
+        ) : activeTab === 'compare' ? (
+          <CompareTab roleId={role.id} policies={policies} />
         ) : activeTab === 'ui' ? (
           <UiPermissionsTab
             roleId={role.id}

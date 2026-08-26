@@ -1,3 +1,4 @@
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Modifier } from '@dnd-kit/core'
 import {
   closestCenter,
@@ -115,6 +116,7 @@ import {
   getDefaultInterface,
   getDisplays,
   getInterfaces,
+  type InterfaceOption,
   type LabelChoice,
   parseJson,
   SLIDER_INTERFACES
@@ -164,6 +166,34 @@ function FormulaModeToggle({
       ))}
     </div>
   )
+}
+
+// ─── Field interface pack (#663 / #520 / #518) ────────────────────────────────
+// Extra interfaces offered on top of the base lib/field-config lists — kept
+// LOCAL to TableEditor (field-config.ts stays untouched); the shared
+// FieldRenderer dispatches every one of these.
+
+const EXTRA_INTERFACES_BY_TYPE: Record<string, InterfaceOption[]> = {
+  string: [
+    { value: 'checklist', label: 'Checklist (todo list)' },
+    { value: 'phone', label: 'Phone number' },
+    { value: 'email', label: 'Email address' },
+    { value: 'address-autocomplete', label: 'Address (autocomplete)' }
+  ],
+  text: [
+    { value: 'phone', label: 'Phone number' },
+    { value: 'email', label: 'Email address' },
+    { value: 'address-autocomplete', label: 'Address (autocomplete)' }
+  ],
+  integer: [{ value: 'progress', label: 'Progress (0–100 %)' }]
+}
+
+function ifaceOptions(type: string): InterfaceOption[] {
+  const base = getInterfaces(type)
+  const extras = (EXTRA_INTERFACES_BY_TYPE[type] ?? []).filter(
+    (e) => !base.some((b) => b.value === e.value)
+  )
+  return extras.length > 0 ? [...base, ...extras] : base
 }
 
 // ─── Data type badge colors ───────────────────────────────────────────────────
@@ -269,6 +299,175 @@ function Combobox({
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+// ─── Report-widget slot config ────────────────────────────────────────────────
+
+function useReportPickers(reportId: string) {
+  const { data: reports = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['report-studio-list'],
+    queryFn: () => api.get('/report-studio').then((r) => r.data.data ?? []),
+    staleTime: 60_000
+  })
+  const { data: reportDetail } = useQuery<{
+    widgets?: Array<{ id: string; type: string; title: string }>
+  }>({
+    queryKey: ['report-studio-detail', reportId],
+    queryFn: () => api.get(`/report-studio/${reportId}`).then((r) => r.data.data),
+    enabled: !!reportId,
+    staleTime: 60_000
+  })
+  const widgets = (reportDetail?.widgets ?? []).filter((w) => w.type !== 'divider')
+  return { reports, widgets }
+}
+
+// Config editor for widget_type 'report_widget' rows, shown inside the
+// widget-slot settings popover. The config lives on the nivaro_widgets row
+// itself (global to the widget, not per-layout), so this PATCHes
+// /widgets-internal/:id — and only once BOTH ids are chosen, since the
+// server validator requires the pair.
+function ReportWidgetConfigSection({
+  widgetId,
+  config
+}: {
+  widgetId: number
+  config: Record<string, unknown> | null
+}) {
+  const qc = useQueryClient()
+  const [reportId, setReportId] = useState(
+    typeof config?.report_id === 'string' ? config.report_id : ''
+  )
+  const [innerId, setInnerId] = useState(
+    typeof config?.widget_id === 'string' ? config.widget_id : ''
+  )
+  const [filterField, setFilterField] = useState(
+    typeof config?.entity_filter_field === 'string' ? config.entity_filter_field : ''
+  )
+  const { reports, widgets } = useReportPickers(reportId)
+
+  const save = useMutation({
+    mutationFn: (next: { report_id: string; widget_id: string; entity_filter_field: string }) =>
+      api.patch(`/widgets-internal/${widgetId}`, {
+        config: {
+          ...(config ?? {}),
+          report_id: next.report_id,
+          widget_id: next.widget_id,
+          entity_filter_field: next.entity_filter_field.trim() || null
+        }
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['widgets-internal'] })
+  })
+  const commit = (r: string, w: string, f: string) => {
+    if (r && w) save.mutate({ report_id: r, widget_id: w, entity_filter_field: f })
+  }
+
+  return (
+    <div className='space-y-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
+      <p className='text-[10px] font-medium text-slate-400'>Report widget</p>
+      <Combobox
+        value={reportId}
+        onChange={(v) => {
+          setReportId(v)
+          setInnerId('')
+        }}
+        options={reports.map((r) => ({ value: r.id, label: r.name }))}
+        placeholder='Report…'
+      />
+      <Combobox
+        value={innerId}
+        onChange={(v) => {
+          setInnerId(v)
+          commit(reportId, v, filterField)
+        }}
+        options={widgets.map((w) => ({ value: w.id, label: w.title || w.type }))}
+        placeholder='Widget…'
+        disabled={!reportId}
+      />
+      <div className='flex items-center gap-1'>
+        <input
+          type='text'
+          placeholder='Entity filter field'
+          value={filterField}
+          onChange={(e) => setFilterField(e.target.value)}
+          className='min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+        />
+        <button
+          type='button'
+          disabled={!reportId || !innerId || save.isPending}
+          onClick={() => commit(reportId, innerId, filterField)}
+          className='shrink-0 rounded border border-slate-200 px-1.5 py-1 text-[10px] text-slate-500 hover:bg-muted disabled:opacity-40'
+        >
+          {save.isPending ? '…' : 'Apply'}
+        </button>
+      </div>
+      <p className='text-[9px] leading-snug text-slate-400'>
+        Filter field scopes the report data by a record value (bind “Filter value” below, or
+        name a field the record already carries).
+      </p>
+    </div>
+  )
+}
+
+// Inline create flow inside the Add Widget popover — mints a nivaro_widgets
+// row of type report_widget from a report + widget pick.
+function NewReportWidgetForm({
+  onCreated
+}: {
+  onCreated: (w: { id: number; name: string; widget_type: string }) => void
+}) {
+  const qc = useQueryClient()
+  const [reportId, setReportId] = useState('')
+  const [innerId, setInnerId] = useState('')
+  const { reports, widgets } = useReportPickers(reportId)
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const report = reports.find((r) => r.id === reportId)
+      const w = widgets.find((x) => x.id === innerId)
+      const name = `${report?.name ?? 'Report'} · ${w?.title || w?.type || 'widget'}`.slice(0, 255)
+      const res = await api.post('/widgets-internal', {
+        name,
+        widget_type: 'report_widget',
+        config: { report_id: reportId, widget_id: innerId }
+      })
+      return res.data.data as { id: number; name: string; widget_type: string }
+    },
+    onSuccess: (w) => {
+      qc.invalidateQueries({ queryKey: ['widgets-internal'] })
+      onCreated(w)
+    }
+  })
+
+  return (
+    <div className='space-y-1.5 border-t border-slate-100 p-2 dark:border-border'>
+      <p className='text-[10px] font-medium text-slate-400'>New report widget</p>
+      <Combobox
+        value={reportId}
+        onChange={(v) => {
+          setReportId(v)
+          setInnerId('')
+        }}
+        options={reports.map((r) => ({ value: r.id, label: r.name }))}
+        placeholder='Report…'
+      />
+      <Combobox
+        value={innerId}
+        onChange={setInnerId}
+        options={widgets.map((w) => ({ value: w.id, label: w.title || w.type }))}
+        placeholder='Widget…'
+        disabled={!reportId}
+      />
+      <Button
+        size='sm'
+        variant='outline'
+        className='h-6 w-full text-[11px]'
+        disabled={!reportId || !innerId || create.isPending}
+        onClick={() => create.mutate()}
+      >
+        {create.isPending ? 'Creating…' : 'Create & add to layout'}
+      </Button>
+    </div>
   )
 }
 
@@ -781,7 +980,7 @@ function AddColumnForm({
 
   function setFormType(t: string) {
     set('type', t as CreateColumnBody['type'])
-    const ifaces = getInterfaces(t)
+    const ifaces = ifaceOptions(t)
     const current = ifaces.find((i) => i.value === fieldInterface)
     if (!current) setFieldInterfaceRaw(ifaces[0]?.value ?? '')
   }
@@ -801,7 +1000,7 @@ function AddColumnForm({
   // decimal when the picker isn't already holding a numeric type.
   const columnType = isStoredRollup ? rollupColumnType(form.type) : form.type
 
-  const addInterfaces = getInterfaces(form.type)
+  const addInterfaces = ifaceOptions(form.type)
 
   const handleSubmit = async () => {
     if (!form.name) return
@@ -1825,6 +2024,20 @@ function FieldMetaEditor({
   const [numScale, setNumScale] = useState(
     () => parseJson<{ scale?: number }>(fm?.options)?.scale ?? ''
   )
+  // Interface pack options (#663 / #518)
+  const [ratingMax, setRatingMax] = useState<number | ''>(
+    () => parseJson<{ rating_max?: number }>(fm?.options)?.rating_max ?? ''
+  )
+  const [addrLatField, setAddrLatField] = useState(
+    () =>
+      parseJson<{ address_latlng_fields?: { lat?: string } }>(fm?.options)?.address_latlng_fields
+        ?.lat ?? ''
+  )
+  const [addrLngField, setAddrLngField] = useState(
+    () =>
+      parseJson<{ address_latlng_fields?: { lng?: string } }>(fm?.options)?.address_latlng_fields
+        ?.lng ?? ''
+  )
 
   // Computed formula state
   const [computedEnabled, setComputedEnabled] = useState(() => !!fm?.computed_formula)
@@ -1905,7 +2118,7 @@ function FieldMetaEditor({
 
   function setFieldType(t: string) {
     setFieldTypeRaw(t)
-    const ifaces = getInterfaces(t)
+    const ifaces = ifaceOptions(t)
     const current = ifaces.find((i) => i.value === fieldInterface)
     if (!current) setFieldInterface(ifaces[0]?.value ?? '')
     const displays = getDisplays(t)
@@ -1941,6 +2154,15 @@ function FieldMetaEditor({
     if ((fieldType === 'decimal' || fieldType === 'float') && numPrecision !== '') {
       extra.precision = Number(numPrecision)
       if (fieldType === 'decimal' && numScale !== '') extra.scale = Number(numScale)
+    }
+    if (fieldInterface === 'rating' && ratingMax !== '' && Number(ratingMax) >= 2) {
+      extra.rating_max = Math.min(10, Number(ratingMax))
+    }
+    if (fieldInterface === 'address-autocomplete') {
+      const map: Record<string, string> = {}
+      if (addrLatField.trim()) map.lat = addrLatField.trim()
+      if (addrLngField.trim()) map.lng = addrLngField.trim()
+      if (Object.keys(map).length > 0) extra.address_latlng_fields = map
     }
     return Object.keys(extra).length ? JSON.stringify(extra) : null
   }
@@ -2070,7 +2292,7 @@ function FieldMetaEditor({
     }
   }
 
-  const interfaces = getInterfaces(fieldType)
+  const interfaces = ifaceOptions(fieldType)
   const displays = getDisplays(fieldType)
   const typeGroups = FIELD_TYPES.reduce<Record<string, typeof FIELD_TYPES>>((acc, ft) => {
     acc[ft.group] ??= []
@@ -2106,7 +2328,7 @@ function FieldMetaEditor({
           />
           {!col.is_virtual && (
             <p className='mt-0.5 text-[10px] text-slate-400'>
-              Use Change Type in the column actions to alter the DB column.
+              Use Settings → Convert column type to alter the DB column.
             </p>
           )}
         </div>
@@ -2231,6 +2453,50 @@ function FieldMetaEditor({
             className='h-7 font-mono text-[12px]'
             placeholder='#ef4444, #3b82f6, #22c55e'
           />
+        </div>
+      )}
+
+      {fieldInterface === 'rating' && (
+        <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
+          <Label className='mb-1 block text-[11px]'>Max stars (2–10, default 5)</Label>
+          <Input
+            type='number'
+            min={2}
+            max={10}
+            value={ratingMax}
+            onChange={(e) => setRatingMax(e.target.value ? Number(e.target.value) : '')}
+            className='h-7 w-24 text-[12px]'
+            placeholder='5'
+          />
+        </div>
+      )}
+
+      {fieldInterface === 'address-autocomplete' && (
+        <div className='mt-3 rounded-md border border-slate-200 bg-white p-3'>
+          <Label className='mb-1 block text-[11px]'>Coordinate fields (optional)</Label>
+          <p className='mb-2 text-[11px] text-slate-400'>
+            Picking a suggestion also writes its latitude/longitude onto these sibling columns.
+          </p>
+          <div className='grid grid-cols-2 gap-3'>
+            <div>
+              <Label className='mb-1 block text-[10.5px] text-slate-500'>Latitude field</Label>
+              <Input
+                value={addrLatField}
+                onChange={(e) => setAddrLatField(e.target.value)}
+                className='h-7 font-mono text-[12px]'
+                placeholder='latitude'
+              />
+            </div>
+            <div>
+              <Label className='mb-1 block text-[10.5px] text-slate-500'>Longitude field</Label>
+              <Input
+                value={addrLngField}
+                onChange={(e) => setAddrLngField(e.target.value)}
+                className='h-7 font-mono text-[12px]'
+                placeholder='longitude'
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -4180,11 +4446,13 @@ function SettingsTab({
       <AddendumsSection tableName={tableName} />
       <PickerFilterSection tableName={tableName} />
       <BrowserSettingsSection tableName={tableName} />
+      <EmptyStateSlugSection tableName={tableName} />
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
           <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
+      <GenerateTestDataCard tableName={tableName} />
       <FieldUsageSection tableName={tableName} />
       <EditFrequencySection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
@@ -5064,9 +5332,12 @@ function RenameCollectionSection({ tableName }: { tableName: string }) {
 // ─── Type-change dry-run (#153) ──────────────────────────────────────────────
 
 function CastCheckSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [col, setCol] = useState('')
   const [toType, setToType] = useState('integer')
+  const [maxLen, setMaxLen] = useState('')
+  const [confirmText, setConfirmText] = useState('')
   const [result, setResult] = useState<{
     total: number
     failures: number
@@ -5077,25 +5348,64 @@ function CastCheckSection({ tableName }: { tableName: string }) {
     queryFn: () => schemaApi.getTable(tableName).then((r) => r.data),
     enabled: open && !!tableName
   })
+  const lenNum = Number(maxLen)
+  const lenBody =
+    toType === 'string' && Number.isInteger(lenNum) && lenNum > 0 && lenNum <= 4000
+      ? lenNum
+      : undefined
   const run = useMutation({
     mutationFn: () =>
       api
         .post<{ data: { total: number; failures: number; samples: Array<{ id: unknown; value: string }> } }>(
           `/data-model/${tableName}/columns/${col}/cast-check`,
-          { to_type: toType }
+          { to_type: toType, max_length: lenBody }
         )
         .then((r) => r.data.data),
-    onSuccess: setResult,
+    onSuccess: (d) => {
+      setResult(d)
+      setConfirmText('')
+    },
     onError: (e: unknown) =>
       toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Check failed')
+  })
+  // Convert type (#510): executes the previewed conversion via the change-type
+  // route. force only when the preview showed failures the operator has seen;
+  // expected_failures makes the server 409 (CAST_DRIFT) if the count moved.
+  const convert = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { new_type: string; nulled_rows: number } }>(
+          `/data-model/collections/${tableName}/fields/${col}/change-type`,
+          {
+            new_type: toType,
+            max_length: lenBody,
+            force: (result?.failures ?? 0) > 0,
+            expected_failures: result?.failures ?? 0
+          }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(
+        `"${col}" converted to ${d.new_type}${d.nulled_rows > 0 ? ` — ${d.nulled_rows} unconvertible value(s) set to NULL` : ''}`
+      )
+      setResult(null)
+      setConfirmText('')
+      qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
+    },
+    onError: (e: unknown) => {
+      const data = (e as { response?: { data?: { error?: string; code?: string } } })?.response?.data
+      toast.error(data?.error ?? 'Conversion failed')
+      if (data?.code === 'CAST_DRIFT') setResult(null)
+    }
   })
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
       <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-3 text-left'>
         <div>
-          <p className='text-[13px] font-medium text-slate-800'>Type-change dry-run</p>
+          <p className='text-[13px] font-medium text-slate-800'>Convert column type</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
-            Which values would NOT survive a cast — check before changing a column's type.
+            Preview which values survive the cast, then convert the column in place. Primary keys,
+            FK-constrained and computed/auto-ID columns are refused.
           </p>
         </div>
         <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
@@ -5118,12 +5428,27 @@ function CastCheckSection({ tableName }: { tableName: string }) {
                 setToType(v)
                 setResult(null)
               }}
-              options={['integer', 'bigInteger', 'decimal', 'float', 'boolean', 'date', 'datetime', 'uuid', 'string'].map(
+              options={['integer', 'bigInteger', 'decimal', 'float', 'boolean', 'date', 'datetime', 'uuid', 'string', 'text'].map(
                 (t) => ({ value: t, label: t })
               )}
             />
+            {toType === 'string' && (
+              <Input
+                type='number'
+                min={1}
+                max={4000}
+                value={maxLen}
+                onChange={(e) => {
+                  setMaxLen(e.target.value)
+                  setResult(null)
+                }}
+                placeholder='255'
+                title='nvarchar length (default 255)'
+                className='h-7 w-20 text-[11.5px]'
+              />
+            )}
             <Button type='button' size='sm' className='h-7 text-[11.5px]' disabled={!col || run.isPending} onClick={() => run.mutate()}>
-              {run.isPending ? 'Scanning…' : 'Check'}
+              {run.isPending ? 'Scanning…' : 'Preview'}
             </Button>
           </div>
           {result && (
@@ -5147,6 +5472,153 @@ function CastCheckSection({ tableName }: { tableName: string }) {
                   </div>
                 </>
               )}
+            </div>
+          )}
+          {result && (
+            <div className='space-y-1.5 rounded-md border border-amber-200 bg-amber-50/50 p-2.5'>
+              <p className='text-[12px] font-medium text-amber-800'>
+                Convert <span className='font-mono'>{col}</span> to {toType}
+                {toType === 'string' ? `(${lenBody ?? 255})` : ''}
+                {result.failures > 0 &&
+                  ` — ${result.failures.toLocaleString()} unconvertible value(s) will be set to NULL`}
+              </p>
+              <p className='text-[11.5px] text-amber-700'>
+                This alters the physical column and cannot be undone. Type CONVERT to confirm.
+              </p>
+              <div className='flex items-center gap-2'>
+                <Input
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder='CONVERT'
+                  spellCheck={false}
+                  className='h-7 w-32 font-mono text-[12px]'
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='destructive'
+                  className='h-7 text-[11.5px]'
+                  disabled={confirmText !== 'CONVERT' || convert.isPending}
+                  onClick={() => convert.mutate()}
+                >
+                  {convert.isPending ? 'Converting…' : 'Convert'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Test data generator (#512, Settings tab) ────────────────────────────────
+
+function GenerateTestDataCard({ tableName }: { tableName: string }) {
+  const [open, setOpen] = useState(false)
+  const [count, setCount] = useState('10')
+  const [seed, setSeed] = useState('')
+  const [allowNonEmpty, setAllowNonEmpty] = useState(false)
+  const [lastResult, setLastResult] = useState<{
+    created: unknown[]
+    errors: Array<{ row: number; error: string }>
+  } | null>(null)
+  const gen = useMutation({
+    mutationFn: () => {
+      const seedNum = Number(seed)
+      return api
+        .post<{ data: { created: unknown[]; errors: Array<{ row: number; error: string }> } }>(
+          `/test-data/${tableName}`,
+          {
+            count: Math.max(1, Math.min(100, Number(count) || 10)),
+            respect_required: true,
+            allow_nonempty: allowNonEmpty || undefined,
+            seed: seed.trim() && Number.isFinite(seedNum) ? seedNum : undefined
+          }
+        )
+        .then((r) => r.data.data)
+    },
+    onSuccess: (d) => {
+      setLastResult(d)
+      if (d.errors.length === 0) toast.success(`${d.created.length} sample row(s) created`)
+      else
+        toast.warning(
+          `${d.created.length} created, ${d.errors.length} failed — first: ${d.errors[0].error}`
+        )
+    },
+    onError: (e: unknown) => {
+      const data = (e as { response?: { data?: { error?: string; existing_rows?: number } } })
+        ?.response?.data
+      if (data?.existing_rows != null) {
+        setAllowNonEmpty(true)
+        toast.warning(`${data.error} — press Generate again to proceed`)
+      } else {
+        toast.error(data?.error ?? 'Generation failed')
+      }
+    }
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Generate test data</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Seed sample rows (name-aware fakers, FKs sampled from existing targets) — rows go
+            through the normal create path, so hooks and validation apply.
+          </p>
+        </div>
+        <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='space-y-2 border-t border-slate-100 px-4 py-3'>
+          <p className='rounded border border-amber-200 bg-amber-50/50 p-2 text-[11.5px] text-amber-800'>
+            Development affordance — generated rows are fake. Refused on collections that already
+            hold data unless you confirm.
+          </p>
+          <div className='flex items-center gap-2'>
+            <div>
+              <Label className='mb-1 block text-[10.5px] text-slate-500'>Rows (max 100)</Label>
+              <Input
+                type='number'
+                min={1}
+                max={100}
+                value={count}
+                onChange={(e) => setCount(e.target.value)}
+                className='h-7 w-24 text-[12px]'
+              />
+            </div>
+            <div>
+              <Label className='mb-1 block text-[10.5px] text-slate-500'>Seed (optional)</Label>
+              <Input
+                type='number'
+                value={seed}
+                onChange={(e) => setSeed(e.target.value)}
+                placeholder='random'
+                title='Same seed = same rows, reproducible across environments'
+                className='h-7 w-28 text-[12px]'
+              />
+            </div>
+            <Button
+              type='button'
+              size='sm'
+              className='mt-4 h-7 text-[11.5px]'
+              disabled={gen.isPending}
+              onClick={() => gen.mutate()}
+            >
+              {gen.isPending ? 'Generating…' : 'Generate'}
+            </Button>
+          </div>
+          {lastResult && lastResult.errors.length > 0 && (
+            <div className='max-h-32 overflow-y-auto rounded border border-red-100 bg-red-50/40 p-2 text-[11px] text-slate-600'>
+              {lastResult.errors.slice(0, 10).map((er) => (
+                <p key={er.row}>
+                  Row {er.row}: {er.error}
+                </p>
+              ))}
             </div>
           )}
         </div>
@@ -5943,6 +6415,141 @@ interface BrowserConfig {
   page_size?: number
   quick_filters?: unknown[]
   default_sort?: string
+}
+
+// #619/#620 — human-readable record URLs + custom collection empty state.
+function EmptyStateSlugSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: col } = useQuery({
+    queryKey: ['collection-meta-es', tableName],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            slug_field?: string | null
+            empty_state?: {
+              title?: string
+              message?: string
+              cta_label?: string
+              cta_url?: string
+            } | null
+          }
+        }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const { data: fields = [] } = useQuery({
+    queryKey: ['fields-lite', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ field: string; type: string }> }>(`/collections/${tableName}`)
+        .then((r) => (r.data.data as unknown as { fields?: Array<{ field: string; type: string }> }).fields ?? []),
+    enabled: !!tableName
+  })
+  const [draft, setDraft] = useState<{
+    title: string
+    message: string
+    cta_label: string
+    cta_url: string
+  } | null>(null)
+  const es = col?.empty_state ?? {}
+  const eff = draft ?? {
+    title: es.title ?? '',
+    message: es.message ?? '',
+    cta_label: es.cta_label ?? '',
+    cta_url: es.cta_url ?? ''
+  }
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.patch(`/collections/${tableName}`, body),
+    onSuccess: () => {
+      toast.success('Saved')
+      setDraft(null)
+      void qc.invalidateQueries({ queryKey: ['collection-meta-es', tableName] })
+    },
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Save failed'
+      )
+  })
+  const stringFields = fields.filter((f) => ['string', 'text'].includes(f.type))
+  return (
+    <div className='mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+        URLs &amp; empty state
+      </p>
+      <p className='mt-0.5 text-[11.5px] text-slate-400'>
+        A slug field makes records addressable at{' '}
+        <code className='text-[10.5px]'>/items/{tableName}/by-slug/&lt;value&gt;</code>. The empty
+        state replaces the default &quot;no records&quot; panel when the collection has no rows.
+      </p>
+      <div className='mt-3 flex items-center gap-2'>
+        <span className='w-24 shrink-0 text-[11.5px] text-slate-500'>Slug field</span>
+        <Select
+          value={col?.slug_field ?? '__none__'}
+          onValueChange={(v) => save.mutate({ slug_field: v === '__none__' ? null : v })}
+        >
+          <SelectTrigger className='h-7 w-56 text-[12px]'>
+            <SelectValue placeholder='None' />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='__none__'>None</SelectItem>
+            {stringFields.map((f) => (
+              <SelectItem key={f.field} value={f.field}>
+                {f.field}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className='mt-3 space-y-2'>
+        {(
+          [
+            ['title', 'Empty title', 'Nothing here yet'],
+            ['message', 'Message', 'What this collection is for and where to start'],
+            ['cta_label', 'Button label', 'Create the first record'],
+            ['cta_url', 'Button URL', `/collections/${tableName}/new or https://…`]
+          ] as const
+        ).map(([key, label, ph]) => (
+          <div key={key} className='flex items-center gap-2'>
+            <span className='w-24 shrink-0 text-[11.5px] text-slate-500'>{label}</span>
+            <Input
+              value={eff[key]}
+              placeholder={ph}
+              onChange={(e) => setDraft({ ...eff, [key]: e.target.value })}
+              className='h-7 text-[12px]'
+            />
+          </div>
+        ))}
+        {draft && (
+          <div className='flex justify-end gap-2 pt-1'>
+            <Button size='sm' variant='ghost' className='h-7 text-[11.5px]' onClick={() => setDraft(null)}>
+              Cancel
+            </Button>
+            <Button
+              size='sm'
+              className='h-7 text-[11.5px]'
+              disabled={save.isPending}
+              onClick={() =>
+                save.mutate({
+                  empty_state:
+                    eff.title || eff.message || eff.cta_label
+                      ? {
+                          title: eff.title || null,
+                          message: eff.message || null,
+                          cta_label: eff.cta_label || null,
+                          cta_url: eff.cta_url || null
+                        }
+                      : null
+                })
+              }
+            >
+              Save empty state
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
@@ -11421,7 +12028,7 @@ function FieldSettingsPopover({
   }
 
   const interfaceOptions = abstractType
-    ? getInterfaces(abstractType).map((i) => ({ value: i.value, label: i.label }))
+    ? ifaceOptions(abstractType).map((i) => ({ value: i.value, label: i.label }))
     : []
 
   const hasOverrides =
@@ -15780,6 +16387,25 @@ function LayoutsTab({
                       <>
                         <div className='border-t border-slate-200 dark:border-border pt-2 space-y-1.5'>
                           <label className='flex cursor-pointer items-center justify-between'>
+                            <span
+                              className='text-[11px] text-slate-500 dark:text-slate-400'
+                              title='Adds a Dossier button on saved records — one PDF with field values, workflow history, comments and tasks'
+                            >
+                              Dossier export (PDF)
+                            </span>
+                            <input
+                              type='checkbox'
+                              checked={!!(selected as { dossier_enabled?: boolean | number }).dossier_enabled}
+                              onChange={(e) =>
+                                patchLayoutMut.mutate({
+                                  id: selected.id,
+                                  dossier_enabled: e.target.checked
+                                } as never)
+                              }
+                              className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                            />
+                          </label>
+                          <label className='flex cursor-pointer items-center justify-between'>
                             <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                               Summary panel
                             </span>
@@ -18525,6 +19151,11 @@ function FieldGroupsTab({
           if (['review_list', 'rollup'].includes(wDef?.widget_type ?? '')) {
             return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
           }
+          // report_widget: the optional entity-filter scope binds through this
+          // key (a same-named record field also binds with zero config).
+          if (wDef?.widget_type === 'report_widget') {
+            return [{ key: 'entity_filter_value', label: 'Filter value', type: 'string' }]
+          }
           const cfg =
             ((wDef as unknown as Record<string, unknown>)?.config as Record<
               string,
@@ -18622,6 +19253,17 @@ function FieldGroupsTab({
                   ✕ Remove
                 </button>
               </div>
+              {wDef?.widget_type === 'report_widget' && (
+                <ReportWidgetConfigSection
+                  widgetId={wDef.id}
+                  config={
+                    ((wDef as unknown as Record<string, unknown>).config as Record<
+                      string,
+                      unknown
+                    > | null) ?? null
+                  }
+                />
+              )}
               {wInputs.length > 0 && (
                 <div className='space-y-1'>
                   <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
@@ -18725,6 +19367,11 @@ function FieldGroupsTab({
           if (['review_list', 'rollup'].includes(wDef?.widget_type ?? '')) {
             return [{ key: 'record_id', label: 'Record ID', type: 'string' }]
           }
+          // report_widget: the optional entity-filter scope binds through this
+          // key (a same-named record field also binds with zero config).
+          if (wDef?.widget_type === 'report_widget') {
+            return [{ key: 'entity_filter_value', label: 'Filter value', type: 'string' }]
+          }
           const cfg =
             ((wDef as unknown as Record<string, unknown>)?.config as Record<
               string,
@@ -18801,6 +19448,17 @@ function FieldGroupsTab({
                   className='w-full rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
                 />
               </div>
+              {wDef?.widget_type === 'report_widget' && (
+                <ReportWidgetConfigSection
+                  widgetId={wDef.id}
+                  config={
+                    ((wDef as unknown as Record<string, unknown>).config as Record<
+                      string,
+                      unknown
+                    > | null) ?? null
+                  }
+                />
+              )}
               {wInputs.length > 0 && (
                 <div className='space-y-1.5'>
                   <p className='text-[10px] font-medium text-slate-400'>Bindings</p>
@@ -19393,15 +20051,14 @@ function FieldGroupsTab({
             </p>
             {layoutType !== 'table' && (
               <div className='flex gap-2'>
-                {availableWidgets.length > 0 && (
-                  <Popover open={addingWidget} onOpenChange={setAddingWidget}>
-                    <PopoverTrigger asChild>
-                      <Button size='sm' variant='outline' className='h-7 text-[12px]'>
-                        <Plus className='mr-1 h-3 w-3' />
-                        Add Widget
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className='w-56 p-1' align='end'>
+                <Popover open={addingWidget} onOpenChange={setAddingWidget}>
+                  <PopoverTrigger asChild>
+                    <Button size='sm' variant='outline' className='h-7 text-[12px]'>
+                      <Plus className='mr-1 h-3 w-3' />
+                      Add Widget
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className='w-56 p-1' align='end'>
                       {availableWidgets.map((w) => {
                         const key = `__widget_${w.id}__`
                         const alreadyAdded = widgetSlotMeta[key] !== undefined
@@ -19451,9 +20108,33 @@ function FieldGroupsTab({
                           </button>
                         )
                       })}
-                    </PopoverContent>
-                  </Popover>
-                )}
+                      <NewReportWidgetForm
+                        onCreated={(w) => {
+                          const key = `__widget_${w.id}__`
+                          if (widgetSlotMeta[key] === undefined) {
+                            setWidgetSlotMeta((prev) => ({
+                              ...prev,
+                              [key]: {
+                                widget_id: w.id,
+                                name: w.name,
+                                label_override: null,
+                                is_visible: true,
+                                input_bindings: []
+                              }
+                            }))
+                            setLocalFieldOrder((prev) => ({
+                              ...prev,
+                              __pool__: [...(prev.__pool__ ?? []), key],
+                              __unassigned__: [...(prev.__unassigned__ ?? []), key]
+                            }))
+                            hasLocalChangeRef.current = true
+                            changeSeqRef.current++
+                          }
+                          setAddingWidget(false)
+                        }}
+                      />
+                  </PopoverContent>
+                </Popover>
                 <Button
                   size='sm'
                   variant='outline'
@@ -20780,6 +21461,8 @@ function ValidationRulesEditor({
     { value: 'min_length', label: 'Min length' },
     { value: 'max_length', label: 'Max length' },
     { value: 'regex', label: 'Regex pattern' },
+    { value: 'email', label: 'Email address' },
+    { value: 'phone', label: 'Phone number' },
     { value: 'required_if', label: 'Required if…' },
     { value: 'unique', label: 'Unique in collection' }
   ]

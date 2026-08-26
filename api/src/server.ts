@@ -547,6 +547,13 @@ export async function buildServer() {
         await runConfigHealthSweep()
       })
 
+      // Extension event outbox (#504): deliver pending rows to registered
+      // handlers each minute; backoff/dead-letter semantics in the service.
+      app.cron.schedule('extension-events-sweep', '* * * * *', async () => {
+        const { deliverPendingExtensionEvents } = await import('./services/extension-events.js')
+        await deliverPendingExtensionEvents()
+      })
+
       // Ops monitors: freshness / deploy-regression / synthetic checks.
       app.cron.schedule('ops-monitors', '*/5 * * * *', async () => {
         // #365 — alert engines pause during maintenance: a planned freeze must

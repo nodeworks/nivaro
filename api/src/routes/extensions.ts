@@ -166,8 +166,19 @@ export async function extensionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
   app.get('/', async (_req, reply) => {
+    const { getObservedCapabilities } = await import('../extensions/loader.js')
     // Cloud extensions are internal — hidden from the tenant Extensions page
-    const data = Array.from(extensionRegistry.values()).filter((e) => !e.cloud)
+    const data = Array.from(extensionRegistry.values())
+      .filter((e) => !e.cloud)
+      // Capability manifest (#660): declared list from the export beside the
+      // ctx members register() was actually observed touching.
+      .map((e) => ({
+        ...e,
+        capabilities: {
+          declared: e.declared_capabilities ?? [],
+          observed: getObservedCapabilities(e.id)
+        }
+      }))
     return reply.send({ data })
   })
 
@@ -215,42 +226,58 @@ export async function extensionsRoutes(app: FastifyInstance) {
 
   // ─── GET /marketplace — registry index (env URL or built-in curated list) ──
 
-  // ── Extension settings (#112) ─────────────────────────────────────────────
+  // ── Extension settings (#112/#505) — schema-driven, typed ─────────────────
   app.get('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { extensionSettingsDecls, bustExtensionSettingsCache } = await import(
-      '../extensions/loader.js'
-    )
-    void bustExtensionSettingsCache
-    const decls = extensionSettingsDecls.get(id)
-    if (!decls) return reply.code(404).send({ error: 'Extension declares no settings' })
+    const { getExtensionSettingsSchema } = await import('../extensions/loader.js')
+    const schema = getExtensionSettingsSchema(id)
+    if (schema.length === 0)
+      return reply.code(404).send({ error: 'Extension declares no settings' })
     const rows = (await db('nivaro_extension_settings')
       .where({ extension_id: id })
       .select('key', 'value')) as Array<{ key: string; value: string | null }>
     const stored = new Map(rows.map((r) => [r.key, r.value]))
     return reply.send({
-      data: decls.map((d) => ({
+      data: schema.map((d) => ({
         ...d,
-        value: d.secret && stored.get(d.key) ? '••••••' : (stored.get(d.key) ?? d.default ?? null)
+        // Secrets never leave the server — the mask round-trips (PUT preserves it).
+        value:
+          d.type === 'secret' && stored.get(d.key)
+            ? '••••••'
+            : (stored.get(d.key) ?? d.default ?? null)
       }))
     })
   })
 
   app.put('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const body = req.body as { values?: Record<string, string | null> }
-    const { extensionSettingsDecls, bustExtensionSettingsCache } = await import(
+    const body = req.body as { values?: Record<string, string | number | boolean | null> }
+    const { getExtensionSettingsSchema, bustExtensionSettingsCache } = await import(
       '../extensions/loader.js'
     )
-    const decls = extensionSettingsDecls.get(id)
-    if (!decls) return reply.code(404).send({ error: 'Extension declares no settings' })
-    const declared = new Map(decls.map((d) => [d.key, d]))
+    const schema = getExtensionSettingsSchema(id)
+    if (schema.length === 0)
+      return reply.code(404).send({ error: 'Extension declares no settings' })
+    const declared = new Map(schema.map((d) => [d.key, d]))
     for (const [key, raw] of Object.entries(body?.values ?? {})) {
       const decl = declared.get(key)
       if (!decl) continue // undeclared keys are ignored, never stored
       // Masked secret re-submitted → keep the stored value.
-      if (decl.secret && raw === '••••••') continue
-      const value = raw == null ? null : String(raw).slice(0, 4000)
+      if (decl.type === 'secret' && raw === '••••••') continue
+      let value: string | null
+      if (raw == null || raw === '') {
+        value = null
+      } else if (decl.type === 'number') {
+        const n = Number(raw)
+        if (!Number.isFinite(n)) {
+          return reply.code(400).send({ error: `"${decl.label}" must be a number` })
+        }
+        value = String(n)
+      } else if (decl.type === 'boolean') {
+        value = raw === true || raw === 'true' || raw === '1' || raw === 1 ? 'true' : 'false'
+      } else {
+        value = String(raw).slice(0, 4000)
+      }
       const existing = await db('nivaro_extension_settings')
         .where({ extension_id: id, key })
         .first('id')
@@ -484,7 +511,6 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data, loaded: newIds })
   })
 }
-
 
 // Starter extension (#181): everything a first extension needs — typed ctx,
 // a hook, a cron, a route, a setting, a health check.
