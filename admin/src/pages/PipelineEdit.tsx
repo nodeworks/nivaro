@@ -376,6 +376,7 @@ interface StateFormData {
   is_terminal: boolean
   lock_record: boolean
   skip_if_no_owners: boolean
+  owners_not_required: boolean
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
   description: string
 }
@@ -399,6 +400,7 @@ function StateForm({
     is_terminal: initial.is_terminal ?? false,
     lock_record: initial.lock_record ?? false,
     skip_if_no_owners: initial.skip_if_no_owners ?? false,
+    owners_not_required: initial.owners_not_required ?? false,
     stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always',
     description: initial.description ?? ''
   })
@@ -494,6 +496,18 @@ function StateForm({
             className='rounded'
           />
           Auto-skip when record resolves no owners
+        </label>
+        <label
+          className='flex items-center gap-1.5 cursor-pointer'
+          title='Records parked here legitimately have nobody assigned (Started, Completed…) — owner-gap and coverage reports stop flagging this state'
+        >
+          <input
+            type='checkbox'
+            checked={form.owners_not_required}
+            onChange={(e) => set('owners_not_required', e.target.checked)}
+            className='rounded'
+          />
+          No owners expected in this state
         </label>
       </div>
 

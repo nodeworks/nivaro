@@ -101,6 +101,11 @@ export async function buildCoverageGapReport(): Promise<CoverageGapReport> {
   const instances = (await db('nivaro_workflow_instances as wi')
     .join('nivaro_workflow_states as s', 'wi.current_state', 's.id')
     .where('s.is_terminal', 0)
+    // States flagged owners-not-required (Started…) are deliberately unowned —
+    // reporting them as gaps buried the real ones (Rob 2026-08-26).
+    .where((qb) => {
+      qb.where('s.owners_not_required', false).orWhereNull('s.owners_not_required')
+    })
     .orderBy('wi.started_at', 'desc')
     .limit(EVAL_CAP + 1)
     .select(

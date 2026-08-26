@@ -1367,12 +1367,23 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
     .select('collection')) as Array<{ collection: string }>
   const states = (await db('nivaro_workflow_states')
     .where({ template: templateId })
-    .select('id', 'key')) as Array<{ id: string; key: string }>
+    .select('id', 'key', 'owners_not_required')) as Array<{
+    id: string
+    key: string
+    owners_not_required?: boolean | number
+  }>
   const keyByState = new Map(states.map((st) => [String(st.id).toUpperCase(), st.key]))
+  // States flagged owners-not-required (Started, Completed…) are not gaps —
+  // nobody is SUPPOSED to own records parked there.
+  const noOwnerStates = new Set(
+    states
+      .filter((st) => st.owners_not_required === true || st.owners_not_required === 1)
+      .map((st) => String(st.id).toUpperCase())
+  )
 
   const clusters = new Map<string, OwnerGapCluster>()
   for (const b of bindings) {
-    const instances = (await db('nivaro_workflow_instances')
+    const allInstances = (await db('nivaro_workflow_instances')
       .where({ template: templateId, collection: b.collection })
       .whereNull('completed_at')
       .whereNotNull('current_state')
@@ -1381,6 +1392,9 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
       item: string
       current_state: string
     }>
+    const instances = allInstances.filter(
+      (i) => !noOwnerStates.has(String(i.current_state).toUpperCase())
+    )
     if (instances.length === 0) continue
 
     const requests: OwnerResolutionRequest[] = instances.map((i) => ({

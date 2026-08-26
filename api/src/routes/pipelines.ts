@@ -59,6 +59,7 @@ interface WorkflowState {
   skip_criteria: string | null
   skip_if_no_owners: boolean
   stage_visibility: string
+  owners_not_required?: boolean | number
   description: string | null
 }
 
@@ -208,7 +209,8 @@ function formatState(s: WorkflowState) {
     lock_record: coerceBool(s.lock_record),
     skip_if_no_owners: coerceBool(s.skip_if_no_owners),
     skip_criteria: parseJson(s.skip_criteria),
-    stage_visibility: s.stage_visibility ?? 'always'
+    stage_visibility: s.stage_visibility ?? 'always',
+    owners_not_required: s.owners_not_required === true || s.owners_not_required === 1
   }
 }
 
@@ -814,6 +816,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'sort'
       | 'skip_if_no_owners'
       | 'stage_visibility'
+      | 'owners_not_required'
       | 'description'
     >
     if (!body.key?.trim()) return reply.code(400).send({ error: 'key is required' })
@@ -830,6 +833,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       is_terminal: body.is_terminal ? 1 : 0,
       lock_record: body.lock_record ? 1 : 0,
       skip_if_no_owners: body.skip_if_no_owners ? 1 : 0,
+      owners_not_required: body.owners_not_required ? 1 : 0,
       stage_visibility: body.stage_visibility ?? 'always',
       description: body.description ? String(body.description).slice(0, 1000) : null,
       sort: body.sort ?? 0
@@ -870,6 +874,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
               ? 1
               : 0
             : state.skip_if_no_owners,
+        owners_not_required:
+          body.owners_not_required !== undefined
+            ? body.owners_not_required
+              ? 1
+              : 0
+            : (state.owners_not_required ?? 0),
         stage_visibility: body.stage_visibility ?? state.stage_visibility ?? 'always',
         description:
           body.description !== undefined
