@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T15:34:46.376Z",
+  "generated_at": "2026-08-26T15:47:40.901Z",
   "releases": [
+    {
+      "version": "0.1.144",
+      "tag": "v0.1.144",
+      "date": "2026-08-26T11:47:36-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "__referenced_by__ joins SENTINEL_FIELDS",
+              "hash": "d970cf89"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.143",
       "tag": "v0.1.143",
-      "date": "2026-08-26T11:34:40-04:00",
+      "date": "2026-08-26T11:34:46-04:00",
       "sections": [
         {
           "label": "Added",
