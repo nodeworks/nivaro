@@ -6510,7 +6510,7 @@ export function ItemEditForm({
                                               toast.error('Dossier export failed')
                                             }
                                           }}
-                                          className='flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-600 transition-colors hover:border-[#00ceff] hover:text-slate-900 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-foreground'
+                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                         >
                                           <FileDown className='h-3.5 w-3.5' />
                                           {(

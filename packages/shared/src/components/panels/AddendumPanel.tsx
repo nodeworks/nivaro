@@ -2,7 +2,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { ChevronDown, FileDiff, Loader2, Paperclip, Upload } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemEditAuth, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
@@ -130,6 +130,10 @@ const STATUS_STYLES: Record<string, { badge: string; dot: string }> = {
   rejected: {
     badge: 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400',
     dot: 'bg-red-500'
+  },
+  reverted: {
+    badge: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400',
+    dot: 'bg-amber-500'
   }
 }
 
@@ -1176,6 +1180,20 @@ function AddendumCard({
     }
   })
 
+  const revertMut = useMutation({
+    mutationFn: () => client.request(post(`/addendums/${addendum.id}/revert`)),
+    onSuccess: () => {
+      onRefresh()
+      toast.success('Addendum reverted — the record is back to its pre-approval values')
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Failed to revert', { duration: 10000 })
+    }
+  })
+  const [confirmRevert, setConfirmRevert] = useState(false)
+  const { isAdmin } = useItemEditAuth()
+
   const rejectMut = useMutation({
     mutationFn: () => client.request(post(`/addendums/${addendum.id}/reject`)),
     onSuccess: () => {
@@ -1493,6 +1511,48 @@ function AddendumCard({
                     : 'No changes applied'}
                 </span>
               )}
+            {addendum.status === 'reverted' && (
+              <span className='text-[11px] italic text-amber-600 dark:text-amber-400'>
+                Reverted — the applied changes were rolled back
+              </span>
+            )}
+            {isAdmin &&
+              addendum.status === 'approved' &&
+              (confirmRevert ? (
+                <span className='ml-auto flex items-center gap-1.5'>
+                  <span className='text-[11px] text-amber-600 dark:text-amber-400'>
+                    Roll every applied change back?
+                  </span>
+                  <Button
+                    size='sm'
+                    className='h-7 bg-amber-600 text-[11px] text-white hover:bg-amber-700'
+                    disabled={revertMut.isPending}
+                    onClick={() => {
+                      revertMut.mutate()
+                      setConfirmRevert(false)
+                    }}
+                  >
+                    {revertMut.isPending ? 'Reverting…' : 'Revert'}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 text-[11px]'
+                    onClick={() => setConfirmRevert(false)}
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  data-tip='Admin only — restores the record to its pre-approval values through the normal revision trail; the addendum stays as a reverted record of what happened'
+                  onClick={() => setConfirmRevert(true)}
+                  className='ml-auto text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 hover:text-amber-600'
+                >
+                  Revert…
+                </button>
+              ))}
           </div>
         </div>
       )}
@@ -1615,7 +1675,7 @@ export function AddendumPanel({
   const configuredFields = assignments.filter(
     (a) => !String(a.field).startsWith('__') && (a.is_visible || a.is_visible === 1)
   )
-  const activeCount = addendums.filter((a) => !['approved', 'rejected'].includes(a.status)).length
+  const activeCount = addendums.filter((a) => !['approved', 'rejected', 'reverted'].includes(a.status)).length
 
   const onActiveCountChangeRef = useRef(onActiveCountChange)
   onActiveCountChangeRef.current = onActiveCountChange
@@ -1717,7 +1777,7 @@ export function AddendumPanel({
                   addendum={a}
                   configuredFields={configuredFields}
                   onRefresh={handleRefresh}
-                  isActive={!['approved', 'rejected'].includes(a.status)}
+                  isActive={!['approved', 'rejected', 'reverted'].includes(a.status)}
                   relations={relations}
                   parentCollection={collection}
                   parentId={item}

@@ -651,6 +651,37 @@ export async function applyTransition(opts: {
       .catch(() => {})
   }
 
+  // ── Addendum workflow outcomes (pipeline-driven approvals) ────────────────
+  // An addendum's workflow reaching a TERMINAL state IS its decision — without
+  // this, a pipeline-run addendum sat at status 'draft' forever while its
+  // approvals completed. Reject-ish terminal states mark it rejected; any
+  // other terminal state approves + applies through the shared service (same
+  // apply-back, line changes and auto-PDF as the panel's Approve button).
+  if (instance.collection === 'nivaro_addendums' && newStateObj?.is_terminal) {
+    void (async () => {
+      try {
+        const rejectish = /reject|denied|cancel/i.test(
+          `${newStateObj.key ?? ''} ${newStateObj.label ?? ''}`
+        )
+        if (rejectish) {
+          await db('nivaro_addendums')
+            .where({ id: instance.item })
+            .whereIn('status', ['draft', 'review'])
+            .update({ status: 'rejected', updated_at: new Date() })
+          return
+        }
+        const { applyAddendumApproval } = await import('./addendum-approve.js')
+        const { getApp } = await import('./io-holder.js')
+        await applyAddendumApproval(String(instance.item), opts.userId ?? null, {
+          allowedFromStatuses: ['draft', 'review'],
+          app: getApp()
+        })
+      } catch (err) {
+        console.warn('[workflow-transitions] addendum outcome sync failed:', err)
+      }
+    })()
+  }
+
   return { updatedInstance, newStateObj, previousState }
 }
 

@@ -423,83 +423,22 @@ export async function addendumsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'You do not have approval rights' })
     }
 
-    const now = new Date()
-
-    // Apply addendum data back to parent record
-    if (existing.data) {
-      const data = parseJsonSafe(existing.data) as Record<string, unknown> | null
-      if (data && typeof data === 'object') {
-        const allowedKeys = await getAllowedAddendumFields(
-          existing.parent_collection as string,
-          existing.addendum_layout_id as number | null
-        )
-        const fieldMeta = await db('nivaro_fields')
-          .where({ collection: existing.parent_collection as string })
-          .select('field', 'interface', 'type') as Array<{ field: string; interface: string | null; type: string | null }>
-        const subRowFields = new Set(
-          fieldMeta.filter((f) => f.interface === 'sub-rows').map((f) => f.field)
-        )
-        // O2M and M2M relations are stored in related tables — cannot be set as scalar columns; skip on apply-back
-        const relationFields = await db('nivaro_relations')
-          .where({ one_collection: existing.parent_collection as string })
-          .select('one_field') as Array<{ one_field: string | null }>
-        const relationFieldSet = new Set(relationFields.map((r) => r.one_field).filter(Boolean) as string[])
-        const scalarPatch: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(data)) {
-          if (PARENT_WRITE_BLOCKED_COLUMNS.has(key)) continue
-          if (!allowedKeys.has(key)) continue
-          if (relationFieldSet.has(key)) continue
-          if (subRowFields.has(key)) {
-            const rows = Array.isArray(value) ? value : []
-            await db('nivaro_sub_rows')
-              .where({ parent_collection: existing.parent_collection, parent_id: existing.parent_id, sub_row_field: key })
-              .delete()
-            if (rows.length > 0) {
-              await db('nivaro_sub_rows').insert(
-                rows.map((row: unknown, idx: number) => ({
-                  parent_collection: existing.parent_collection,
-                  parent_id: existing.parent_id,
-                  sub_row_field: key,
-                  sort: idx,
-                  data: JSON.stringify(row),
-                  created_at: now,
-                  updated_at: now,
-                }))
-              )
-            }
-          } else {
-            scalarPatch[key] = value
-          }
-        }
-        if (Object.keys(scalarPatch).length > 0) {
-          await db(existing.parent_collection as string)
-            .where({ id: existing.parent_id })
-            .update({ ...scalarPatch, updated_at: now })
-        }
+    // Apply-back + status + change order + line changes + auto-PDF all live in
+    // the shared service (the pipeline terminal-state sync uses the same one).
+    const { applyAddendumApproval } = await import('../services/addendum-approve.js')
+    const result = await applyAddendumApproval(id, req.user!.id, {
+      allowedFromStatuses: ['review'],
+      app,
+      pdfAuthHeaders: {
+        ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+        ...(req.headers.cookie ? { cookie: req.headers.cookie } : {}),
+        ...(req.headers['x-workspace']
+          ? { 'x-workspace': String(req.headers['x-workspace']) }
+          : {})
       }
-    }
-
-    await db('nivaro_addendums')
-      .where({ id })
-      .update({ status: 'approved', approved_by: req.user!.id, approved_at: now, updated_at: now })
-
-    // Create change order log entry if not already exists
-    const existingOrder = await db('nivaro_addendum_approvals').where({ addendum_id: id }).first()
-
-    if (!existingOrder) {
-      const approvalCount = await db('nivaro_addendum_approvals')
-        .where({ parent_collection: existing.parent_collection, parent_id: existing.parent_id })
-        .count('id as cnt')
-        .then((r) => Number((r[0] as { cnt: number }).cnt))
-      await db('nivaro_addendum_approvals').insert({
-        addendum_id: id,
-        parent_collection: existing.parent_collection,
-        parent_id: existing.parent_id,
-        order_number: approvalCount + 1,
-        approved_by: req.user!.id,
-        approved_at: now,
-        created_at: now,
-      })
+    })
+    if (!result.ok) {
+      return reply.code(result.status ?? 400).send({ error: result.error ?? 'Approve failed' })
     }
 
     await logActivity({
@@ -511,6 +450,29 @@ export async function addendumsRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ data: { id, status: 'approved' } })
+  })
+
+  // POST /addendums/:id/revert — ADMIN ONLY: roll an approved addendum back
+  // so its changes never landed. The addendum row survives as status
+  // 'reverted', the change-order row is removed, and every restored value
+  // rides the normal revision trail — fully visible in history and logs.
+  app.post('/:id/revert', { preHandler: authenticate }, async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const { id } = req.params as { id: string }
+    const { revertAddendumApproval } = await import('../services/addendum-approve.js')
+    const result = await revertAddendumApproval(id, req.user!.id)
+    if (!result.ok) {
+      return reply.code(result.status ?? 400).send({ error: result.error ?? 'Revert failed' })
+    }
+    await logActivity({
+      action: 'addendum-revert',
+      user: req.user?.id,
+      collection: 'nivaro_addendums',
+      item: id,
+      comment: `restored ${result.line_changes_applied ?? 0} line change(s)${(result.line_changes_failed ?? 0) > 0 ? `, ${result.line_changes_failed} failed` : ''}`,
+      req
+    })
+    return reply.send({ data: { id, status: 'reverted' } })
   })
 
   // POST /addendums/:id/reject — set status='rejected'

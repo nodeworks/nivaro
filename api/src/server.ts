@@ -169,8 +169,9 @@ export async function buildServer() {
   // scope emit through the holder; the event journal (#266) shares the
   // app Redis connection.
   {
-    const { setIo } = await import('./services/io-holder.js')
+    const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
+    setAppRef(app)
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
   }
