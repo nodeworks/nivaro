@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T16:10:40.350Z",
+  "generated_at": "2026-08-26T16:23:11.452Z",
   "releases": [
+    {
+      "version": "0.1.146",
+      "tag": "v0.1.146",
+      "date": "2026-08-26T12:23:06-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "suspended/redacted owners get flagged AND fixed",
+              "hash": "47956977"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.145",
       "tag": "v0.1.145",
-      "date": "2026-08-26T12:10:35-04:00",
+      "date": "2026-08-26T12:10:40-04:00",
       "sections": [
         {
           "label": "Added",
