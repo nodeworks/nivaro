@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-25T23:47:12.073Z",
+  "generated_at": "2026-08-26T00:05:57.544Z",
   "releases": [
+    {
+      "version": "0.1.136",
+      "tag": "v0.1.136",
+      "date": "2026-08-25T20:05:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "integrity auto-fix + per-layout banner toggles + per-record item actions + track skeleton",
+              "hash": "29f31426"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "integrity",
+              "text": "a successful auto-fix deletes its stored finding row",
+              "hash": "69831413"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.135",
       "tag": "v0.1.135",
-      "date": "2026-08-25T19:47:08-04:00",
+      "date": "2026-08-25T19:47:12-04:00",
       "sections": [
         {
           "label": "Added",
