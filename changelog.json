@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T13:38:48.054Z",
+  "generated_at": "2026-08-26T13:58:09.388Z",
   "releases": [
+    {
+      "version": "0.1.140",
+      "tag": "v0.1.140",
+      "date": "2026-08-26T09:58:04-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "settings",
+              "text": "profile-fields section was missing the p-8 section padding",
+              "hash": "2480e382"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.139",
       "tag": "v0.1.139",
-      "date": "2026-08-26T09:38:42-04:00",
+      "date": "2026-08-26T09:38:48-04:00",
       "sections": [
         {
           "label": "Added",
