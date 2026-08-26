@@ -18,7 +18,22 @@ export async function itemActionsRoutes(app: FastifyInstance) {
       ? (
           await Promise.all(
             actions.map(async (a) => {
-              if (!a.applicable || !collection) return a
+              if (!collection) return a
+              // Declared requirement first: an addendum-creating action hides
+              // when the caller couldn't create an addendum here at all.
+              if (a.requires_addendum_create) {
+                try {
+                  const { canCreateAddendum } = await import('../services/addendum-approve.js')
+                  const gate = await canCreateAddendum(collection, item, {
+                    roleId: (req.user?.role as string | null) ?? null,
+                    isAdmin: !!req.isAdmin
+                  })
+                  if (!gate.ok) return null
+                } catch {
+                  /* gate error must not hide a working action */
+                }
+              }
+              if (!a.applicable) return a
               const ok = await a
                 .applicable({ collection, itemId: item })
                 .catch(() => true) // broken check must not hide a working action
@@ -43,6 +58,15 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     const { collection, itemId, payload } = req.body
     if (!collection || itemId == null) {
       return reply.status(400).send({ error: 'collection and itemId are required' })
+    }
+
+    if (action.requires_addendum_create) {
+      const { canCreateAddendum } = await import('../services/addendum-approve.js')
+      const gate = await canCreateAddendum(collection, itemId, {
+        roleId: (req.user?.role as string | null) ?? null,
+        isAdmin: !!req.isAdmin
+      })
+      if (!gate.ok) return reply.status(403).send({ error: gate.reason ?? 'Addendums unavailable' })
     }
 
     try {

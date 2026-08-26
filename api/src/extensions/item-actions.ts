@@ -17,6 +17,12 @@ export interface ItemActionDef {
     input?: { label: string; placeholder?: string; required?: boolean }
   }
   execute(ctx: ItemActionContext): Promise<{ message: string; data?: unknown }>
+  /** The action CREATES AN ADDENDUM: core enforces the addendum-create gates
+   *  (collection toggle, role allow-list, pipeline-state allow-list) — the
+   *  button hides when the caller couldn't create one, and execute 403s with
+   *  the gate's reason. Declared, not implemented, so extensions never
+   *  replicate core policy. */
+  requires_addendum_create?: boolean
   /** Optional per-record gate: when present, /item-actions/registered?item=
    *  evaluates it and the client hides inapplicable buttons. Errors count as
    *  applicable — a broken check must not hide a working action. */

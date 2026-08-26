@@ -560,3 +560,77 @@ export async function revertAddendumApproval(
 
   return { ok: true, line_changes_applied: lineChangesApplied, line_changes_failed: lineChangesFailed }
 }
+
+/**
+ * Can this caller create an addendum on this record AT ALL? The same three
+ * gates POST /addendums enforces — collection toggle, role allow-list,
+ * pipeline-state allow-list — as one reusable answer, so surfaces that LEAD
+ * to addendum creation (the PO closeout action) can hide themselves instead
+ * of failing at the end.
+ */
+export async function canCreateAddendum(
+  parentCollection: string,
+  parentId: string | number,
+  opts: { roleId?: string | null; isAdmin?: boolean } = {}
+): Promise<{ ok: boolean; reason?: string }> {
+  const col = (await db('nivaro_collections')
+    .where({ collection: parentCollection })
+    .first('addendums_enabled', 'addendum_allowed_roles', 'addendum_allowed_states')
+    .catch(() => undefined)) as
+    | {
+        addendums_enabled: number | boolean
+        addendum_allowed_roles: string | null
+        addendum_allowed_states: string | null
+      }
+    | undefined
+
+  const enabled = col?.addendums_enabled === 1 || col?.addendums_enabled === true
+  if (!enabled) return { ok: false, reason: 'Addendums are not enabled for this collection' }
+
+  if (!opts.isAdmin && col?.addendum_allowed_roles) {
+    const allowedRoles = parseJsonSafe(col.addendum_allowed_roles) as string[] | null
+    if (Array.isArray(allowedRoles) && allowedRoles.length > 0) {
+      if (!opts.roleId || !allowedRoles.includes(opts.roleId)) {
+        return {
+          ok: false,
+          reason: 'Your role is not allowed to create addendums for this collection'
+        }
+      }
+    }
+  }
+
+  if (col?.addendum_allowed_states) {
+    const stateRules = parseJsonSafe(col.addendum_allowed_states) as Array<{
+      pipeline_id: string
+      state_keys: string[]
+    }> | null
+    if (Array.isArray(stateRules) && stateRules.length > 0) {
+      const binding = (await db('nivaro_workflow_bindings')
+        .whereIn(
+          'template',
+          stateRules.map((r) => r.pipeline_id)
+        )
+        .where({ collection: parentCollection })
+        .first()) as { template: string } | undefined
+      if (binding) {
+        const instance = (await db('nivaro_workflow_instances')
+          .where({ collection: parentCollection, item: String(parentId) })
+          .first()) as { current_state: string | null } | undefined
+        const currentState = instance?.current_state ?? null
+        if (currentState) {
+          const stateRow = (await db('nivaro_workflow_states')
+            .where({ id: currentState })
+            .select('key')
+            .first()) as { key: string } | undefined
+          const currentKey = stateRow?.key ?? null
+          const rule = stateRules.find((r) => r.pipeline_id === binding.template)
+          if (rule && rule.state_keys.length > 0 && currentKey && !rule.state_keys.includes(currentKey)) {
+            return { ok: false, reason: 'Addendums cannot be created in the current pipeline state' }
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: true }
+}
