@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T02:39:58.699Z",
+  "generated_at": "2026-08-26T02:49:08.032Z",
   "releases": [
+    {
+      "version": "0.1.138",
+      "tag": "v0.1.138",
+      "date": "2026-08-25T22:49:04-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "provenance-trace resolves the record through readOne as the caller",
+              "hash": "ebac6d99"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.137",
       "tag": "v0.1.137",
-      "date": "2026-08-25T22:39:55-04:00",
+      "date": "2026-08-25T22:39:58-04:00",
       "sections": [
         {
           "label": "Added",
