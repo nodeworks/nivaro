@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T13:58:09.388Z",
+  "generated_at": "2026-08-26T14:20:54.789Z",
   "releases": [
+    {
+      "version": "0.1.141",
+      "tag": "v0.1.141",
+      "date": "2026-08-26T10:20:50-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "URL alias absorbs slugs + closeout gating honesty + dossier label",
+              "hash": "40ed21a5"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.140",
       "tag": "v0.1.140",
-      "date": "2026-08-26T09:58:04-04:00",
+      "date": "2026-08-26T09:58:09-04:00",
       "sections": [
         {
           "label": "Fixed",
