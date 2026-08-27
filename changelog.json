@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T15:03:50.978Z",
+  "generated_at": "2026-08-27T15:15:38.129Z",
   "releases": [
+    {
+      "version": "0.1.160",
+      "tag": "v0.1.160",
+      "date": "2026-08-27T11:15:31-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "people pickers search server-side — the directory exceeds any client slice",
+              "hash": "6de16041"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.159",
       "tag": "v0.1.159",
-      "date": "2026-08-27T11:03:46-04:00",
+      "date": "2026-08-27T11:03:51-04:00",
       "sections": [
         {
           "label": "Added",
