@@ -207,6 +207,25 @@ function useRoleNames(): Map<string, string> | null {
   return data ?? null
 }
 
+/** Server-side people search — the directory exceeds any client-side fetch
+ *  cap (>1000 users on EFP), so slicing locally silently hides people. Every
+ *  picker queries /users with search + alphabetical sort instead. */
+function usePeopleSearch(query: string): { people: User[]; isFetching: boolean } {
+  const client = useNivaroClient()
+  const q = query.trim()
+  const { data, isFetching } = useQuery<User[]>({
+    queryKey: ['people-search', q],
+    queryFn: () =>
+      client
+        .request<{ data: User[] }>(
+          get('/users', { limit: 50, sort: 'first_name', search: q || undefined })
+        )
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  return { people: data ?? [], isFetching }
+}
+
 function initials(u: {
   first_name: string | null
   last_name: string | null
@@ -450,12 +469,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     queryFn: () =>
       client.request<{ data: any }>(get(`/collections/${rowRelatedCollection}`)).then((r) => r.data),
     enabled: !!rowRelatedCollection && !rowSubField
-  })
-
-  const { data: allUsers } = useQuery<User[]>({
-    queryKey: ['users', 'picker'],
-    queryFn: () =>
-      client.request<{ data: User[] }>(get('/users', { limit: 200 })).then((r) => r.data)
   })
 
   const [expandedCell, setExpandedCell] = useState<{ stateId: string; rowValue: string } | null>(
@@ -833,7 +846,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       {managingTeam && (
         <TeamManagerPanel
           team={managingTeam}
-          allUsers={allUsers ?? []}
           onClose={() => {
             setManagingTeam(null)
             invalidate()
@@ -1147,7 +1159,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                 stateId={s.id}
                                 rowValue={row.value}
                                 existingUserIds={users.map((u) => u.user)}
-                                allUsers={allUsers ?? []}
                                 teams={(allTeams ?? []).filter(
                                   (t) => !(group?.teams ?? []).some((lt) => lt.id === t.id)
                                 )}
@@ -1395,7 +1406,6 @@ function AddUserToCell({
   stateId: _stateId,
   rowValue: _rowValue,
   existingUserIds,
-  allUsers,
   teams = [],
   onAdd,
   onAddTeam,
@@ -1405,7 +1415,6 @@ function AddUserToCell({
   stateId: string
   rowValue: string
   existingUserIds: string[]
-  allUsers: User[]
   teams?: Array<{ id: number; name: string; member_count: number }>
   onAdd: (userId: string) => void
   onAddTeam?: (teamId: number) => void
@@ -1428,23 +1437,16 @@ function AddUserToCell({
   }, [open])
 
   const roleNames = useRoleNames()
-  const available = sortPeople(allUsers.filter((u) => !existingUserIds.includes(u.id)))
+  const { people } = usePeopleSearch(open ? query : '')
   const q = query.trim().toLowerCase()
   const userLabel = (u: User) =>
     [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const excluded = new Set(existingUserIds.map((id) => id.toUpperCase()))
   const filteredTeams = (q
     ? teams.filter((t) => t.name.toLowerCase().includes(q))
     : teams
   ).slice().sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-  const filteredUsers = (q
-    ? available.filter(
-        (u) =>
-          userLabel(u).toLowerCase().includes(q) ||
-          (u.email ?? '').toLowerCase().includes(q) ||
-          personSecondary(u, roleNames).toLowerCase().includes(q)
-      )
-    : available
-  ).slice(0, 50)
+  const filteredUsers = people.filter((u) => !excluded.has(String(u.id).toUpperCase()))
 
   if (creating) {
     return (
@@ -1578,7 +1580,9 @@ function AddUserToCell({
             </button>
           ))}
           {filteredUsers.length === 0 && filteredTeams.length === 0 && (
-            <p className='px-3 py-2 text-[12px] text-slate-400'>No matches</p>
+            <p className='px-3 py-2 text-[12px] text-slate-400'>
+              No matches — people already in this cell are hidden
+            </p>
           )}
         </div>
       </PopoverContent>
@@ -1694,7 +1698,7 @@ function BulkMembershipPanel({
   const { data: users = [] } = useQuery<
     Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
   >({
-    queryKey: ['bulk-matrix-users'],
+    queryKey: ['bulk-matrix-users', userQuery.trim()],
     queryFn: () =>
       client
         .request<{
@@ -1704,16 +1708,10 @@ function BulkMembershipPanel({
             last_name: string | null
             email: string
           }>
-        }>(get('/users', { limit: 500 }))
+        }>(get('/users', { limit: 50, sort: 'first_name', search: userQuery.trim() || undefined }))
         .then((r) => r.data)
   })
-  const filteredUsers = users
-    .filter((u) =>
-      `${u.first_name ?? ''} ${u.last_name ?? ''} ${u.email}`
-        .toLowerCase()
-        .includes(userQuery.toLowerCase())
-    )
-    .slice(0, 8)
+  const filteredUsers = users.slice(0, 8)
   const submit = () => {
     setBusy(true)
     void client
@@ -1836,11 +1834,9 @@ function BulkMembershipPanel({
  *  TEAM itself: every cell (and mention) using it follows. */
 function TeamManagerPanel({
   team,
-  allUsers,
   onClose
 }: {
   team: { id: number; name: string }
-  allUsers: User[]
   onClose: () => void
 }) {
   const client = useNivaroClient()
@@ -1877,7 +1873,6 @@ function TeamManagerPanel({
     onError: () => toast.error('Failed to remove member')
   })
   const memberIds = new Set((members ?? []).map((m) => String(m.id).toUpperCase()))
-  const available = allUsers.filter((u) => !memberIds.has(String(u.id).toUpperCase()))
 
   return createPortal(
     <div
@@ -1931,7 +1926,7 @@ function TeamManagerPanel({
           </div>
         )}
         <MemberPickerCombobox
-          available={available}
+          excludeIds={[...memberIds]}
           isPending={addMember.isPending}
           onPick={(userId) => addMember.mutate(userId)}
         />
@@ -1949,11 +1944,11 @@ function TeamManagerPanel({
 /** People-only styled picker for the team roster manager — same combobox
  *  vocabulary as the cell's owner picker. */
 function MemberPickerCombobox({
-  available,
+  excludeIds,
   isPending,
   onPick
 }: {
-  available: User[]
+  excludeIds: string[]
   isPending: boolean
   onPick: (userId: string) => void
 }) {
@@ -1965,18 +1960,10 @@ function MemberPickerCombobox({
     else setQuery('')
   }, [open])
   const roleNames = useRoleNames()
-  const q = query.trim().toLowerCase()
+  const { people } = usePeopleSearch(open ? query : '')
   const label = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-  const sorted = sortPeople(available)
-  const filtered = (q
-    ? sorted.filter(
-        (u) =>
-          label(u).toLowerCase().includes(q) ||
-          (u.email ?? '').toLowerCase().includes(q) ||
-          personSecondary(u, roleNames).toLowerCase().includes(q)
-      )
-    : sorted
-  ).slice(0, 50)
+  const excluded = new Set(excludeIds.map((id) => id.toUpperCase()))
+  const filtered = people.filter((u) => !excluded.has(String(u.id).toUpperCase()))
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -2025,7 +2012,11 @@ function MemberPickerCombobox({
               </span>
             </button>
           ))}
-          {filtered.length === 0 && <p className='px-3 py-2 text-[12px] text-slate-400'>No matches</p>}
+          {filtered.length === 0 && (
+            <p className='px-3 py-2 text-[12px] text-slate-400'>
+              No matches — people already on the team are hidden
+            </p>
+          )}
         </div>
       </PopoverContent>
     </Popover>

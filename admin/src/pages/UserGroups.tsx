@@ -64,9 +64,17 @@ function AddMemberPicker({
   disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  // Server-side search — the directory exceeds any client fetch cap, so a
+  // sliced list silently hides people (the "can't find my own name" bug).
   const { data: users } = useQuery<User[]>({
-    queryKey: ['users', 'combobox'],
-    queryFn: () => api.get<{ data: User[] }>('/users?limit=1000').then((r) => r.data.data),
+    queryKey: ['users', 'combobox', query.trim()],
+    queryFn: () =>
+      api
+        .get<{ data: User[] }>('/users', {
+          params: { limit: 50, sort: 'first_name', search: query.trim() || undefined }
+        })
+        .then((r) => r.data.data),
     enabled: open
   })
   // Role id → name, for the identity line when a person has no title.
@@ -100,11 +108,20 @@ function AddMemberPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className='w-[420px] p-0' align='start'>
-        <Command shouldFilter={true}>
-          <CommandInput placeholder='Search people…' className='h-9 text-[13px]' />
+        <Command
+          // Filtering happens server-side (search param) — cmdk's fuzzy
+          // matcher would re-rank and surface scattered-letter matches.
+          shouldFilter={false}
+        >
+          <CommandInput
+            placeholder='Search people…'
+            className='h-9 text-[13px]'
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList>
             <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-              No people found
+              No matches — people already on the team are hidden here
             </CommandEmpty>
             <CommandGroup>
               {options.map((u) => (

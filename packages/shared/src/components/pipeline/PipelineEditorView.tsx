@@ -4523,7 +4523,9 @@ function CoveragePeoplePicker({
     queryKey: ['coverage-people', q],
     queryFn: () =>
       client
-        .request<{ data: User[] }>(get('/users', { limit: 20, search: q || undefined }))
+        .request<{ data: User[] }>(
+          get('/users', { limit: 50, sort: 'first_name', search: q || undefined })
+        )
         .then((r) => r.data),
     staleTime: 60_000
   })
