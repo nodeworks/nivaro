@@ -73,7 +73,8 @@ import type {
   PipelineState,
   PipelineTemplate,
   PipelineTransition,
-  TransitionRequirement
+  TransitionRequirement,
+  User
 } from './types'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
@@ -4480,17 +4481,445 @@ const FLOW_COL_W = 230
 // people who can no longer act (suspended/redacted), fixable in place.
 
 interface OwnerGapCluster {
+  state_id: string
   state_key: string | null
   collection: string
   count: number
   sample_items: string[]
   dims: Record<string, string>
+  filters: Array<{ field: string; op: 'eq'; value: string; id_value: number | null }>
   suggestion: {
     group_id: string | null
     group_label: string | null
     matched_filters: string[]
     mismatched_filters: string[]
   } | null
+}
+
+interface HygieneFinding {
+  type: string
+  state: string
+  group_id: string
+  group_name: string
+  detail: string
+  other_group_id?: string
+  other_group_name?: string
+  dead_field?: string
+  group_filters?: Array<{ field?: string; op?: string; value?: unknown; id_value?: unknown }>
+}
+
+/** Compact multi-select people picker for the coverage remediations —
+ *  search-as-you-type over /users, selected people as removable chips. */
+function CoveragePeoplePicker({
+  selected,
+  onChange
+}: {
+  selected: Array<{ id: string; name: string }>
+  onChange: (next: Array<{ id: string; name: string }>) => void
+}) {
+  const client = useNivaroClient()
+  const [q, setQ] = useState('')
+  const { data: users, isFetching } = useQuery<User[]>({
+    queryKey: ['coverage-people', q],
+    queryFn: () =>
+      client
+        .request<{ data: User[] }>(get('/users', { limit: 20, search: q || undefined }))
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  const selectedIds = new Set(selected.map((u) => u.id))
+  const nameOf = (u: User) =>
+    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id
+  return (
+    <div className='space-y-1.5'>
+      {selected.length > 0 && (
+        <div className='flex flex-wrap gap-1'>
+          {selected.map((u) => (
+            <span
+              key={u.id}
+              className='inline-flex items-center gap-1 rounded-full bg-[#00ceff1a] px-2 py-px text-[11px] font-medium text-slate-700 dark:text-slate-200'
+            >
+              {u.name}
+              <button
+                type='button'
+                aria-label={`Remove ${u.name}`}
+                className='text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                onClick={() => onChange(selected.filter((x) => x.id !== u.id))}
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <Input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder='Search people…'
+        className='h-7 text-[12px]'
+      />
+      <div className='max-h-36 divide-y divide-slate-100 overflow-y-auto rounded-md border border-slate-200 dark:divide-border/60 dark:border-border'>
+        {(users ?? []).map((u) => {
+          const picked = selectedIds.has(String(u.id))
+          return (
+            <button
+              key={u.id}
+              type='button'
+              className={cn(
+                'flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors',
+                picked ? 'bg-[#00ceff0f]' : 'hover:bg-muted'
+              )}
+              onClick={() =>
+                onChange(
+                  picked
+                    ? selected.filter((x) => x.id !== String(u.id))
+                    : [...selected, { id: String(u.id), name: nameOf(u) }]
+                )
+              }
+            >
+              <span
+                className={cn(
+                  'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border',
+                  picked
+                    ? 'border-[#00ceff] bg-[#00ceff] text-white'
+                    : 'border-slate-300 dark:border-border'
+                )}
+              >
+                {picked && <Check className='h-2.5 w-2.5' />}
+              </span>
+              <span className='truncate text-slate-700 dark:text-slate-200'>{nameOf(u)}</span>
+              <span className='ml-auto truncate text-[10.5px] text-slate-400'>{u.email}</span>
+            </button>
+          )
+        })}
+        {!isFetching && (users ?? []).length === 0 && (
+          <p className='px-2 py-2 text-[11.5px] text-slate-400'>No matching people</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Inline remediation for one unowned cluster: adds people to the closest
+ *  fully-matching group when one exists (the group matched but nobody active
+ *  sits in it), otherwise creates a group scoped to this exact combination. */
+function ClusterAssignPanel({
+  templateId,
+  cluster,
+  onDone
+}: {
+  templateId: string
+  cluster: OwnerGapCluster
+  onDone: () => void
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const useExisting =
+    !!cluster.suggestion?.group_id && cluster.suggestion.mismatched_filters.length === 0
+  const defaultName = Object.values(cluster.dims).filter(Boolean).join(' · ') || 'New group'
+  const [name, setName] = useState(defaultName)
+  const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
+
+  const assign = useMutation({
+    mutationFn: async () => {
+      let groupId = useExisting ? String(cluster.suggestion?.group_id) : null
+      if (!groupId) {
+        const r = await client.request<{ data: PipelineOwnerGroup }>(
+          post(`/pipelines/states/${cluster.state_id}/owner-groups`, {
+            name: name.trim() || defaultName,
+            filters: cluster.filters,
+            is_default: false,
+            sort: 0,
+            priority: 0
+          })
+        )
+        groupId = String(r.data.id)
+      }
+      for (const u of people) {
+        await client.request(post(`/pipelines/owner-groups/${groupId}/users`, { user: u.id }))
+      }
+      return people.length
+    },
+    onSuccess: (n) => {
+      toast.success(
+        useExisting
+          ? `Added ${n} ${n === 1 ? 'person' : 'people'} to ${cluster.suggestion?.group_label}`
+          : `Created "${name.trim() || defaultName}" with ${n} ${n === 1 ? 'person' : 'people'}`
+      )
+      void qc.invalidateQueries({ queryKey: ['owner-gaps', templateId] })
+      void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
+      void qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
+      onDone()
+    },
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { error?: string } })?.response?.error ?? 'Assignment failed',
+        { duration: 9000 }
+      )
+  })
+
+  return (
+    <div className='mt-2 ml-8 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
+      {useExisting ? (
+        <p className='text-[11.5px] text-slate-600 dark:text-slate-300'>
+          <span className='font-medium text-slate-800 dark:text-foreground'>
+            {cluster.suggestion?.group_label}
+          </span>{' '}
+          already covers this combination — it just has nobody active in it. People you pick are
+          added there.
+        </p>
+      ) : (
+        <div className='space-y-1'>
+          <p className='text-[11.5px] text-slate-600 dark:text-slate-300'>
+            Creates a group scoped to exactly this combination, with the people you pick.
+          </p>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder='Group name'
+            className='h-7 text-[12px]'
+          />
+        </div>
+      )}
+      <CoveragePeoplePicker selected={people} onChange={setPeople} />
+      <div className='flex items-center justify-end gap-1.5'>
+        <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={onDone}>
+          Cancel
+        </Button>
+        <Button
+          size='sm'
+          className='h-6 px-2.5 text-[11px]'
+          disabled={people.length === 0 || assign.isPending}
+          onClick={() => assign.mutate()}
+        >
+          {assign.isPending
+            ? 'Assigning…'
+            : people.length === 0
+              ? 'Assign'
+              : `Assign ${people.length} ${people.length === 1 ? 'person' : 'people'}`}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** One hygiene finding with its fix inline: merge duplicates, staff or delete
+ *  empty groups, strip dead filters. */
+function HygieneRow({
+  templateId,
+  finding
+}: {
+  templateId: string
+  finding: HygieneFinding
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [mode, setMode] = useState<'idle' | 'confirm-merge' | 'confirm-delete' | 'add-member'>(
+    'idle'
+  )
+  const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
+  const done = (msg: string) => {
+    toast.success(msg)
+    setMode('idle')
+    setPeople([])
+    void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
+    void qc.invalidateQueries({ queryKey: ['owner-gaps', templateId] })
+    void qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
+  }
+  const fail = (e: unknown) =>
+    toast.error((e as { response?: { error?: string } })?.response?.error ?? 'Action failed', {
+      duration: 9000
+    })
+
+  const merge = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { moved: number } }>(
+        post(`/pipelines/owner-groups/${finding.group_id}/merge-into`, {
+          target_group_id: finding.other_group_id
+        })
+      ),
+    onSuccess: (r) =>
+      done(`Merged into ${finding.other_group_name} — ${r.data.moved} member(s) moved`),
+    onError: fail
+  })
+  const removeGroup = useMutation({
+    mutationFn: () => client.request(del(`/pipelines/owner-groups/${finding.group_id}`)),
+    onSuccess: () => done(`Deleted ${finding.group_name}`),
+    onError: fail
+  })
+  const addMembers = useMutation({
+    mutationFn: async () => {
+      for (const u of people) {
+        await client.request(
+          post(`/pipelines/owner-groups/${finding.group_id}/users`, { user: u.id })
+        )
+      }
+      return people.length
+    },
+    onSuccess: (n) => done(`Added ${n} ${n === 1 ? 'person' : 'people'} to ${finding.group_name}`),
+    onError: fail
+  })
+  const removeFilter = useMutation({
+    mutationFn: () =>
+      client.request(
+        patch(`/pipelines/owner-groups/${finding.group_id}`, {
+          filters: (finding.group_filters ?? []).filter((f) => f.field !== finding.dead_field)
+        })
+      ),
+    onSuccess: () => done(`Removed the "${finding.dead_field}" filter from ${finding.group_name}`),
+    onError: fail
+  })
+  const busy =
+    merge.isPending || removeGroup.isPending || addMembers.isPending || removeFilter.isPending
+
+  const actionBtn = 'h-6 shrink-0 px-2 text-[11px]'
+  return (
+    <div className='py-1.5 text-[12px]'>
+      <div className='flex items-start gap-2'>
+        <span
+          className={cn(
+            'mt-0.5 shrink-0 rounded-full px-1.5 py-px text-[9.5px] font-semibold uppercase',
+            finding.type === 'empty' && 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
+            finding.type === 'duplicate' &&
+              'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+            finding.type === 'unknown_field' &&
+              'bg-slate-100 text-slate-600 dark:bg-muted dark:text-slate-300'
+          )}
+        >
+          {finding.type === 'empty'
+            ? 'No members'
+            : finding.type === 'duplicate'
+              ? 'Duplicate'
+              : finding.type === 'unknown_field'
+                ? 'Dead filter'
+                : finding.type}
+        </span>
+        <span className='min-w-0 flex-1'>
+          <span className='font-medium text-slate-700 dark:text-foreground'>
+            {finding.state} · {finding.group_name}
+          </span>{' '}
+          <span className='text-slate-500 dark:text-muted-foreground'>— {finding.detail}</span>
+        </span>
+        {mode === 'idle' && (
+          <span className='flex shrink-0 items-center gap-1'>
+            {finding.type === 'duplicate' && finding.other_group_id && (
+              <Button
+                size='sm'
+                variant='outline'
+                className={actionBtn}
+                disabled={busy}
+                onClick={() => setMode('confirm-merge')}
+              >
+                Merge…
+              </Button>
+            )}
+            {finding.type === 'empty' && (
+              <>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={actionBtn}
+                  disabled={busy}
+                  onClick={() => setMode('add-member')}
+                >
+                  Add people…
+                </Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn(actionBtn, 'text-red-600 hover:text-red-700 dark:text-red-400')}
+                  disabled={busy}
+                  onClick={() => setMode('confirm-delete')}
+                >
+                  Delete…
+                </Button>
+              </>
+            )}
+            {finding.type === 'unknown_field' && finding.dead_field && finding.group_filters && (
+              <Button
+                size='sm'
+                variant='outline'
+                className={actionBtn}
+                disabled={busy}
+                onClick={() => removeFilter.mutate()}
+              >
+                {removeFilter.isPending ? 'Removing…' : 'Remove filter'}
+              </Button>
+            )}
+          </span>
+        )}
+      </div>
+      {mode === 'confirm-merge' && (
+        <div className='mt-1.5 ml-2 flex flex-wrap items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
+          Move its members into “{finding.other_group_name}” and delete this group?
+          <Button
+            size='sm'
+            className='h-6 px-2 text-[11px]'
+            disabled={merge.isPending}
+            onClick={() => merge.mutate()}
+          >
+            {merge.isPending ? 'Merging…' : 'Merge'}
+          </Button>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 px-2 text-[11px]'
+            onClick={() => setMode('idle')}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
+      {mode === 'confirm-delete' && (
+        <div className='mt-1.5 ml-2 flex flex-wrap items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
+          Delete “{finding.group_name}”? It has no members, so nothing loses coverage.
+          <Button
+            size='sm'
+            variant='destructive'
+            className='h-6 px-2 text-[11px]'
+            disabled={removeGroup.isPending}
+            onClick={() => removeGroup.mutate()}
+          >
+            {removeGroup.isPending ? 'Deleting…' : 'Delete group'}
+          </Button>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 px-2 text-[11px]'
+            onClick={() => setMode('idle')}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
+      {mode === 'add-member' && (
+        <div className='mt-2 ml-2 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
+          <CoveragePeoplePicker selected={people} onChange={setPeople} />
+          <div className='flex items-center justify-end gap-1.5'>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='h-6 px-2 text-[11px]'
+              onClick={() => {
+                setMode('idle')
+                setPeople([])
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size='sm'
+              className='h-6 px-2.5 text-[11px]'
+              disabled={people.length === 0 || addMembers.isPending}
+              onClick={() => addMembers.mutate()}
+            >
+              {addMembers.isPending ? 'Adding…' : 'Add'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function OwnerGapsCard({
@@ -4504,6 +4933,7 @@ export function OwnerGapsCard({
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [confirmClean, setConfirmClean] = useState(false)
+  const [assigningCluster, setAssigningCluster] = useState<string | null>(null)
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['owner-gaps', templateId],
     queryFn: () =>
@@ -4514,7 +4944,7 @@ export function OwnerGapsCard({
             dead_seats: {
               group_seats: number
               instance_seats: number
-              users: Array<{ name: string; seats: number; redacted: boolean }>
+              users: Array<{ id: string | null; name: string; seats: number; redacted: boolean }>
             }
           }
         }>(get(`/pipelines/${templateId}/owner-gaps`))
@@ -4524,40 +4954,22 @@ export function OwnerGapsCard({
   })
   // Matrix hygiene rides the same Analyze click — the lint's inactive_member
   // findings are the dead seats above, so they are filtered out here.
-  const { data: lint } = useQuery<{
-    groups_checked: number
-    findings: Array<{
-      type: string
-      state: string
-      group_id: string
-      group_name: string
-      detail: string
-    }>
-  }>({
+  const { data: lint } = useQuery<{ groups_checked: number; findings: HygieneFinding[] }>({
     queryKey: ['owner-lint', templateId],
     queryFn: () =>
       client
-        .request<{
-          data: {
-            groups_checked: number
-            findings: Array<{
-              type: string
-              state: string
-              group_id: string
-              group_name: string
-              detail: string
-            }>
-          }
-        }>(get(`/pipelines/${templateId}/owner-lint`))
+        .request<{ data: { groups_checked: number; findings: HygieneFinding[] } }>(
+          get(`/pipelines/${templateId}/owner-lint`)
+        )
         .then((r) => r.data),
     enabled: open,
     staleTime: 5 * 60_000
   })
   const clean = useMutation({
-    mutationFn: () =>
+    mutationFn: (userId: string | null) =>
       client.request<{
         data: { group_members_removed: number; instance_owners_removed: number; users: string[] }
-      }>(post(`/pipelines/${templateId}/owner-cleanup`)),
+      }>(post(`/pipelines/${templateId}/owner-cleanup`, userId ? { user_id: userId } : {})),
     onSuccess: (r) => {
       const d = r.data
       toast.success(
@@ -4566,6 +4978,7 @@ export function OwnerGapsCard({
       void qc.invalidateQueries({ queryKey: ['owner-gaps', templateId] })
       void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
       void qc.invalidateQueries({ queryKey: ['owner-groups', templateId] })
+      void qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups', templateId] })
     },
     onError: () => toast.error('Cleanup failed')
   })
@@ -4573,11 +4986,6 @@ export function OwnerGapsCard({
   const clusters = data?.clusters ?? []
   const dead = data?.dead_seats
   const hygiene = (lint?.findings ?? []).filter((f) => f.type !== 'inactive_member')
-  const HYGIENE_TYPE_LABEL: Record<string, string> = {
-    empty: 'No members',
-    duplicate: 'Duplicate',
-    unknown_field: 'Dead filter'
-  }
   const totalUnowned = clusters.reduce((sum, g) => sum + g.count, 0)
   const stateMeta = new Map(
     states.map((st) => [st.key, { label: st.label, color: st.color ?? null }])
@@ -4614,7 +5022,8 @@ export function OwnerGapsCard({
           </h3>
           <p className='mt-0.5 max-w-[68ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
             Who actually covers this pipeline — open records resolving nobody, seats held by
-            people who can no longer act, and hygiene problems in the matrix itself.
+            people who can no longer act, and hygiene problems in the matrix itself. Every finding
+            is fixable in place.
           </p>
         </div>
         <Button
@@ -4668,28 +5077,32 @@ export function OwnerGapsCard({
             </div>
           )}
 
-          {/* Dead seats — the fix lives right here. */}
+          {/* Dead seats — remove one person, or everyone, right here. */}
           {dead && dead.group_seats > 0 && (
-            <div className='rounded-md border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-500/25 dark:bg-violet-500/5'>
-              <div className='flex flex-wrap items-center gap-2'>
-                <p className='text-[12.5px] font-medium text-violet-900 dark:text-violet-300'>
-                  Seats held by suspended or redacted people
-                </p>
+            <div className='overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              <div className='flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
+                <span className='h-2 w-2 shrink-0 rounded-full bg-violet-500' />
+                <span className='text-[12px] font-semibold text-slate-700 dark:text-foreground'>
+                  Dead seats
+                </span>
+                <span className='text-[11px] text-slate-400'>
+                  suspended or redacted people still holding owner seats
+                </span>
                 {confirmClean ? (
                   <span className='ml-auto flex items-center gap-1.5'>
-                    <span className='text-[11.5px] text-violet-700 dark:text-violet-300'>
-                      Remove them from every group and open record?
+                    <span className='text-[11.5px] text-slate-600 dark:text-slate-300'>
+                      Remove all of them from every group and open record?
                     </span>
                     <Button
                       size='sm'
                       className='h-6 bg-violet-600 px-2 text-[11px] text-white hover:bg-violet-700'
                       disabled={clean.isPending}
                       onClick={() => {
-                        clean.mutate()
+                        clean.mutate(null)
                         setConfirmClean(false)
                       }}
                     >
-                      Remove
+                      Remove all
                     </Button>
                     <Button
                       size='sm'
@@ -4704,82 +5117,55 @@ export function OwnerGapsCard({
                   <Button
                     size='sm'
                     variant='outline'
-                    className='ml-auto h-6 border-violet-300 px-2 text-[11px] text-violet-700 dark:border-violet-500/40 dark:text-violet-300'
+                    className='ml-auto h-6 px-2 text-[11px]'
                     disabled={clean.isPending}
                     onClick={() => setConfirmClean(true)}
                   >
-                    {clean.isPending ? 'Removing…' : 'Remove dead seats…'}
+                    {clean.isPending ? 'Removing…' : 'Remove all…'}
                   </Button>
                 )}
               </div>
-              <div className='mt-2 flex flex-wrap gap-1'>
-                {dead.users.slice(0, 8).map((u) => (
-                  <span
-                    key={u.name}
-                    className='inline-flex items-baseline gap-1 rounded-full border border-violet-200 bg-white px-2 py-px text-[11px] text-slate-700 dark:border-violet-500/30 dark:bg-transparent dark:text-slate-300'
-                  >
-                    {u.name}
-                    <span className='tabular-nums text-slate-400'>×{u.seats}</span>
-                    {u.redacted && <span className='text-[9.5px] uppercase text-violet-500'>redacted</span>}
-                  </span>
-                ))}
-                {dead.users.length > 8 && (
-                  <span className='self-center text-[11px] text-slate-400'>
-                    +{dead.users.length - 8} more
-                  </span>
-                )}
-              </div>
-              {dead.instance_seats > 0 && (
-                <p className='mt-1.5 text-[11.5px] text-violet-700/80 dark:text-violet-300/80'>
-                  {dead.instance_seats} open record{dead.instance_seats === 1 ? '' : 's'} also list
-                  {dead.instance_seats === 1 ? 's' : ''} one as a manually-added owner — removal
-                  covers those too.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Matrix hygiene — problems in the configuration, not the coverage. */}
-          {hygiene.length > 0 && (
-            <div className='overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-              <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
-                <span className='text-[12px] font-semibold text-slate-700 dark:text-foreground'>
-                  Matrix hygiene
-                </span>
-                {lint && (
-                  <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
-                    {lint.groups_checked.toLocaleString()} group(s) checked · {hygiene.length}{' '}
-                    finding{hygiene.length === 1 ? '' : 's'}
-                  </span>
-                )}
-              </div>
-              <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto px-3 dark:divide-border/60'>
-                {hygiene.map((f, i) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional
-                  <div key={i} className='flex items-start gap-2 py-1.5 text-[12px]'>
+              <div className='px-3 py-2'>
+                <div className='flex flex-wrap gap-1'>
+                  {dead.users.slice(0, 12).map((u) => (
                     <span
-                      className={cn(
-                        'mt-0.5 shrink-0 rounded-full px-1.5 py-px text-[9.5px] font-semibold uppercase',
-                        f.type === 'empty' && 'bg-red-100 text-red-700',
-                        f.type === 'duplicate' && 'bg-amber-100 text-amber-700',
-                        f.type === 'unknown_field' && 'bg-slate-100 text-slate-600'
-                      )}
+                      key={u.name}
+                      className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-px text-[11px] text-slate-700 dark:border-border dark:bg-transparent dark:text-slate-300'
                     >
-                      {HYGIENE_TYPE_LABEL[f.type] ?? f.type}
+                      {u.name}
+                      <span className='tabular-nums text-slate-400'>×{u.seats}</span>
+                      {u.id && (
+                        <button
+                          type='button'
+                          aria-label={`Remove ${u.name}'s seats`}
+                          data-tip={`Remove ${u.name} from every group and open record`}
+                          className='text-slate-400 transition-colors hover:text-red-600 dark:hover:text-red-400'
+                          disabled={clean.isPending}
+                          onClick={() => clean.mutate(u.id)}
+                        >
+                          <X className='h-3 w-3' />
+                        </button>
+                      )}
                     </span>
-                    <span className='min-w-0'>
-                      <span className='font-medium text-slate-700 dark:text-foreground'>
-                        {f.state} · {f.group_name}
-                      </span>{' '}
-                      <span className='text-slate-500 dark:text-muted-foreground'>— {f.detail}</span>
+                  ))}
+                  {dead.users.length > 12 && (
+                    <span className='self-center text-[11px] text-slate-400'>
+                      +{dead.users.length - 12} more
                     </span>
-                  </div>
-                ))}
+                  )}
+                </div>
+                {dead.instance_seats > 0 && (
+                  <p className='mt-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    {dead.instance_seats} open record{dead.instance_seats === 1 ? '' : 's'} also
+                    list{dead.instance_seats === 1 ? 's' : ''} one as a manually-added owner —
+                    removal covers those too.
+                  </p>
+                )}
               </div>
             </div>
           )}
 
-          {/* Unowned records, grouped by stage. */}
+          {/* Unowned records, grouped by stage — assign people in place. */}
           {stateGroups.map(([stateKey, groupClusters]) => {
             const meta = stateMeta.get(stateKey)
             const stateTotal = groupClusters.reduce((s, g) => s + g.count, 0)
@@ -4802,72 +5188,119 @@ export function OwnerGapsCard({
                   </span>
                 </div>
                 <div className='divide-y divide-slate-100 dark:divide-border/60'>
-                  {groupClusters.map((g, i) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: server-ordered clusters
-                    <div key={i} className='px-3 py-2'>
-                      <div className='flex flex-wrap items-center gap-1.5'>
-                        <span className='w-8 shrink-0 text-[13px] font-semibold tabular-nums text-slate-800 dark:text-foreground'>
-                          {g.count}
-                        </span>
-                        {Object.entries(g.dims).filter(([, v]) => v).length > 0 ? (
-                          Object.entries(g.dims)
-                            .filter(([, v]) => v)
-                            .map(([k, v]) => dimChip(k, v))
-                        ) : (
-                          <span className='text-[11px] italic text-slate-400'>
-                            no dimension values resolved
+                  {groupClusters.map((g, i) => {
+                    const clusterKey = `${g.state_id}|${JSON.stringify(g.dims)}`
+                    return (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: server-ordered clusters
+                      <div key={i} className='px-3 py-2'>
+                        <div className='flex flex-wrap items-center gap-1.5'>
+                          <span className='w-8 shrink-0 text-[13px] font-semibold tabular-nums text-slate-800 dark:text-foreground'>
+                            {g.count}
                           </span>
-                        )}
-                        <span
-                          className='ml-auto max-w-[220px] truncate text-[10.5px] text-slate-400'
-                          data-tip={g.sample_items.join(', ')}
-                        >
-                          e.g. {g.sample_items.slice(0, 3).join(', ')}
-                        </span>
-                      </div>
-                      <p className='mt-1 pl-8 text-[11.5px] leading-relaxed'>
-                        {g.suggestion ? (
-                          <>
-                            <span className='text-slate-500 dark:text-muted-foreground'>
-                              Closest group{' '}
+                          {Object.entries(g.dims).filter(([, v]) => v).length > 0 ? (
+                            Object.entries(g.dims)
+                              .filter(([, v]) => v)
+                              .map(([k, v]) => dimChip(k, v))
+                          ) : (
+                            <span className='text-[11px] italic text-slate-400'>
+                              no dimension values resolved
                             </span>
-                            <span className='font-medium text-slate-700 dark:text-foreground'>
-                              {g.suggestion.group_label}
-                            </span>
-                            <span className='text-slate-500 dark:text-muted-foreground'>
-                              {' '}
-                              already matches {humanizeFieldList(g.suggestion.matched_filters.join(', ')) || 'nothing'}
-                            </span>
-                            {g.suggestion.mismatched_filters.length > 0 && (
-                              <span className='text-amber-700 dark:text-amber-400'>
-                                {' '}
-                                — widen it to cover {humanizeFieldList(g.suggestion.mismatched_filters.join(', '))}, or
-                                add a group for this combination
+                          )}
+                          <span
+                            className='ml-auto max-w-[180px] truncate text-[10.5px] text-slate-400'
+                            data-tip={g.sample_items.join(', ')}
+                          >
+                            e.g. {g.sample_items.slice(0, 3).join(', ')}
+                          </span>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-6 shrink-0 px-2 text-[11px]'
+                            onClick={() =>
+                              setAssigningCluster(
+                                assigningCluster === clusterKey ? null : clusterKey
+                              )
+                            }
+                          >
+                            Assign owners…
+                          </Button>
+                        </div>
+                        <p className='mt-1 pl-8 text-[11.5px] leading-relaxed'>
+                          {g.suggestion ? (
+                            <>
+                              <span className='text-slate-500 dark:text-muted-foreground'>
+                                Closest group{' '}
                               </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className='inline-flex items-center gap-1 text-amber-700 dark:text-amber-400'>
-                            <span className='rounded bg-amber-100 px-1 py-px text-[9.5px] font-semibold uppercase dark:bg-amber-500/15'>
-                              no match
+                              <span className='font-medium text-slate-700 dark:text-foreground'>
+                                {g.suggestion.group_label}
+                              </span>
+                              <span className='text-slate-500 dark:text-muted-foreground'>
+                                {' '}
+                                already matches{' '}
+                                {humanizeFieldList(g.suggestion.matched_filters.join(', ')) ||
+                                  'nothing'}
+                              </span>
+                              {g.suggestion.mismatched_filters.length > 0 && (
+                                <span className='text-amber-700 dark:text-amber-400'>
+                                  {' '}
+                                  — it misses{' '}
+                                  {humanizeFieldList(g.suggestion.mismatched_filters.join(', '))},
+                                  so assigning creates a group for this combination
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className='inline-flex items-center gap-1 text-amber-700 dark:text-amber-400'>
+                              <span className='rounded bg-amber-100 px-1 py-px text-[9.5px] font-semibold uppercase dark:bg-amber-500/15'>
+                                no match
+                              </span>
+                              No group comes close — assigning creates one for this combination.
                             </span>
-                            No group comes close — create one for this combination in the Owner
-                            Matrix above.
-                          </span>
+                          )}
+                        </p>
+                        {assigningCluster === clusterKey && (
+                          <ClusterAssignPanel
+                            templateId={templateId}
+                            cluster={g}
+                            onDone={() => setAssigningCluster(null)}
+                          />
                         )}
-                      </p>
-                    </div>
-                  ))}
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )
           })}
+
+          {/* Matrix hygiene — configuration debt, each row with its fix. */}
+          {hygiene.length > 0 && (
+            <div className='overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              <div className='flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
+                <span className='h-2 w-2 shrink-0 rounded-full bg-slate-400' />
+                <span className='text-[12px] font-semibold text-slate-700 dark:text-foreground'>
+                  Matrix hygiene
+                </span>
+                {lint && (
+                  <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
+                    {lint.groups_checked.toLocaleString()} group(s) checked · {hygiene.length}{' '}
+                    finding{hygiene.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+              <div className='max-h-96 divide-y divide-slate-100 overflow-y-auto px-3 dark:divide-border/60'>
+                {hygiene.map((f, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional
+                  <HygieneRow key={i} templateId={templateId} finding={f} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
-
 function titleCaseLabel(v: string): string {
   return v.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

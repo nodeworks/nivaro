@@ -1266,6 +1266,9 @@ export interface OwnerGapCluster {
   sample_items: string[]
   /** dotted filter field → the records' resolved display value(s). */
   dims: Record<string, string>
+  /** Ready-to-save owner-group filters for this combination — what a
+   *  "create a group for this cluster" remediation should POST verbatim. */
+  filters: Array<{ field: string; op: 'eq'; value: string; id_value: number | null }>
   suggestion: {
     group_id: string | null
     group_label: string | null
@@ -1432,6 +1435,14 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
         return d.map(String).sort().join(', ')
       }
 
+      const firstOf = (v: unknown): unknown => {
+        if (v instanceof Set) {
+          const arr = [...v]
+          return arr.length > 0 ? arr.sort()[0] : null
+        }
+        return v ?? null
+      }
+
       for (const inst of insts) {
         const item = String(inst.item)
         const rv = resolved.get(item)
@@ -1475,6 +1486,23 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
               }
             }
           }
+          // Filters a remediation group would need: one eq per dimension the
+          // records actually resolved a value for (first id when multi-valued
+          // — Set membership makes a single-id eq still match those records).
+          const clusterFilters: OwnerGapCluster['filters'] = []
+          for (const f of fields) {
+            const r = rv?.get(f)
+            const display = dims[f]
+            if (!display) continue
+            const rawId = r ? firstOf(r.ids) : null
+            const idNum = rawId != null && !Number.isNaN(Number(rawId)) ? Number(rawId) : null
+            clusterFilters.push({
+              field: f,
+              op: 'eq',
+              value: display.split(', ')[0],
+              id_value: idNum
+            })
+          }
           cluster = {
             state_id: sid,
             state_key: keyByState.get(sid.toUpperCase()) ?? null,
@@ -1482,6 +1510,7 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
             count: 0,
             sample_items: [],
             dims,
+            filters: clusterFilters,
             suggestion: bestSuggestion
           }
           clusters.set(clusterKey, cluster)

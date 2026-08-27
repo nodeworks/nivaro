@@ -299,7 +299,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // metadata-cache hook in routes/index.ts).
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
-    if (/owner-group|owner_group|bindings|restore/.test(req.url)) bustOwnerGroupCache()
+    if (/owner-group|owner_group|owner-cleanup|bindings|restore/.test(req.url)) bustOwnerGroupCache()
   })
 
   // ─── Template CRUD (admin only) ───────────────────────────────────────────
@@ -437,7 +437,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           users: (() => {
             // Redacted users have no meaningful name left — collapsing them
             // into one anonymous entry beats a wall of "Redacted Redacted".
-            const named: Array<{ name: string; seats: number; redacted: boolean }> = []
+            const named: Array<{
+              id: string | null
+              name: string
+              seats: number
+              redacted: boolean
+            }> = []
             let redactedPeople = 0
             let redactedSeats = 0
             for (const r of deadRows) {
@@ -451,6 +456,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
                 redactedSeats += Number(r.seats)
               } else {
                 named.push({
+                  id: String(r.id),
                   name:
                     [r.first_name, r.last_name].filter(Boolean).join(' ') ||
                     r.email ||
@@ -464,7 +470,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
             if (redactedPeople > 0) {
               named.push({
                 // Self-describing label — the client's 'redacted' micro-badge
-                // would be redundant noise on the aggregate chip.
+                // would be redundant noise on the aggregate chip. No id: the
+                // aggregate has no single person to remove.
+                id: null,
                 name: `${redactedPeople} redacted ${redactedPeople === 1 ? 'person' : 'people'}`,
                 seats: redactedSeats,
                 redacted: false
@@ -2422,6 +2430,54 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     return reply.send({ success: true })
   })
 
+  // Merge one owner group into another (the fix for duplicate filter sets):
+  // members move to the target (already-present ones skipped), the source
+  // group is deleted. Both groups must sit on the same state — merging across
+  // states would silently reassign responsibility.
+  app.post('/owner-groups/:groupId/merge-into', { preHandler: requireAdmin }, async (req, reply) => {
+    const { groupId } = req.params as { groupId: string }
+    const { target_group_id } = (req.body ?? {}) as { target_group_id?: string }
+    if (!target_group_id) return reply.code(400).send({ error: 'target_group_id is required' })
+    if (String(target_group_id) === String(groupId)) {
+      return reply.code(400).send({ error: 'A group cannot merge into itself' })
+    }
+    const [source, target] = await Promise.all([
+      db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: groupId }).first(),
+      db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: target_group_id }).first()
+    ])
+    if (!source || !target) return reply.code(404).send({ error: 'Group not found' })
+    if (String(source.state).toUpperCase() !== String(target.state).toUpperCase()) {
+      return reply.code(400).send({ error: 'Groups belong to different states — merge only covers duplicates within one state' })
+    }
+    await snapshotTemplateVersion(String(source.template), req.user?.id, 'before owner-group merge')
+
+    const [sourceMembers, targetMembers] = await Promise.all([
+      db('nivaro_pipeline_owner_group_users').where({ group: groupId }).select('user'),
+      db('nivaro_pipeline_owner_group_users').where({ group: target_group_id }).select('user')
+    ])
+    const existing = new Set(
+      (targetMembers as Array<{ user: string }>).map((m) => String(m.user).toUpperCase())
+    )
+    let moved = 0
+    for (const m of sourceMembers as Array<{ user: string }>) {
+      if (existing.has(String(m.user).toUpperCase())) continue
+      await db('nivaro_pipeline_owner_group_users').insert({ group: target_group_id, user: m.user })
+      existing.add(String(m.user).toUpperCase())
+      moved++
+    }
+    await db('nivaro_pipeline_owner_group_users').where({ group: groupId }).delete()
+    await db('nivaro_pipeline_owner_groups').where({ id: groupId }).delete()
+    await logActivity({
+      action: 'owner-group-merge',
+      collection: 'nivaro_pipeline_owner_groups',
+      item: String(target_group_id),
+      user: req.user?.id,
+      comment: `merged group ${groupId} into ${target_group_id} (${moved} member(s) moved)`,
+      req
+    })
+    return reply.send({ data: { moved, deleted_group: groupId } })
+  })
+
   app.post('/owner-groups/:groupId/users', { preHandler: requireAdmin }, async (req, reply) => {
     const { groupId } = req.params as { groupId: string }
     const body = req.body as { user: string }
@@ -3181,6 +3237,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       group_id: string
       group_name: string
       detail: string
+      /** duplicate: the surviving twin a merge should target. */
+      other_group_id?: string
+      other_group_name?: string
+      /** unknown_field: which filter field is dead + the group's full filter
+       *  set, so the client can PATCH the filter out without re-fetching. */
+      dead_field?: string
+      group_filters?: Array<{ field?: string; op?: string; value?: unknown; id_value?: unknown }>
     }> = []
     const groupLabel = (g: (typeof groups)[number]) => {
       if (g.name?.trim()) return g.name
@@ -3217,12 +3280,20 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           state: st,
           group_id: g.id,
           group_name: groupLabel(g),
+          other_group_id: String(twin.id),
+          other_group_name: groupLabel(twin),
           detail: `Identical filter set to "${groupLabel(twin)}" — merge them (both win jointly today; edits to one silently diverge)`
         })
       } else {
         sigMap.set(sig, g)
       }
-      const filters = (parseJson(g.filters) as Array<{ field?: string }> | null) ?? []
+      const filters =
+        (parseJson(g.filters) as Array<{
+          field?: string
+          op?: string
+          value?: unknown
+          id_value?: unknown
+        }> | null) ?? []
       for (const f of filters) {
         const fld = String(f.field ?? '')
         if (fld && !dimSet.has(fld.toLowerCase())) {
@@ -3231,6 +3302,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
             state: st,
             group_id: g.id,
             group_name: groupLabel(g),
+            dead_field: fld,
+            group_filters: filters,
             detail: `Filter on "${fld}" — not a configured dimension, so it never narrows anything`
           })
         }
@@ -3261,6 +3334,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // coverage-gaps then reports honestly.
   app.post('/:id/owner-cleanup', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    // Optional user_id scopes removal to ONE person's seats (per-chip ✕ in the
+    // coverage card); omitted = every suspended/redacted member, as before.
+    const { user_id } = (req.body ?? {}) as { user_id?: string }
     const groups = (await db('nivaro_pipeline_owner_groups')
       .where({ template: id })
       .select('id')) as Array<{ id: number }>
@@ -3270,6 +3346,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const deadUsers = (await db('nivaro_users')
       .where((qb) => {
         qb.where('status', 'suspended').orWhere('is_redacted', true)
+      })
+      .modify((qb) => {
+        if (user_id) qb.where('id', user_id)
       })
       .select('id', 'first_name', 'last_name', 'email')) as Array<{
       id: string
