@@ -46,7 +46,10 @@ export function matchFilterDimension(
 ): ScopeDimensionLite | null {
   const segments = field.split('.')
   if (segments.length > 1) {
-    for (const seg of segments) {
+    // LEAF-first: 'project.project_type' is a project-TYPE constraint — the
+    // deepest segment names what the filter actually pins ('project' would
+    // wrongly match the project dimension).
+    for (const seg of [...segments].reverse()) {
       const hit = dims.find(
         (d) => seg === d.name || seg === d.target_collection || `${seg}s` === d.target_collection
       )
@@ -80,19 +83,41 @@ export function rankTeamForFilters(
   const scoped = scopes && Object.keys(scopes).length > 0 ? scopes : null
   if (!scoped) return { tier: 'unscoped', mismatches: [] }
   let explicitMatch = false
+  let unverified = false
   const mismatches: string[] = []
   for (const f of filters) {
-    if (f.id_value == null) continue
     const dim = matchFilterDimension(f.field, boundCollection, dims)
     if (!dim) continue
     const vals = scoped[dim.name]
     if (!vals || vals.length === 0) continue // unrestricted on this dimension
-    const covered = vals.some((v) => String(v) === String(f.id_value))
+    // Two id sources: the resolved id_value, and the raw filter value itself
+    // (a path like project.project_type carries the target's FK id AS the
+    // value, and its id_value resolves to the wrong table entirely).
+    const rawNumeric = /^\d+$/.test(String(f.value ?? ''))
+    if (f.id_value == null && !rawNumeric) {
+      // The cell constrains a dimension this team scopes, but no comparable
+      // id exists — we cannot verify coverage, so never claim "in scope".
+      unverified = true
+      continue
+    }
+    // A numeric raw value IS the target id (the FK-column path shape) and its
+    // resolved id_value points at the wrong table — trust the value alone
+    // there; display-valued filters trust the resolved id alone.
+    const covered = rawNumeric
+      ? vals.some((v) => String(v) === String(f.value))
+      : vals.some((v) => String(v) === String(f.id_value))
     if (covered) explicitMatch = true
-    else mismatches.push(`doesn't cover ${dim.label} ${String(f.value)}`)
+    else
+      mismatches.push(
+        rawNumeric
+          ? `doesn't cover this cell's ${dim.label}`
+          : `doesn't cover ${dim.label} ${String(f.value)}`
+      )
   }
   if (mismatches.length > 0) return { tier: 'out', mismatches }
-  return { tier: explicitMatch ? 'suggested' : 'unscoped', mismatches: [] }
+  // An unverifiable constrained dimension degrades a would-be match to
+  // neutral — an honest "can't tell" beats a wrong "in scope".
+  return { tier: explicitMatch && !unverified ? 'suggested' : 'unscoped', mismatches: [] }
 }
 
 export function tierOrder(t: TeamTier): number {
