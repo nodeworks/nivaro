@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T21:09:23.279Z",
+  "generated_at": "2026-08-27T22:50:44.421Z",
   "releases": [
+    {
+      "version": "0.1.164",
+      "tag": "v0.1.164",
+      "date": "2026-08-27T18:50:39-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "shared TeamsView + 'Manage teams' slide-over on the Owner Matrix",
+              "hash": "e0e9cca2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.163",
       "tag": "v0.1.163",
-      "date": "2026-08-27T17:09:17-04:00",
+      "date": "2026-08-27T17:09:23-04:00",
       "sections": [
         {
           "label": "Fixed",
