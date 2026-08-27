@@ -684,7 +684,10 @@ export function CommentPanel({
             return (
               <span className='mt-1 w-full truncate pl-6 text-[11.5px] text-slate-400'>
                 <span className='font-medium text-slate-500 dark:text-slate-400'>{who}:</span>{' '}
-                {text}
+                {/* plain mode resolves record references to their display
+                    labels (workflows/283819 → CI20-1413) without nesting
+                    links inside the expand-toggle button. */}
+                <AutolinkedText text={text} plain />
               </span>
             )
           })()}

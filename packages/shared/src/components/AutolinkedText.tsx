@@ -36,7 +36,7 @@ function useRoomTypes(): RoomType[] {
   return data ?? []
 }
 
-function RecordToken({ token }: { token: string }) {
+function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
   const client = useNivaroClient()
   const nav = useNavigation()
   const types = useRoomTypes()
@@ -80,6 +80,7 @@ function RecordToken({ token }: { token: string }) {
   })
 
   if (!card) return <>{token}</>
+  if (plain) return <span className='font-medium'>{token}</span>
   const target = { collection: card.collection, itemId: String(card.id) }
   const open = () => {
     if (nav.openItem?.(target)) return
@@ -126,7 +127,17 @@ function renderTemplateLabel(template: string | null, row: Record<string, unknow
 
 /** "collection/id" → the record's display-template label, linked. Falls back
  *  to the raw text when the record can't be read or doesn't resolve. */
-function RecordPathToken({ collection, id, raw }: { collection: string; id: string; raw: string }) {
+function RecordPathToken({
+  collection,
+  id,
+  raw,
+  plain
+}: {
+  collection: string
+  id: string
+  raw: string
+  plain?: boolean
+}) {
   const client = useNivaroClient()
   const nav = useNavigation()
   const { data } = useQuery({
@@ -152,6 +163,7 @@ function RecordPathToken({ collection, id, raw }: { collection: string; id: stri
     staleTime: 10 * 60_000
   })
   if (!data) return <>{raw}</>
+  if (plain) return <span className='font-medium'>{data.label}</span>
   const target = { collection, itemId: id }
   const open = () => {
     if (nav.openItem?.(target)) return
@@ -170,7 +182,7 @@ function RecordPathToken({ collection, id, raw }: { collection: string; id: stri
   )
 }
 
-export function AutolinkedText({ text }: { text: string }) {
+export function AutolinkedText({ text, plain }: { text: string; plain?: boolean }) {
   const parts = useMemo(() => {
     const re = new RegExp(`${ENTITY_RE}|${PATH_RE}`, 'g')
     const out: Array<
@@ -195,9 +207,15 @@ export function AutolinkedText({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         p.kind === 'entity' ? (
-          <RecordToken key={`${p.text}-${i}`} token={p.text} />
+          <RecordToken key={`${p.text}-${i}`} token={p.text} plain={plain} />
         ) : p.kind === 'path' ? (
-          <RecordPathToken key={`${p.text}-${i}`} collection={p.collection} id={p.id} raw={p.text} />
+          <RecordPathToken
+            key={`${p.text}-${i}`}
+            collection={p.collection}
+            id={p.id}
+            raw={p.text}
+            plain={plain}
+          />
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
           <span key={i}>{p.text}</span>
