@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { selectInChunks } from '../services/db-batch.js'
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -833,38 +834,76 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   })
 
   // Delete template (cascade removes states, transitions, bindings)
+  // What a template delete would take with it — feeds the styled confirm dialog.
+  app.get('/:id/delete-impact', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const template = await db('nivaro_workflow_templates').where({ id }).first('id', 'name')
+    if (!template) return reply.code(404).send({ error: 'Not found' })
+    const count = async (q: Knex.QueryBuilder) =>
+      Number(((await q.count({ c: '*' }).first()) as { c?: number | string } | undefined)?.c ?? 0)
+    const [
+      open_instances,
+      completed_instances,
+      history,
+      states,
+      transitions,
+      bindings,
+      owner_groups,
+      sla_rules
+    ] = await Promise.all([
+      count(db('nivaro_workflow_instances').where({ template: id }).whereNull('completed_at')),
+      count(db('nivaro_workflow_instances').where({ template: id }).whereNotNull('completed_at')),
+      count(
+        db('nivaro_workflow_history').whereIn(
+          'instance',
+          db('nivaro_workflow_instances').select('id').where({ template: id })
+        )
+      ),
+      count(db('nivaro_workflow_states').where({ template: id })),
+      count(db('nivaro_workflow_transitions').where({ template: id })),
+      count(db('nivaro_workflow_bindings').where({ template: id })),
+      count(db('nivaro_pipeline_owner_groups').where({ template: id })),
+      count(db('nivaro_sla_rules').where({ workflow_template: id }))
+    ])
+    return {
+      data: {
+        name: template.name,
+        open_instances,
+        completed_instances,
+        history,
+        states,
+        transitions,
+        bindings,
+        owner_groups,
+        sla_rules
+      }
+    }
+  })
+
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    // A template with instances cannot hard-delete: instances FK the states
-    // (nivaro_workflow_instances.current_state), so the delete used to die as
-    // a raw FK 500. Answer with WHY and what to do instead.
-    const [openRow, doneRow] = await Promise.all([
-      db('nivaro_workflow_instances as i')
-        .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-        .where('s.template', id)
-        .whereNull('i.completed_at')
-        .count({ c: '*' })
-        .first(),
-      db('nivaro_workflow_instances as i')
-        .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-        .where('s.template', id)
-        .whereNotNull('i.completed_at')
-        .count({ c: '*' })
-        .first()
-    ])
-    const open = Number((openRow as { c?: number | string } | undefined)?.c ?? 0)
-    const done = Number((doneRow as { c?: number | string } | undefined)?.c ?? 0)
-    if (open > 0) {
-      return reply.code(409).send({
-        error: `${open} record(s) are still running this workflow — move them with the instance migration tool (or complete them) before deleting the template`
-      })
-    }
-    if (done > 0) {
-      return reply.code(409).send({
-        error: `${done} completed record(s) carry this workflow's history — deleting the template would orphan it. Archive the template instead (rename it, remove its bindings) if it should stop being used`
-      })
-    }
-    // Versions FK the template with NO ACTION — clear them before the delete.
+    const template = await db('nivaro_workflow_templates').where({ id }).first('id', 'name')
+    if (!template) return reply.code(404).send({ error: 'Not found' })
+
+    // Full cascade — the admin UI shows a styled impact warning before calling this.
+    // Order matters: history and instance owners FK states/instances with NO ACTION,
+    // so children go first; SLA escalation/ack rows have no FK but are rule-scoped.
+    const instanceIds = db('nivaro_workflow_instances').select('id').where({ template: id })
+    const bindingIds = db('nivaro_workflow_bindings').select('id').where({ template: id })
+    const slaRuleIds = db('nivaro_sla_rules').select('id').where({ workflow_template: id })
+
+    await db('nivaro_workflow_history').whereIn('instance', instanceIds).delete()
+    await db('nivaro_pipeline_instance_owners').whereIn('instance', instanceIds).delete()
+    await db('nivaro_workflow_instances').where({ template: id }).delete()
+    // group_users CASCADE off groups
+    await db('nivaro_pipeline_owner_groups').where({ template: id }).delete()
+    await db('nivaro_pipeline_owner_dimensions').whereIn('binding', bindingIds).delete()
+    await db('nivaro_sla_escalations').whereIn('rule', slaRuleIds).delete().catch(() => 0)
+    await db('nivaro_sla_acks').whereIn('rule', slaRuleIds).delete().catch(() => 0)
+    await db('nivaro_sla_rules').where({ workflow_template: id }).delete()
+    await db('nivaro_workflow_transitions').where({ template: id }).delete()
+    await db('nivaro_workflow_bindings').where({ template: id }).delete()
+    await db('nivaro_workflow_states').where({ template: id }).delete()
     await db('nivaro_workflow_template_versions').where({ template: id }).delete()
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
@@ -873,6 +912,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       collection: 'nivaro_workflow_templates',
       item: id,
       user: req.user?.id,
+      comment: `cascade delete "${template.name}"`,
       req
     })
     return reply.code(204).send()
@@ -987,7 +1027,46 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .where({ id: stateId })
       .first('template')
     if (!existingState) return reply.code(404).send({ error: 'Not found' })
+
+    // A state referenced by live instances or immutable history cannot be hard-deleted
+    // (FK constraints would reject it anyway — answer with the fix path, not a 500).
+    const [instanceRow, historyRow] = await Promise.all([
+      db('nivaro_workflow_instances')
+        .where({ current_state: stateId })
+        .count<{ c: number }[]>('id as c')
+        .first(),
+      db('nivaro_workflow_history')
+        .where({ from_state: stateId })
+        .orWhere({ to_state: stateId })
+        .count<{ c: number }[]>('id as c')
+        .first()
+    ])
+    const instanceCount = Number(instanceRow?.c ?? 0)
+    const historyCount = Number(historyRow?.c ?? 0)
+    if (instanceCount > 0) {
+      return reply.code(409).send({
+        error: `${instanceCount} record(s) currently sit in this state. Use the Instance migration card to move them to another state first, then delete the state.`,
+        code: 'STATE_IN_USE',
+        instances: instanceCount,
+        history: historyCount
+      })
+    }
+    if (historyCount > 0) {
+      return reply.code(409).send({
+        error: `${historyCount} history entries reference this state, so it cannot be deleted. Hide it instead (set stage visibility to "hide") to remove it from the flow while keeping history intact.`,
+        code: 'STATE_IN_HISTORY',
+        instances: 0,
+        history: historyCount
+      })
+    }
+
     await snapshotTemplateVersion(existingState.template, req.user?.id, 'before state delete')
+    // Transitions touching this state would FK-block the delete — remove them first
+    // (only reachable when no history references them, per the checks above).
+    await db('nivaro_workflow_transitions')
+      .where({ from_state: stateId })
+      .orWhere({ to_state: stateId })
+      .delete()
     const deleted = await db('nivaro_workflow_states').where({ id: stateId }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({

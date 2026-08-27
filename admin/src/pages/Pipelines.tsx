@@ -15,22 +15,14 @@ import { formatRelative } from '@/lib/utils'
 
 function PipelineRow({
   template,
-  pendingDelete,
-  isDeleting,
   onOpen,
   onExport,
-  onRequestDelete,
-  onCancelDelete,
-  onConfirmDelete
+  onRequestDelete
 }: {
   template: PipelineTemplate
-  pendingDelete: boolean
-  isDeleting: boolean
   onOpen: () => void
   onExport: () => void
   onRequestDelete: () => void
-  onCancelDelete: () => void
-  onConfirmDelete: () => void
 }) {
   const collections = template.collections ?? []
   return (
@@ -76,47 +68,137 @@ function PipelineRow({
         className='absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-1'
         onClick={(e) => e.stopPropagation()}
       >
-        {pendingDelete ? (
-          <span className='flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1 dark:border-red-900/40 dark:bg-red-900/15'>
-            <span className='text-[11px] font-medium text-red-600 dark:text-red-400'>Delete?</span>
-            <button
-              type='button'
-              disabled={isDeleting}
-              onClick={onConfirmDelete}
-              className='rounded bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50'
-            >
-              {isDeleting ? 'Deleting…' : 'Confirm'}
-            </button>
-            <button
-              type='button'
-              onClick={onCancelDelete}
-              className='rounded px-1.5 py-0.5 text-[11px] font-medium text-red-700 hover:bg-white dark:text-red-300 dark:hover:bg-muted'
-            >
-              Cancel
-            </button>
-          </span>
-        ) : (
-          <span className='hidden items-center gap-0.5 group-hover/row:flex'>
-            <button
-              type='button'
-              title='Export pipeline'
-              onClick={onExport}
-              className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
-            >
-              <Download className='h-3.5 w-3.5' />
-            </button>
-            <button
-              type='button'
-              title='Delete pipeline'
-              onClick={onRequestDelete}
-              className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
-            >
-              <Trash2 className='h-3.5 w-3.5' />
-            </button>
-          </span>
-        )}
+        <span className='hidden items-center gap-0.5 group-hover/row:flex'>
+          <button
+            type='button'
+            title='Export pipeline'
+            onClick={onExport}
+            className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
+          >
+            <Download className='h-3.5 w-3.5' />
+          </button>
+          <button
+            type='button'
+            title='Delete pipeline'
+            onClick={onRequestDelete}
+            className='rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
+          >
+            <Trash2 className='h-3.5 w-3.5' />
+          </button>
+        </span>
       </span>
     </li>
+  )
+}
+
+// ─── Delete confirm dialog ────────────────────────────────────────────────────
+// Deleting a pipeline cascades: instances, history, owner groups, SLA rules,
+// states, routes and bindings all go with it. This dialog shows exactly what
+// before the destructive click — never a browser confirm().
+
+interface DeleteImpact {
+  name: string
+  open_instances: number
+  completed_instances: number
+  history: number
+  states: number
+  transitions: number
+  bindings: number
+  owner_groups: number
+  sla_rules: number
+}
+
+function ImpactRow({ label, value }: { label: string; value: number }) {
+  if (!value) return null
+  return (
+    <div className='flex items-center justify-between py-1'>
+      <span className='text-[12px] text-slate-600 dark:text-slate-300'>{label}</span>
+      <span className='text-[12px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
+        {value.toLocaleString()}
+      </span>
+    </div>
+  )
+}
+
+function DeletePipelineDialog({
+  templateId,
+  templateName,
+  isDeleting,
+  onConfirm,
+  onCancel
+}: {
+  templateId: string
+  templateName: string
+  isDeleting: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const { data: impact, isLoading } = useQuery<DeleteImpact>({
+    queryKey: ['pipeline-delete-impact', templateId],
+    queryFn: () =>
+      api
+        .get<{ data: DeleteImpact }>(`/pipelines/${templateId}/delete-impact`)
+        .then((r) => r.data.data)
+  })
+  const totalRecords = (impact?.open_instances ?? 0) + (impact?.completed_instances ?? 0)
+  return (
+    <div
+      className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'
+      onClick={onCancel}
+    >
+      <div
+        className='w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='mb-1 flex items-center gap-2'>
+          <Trash2 className='h-4 w-4 text-red-500' />
+          <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+            Delete “{templateName}”?
+          </h2>
+        </div>
+        <p className='mb-3 text-[12px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+          This permanently removes the pipeline and everything attached to it. It cannot be undone.
+        </p>
+        {isLoading ? (
+          <div className='mb-3 space-y-2'>
+            <Skeleton className='h-3 w-2/3' />
+            <Skeleton className='h-3 w-1/2' />
+          </div>
+        ) : impact ? (
+          <div className='mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/40 dark:bg-red-900/15'>
+            {totalRecords > 0 && (
+              <p className='mb-1.5 text-[12px] font-medium text-red-700 dark:text-red-300'>
+                {totalRecords.toLocaleString()} record{totalRecords === 1 ? '' : 's'} lose their
+                workflow — {impact.open_instances.toLocaleString()} still in progress.
+              </p>
+            )}
+            <div className='divide-y divide-red-200/60 dark:divide-red-900/30'>
+              <ImpactRow label='Records in progress' value={impact.open_instances} />
+              <ImpactRow label='Completed records' value={impact.completed_instances} />
+              <ImpactRow label='History entries' value={impact.history} />
+              <ImpactRow label='States' value={impact.states} />
+              <ImpactRow label='Routes' value={impact.transitions} />
+              <ImpactRow label='Collection bindings' value={impact.bindings} />
+              <ImpactRow label='Owner groups' value={impact.owner_groups} />
+              <ImpactRow label='SLA rules' value={impact.sla_rules} />
+            </div>
+          </div>
+        ) : null}
+        <div className='flex justify-end gap-2'>
+          <Button size='sm' variant='outline' onClick={onCancel} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button
+            size='sm'
+            variant='destructive'
+            onClick={onConfirm}
+            disabled={isDeleting || isLoading}
+          >
+            {isDeleting ? 'Deleting…' : 'Delete everything'}
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -174,7 +256,10 @@ export function PipelinesPage() {
       setPendingDelete(null)
       toast.success('Pipeline deleted')
     },
-    onError: () => toast.error('Failed to delete pipeline')
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg || 'Failed to delete pipeline', { duration: 9000 })
+    }
   })
 
   return (
@@ -258,8 +343,6 @@ export function PipelinesPage() {
                 <PipelineRow
                   key={t.id}
                   template={t}
-                  pendingDelete={pendingDelete === t.id}
-                  isDeleting={deleteTemplate.isPending && pendingDelete === t.id}
                   onOpen={() => navigate(`/pipelines/${t.id}`)}
                   onExport={async () => {
                     try {
@@ -269,14 +352,26 @@ export function PipelinesPage() {
                     }
                   }}
                   onRequestDelete={() => setPendingDelete(t.id)}
-                  onCancelDelete={() => setPendingDelete(null)}
-                  onConfirmDelete={() => deleteTemplate.mutate(t.id)}
                 />
               ))}
             </ul>
           )}
         </div>
       </div>
+
+      {pendingDelete &&
+        (() => {
+          const t = templates.find((x) => x.id === pendingDelete)
+          return t ? (
+            <DeletePipelineDialog
+              templateId={t.id}
+              templateName={t.name}
+              isDeleting={deleteTemplate.isPending}
+              onConfirm={() => deleteTemplate.mutate(t.id)}
+              onCancel={() => setPendingDelete(null)}
+            />
+          ) : null
+        })()}
     </div>
   )
 }

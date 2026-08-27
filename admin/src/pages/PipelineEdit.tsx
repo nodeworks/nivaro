@@ -2573,7 +2573,10 @@ export function PipelineEditPage() {
       invalidate()
       toast.success('State deleted')
     },
-    onError: () => toast.error('Failed to delete state')
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg || 'Failed to delete state', { duration: 9000 })
+    }
   })
 
   // ─── Transition mutations ───────────────────────────────────────────────
