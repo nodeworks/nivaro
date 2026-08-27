@@ -126,10 +126,11 @@ export function UserGroupsPage() {
             <Users2 className='h-4 w-4 text-slate-400' />
             <div>
               <h1 className='text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-                User Groups
+                Teams
               </h1>
               <p className='text-[12px] text-muted-foreground'>
-                Named user sets — mention a group in comments as @its-slug to notify every member.
+                Named user sets — assign a whole team as a pipeline owner, or mention one in
+                comments as @its-slug. Roster edits apply everywhere the team is used.
               </p>
             </div>
           </div>

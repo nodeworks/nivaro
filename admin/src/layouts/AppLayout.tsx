@@ -261,7 +261,7 @@ export const navCategories: NavCategory[] = [
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: ClipboardList, label: 'Change Sets', to: '/change-sets' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
-      { icon: Users2, label: 'User Groups', to: '/user-groups' },
+      { icon: Users2, label: 'Teams', to: '/user-groups' },
       { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },

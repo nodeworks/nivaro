@@ -4619,6 +4619,19 @@ function ClusterAssignPanel({
   const defaultName = Object.values(cluster.dims).filter(Boolean).join(' · ') || 'New group'
   const [name, setName] = useState(defaultName)
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
+  const [teamIds, setTeamIds] = useState<number[]>([])
+  const { data: allTeams } = useQuery<
+    Array<{ id: number; name: string; member_count: number }>
+  >({
+    queryKey: ['user-groups-teams'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string; member_count: number }> }>(
+          get('/user-groups')
+        )
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
 
   const assign = useMutation({
     mutationFn: async () => {
@@ -4635,16 +4648,19 @@ function ClusterAssignPanel({
         )
         groupId = String(r.data.id)
       }
+      for (const tid of teamIds) {
+        await client.request(post(`/pipelines/owner-groups/${groupId}/teams`, { team_id: tid }))
+      }
       for (const u of people) {
         await client.request(post(`/pipelines/owner-groups/${groupId}/users`, { user: u.id }))
       }
-      return people.length
+      return people.length + teamIds.length
     },
     onSuccess: (n) => {
       toast.success(
         useExisting
-          ? `Added ${n} ${n === 1 ? 'person' : 'people'} to ${cluster.suggestion?.group_label}`
-          : `Created "${name.trim() || defaultName}" with ${n} ${n === 1 ? 'person' : 'people'}`
+          ? `Added ${n} owner${n === 1 ? '' : 's'} to ${cluster.suggestion?.group_label}`
+          : `Created "${name.trim() || defaultName}" with ${n} owner${n === 1 ? '' : 's'}`
       )
       void qc.invalidateQueries({ queryKey: ['owner-gaps', templateId] })
       void qc.invalidateQueries({ queryKey: ['owner-lint', templateId] })
@@ -4681,6 +4697,34 @@ function ClusterAssignPanel({
           />
         </div>
       )}
+      {(allTeams ?? []).length > 0 && (
+        <div className='flex flex-wrap items-center gap-1'>
+          <span className='mr-0.5 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+            Teams
+          </span>
+          {(allTeams ?? []).map((t) => {
+            const picked = teamIds.includes(t.id)
+            return (
+              <button
+                key={t.id}
+                type='button'
+                onClick={() =>
+                  setTeamIds(picked ? teamIds.filter((x) => x !== t.id) : [...teamIds, t.id])
+                }
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border px-2 py-px text-[11px] transition-colors',
+                  picked
+                    ? 'border-violet-300 bg-violet-100 font-medium text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300'
+                    : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                )}
+              >
+                {t.name}
+                <span className='tabular-nums text-slate-400'>{t.member_count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
       <CoveragePeoplePicker selected={people} onChange={setPeople} />
       <div className='flex items-center justify-end gap-1.5'>
         <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={onDone}>
@@ -4689,14 +4733,14 @@ function ClusterAssignPanel({
         <Button
           size='sm'
           className='h-6 px-2.5 text-[11px]'
-          disabled={people.length === 0 || assign.isPending}
+          disabled={(people.length === 0 && teamIds.length === 0) || assign.isPending}
           onClick={() => assign.mutate()}
         >
           {assign.isPending
             ? 'Assigning…'
-            : people.length === 0
+            : people.length + teamIds.length === 0
               ? 'Assign'
-              : `Assign ${people.length} ${people.length === 1 ? 'person' : 'people'}`}
+              : `Assign ${people.length + teamIds.length} owner${people.length + teamIds.length === 1 ? '' : 's'}`}
         </Button>
       </div>
     </div>

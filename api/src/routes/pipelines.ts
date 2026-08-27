@@ -2317,6 +2317,38 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       usersByGroup.set(u.group as string, arr)
     }
 
+    // Linked TEAMS per group (whole-roster assignment) — the matrix renders
+    // them as team chips beside direct members; their people resolve as
+    // owners at read time.
+    const teamLinks = (await selectInChunks(groupIds, 2000, (chunk) =>
+      db('nivaro_pipeline_owner_group_teams as ogt')
+        .join('nivaro_user_groups as t', 't.id', 'ogt.team_id')
+        .leftJoin('nivaro_user_group_members as m', 'm.group_id', 't.id')
+        .whereIn('ogt.group', chunk)
+        .groupBy('ogt.id', 'ogt.group', 't.id', 't.name', 't.slug')
+        .count('m.id as member_count')
+        .select('ogt.id as link_id', 'ogt.group', 't.id', 't.name', 't.slug')
+    )) as Array<{
+      link_id: number
+      group: string
+      id: number
+      name: string
+      slug: string
+      member_count: number | string
+    }>
+    const teamsByGroup = new Map<string, Array<Record<string, unknown>>>()
+    for (const t of teamLinks) {
+      const arr = teamsByGroup.get(String(t.group)) ?? []
+      arr.push({
+        link_id: t.link_id,
+        id: t.id,
+        name: t.name,
+        slug: t.slug,
+        member_count: Number(t.member_count ?? 0)
+      })
+      teamsByGroup.set(String(t.group), arr)
+    }
+
     const result: Record<string, unknown[]> = {}
     for (const g of groups) {
       const stateKey = g.state as string
@@ -2325,7 +2357,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         ...g,
         is_default: coerceBool(g.is_default),
         filters: parseJson(g.filters as string),
-        users: usersByGroup.get(g.id) ?? []
+        users: usersByGroup.get(g.id) ?? [],
+        teams: teamsByGroup.get(String(g.id)) ?? []
       })
     }
 
@@ -2429,6 +2462,58 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
     return reply.send({ success: true })
   })
+
+  // Link a whole TEAM (nivaro_user_groups) to an owner-group cell — its
+  // roster resolves as owners at read time, so team edits apply everywhere
+  // the team is assigned without touching individual cells.
+  app.post('/owner-groups/:groupId/teams', { preHandler: requireAdmin }, async (req, reply) => {
+    const { groupId } = req.params as { groupId: string }
+    const { team_id } = (req.body ?? {}) as { team_id?: number }
+    if (!team_id) return reply.code(400).send({ error: 'team_id is required' })
+    const [group, team] = await Promise.all([
+      db('nivaro_pipeline_owner_groups').where({ id: groupId }).first('id'),
+      db('nivaro_user_groups').where({ id: team_id }).first('id', 'name')
+    ])
+    if (!group || !team) return reply.code(404).send({ error: 'Group or team not found' })
+    const existing = await db('nivaro_pipeline_owner_group_teams')
+      .where({ group: groupId, team_id })
+      .first('id')
+    if (existing) return reply.send({ data: { id: existing.id, already_linked: true } })
+    await db('nivaro_pipeline_owner_group_teams').insert({ group: groupId, team_id })
+    const row = await db('nivaro_pipeline_owner_group_teams')
+      .where({ group: groupId, team_id })
+      .first('id')
+    await logActivity({
+      action: 'owner-group-team-add',
+      collection: 'nivaro_pipeline_owner_groups',
+      item: groupId,
+      user: req.user?.id,
+      comment: `team "${(team as { name?: string }).name}" assigned`,
+      req
+    })
+    return reply.send({ data: { id: row?.id } })
+  })
+
+  app.delete(
+    '/owner-groups/:groupId/teams/:teamId',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { groupId, teamId } = req.params as { groupId: string; teamId: string }
+      const deleted = await db('nivaro_pipeline_owner_group_teams')
+        .where({ group: groupId, team_id: Number(teamId) })
+        .delete()
+      if (!deleted) return reply.code(404).send({ error: 'Not linked' })
+      await logActivity({
+        action: 'owner-group-team-remove',
+        collection: 'nivaro_pipeline_owner_groups',
+        item: groupId,
+        user: req.user?.id,
+        comment: `team ${teamId} unassigned`,
+        req
+      })
+      return reply.send({ success: true })
+    }
+  )
 
   // Merge one owner group into another (the fix for duplicate filter sets):
   // members move to the target (already-present ones skipped), the source

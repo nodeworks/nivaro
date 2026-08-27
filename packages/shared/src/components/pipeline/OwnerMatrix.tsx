@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, Loader2, Plus, Search, X } from 'lucide-react'
+import { Check, ChevronDown, Loader2, Plus, Search, Users2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -625,6 +625,63 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     return [rowFilter, ...colFilters]
   }
 
+  // Teams (nivaro_user_groups) — assignable wholesale: the roster resolves
+  // as owners at read time, managed once on the Teams page.
+  const { data: allTeams } = useQuery<
+    Array<{ id: number; name: string; slug: string; member_count: number }>
+  >({
+    queryKey: ['user-groups-teams'],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ id: number; name: string; slug: string; member_count: number }>
+        }>(get('/user-groups'))
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+
+  const addTeamToCell = useMutation({
+    mutationFn: async ({
+      stateId,
+      rowValue,
+      teamId
+    }: {
+      stateId: string
+      rowValue: string
+      teamId: number
+    }) => {
+      const { group: existing, isInherited } = getCellResult(stateId, rowValue)
+      let group = !isInherited ? existing : null
+      if (!group) {
+        const r = await client.request<{ data: PipelineOwnerGroup }>(
+          post(`/pipelines/states/${stateId}/owner-groups`, {
+            filters: buildCellFilters(stateId, rowValue),
+            is_default: false,
+            sort: 0,
+            priority: 0
+          })
+        )
+        group = r.data
+      }
+      return client.request(post(`/pipelines/owner-groups/${group.id}/teams`, { team_id: teamId }))
+    },
+    onSuccess: () => {
+      invalidate()
+      toast.success('Team assigned')
+    },
+    onError: () => toast.error('Failed to assign team')
+  })
+
+  const removeTeam = useMutation({
+    mutationFn: ({ groupId, teamId }: { groupId: string; teamId: number }) =>
+      client.request(del(`/pipelines/owner-groups/${groupId}/teams/${teamId}`)),
+    onSuccess: () => {
+      invalidate()
+      toast.success('Team unassigned')
+    },
+    onError: () => toast.error('Failed to unassign team')
+  })
+
   const createOverride = useMutation({
     mutationFn: async ({ stateId, rowValue }: { stateId: string; rowValue: string }) => {
       const colFilterItems = colFilterItemQueries.flatMap(
@@ -832,7 +889,17 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                         tabIndex={unmetRequired.length > 0 ? -1 : 0}
                       >
                         <div className='flex flex-wrap items-center gap-1'>
-                          {users.length === 0 ? (
+                          {(group?.teams ?? []).map((t) => (
+                            <span
+                              key={`t${t.link_id}`}
+                              data-tip={`Team · ${t.member_count} member${t.member_count === 1 ? '' : 's'}`}
+                              className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[10.5px] font-semibold ${isInherited ? 'bg-slate-100 text-slate-400' : 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'}`}
+                            >
+                              <Users2 className='h-3 w-3' />
+                              {t.name}
+                            </span>
+                          ))}
+                          {users.length === 0 && (group?.teams ?? []).length === 0 ? (
                             <span className='text-slate-300 text-[11px]'>—</span>
                           ) : (
                             users.slice(0, 4).map((u) => (
@@ -937,6 +1004,27 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             </div>
                           ) : (
                             <div className='space-y-2 min-w-[200px]'>
+                              {(group?.teams ?? []).map((t) => (
+                                <div key={`t${t.link_id}`} className='flex items-center gap-1.5'>
+                                  <span className='flex flex-1 items-center gap-1.5 text-[12px] font-medium text-violet-700 dark:text-violet-300'>
+                                    <Users2 className='h-3.5 w-3.5' />
+                                    {t.name}
+                                    <span className='font-normal tabular-nums text-slate-400'>
+                                      {t.member_count} member{t.member_count === 1 ? '' : 's'}
+                                    </span>
+                                  </span>
+                                  <button
+                                    type='button'
+                                    data-tip='Unassign this team from the cell (the team itself is untouched)'
+                                    onClick={() =>
+                                      group && removeTeam.mutate({ groupId: group.id, teamId: t.id })
+                                    }
+                                    className='text-slate-400 hover:text-red-500'
+                                  >
+                                    <X className='h-3 w-3' />
+                                  </button>
+                                </div>
+                              ))}
                               {users.map((u) => (
                                 <div key={u.link_id} className='flex items-center gap-1.5'>
                                   <span className='flex-1 text-[12px] text-slate-700'>
@@ -968,6 +1056,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                 rowValue={row.value}
                                 existingUserIds={users.map((u) => u.user)}
                                 allUsers={allUsers ?? []}
+                                teams={(allTeams ?? []).filter(
+                                  (t) => !(group?.teams ?? []).some((lt) => lt.id === t.id)
+                                )}
                                 onAdd={(userId) =>
                                   addUserToCell.mutate({
                                     stateId: s.id,
@@ -975,7 +1066,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                     userId
                                   })
                                 }
-                                isPending={addUserToCell.isPending}
+                                onAddTeam={(teamId) =>
+                                  addTeamToCell.mutate({
+                                    stateId: s.id,
+                                    rowValue: row.value,
+                                    teamId
+                                  })
+                                }
+                                isPending={addUserToCell.isPending || addTeamToCell.isPending}
                               />
                               {group && (
                                 <div className='flex items-center gap-2 border-t border-slate-100 pt-2'>
@@ -1191,38 +1289,54 @@ function AddUserToCell({
   rowValue: _rowValue,
   existingUserIds,
   allUsers,
+  teams = [],
   onAdd,
+  onAddTeam,
   isPending
 }: {
   stateId: string
   rowValue: string
   existingUserIds: string[]
   allUsers: User[]
+  teams?: Array<{ id: number; name: string; member_count: number }>
   onAdd: (userId: string) => void
+  onAddTeam?: (teamId: number) => void
   isPending: boolean
 }) {
-  const [userId, setUserId] = useState('')
+  const [picked, setPicked] = useState('')
   const available = allUsers.filter((u) => !existingUserIds.includes(u.id))
   return (
     <div className='flex items-center gap-1.5'>
       <select
-        value={userId}
-        onChange={(e) => setUserId(e.target.value)}
+        value={picked}
+        onChange={(e) => setPicked(e.target.value)}
         className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
       >
-        <option value=''>Add user…</option>
-        {available.map((u) => (
-          <option key={u.id} value={u.id}>
-            {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
-          </option>
-        ))}
+        <option value=''>Add owner…</option>
+        {teams.length > 0 && onAddTeam && (
+          <optgroup label='Teams'>
+            {teams.map((t) => (
+              <option key={`team:${t.id}`} value={`team:${t.id}`}>
+                {t.name} ({t.member_count})
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label='People'>
+          {available.map((u) => (
+            <option key={u.id} value={u.id}>
+              {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+            </option>
+          ))}
+        </optgroup>
       </select>
       <button
         type='button'
-        disabled={!userId || isPending}
+        disabled={!picked || isPending}
         onClick={() => {
-          onAdd(userId)
-          setUserId('')
+          if (picked.startsWith('team:')) onAddTeam?.(Number(picked.slice(5)))
+          else onAdd(picked)
+          setPicked('')
         }}
         className='h-7 rounded bg-nvr-cyan px-2 text-[11px] font-medium text-white disabled:opacity-40'
       >

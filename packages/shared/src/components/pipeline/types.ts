@@ -159,6 +159,17 @@ export type PipelineOwnerGroup = {
   priority: number
   max_wip: number | null
   users: PipelineOwnerGroupUser[]
+  /** Whole teams (nivaro_user_groups) linked to this cell — their rosters
+   *  resolve as owners at read time. */
+  teams?: OwnerTeam[]
+}
+
+export type OwnerTeam = {
+  link_id: number
+  id: number
+  name: string
+  slug: string
+  member_count: number
 }
 
 export type PipelineOwnerGroupsMap = Record<string, PipelineOwnerGroup[]>

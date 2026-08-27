@@ -879,13 +879,32 @@ export async function resolveStateOwnersBatch(
 
   const groupUsersByGroup = new Map<string, ResolvedOwner[]>()
   if (allGroupIds.size > 0) {
-    const rows = await span('owners:group-users', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
-      database('nivaro_pipeline_owner_group_users as ogu')
-        .join('nivaro_users as u', 'ogu.user', 'u.id')
-        .whereIn('ogu.group', chunk)
-        .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-    ))
-    for (const row of rows as Array<ResolvedOwner & { group: string }>) {
+    // Direct members ∪ TEAM members (nivaro_user_groups linked via
+    // nivaro_pipeline_owner_group_teams) — teams edit in one place, every
+    // cell they sit in follows. Deduped per group: a person can be a direct
+    // member AND in a linked team.
+    const [rows, teamRows] = await Promise.all([
+      span('owners:group-users', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
+        database('nivaro_pipeline_owner_group_users as ogu')
+          .join('nivaro_users as u', 'ogu.user', 'u.id')
+          .whereIn('ogu.group', chunk)
+          .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+      )),
+      span('owners:group-teams', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
+        database('nivaro_pipeline_owner_group_teams as ogt')
+          .join('nivaro_user_group_members as m', 'm.group_id', 'ogt.team_id')
+          .join('nivaro_users as u', 'm.user', 'u.id')
+          .whereIn('ogt.group', chunk)
+          .select('ogt.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+      ))
+    ])
+    const seenByGroup = new Map<string, Set<string>>()
+    for (const row of [...rows, ...teamRows] as Array<ResolvedOwner & { group: string }>) {
+      const seen = seenByGroup.get(row.group) ?? new Set<string>()
+      const uid = String(row.id).toUpperCase()
+      if (seen.has(uid)) continue
+      seen.add(uid)
+      seenByGroup.set(row.group, seen)
       const list = groupUsersByGroup.get(row.group) ?? []
       list.push({
         id: row.id,
