@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T00:02:13.805Z",
+  "generated_at": "2026-08-27T00:32:06.262Z",
   "releases": [
+    {
+      "version": "0.1.152",
+      "tag": "v0.1.152",
+      "date": "2026-08-26T20:32:01-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "OOO runway tab (#727) + EFP threshold impact route (#728)",
+              "hash": "5bc63590"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.151",
       "tag": "v0.1.151",
-      "date": "2026-08-26T20:02:08-04:00",
+      "date": "2026-08-26T20:02:13-04:00",
       "sections": [
         {
           "label": "Added",
