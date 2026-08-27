@@ -1158,7 +1158,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                               <AddUserToCell
                                 stateId={s.id}
                                 rowValue={row.value}
-                                existingUserIds={users.map((u) => u.user)}
+                                existingUserIds={users.map((u) => String(u.user ?? u.id))}
                                 teams={(allTeams ?? []).filter(
                                   (t) => !(group?.teams ?? []).some((lt) => lt.id === t.id)
                                 )}
@@ -1441,7 +1441,9 @@ function AddUserToCell({
   const q = query.trim().toLowerCase()
   const userLabel = (u: User) =>
     [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-  const excluded = new Set(existingUserIds.map((id) => id.toUpperCase()))
+  const excluded = new Set(
+    existingUserIds.filter(Boolean).map((id) => String(id).toUpperCase())
+  )
   const filteredTeams = (q
     ? teams.filter((t) => t.name.toLowerCase().includes(q))
     : teams
