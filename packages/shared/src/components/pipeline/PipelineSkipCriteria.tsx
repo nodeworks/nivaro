@@ -2,13 +2,28 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { CollectionFieldPicker } from '@/components/field-picker'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { api, type SkipCondition, type SkipCriteria, type SkipOp } from '@/lib/api'
+import { useNivaroClient } from '../../context'
+import { get, patch, post } from '../../lib/commands'
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { Label } from '../ui/label'
+import { CollectionFieldPicker } from './FieldPicker'
+import type { SkipCondition, SkipCriteria, SkipOp } from './types'
 
 const OPS: SkipOp[] = ['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in', 'notin']
+
+type SkipImpact = {
+  evaluated: number
+  truncated: boolean
+  now_skipped: number
+  now_required: number
+  changes: Array<{
+    collection: string
+    item: string
+    proposed: boolean
+    proposed_reasons: string[]
+  }>
+}
 
 function describeCondition(c: SkipCondition): string {
   switch (c.type) {
@@ -38,6 +53,7 @@ export function PipelineSkipCriteria({
   initialCriteria: SkipCriteria | null
   collection?: string
 }) {
+  const client = useNivaroClient()
   const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [mode, setMode] = useState<'any' | 'all'>(initialCriteria?.mode ?? 'any')
@@ -51,7 +67,7 @@ export function PipelineSkipCriteria({
 
   const save = useMutation({
     mutationFn: (criteria: SkipCriteria | null) =>
-      api.patch(`/pipelines/states/${stateId}/skip`, { criteria }).then((r) => r.data),
+      client.request(patch(`/pipelines/states/${stateId}/skip`, { criteria })),
     onSuccess: (_data, criteria) => {
       invalidate()
       toast.success(criteria ? 'Skip criteria saved' : 'Skip criteria cleared')
@@ -59,31 +75,22 @@ export function PipelineSkipCriteria({
     onError: () => toast.error('Failed to save skip criteria')
   })
 
-  const [impact, setImpact] = useState<{
-    evaluated: number
-    truncated: boolean
-    now_skipped: number
-    now_required: number
-    changes: Array<{
-      collection: string
-      item: string
-      proposed: boolean
-      proposed_reasons: string[]
-    }>
-  } | null>(null)
+  const [impact, setImpact] = useState<SkipImpact | null>(null)
 
   // Dry-run the DRAFT criteria against real records in active instances —
   // "30 of 98 sampled records would newly skip this state" before Save,
   // instead of finding out from the approval queue next week.
   const preview = useMutation({
     mutationFn: () =>
-      api
-        .post(`/pipelines/${templateId}/simulate-impact`, {
-          state_id: stateId,
-          skip_criteria: conditions.length ? { mode, conditions } : null,
-          limit: 200
-        })
-        .then((r) => r.data.data),
+      client
+        .request<{ data: SkipImpact }>(
+          post(`/pipelines/${templateId}/simulate-impact`, {
+            state_id: stateId,
+            skip_criteria: conditions.length ? { mode, conditions } : null,
+            limit: 200
+          })
+        )
+        .then((r) => r.data),
     onSuccess: (data) => setImpact(data),
     onError: () => toast.error('Impact preview failed')
   })
@@ -118,9 +125,9 @@ export function PipelineSkipCriteria({
     setConditions((c) => [...c, next])
   }
 
-  const updateCondition = (idx: number, patch: Partial<SkipCondition>) =>
+  const updateCondition = (idx: number, patchValue: Partial<SkipCondition>) =>
     setConditions((c) =>
-      c.map((cond, i) => (i === idx ? ({ ...cond, ...patch } as SkipCondition) : cond))
+      c.map((cond, i) => (i === idx ? ({ ...cond, ...patchValue } as SkipCondition) : cond))
     )
 
   const removeCondition = (idx: number) => setConditions((c) => c.filter((_, i) => i !== idx))
@@ -265,10 +272,10 @@ export function PipelineSkipCriteria({
                   {cond.type === 'lookup_compare' && (
                     <div className='space-y-2'>
                       <p className='text-[11px] text-slate-400'>
-                        Skip when a matched row in another collection compares true against a
-                        record value (e.g. requisition amount below a threshold table amount).
-                        Filter values may come from a record field — plain column, dotted M2O
-                        path, or an M2M alias (matches any linked id).
+                        Skip when a matched row in another collection compares true against a record
+                        value (e.g. requisition amount below a threshold table amount). Filter values
+                        may come from a record field — plain column, dotted M2O path, or an M2M alias
+                        (matches any linked id).
                       </p>
                       <div className='grid gap-2 sm:grid-cols-2'>
                         <div className='space-y-1'>
@@ -374,9 +381,7 @@ export function PipelineSkipCriteria({
                               onChange={(e) =>
                                 updateCondition(idx, {
                                   filters: cond.filters.map((x, i) =>
-                                    i === fi
-                                      ? { ...x, value: e.target.value || undefined }
-                                      : x
+                                    i === fi ? { ...x, value: e.target.value || undefined } : x
                                   )
                                 })
                               }
@@ -532,7 +537,10 @@ export function PipelineSkipCriteria({
                 this state under the draft criteria.
               </p>
               {impact.changes.slice(0, 6).map((c) => (
-                <p key={`${c.collection}-${c.item}`} className='mt-1 text-[11px] text-muted-foreground'>
+                <p
+                  key={`${c.collection}-${c.item}`}
+                  className='mt-1 text-[11px] text-muted-foreground'
+                >
                   {c.collection}/{c.item}: {c.proposed ? 'skips' : 'requires'}
                   {c.proposed_reasons[0] ? ` — ${c.proposed_reasons[0]}` : ''}
                 </p>
@@ -568,12 +576,13 @@ function RelationValuePicker({
   value: unknown
   onChange: (value: unknown) => void
 }) {
+  const client = useNivaroClient()
   const { data, isLoading } = useQuery({
     queryKey: ['skip-relation-items', relatedCollection],
     queryFn: () =>
-      api
-        .get(`/items/${relatedCollection}`, { params: { limit: 200 } })
-        .then((r) => (r.data?.data ?? []) as RelationItem[]),
+      client
+        .request<{ data: RelationItem[] }>(get(`/items/${relatedCollection}`, { limit: 200 }))
+        .then((r) => r.data ?? []),
     enabled: !!relatedCollection
   })
 

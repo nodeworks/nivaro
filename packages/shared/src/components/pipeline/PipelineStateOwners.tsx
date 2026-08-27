@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, Settings, Trash2, UserPlus, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FieldPicker, type PickedField } from '@/components/field-picker'
-import { Button } from '@/components/ui/button'
+import { useNivaroClient } from '../../context'
+import { del, get, patch, post } from '../../lib/commands'
+import { Button } from '../ui/button'
 import {
   Command,
   CommandEmpty,
@@ -11,14 +12,21 @@ import {
   CommandInput,
   CommandItem,
   CommandList
-} from '@/components/ui/command'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, type CMSField, type CMSRelation, type PipelineOwnerGroup, type User } from '@/lib/api'
-import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from '@/lib/relations'
+} from '../ui/command'
+import { Input } from '../ui/input'
+import { Label } from '../ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { FieldPicker, type PickedField } from './FieldPicker'
+import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
+import type { CMSField, CMSRelation, PipelineOwnerGroup, User } from './types'
 
 type FilterRow = { field: string; op: string; value: string }
+
+type CollectionMeta = {
+  fields?: CMSField[]
+  relations?: CMSRelation[]
+  display_template?: string | null
+}
 
 interface PipelineStateOwnersProps {
   stateId: string
@@ -107,6 +115,7 @@ function M2OValuePicker({
   value: string
   onChange: (v: string) => void
 }) {
+  const client = useNivaroClient()
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const [inputVal, setInputVal] = useState('')
@@ -114,7 +123,10 @@ function M2OValuePicker({
 
   const { data: relMeta } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data)
+    queryFn: () =>
+      client
+        .request<{ data: CollectionMeta }>(get(`/collections/${relatedCollection}`))
+        .then((r) => r.data)
   })
   const displayTemplate: string | null = relMeta?.display_template ?? null
 
@@ -125,20 +137,20 @@ function M2OValuePicker({
   const { data: items, isLoading } = useQuery({
     queryKey: ['items-picker', relatedCollection, search],
     queryFn: () =>
-      api
-        .get<{ data: Record<string, unknown>[] }>(`/items/${relatedCollection}`, {
-          params: { limit: 30, search: search || undefined }
-        })
-        .then((r) => r.data.data),
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, { limit: 30, search: search || undefined })
+        )
+        .then((r) => r.data),
     enabled: open
   })
 
   const { data: currentItem } = useQuery({
     queryKey: ['item-single', relatedCollection, value],
     queryFn: () =>
-      api
-        .get<{ data: Record<string, unknown> }>(`/items/${relatedCollection}/${value}`)
-        .then((r) => r.data.data),
+      client
+        .request<{ data: Record<string, unknown> }>(get(`/items/${relatedCollection}/${value}`))
+        .then((r) => r.data),
     enabled: !!value
   })
 
@@ -422,13 +434,15 @@ export function PipelineStateOwners({
   templateId,
   collection
 }: PipelineStateOwnersProps) {
+  const client = useNivaroClient()
   const queryClient = useQueryClient()
   void templateId
   void stateName
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    queryFn: () =>
+      client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection
   })
 
@@ -440,17 +454,17 @@ export function PipelineStateOwners({
   const { data: groups, isLoading } = useQuery<PipelineOwnerGroup[]>({
     queryKey: groupsKey,
     queryFn: () =>
-      api
-        .get<{ data: PipelineOwnerGroup[] }>(`/pipelines/states/${stateId}/owner-groups`)
-        .then((r) => r.data.data)
+      client
+        .request<{ data: PipelineOwnerGroup[] }>(get(`/pipelines/states/${stateId}/owner-groups`))
+        .then((r) => r.data)
   })
 
   const { data: users } = useQuery<User[]>({
     queryKey: ['users', 'picker'],
     queryFn: () =>
-      api
-        .get<{ data: User[]; total: number }>('/users', { params: { limit: 200 } })
-        .then((r) => r.data.data)
+      client
+        .request<{ data: User[]; total: number }>(get('/users', { limit: 200 }))
+        .then((r) => r.data)
   })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: groupsKey })
@@ -502,15 +516,19 @@ export function PipelineStateOwners({
   const createGroup = useMutation({
     mutationFn: async () => {
       const filters = toFilterPayload(newGroupFilters)
-      const created = await api
-        .post<{ data: PipelineOwnerGroup }>(`/pipelines/states/${stateId}/owner-groups`, {
-          name: newGroupName.trim() || undefined,
-          is_default: newGroupIsDefault,
-          filters: filters.length > 0 ? filters : undefined
-        })
-        .then((r) => r.data.data)
+      const created = await client
+        .request<{ data: PipelineOwnerGroup }>(
+          post(`/pipelines/states/${stateId}/owner-groups`, {
+            name: newGroupName.trim() || undefined,
+            is_default: newGroupIsDefault,
+            filters: filters.length > 0 ? filters : undefined
+          })
+        )
+        .then((r) => r.data)
       if (newGroupUserId) {
-        await api.post(`/pipelines/owner-groups/${created.id}/users`, { user: newGroupUserId })
+        await client.request(
+          post(`/pipelines/owner-groups/${created.id}/users`, { user: newGroupUserId })
+        )
       }
     },
     onSuccess: () => {
@@ -523,11 +541,13 @@ export function PipelineStateOwners({
 
   const updateGroup = useMutation({
     mutationFn: (groupId: string) =>
-      api.patch(`/pipelines/owner-groups/${groupId}`, {
-        name: editName.trim() || null,
-        is_default: editIsDefault,
-        filters: toFilterPayload(editFilters)
-      }),
+      client.request(
+        patch(`/pipelines/owner-groups/${groupId}`, {
+          name: editName.trim() || null,
+          is_default: editIsDefault,
+          filters: toFilterPayload(editFilters)
+        })
+      ),
     onSuccess: () => {
       invalidate()
       toast.success('Group updated')
@@ -536,7 +556,7 @@ export function PipelineStateOwners({
   })
 
   const deleteGroup = useMutation({
-    mutationFn: (groupId: string) => api.delete(`/pipelines/owner-groups/${groupId}`),
+    mutationFn: (groupId: string) => client.request(del(`/pipelines/owner-groups/${groupId}`)),
     onSuccess: () => {
       invalidate()
       closeEditor()
@@ -547,7 +567,7 @@ export function PipelineStateOwners({
 
   const addUser = useMutation({
     mutationFn: ({ groupId, user }: { groupId: string; user: string }) =>
-      api.post(`/pipelines/owner-groups/${groupId}/users`, { user }),
+      client.request(post(`/pipelines/owner-groups/${groupId}/users`, { user })),
     onSuccess: () => {
       invalidate()
       setAddUserId('')
@@ -556,7 +576,7 @@ export function PipelineStateOwners({
   })
 
   const removeUser = useMutation({
-    mutationFn: (linkId: number) => api.delete(`/pipelines/owner-group-users/${linkId}`),
+    mutationFn: (linkId: number) => client.request(del(`/pipelines/owner-group-users/${linkId}`)),
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to remove user')
   })
@@ -805,9 +825,7 @@ export function PipelineStateOwners({
                 size='sm'
                 variant='ghost'
                 className='h-6 gap-1 text-[11px]'
-                onClick={() =>
-                  setNewGroupFilters((f) => [...f, { field: '', op: 'eq', value: '' }])
-                }
+                onClick={() => setNewGroupFilters((f) => [...f, { field: '', op: 'eq', value: '' }])}
               >
                 <Plus className='h-3 w-3' />
                 Add Filter

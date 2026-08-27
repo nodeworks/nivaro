@@ -2,20 +2,21 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { Check, ChevronDown, Loader2, Plus, Search, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  api,
-  type CMSRelation,
-  type PipelineBinding,
-  type PipelineOwnerDimension,
-  type PipelineOwnerGroup,
-  type PipelineOwnerGroupsMap,
-  type PipelineState,
-  type RecordFilter,
-  type User
-} from '@/lib/api'
-import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from '@/lib/relations'
+import { useNivaroClient } from '../../context'
+import { del, get, patch, post } from '../../lib/commands'
+import { Button } from '../ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
+import type {
+  CMSRelation,
+  PipelineBinding,
+  PipelineOwnerDimension,
+  PipelineOwnerGroup,
+  PipelineOwnerGroupsMap,
+  PipelineState,
+  RecordFilter,
+  User
+} from './types'
 
 // ─── Filter combobox ──────────────────────────────────────────────────────────
 
@@ -191,6 +192,7 @@ function initials(u: {
 }
 
 export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) {
+  const client = useNivaroClient()
   const allDimensions = bindings.flatMap((b) => b.dimensions ?? [])
   const rowDim = allDimensions.find((d) => d.is_row_axis) ?? null
   const colFilterDims = allDimensions.filter((d) => !d.is_row_axis)
@@ -198,16 +200,17 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const { data: groupsMap, isLoading } = useQuery<PipelineOwnerGroupsMap>({
     queryKey: ['pipeline-all-owner-groups', templateId],
     queryFn: () =>
-      api
-        .get<{ data: PipelineOwnerGroupsMap }>(`/pipelines/${templateId}/owner-groups`)
-        .then((r) => r.data.data)
+      client
+        .request<{ data: PipelineOwnerGroupsMap }>(get(`/pipelines/${templateId}/owner-groups`))
+        .then((r) => r.data)
   })
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const firstCollection = bindings[0]?.collection ?? ''
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', firstCollection],
-    queryFn: () => api.get(`/collections/${firstCollection}`).then((r) => r.data.data),
+    queryFn: () =>
+      client.request<{ data: any }>(get(`/collections/${firstCollection}`)).then((r) => r.data),
     enabled: !!firstCollection && (!!rowDim || colFilterDims.length > 0)
   })
   const colRelations: CMSRelation[] = colMeta?.relations ?? []
@@ -321,7 +324,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       }
       return {
         queryKey: ['collection-meta', baseCol],
-        queryFn: (): Promise<any> => api.get(`/collections/${baseCol}`).then((r) => r.data.data)
+        queryFn: (): Promise<any> =>
+          client.request<{ data: any }>(get(`/collections/${baseCol}`)).then((r) => r.data)
       }
     })
   })
@@ -363,11 +367,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         return {
           queryKey: ['items-picker', resolved.relatedCollection, term],
           queryFn: () =>
-            api
-              .get<{ data: Record<string, unknown>[] }>(`/items/${resolved.relatedCollection}`, {
-                params: { limit: 100, ...(term ? { search: term } : {}) }
-              })
-              .then((r) => r.data.data)
+            client
+              .request<{ data: Record<string, unknown>[] }>(
+                get(`/items/${resolved.relatedCollection}`, {
+                  limit: 100,
+                  ...(term ? { search: term } : {})
+                })
+              )
+              .then((r) => r.data)
         }
       }
       return {
@@ -390,7 +397,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       return {
         queryKey: ['collection-meta', resolved.relatedCollection],
         queryFn: (): Promise<any> =>
-          api.get(`/collections/${resolved.relatedCollection}`).then((r) => r.data.data)
+          client
+            .request<{ data: any }>(get(`/collections/${resolved.relatedCollection}`))
+            .then((r) => r.data)
       }
     })
   })
@@ -398,24 +407,25 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const { data: rowItems } = useQuery<Record<string, unknown>[]>({
     queryKey: ['items-picker', rowRelatedCollection],
     queryFn: () =>
-      api
-        .get<{ data: Record<string, unknown>[] }>(`/items/${rowRelatedCollection}`, {
-          params: { limit: 100 }
-        })
-        .then((r) => r.data.data),
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${rowRelatedCollection}`, { limit: 100 })
+        )
+        .then((r) => r.data),
     enabled: !!rowRelatedCollection
   })
 
   const { data: rowRelMeta } = useQuery({
     queryKey: ['collection-meta', rowRelatedCollection],
-    queryFn: () => api.get(`/collections/${rowRelatedCollection}`).then((r) => r.data.data),
+    queryFn: () =>
+      client.request<{ data: any }>(get(`/collections/${rowRelatedCollection}`)).then((r) => r.data),
     enabled: !!rowRelatedCollection && !rowSubField
   })
 
   const { data: allUsers } = useQuery<User[]>({
     queryKey: ['users', 'picker'],
     queryFn: () =>
-      api.get<{ data: User[] }>('/users', { params: { limit: 200 } }).then((r) => r.data.data)
+      client.request<{ data: User[] }>(get('/users', { limit: 200 })).then((r) => r.data)
   })
 
   const [expandedCell, setExpandedCell] = useState<{ stateId: string; rowValue: string } | null>(
@@ -574,13 +584,17 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
             id_value: getIdValue(d, filterValues[d.id], undefined, colFilterItems)
           }))
         const filters: RecordFilter[] = [rowFilter, ...colFilters]
-        const r = await api.post<{ data: PipelineOwnerGroup }>(
-          `/pipelines/states/${stateId}/owner-groups`,
-          { filters, is_default: false, sort: 0, priority: 0 }
+        const r = await client.request<{ data: PipelineOwnerGroup }>(
+          post(`/pipelines/states/${stateId}/owner-groups`, {
+            filters,
+            is_default: false,
+            sort: 0,
+            priority: 0
+          })
         )
-        group = r.data.data
+        group = r.data
       }
-      return api.post(`/pipelines/owner-groups/${group.id}/users`, { user: userId })
+      return client.request(post(`/pipelines/owner-groups/${group.id}/users`, { user: userId }))
     },
     onSuccess: () => {
       invalidate()
@@ -631,12 +645,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           id_value: getIdValue(d, filterValues[d.id], undefined, colFilterItems)
         }))
       const filters: RecordFilter[] = [rowFilter, ...colFilters]
-      return api.post<{ data: PipelineOwnerGroup }>(`/pipelines/states/${stateId}/owner-groups`, {
-        filters,
-        is_default: false,
-        sort: 0,
-        priority: 0
-      })
+      return client.request<{ data: PipelineOwnerGroup }>(
+        post(`/pipelines/states/${stateId}/owner-groups`, {
+          filters,
+          is_default: false,
+          sort: 0,
+          priority: 0
+        })
+      )
     },
     onSuccess: () => {
       invalidate()
@@ -647,20 +663,20 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
 
   const updatePriority = useMutation({
     mutationFn: ({ groupId, priority }: { groupId: string; priority: number }) =>
-      api.patch(`/pipelines/owner-groups/${groupId}`, { priority }),
+      client.request(patch(`/pipelines/owner-groups/${groupId}`, { priority })),
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update priority')
   })
 
   const updateMaxWip = useMutation({
     mutationFn: ({ groupId, maxWip }: { groupId: string; maxWip: number | null }) =>
-      api.patch(`/pipelines/owner-groups/${groupId}`, { max_wip: maxWip }),
+      client.request(patch(`/pipelines/owner-groups/${groupId}`, { max_wip: maxWip })),
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update WIP limit')
   })
 
   const removeUser = useMutation({
-    mutationFn: (linkId: number) => api.delete(`/pipelines/owner-group-users/${linkId}`),
+    mutationFn: (linkId: number) => client.request(del(`/pipelines/owner-group-users/${linkId}`)),
     onSuccess: () => {
       invalidate()
       toast.success('Owner removed')
@@ -1117,6 +1133,7 @@ function CellImpactHint({
   stateId: string
   buildFilters: () => RecordFilter[]
 }) {
+  const client = useNivaroClient()
   const [result, setResult] = useState<{
     matched: number
     total_in_state: number
@@ -1126,10 +1143,19 @@ function CellImpactHint({
   const check = async () => {
     setLoading(true)
     try {
-      const r = await api.post<{
-        data: { matched: number; total_in_state: number; sample: Array<{ item: string; label: string }> }
-      }>(`/pipelines/${templateId}/owner-impact`, { state_id: stateId, filters: buildFilters() })
-      setResult(r.data.data)
+      const r = await client.request<{
+        data: {
+          matched: number
+          total_in_state: number
+          sample: Array<{ item: string; label: string }>
+        }
+      }>(
+        post(`/pipelines/${templateId}/owner-impact`, {
+          state_id: stateId,
+          filters: buildFilters()
+        })
+      )
+      setResult(r.data)
     } catch {
       setResult(null)
     } finally {
@@ -1221,6 +1247,7 @@ function InlineM2OPicker({
   label: string
   onChange: (value: string, label: string) => void
 }) {
+  const client = useNivaroClient()
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1237,11 +1264,11 @@ function InlineM2OPicker({
   const { data: items, isLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: ['items-picker', relatedCollection, search],
     queryFn: () =>
-      api
-        .get<{ data: Record<string, unknown>[] }>(`/items/${relatedCollection}`, {
-          params: { limit: 30, search: search || undefined }
-        })
-        .then((r) => r.data.data),
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, { limit: 30, search: search || undefined })
+        )
+        .then((r) => r.data),
     enabled: open
   })
 
@@ -1292,7 +1319,6 @@ function InlineM2OPicker({
   )
 }
 
-
 // ─── Bulk matrix membership (#387) ───────────────────────────────────────────
 function BulkMembershipPanel({
   templateId,
@@ -1307,6 +1333,7 @@ function BulkMembershipPanel({
   onClose: () => void
   onDone: () => void
 }) {
+  const client = useNivaroClient()
   const [userQuery, setUserQuery] = useState('')
   const [userId, setUserId] = useState('')
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -1315,7 +1342,17 @@ function BulkMembershipPanel({
     Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
   >({
     queryKey: ['bulk-matrix-users'],
-    queryFn: () => api.get('/users?limit=500').then((r) => r.data.data)
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string
+          }>
+        }>(get('/users', { limit: 500 }))
+        .then((r) => r.data)
   })
   const filteredUsers = users
     .filter((u) =>
@@ -1326,13 +1363,15 @@ function BulkMembershipPanel({
     .slice(0, 8)
   const submit = () => {
     setBusy(true)
-    void api
-      .post(`/pipelines/${templateId}/owner-groups/bulk-add`, {
-        user_id: userId,
-        group_ids: [...selected]
-      })
+    void client
+      .request<{ data: { added: number } }>(
+        post(`/pipelines/${templateId}/owner-groups/bulk-add`, {
+          user_id: userId,
+          group_ids: [...selected]
+        })
+      )
       .then((r) => {
-        toast.success(`Added to ${r.data.data.added} group(s)`)
+        toast.success(`Added to ${r.data.added} group(s)`)
         onDone()
       })
       .catch(() => toast.error('Bulk add failed'))
