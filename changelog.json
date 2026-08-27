@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T15:29:05.949Z",
+  "generated_at": "2026-08-27T17:40:53.839Z",
   "releases": [
+    {
+      "version": "0.1.162",
+      "tag": "v0.1.162",
+      "date": "2026-08-27T13:40:47-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "scoped teams — dimension allowances rank every owner picker",
+              "hash": "e41a340d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.161",
       "tag": "v0.1.161",
-      "date": "2026-08-27T11:29:01-04:00",
+      "date": "2026-08-27T11:29:05-04:00",
       "sections": [
         {
           "label": "Fixed",
