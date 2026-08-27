@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T14:16:25.475Z",
+  "generated_at": "2026-08-27T14:36:02.776Z",
   "releases": [
+    {
+      "version": "0.1.156",
+      "tag": "v0.1.156",
+      "date": "2026-08-27T10:35:56-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "teams as owners — assign a whole roster to an owner-group cell",
+              "hash": "bd972fef"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.155",
       "tag": "v0.1.155",
-      "date": "2026-08-27T10:16:17-04:00",
+      "date": "2026-08-27T10:16:25-04:00",
       "sections": [
         {
           "label": "Added",
