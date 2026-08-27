@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { UserX } from 'lucide-react'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
@@ -70,13 +71,37 @@ function Tile({ label, value, tone }: { label: string; value: string; tone?: str
  * of office with no working delegate — before "why is this still in review"
  * gets asked three weeks late.
  */
+interface RunwayEntry {
+  user_id: string
+  name: string
+  ooo_start: string | null
+  ooo_end: string | null
+  currently_out: boolean
+  delegate_name: string | null
+  delegate_ok: boolean
+  group_seats: number
+  states: string[]
+  pending_estimate: number
+}
+
 export function CoverageGapsPage() {
+  const [tab, setTab] = useState<'now' | 'runway'>('now')
   const { data, isLoading, dataUpdatedAt, refetch, isFetching } = useQuery<Report>({
     queryKey: ['coverage-gaps'],
     queryFn: () => api.get<{ data: Report }>('/coverage-gaps').then((r) => r.data.data),
+    enabled: tab === 'now',
     // Availability flips with every status change; computed live server-side,
     // so a manual refresh answers "did my fix take" immediately.
     staleTime: 60_000
+  })
+  const runway = useQuery<{ days: number; entries: RunwayEntry[] }>({
+    queryKey: ['coverage-runway'],
+    queryFn: () =>
+      api
+        .get<{ data: { days: number; entries: RunwayEntry[] } }>('/coverage-gaps/runway?days=21')
+        .then((r) => r.data.data),
+    enabled: tab === 'runway',
+    staleTime: 5 * 60_000
   })
 
   return (
@@ -87,12 +112,35 @@ export function CoverageGapsPage() {
           <div>
             <h1 className='text-lg font-semibold'>Coverage Gaps</h1>
             <p className='text-[11px] text-muted-foreground'>
-              Open records every owner of which is suspended, redacted, or out with no delegate.
+              {tab === 'now'
+                ? 'Open records every owner of which is suspended, redacted, or out with no delegate.'
+                : 'Scheduled absences over the next three weeks vs the approval load they touch — the gap BEFORE it happens.'}
             </p>
           </div>
         </div>
         <div className='flex items-center gap-3'>
-          {dataUpdatedAt > 0 && (
+          <div className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {(
+              [
+                ['now', 'Right now'],
+                ['runway', 'Runway']
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type='button'
+                onClick={() => setTab(key)}
+                className={
+                  tab === key
+                    ? 'rounded bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'rounded px-2.5 py-1 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tab === 'now' && dataUpdatedAt > 0 && (
             <span className='text-[11px] text-muted-foreground'>
               Checked {new Date(dataUpdatedAt).toLocaleTimeString()}
             </span>
@@ -109,7 +157,13 @@ export function CoverageGapsPage() {
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
-        {isLoading || !data ? (
+        {tab === 'runway' ? (
+          <RunwayTab
+            entries={runway.data?.entries ?? []}
+            days={runway.data?.days ?? 21}
+            loading={runway.isLoading}
+          />
+        ) : isLoading || !data ? (
           <div className='grid grid-cols-3 gap-4'>
             {[1, 2, 3].map((i) => (
               <div
@@ -220,6 +274,116 @@ export function CoverageGapsPage() {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+
+// ─── OOO runway (#727) ───────────────────────────────────────────────────────
+
+function RunwayTab({
+  entries,
+  days,
+  loading
+}: {
+  entries: RunwayEntry[]
+  days: number
+  loading: boolean
+}) {
+  if (loading) {
+    return (
+      <div className='space-y-2'>
+        {[1, 2, 3].map((i) => (
+          <div key={i} className='h-14 animate-pulse rounded-lg bg-[hsl(var(--nvr-skeleton))]' />
+        ))}
+      </div>
+    )
+  }
+  if (entries.length === 0) {
+    return (
+      <p className='flex items-center gap-1.5 text-[13px] font-medium text-emerald-600 dark:text-emerald-400'>
+        <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+        Nobody who holds owner seats is scheduled out over the next {days} days.
+      </p>
+    )
+  }
+  const risky = entries.filter((e) => !e.delegate_ok && e.pending_estimate > 0)
+  const fmtDay = (v: string | null) =>
+    v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'
+  return (
+    <div className='max-w-[900px] space-y-3'>
+      {risky.length > 0 && (
+        <p className='text-[12.5px] text-slate-700 dark:text-foreground'>
+          <span className='font-semibold text-red-600 dark:text-red-400'>{risky.length}</span>{' '}
+          upcoming absence{risky.length === 1 ? '' : 's'} with real load and{' '}
+          <span className='font-medium'>no working delegate</span> — set delegates before these
+          windows open.
+        </p>
+      )}
+      <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+        <table className='w-full text-[12.5px]'>
+          <thead>
+            <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border/60'>
+              <th className='px-3 py-2 font-semibold'>Person</th>
+              <th className='px-3 py-2 font-semibold'>Out</th>
+              <th className='px-3 py-2 font-semibold'>Delegate</th>
+              <th className='px-3 py-2 text-right font-semibold'>Seats</th>
+              <th className='px-3 py-2 text-right font-semibold'>Load touched</th>
+              <th className='px-3 py-2 font-semibold'>Covers</th>
+            </tr>
+          </thead>
+          <tbody className='divide-y divide-slate-100 tabular-nums dark:divide-border/60'>
+            {entries.map((e) => {
+              const risk = !e.delegate_ok && e.pending_estimate > 0
+              return (
+                <tr key={e.user_id} className={risk ? 'bg-red-50/50 dark:bg-red-500/5' : undefined}>
+                  <td className='px-3 py-2 font-medium text-slate-800 dark:text-foreground'>
+                    {e.name}
+                    {e.currently_out && (
+                      <span className='ml-1.5 rounded bg-amber-100 px-1 py-px text-[9.5px] font-semibold uppercase text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'>
+                        out now
+                      </span>
+                    )}
+                  </td>
+                  <td className='whitespace-nowrap px-3 py-2 text-slate-600 dark:text-muted-foreground'>
+                    {fmtDay(e.ooo_start)} → {fmtDay(e.ooo_end)}
+                  </td>
+                  <td className='px-3 py-2'>
+                    {e.delegate_ok ? (
+                      <span className='text-emerald-600 dark:text-emerald-400'>
+                        {e.delegate_name}
+                      </span>
+                    ) : e.delegate_name ? (
+                      <span
+                        className='text-red-600 dark:text-red-400'
+                        title='Delegate is suspended, expired, or also out'
+                      >
+                        {e.delegate_name} (unavailable)
+                      </span>
+                    ) : (
+                      <span className='text-red-600 dark:text-red-400'>none</span>
+                    )}
+                  </td>
+                  <td className='px-3 py-2 text-right text-slate-600 dark:text-muted-foreground'>
+                    {e.group_seats.toLocaleString()}
+                  </td>
+                  <td className='px-3 py-2 text-right font-semibold text-slate-800 dark:text-foreground'>
+                    {e.pending_estimate.toLocaleString()}
+                  </td>
+                  <td className='max-w-[240px] truncate px-3 py-2 text-[11.5px] text-slate-500 dark:text-muted-foreground' title={e.states.join(', ')}>
+                    {e.states.join(', ') || '—'}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className='text-[11px] text-slate-400'>
+        “Load touched” counts open records currently sitting in states this person helps cover — an
+        estimate of exposure, not exact ownership. Delegates are set from each person's Profile or
+        the admin Users page.
+      </p>
     </div>
   )
 }

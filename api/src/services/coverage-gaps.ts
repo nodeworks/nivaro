@@ -236,3 +236,147 @@ export async function buildCoverageGapReport(): Promise<CoverageGapReport> {
       .sort((a, b) => b.blocked_count - a.blocked_count)
   }
 }
+
+// ─── OOO runway (#727, Rob 2026-08-26) ───────────────────────────────────────
+// Forward-looking coverage: who is scheduled out over the next N days, whether
+// their delegate can actually work, and roughly how much approval load sits
+// in states they help cover. "Next week 3 Zone-2 approvers are out with no
+// delegates" BEFORE it happens — coverage-gaps only sees the present.
+
+export interface RunwayEntry {
+  user_id: string
+  name: string
+  ooo_start: string | null
+  ooo_end: string | null
+  currently_out: boolean
+  delegate_name: string | null
+  /** Delegate exists AND is active AND is not themselves out for an
+   *  overlapping window. */
+  delegate_ok: boolean
+  group_seats: number
+  states: string[]
+  /** Open instances currently sitting in states this person helps cover —
+   *  an honest approximation of the load their absence touches (full owner
+   *  resolution over every instance would take minutes, not seconds). */
+  pending_estimate: number
+}
+
+export async function buildOooRunway(days = 21): Promise<RunwayEntry[]> {
+  const horizon = new Date(Date.now() + days * 24 * 3600 * 1000)
+  const now = new Date()
+
+  const users = (await db('nivaro_users as u')
+    .leftJoin('nivaro_users as d', 'd.id', 'u.delegate_id')
+    .where((qb) => {
+      qb
+        // Scheduled window touching [now, horizon]
+        .where((w) => {
+          w.whereNotNull('u.ooo_start')
+            .where('u.ooo_start', '<=', horizon)
+            .where((e) => {
+              e.whereNull('u.ooo_end').orWhere('u.ooo_end', '>=', now)
+            })
+        })
+        // Or already out right now with no schedule
+        .orWhere('u.is_out_of_office', true)
+    })
+    .where((qb) => {
+      qb.whereNull('u.status').orWhereNot('u.status', 'suspended')
+    })
+    .select(
+      'u.id',
+      'u.first_name',
+      'u.last_name',
+      'u.email',
+      'u.ooo_start',
+      'u.ooo_end',
+      'u.is_out_of_office',
+      'u.delegate_id',
+      'u.delegate_expires_at',
+      'd.first_name as d_first',
+      'd.last_name as d_last',
+      'd.status as d_status',
+      'd.is_out_of_office as d_ooo'
+    )) as Array<Record<string, unknown>>
+  if (users.length === 0) return []
+
+  const userIds = users.map((u) => String(u.id))
+
+  // Owner-group seats + the states those groups cover.
+  const seatRows = (await db('nivaro_pipeline_owner_group_users as gu')
+    .join('nivaro_pipeline_owner_groups as g', 'g.id', 'gu.group')
+    .leftJoin('nivaro_workflow_states as s', 's.id', 'g.state')
+    .whereIn('gu.user', userIds)
+    .select('gu.user', 'g.id as group_id', 's.id as state_id', 's.label as state_label')) as Array<{
+    user: string
+    group_id: number
+    state_id: string | null
+    state_label: string | null
+  }>
+
+  const statesByUser = new Map<string, Set<string>>()
+  const stateIdsByUser = new Map<string, Set<string>>()
+  const seatsByUser = new Map<string, number>()
+  for (const r of seatRows) {
+    const key = String(r.user).toUpperCase()
+    seatsByUser.set(key, (seatsByUser.get(key) ?? 0) + 1)
+    if (r.state_label) {
+      const set = statesByUser.get(key) ?? new Set<string>()
+      set.add(r.state_label)
+      statesByUser.set(key, set)
+    }
+    if (r.state_id) {
+      const ids = stateIdsByUser.get(key) ?? new Set<string>()
+      ids.add(String(r.state_id).toUpperCase())
+      stateIdsByUser.set(key, ids)
+    }
+  }
+
+  // Open-instance counts per state, one grouped query.
+  const allStateIds = [...new Set([...stateIdsByUser.values()].flatMap((s) => [...s]))]
+  const countByState = new Map<string, number>()
+  if (allStateIds.length > 0) {
+    const counts = (await db('nivaro_workflow_instances')
+      .whereNull('completed_at')
+      .whereIn('current_state', allStateIds)
+      .groupBy('current_state')
+      .count('id as c')
+      .select('current_state')) as Array<{ current_state: string; c: number }>
+    for (const c of counts) countByState.set(String(c.current_state).toUpperCase(), Number(c.c))
+  }
+
+  return users
+    .map((u) => {
+      const key = String(u.id).toUpperCase()
+      const stateIds = stateIdsByUser.get(key) ?? new Set<string>()
+      const delegateExpired =
+        u.delegate_expires_at != null && new Date(String(u.delegate_expires_at)) < now
+      const delegateOk =
+        !!u.delegate_id &&
+        !delegateExpired &&
+        u.d_status !== 'suspended' &&
+        !(u.d_ooo === true || u.d_ooo === 1)
+      return {
+        user_id: String(u.id),
+        name:
+          [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? u.id),
+        ooo_start: u.ooo_start ? new Date(String(u.ooo_start)).toISOString() : null,
+        ooo_end: u.ooo_end ? new Date(String(u.ooo_end)).toISOString() : null,
+        currently_out: u.is_out_of_office === true || u.is_out_of_office === 1,
+        delegate_name: u.delegate_id
+          ? [u.d_first, u.d_last].filter(Boolean).join(' ') || 'delegate'
+          : null,
+        delegate_ok: delegateOk,
+        group_seats: seatsByUser.get(key) ?? 0,
+        states: [...(statesByUser.get(key) ?? [])].slice(0, 6),
+        pending_estimate: [...stateIds].reduce((sum, sid) => sum + (countByState.get(sid) ?? 0), 0)
+      }
+    })
+    .filter((e) => e.group_seats > 0 || e.currently_out)
+    .sort((a, b) => {
+      // Risky first: no working delegate with real load, then by start date.
+      const risk = (e: RunwayEntry) => (!e.delegate_ok && e.pending_estimate > 0 ? 0 : 1)
+      if (risk(a) !== risk(b)) return risk(a) - risk(b)
+      return String(a.ooo_start ?? '').localeCompare(String(b.ooo_start ?? ''))
+    })
+}
