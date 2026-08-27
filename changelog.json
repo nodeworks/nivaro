@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T15:15:38.129Z",
+  "generated_at": "2026-08-27T15:29:05.949Z",
   "releases": [
+    {
+      "version": "0.1.161",
+      "tag": "v0.1.161",
+      "date": "2026-08-27T11:29:01-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "AddUserToCell crashed on undefined user ids",
+              "hash": "a99e0c12"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.160",
       "tag": "v0.1.160",
-      "date": "2026-08-27T11:15:31-04:00",
+      "date": "2026-08-27T11:15:38-04:00",
       "sections": [
         {
           "label": "Fixed",
