@@ -83,6 +83,8 @@ export type User = {
   last_name: string | null
   email: string
   role: string | null
+  title?: string | null
+  department?: string | null
   status: string
   static_token: string | null
   last_access: string | null

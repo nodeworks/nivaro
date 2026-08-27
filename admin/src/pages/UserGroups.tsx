@@ -43,6 +43,16 @@ function memberLabel(u: { first_name: string | null; last_name: string | null; e
   return name || u.email
 }
 
+function memberInitials(u: {
+  first_name: string | null
+  last_name: string | null
+  email: string
+}) {
+  const parts = [u.first_name, u.last_name].filter(Boolean) as string[]
+  if (parts.length) return parts.map((p) => p[0]).join('').toUpperCase()
+  return u.email[0].toUpperCase()
+}
+
 /** Popover + Command user search — never a native select. */
 function AddMemberPicker({
   excludeIds,
@@ -56,10 +66,26 @@ function AddMemberPicker({
   const [open, setOpen] = useState(false)
   const { data: users } = useQuery<User[]>({
     queryKey: ['users', 'combobox'],
-    queryFn: () => api.get<{ data: User[] }>('/users?limit=200').then((r) => r.data.data),
+    queryFn: () => api.get<{ data: User[] }>('/users?limit=1000').then((r) => r.data.data),
     enabled: open
   })
-  const options = (users ?? []).filter((u) => !excludeIds.has(u.id))
+  // Role id → name, for the identity line when a person has no title.
+  const { data: roleNames } = useQuery<Map<string, string>>({
+    queryKey: ['roles-name-map'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; name: string }> }>('/roles')
+        .then((r) => new Map(r.data.data.map((x) => [String(x.id).toUpperCase(), x.name]))),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
+  const secondary = (u: User) => {
+    const role = u.role ? (roleNames?.get(String(u.role).toUpperCase()) ?? null) : null
+    return [u.title || role, u.department].filter(Boolean).join(' · ') || u.email
+  }
+  const options = (users ?? [])
+    .filter((u) => !excludeIds.has(u.id))
+    .sort((a, b) => memberLabel(a).localeCompare(memberLabel(b), undefined, { sensitivity: 'base' }))
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -73,26 +99,31 @@ function AddMemberPicker({
           <UserPlus className='h-3.5 w-3.5' /> Add member
         </Button>
       </PopoverTrigger>
-      <PopoverContent className='w-[320px] p-0' align='start'>
-        <Command>
-          <CommandInput placeholder='Search users…' className='h-9 text-[13px]' />
+      <PopoverContent className='w-[420px] p-0' align='start'>
+        <Command shouldFilter={true}>
+          <CommandInput placeholder='Search people…' className='h-9 text-[13px]' />
           <CommandList>
             <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-              No users found
+              No people found
             </CommandEmpty>
             <CommandGroup>
               {options.map((u) => (
                 <CommandItem
                   key={u.id}
-                  value={`${u.first_name ?? ''} ${u.last_name ?? ''} ${u.email}`}
+                  value={`${memberLabel(u)} ${u.email} ${secondary(u)}`}
                   onSelect={() => {
                     onPick(u.id)
                     setOpen(false)
                   }}
-                  className='text-[13px]'
+                  className='gap-2 whitespace-nowrap text-[13px]'
                 >
-                  {memberLabel(u)}
-                  <span className='ml-1 truncate text-[11px] text-muted-foreground'>{u.email}</span>
+                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
+                    {memberInitials(u)}
+                  </span>
+                  <span className='min-w-0 flex-1 truncate font-medium'>{memberLabel(u)}</span>
+                  <span className='max-w-[55%] shrink-0 truncate text-[11px] text-muted-foreground'>
+                    {secondary(u)}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>
