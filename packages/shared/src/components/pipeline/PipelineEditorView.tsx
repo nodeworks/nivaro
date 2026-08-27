@@ -48,6 +48,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { rankTeamForFilters, tierOrder, useScopeDimensions } from './teamScopes'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
 import { Badge } from '../ui/badge'
@@ -4631,18 +4632,41 @@ function ClusterAssignPanel({
   const [name, setName] = useState(defaultName)
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
   const [teamIds, setTeamIds] = useState<number[]>([])
+  const scopeDims = useScopeDimensions()
   const { data: allTeams } = useQuery<
-    Array<{ id: number; name: string; member_count: number }>
+    Array<{
+      id: number
+      name: string
+      member_count: number
+      scopes?: Record<string, Array<string | number>>
+    }>
   >({
     queryKey: ['user-groups-teams'],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; name: string; member_count: number }> }>(
-          get('/user-groups')
-        )
+        .request<{
+          data: Array<{
+            id: number
+            name: string
+            member_count: number
+            scopes?: Record<string, Array<string | number>>
+          }>
+        }>(get('/user-groups'))
         .then((r) => r.data),
     staleTime: 60_000
   })
+  // Rank teams by the cluster's dimension values — a team scoped to exactly
+  // this combination is the obvious staffing answer, so it leads.
+  const rankedTeams = (allTeams ?? [])
+    .map((t) => ({
+      ...t,
+      rank: rankTeamForFilters(t.scopes, cluster.filters, scopeDims, cluster.collection)
+    }))
+    .sort(
+      (a, b) =>
+        tierOrder(a.rank.tier) - tierOrder(b.rank.tier) ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    )
 
   const assign = useMutation({
     mutationFn: async () => {
@@ -4708,17 +4732,24 @@ function ClusterAssignPanel({
           />
         </div>
       )}
-      {(allTeams ?? []).length > 0 && (
+      {rankedTeams.length > 0 && (
         <div className='flex flex-wrap items-center gap-1'>
           <span className='mr-0.5 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
             Teams
           </span>
-          {(allTeams ?? []).map((t) => {
+          {rankedTeams.map((t) => {
             const picked = teamIds.includes(t.id)
             return (
               <button
                 key={t.id}
                 type='button'
+                data-tip={
+                  t.rank.tier === 'out'
+                    ? `Outside this combination — ${t.rank.mismatches.join('; ')}. Picking it is an override.`
+                    : t.rank.tier === 'suggested'
+                      ? 'Scoped to this combination'
+                      : undefined
+                }
                 onClick={() =>
                   setTeamIds(picked ? teamIds.filter((x) => x !== t.id) : [...teamIds, t.id])
                 }
@@ -4726,9 +4757,14 @@ function ClusterAssignPanel({
                   'inline-flex items-center gap-1 rounded-full border px-2 py-px text-[11px] transition-colors',
                   picked
                     ? 'border-violet-300 bg-violet-100 font-medium text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300'
-                    : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                    : t.rank.tier === 'out'
+                      ? 'border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-400 dark:hover:bg-amber-500/10'
+                      : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
                 )}
               >
+                {t.rank.tier === 'suggested' && (
+                  <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+                )}
                 {t.name}
                 <span className='tabular-nums text-slate-400'>{t.member_count}</span>
               </button>

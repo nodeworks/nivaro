@@ -173,6 +173,8 @@ export type OwnerTeam = {
   name: string
   slug: string
   member_count: number
+  /** {dimension: target ids[]} — empty/absent = unscoped. */
+  scopes?: Record<string, Array<string | number>>
 }
 
 export type PipelineOwnerGroupsMap = Record<string, PipelineOwnerGroup[]>

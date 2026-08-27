@@ -2,6 +2,36 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { listUsers } from '../services/users.js'
+
+function parseJson(val: unknown): unknown {
+  if (val == null) return null
+  if (typeof val !== 'string') return val
+  try {
+    return JSON.parse(val)
+  } catch {
+    return null
+  }
+}
+
+/** team_id → { dimension: values[] } for a set of teams, one query. */
+async function loadTeamScopes(teamIds: number[]): Promise<Map<number, Record<string, unknown[]>>> {
+  const out = new Map<number, Record<string, unknown[]>>()
+  if (teamIds.length === 0) return out
+  const rows = (await db('nivaro_team_scopes').whereIn('team_id', teamIds).select(
+    'team_id',
+    'dimension',
+    'values'
+  )) as Array<{ team_id: number; dimension: string; values: string }>
+  for (const r of rows) {
+    const vals = parseJson(r.values)
+    if (!Array.isArray(vals) || vals.length === 0) continue
+    const entry = out.get(r.team_id) ?? {}
+    entry[r.dimension] = vals
+    out.set(r.team_id, entry)
+  }
+  return out
+}
 
 /**
  * User groups (#682) — named user sets (migration 278: nivaro_user_groups +
@@ -38,10 +68,154 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       .orderBy('g.name')
       .select('g.id', 'g.name', 'g.slug', 'g.description', 'g.created_by', 'g.created_at')
       .count('m.id as member_count')) as Array<GroupRow & { member_count: number | string }>
+    const scopes = await loadTeamScopes(rows.map((r) => r.id))
     return reply.send({
-      data: rows.map((r) => ({ ...r, member_count: Number(r.member_count ?? 0) }))
+      data: rows.map((r) => ({
+        ...r,
+        member_count: Number(r.member_count ?? 0),
+        scopes: scopes.get(r.id) ?? {}
+      }))
     })
   })
+
+  // ─── Team scopes (scoped teams) ───────────────────────────────────────────
+  // Optional per-dimension allowances — dimensions AND together, values OR
+  // within one dimension, no row = unrestricted. Advisory only: pickers rank
+  // by them, nothing enforces them.
+  app.put<{ Params: { id: string }; Body: { scopes?: Record<string, unknown> } }>(
+    '/:id/scopes',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const team = await db('nivaro_user_groups').where({ id }).first('id', 'name')
+      if (!team) return reply.code(404).send({ error: 'Team not found' })
+      const body = req.body?.scopes ?? {}
+      if (typeof body !== 'object' || Array.isArray(body)) {
+        return reply.code(400).send({ error: 'scopes must be an object of dimension → values[]' })
+      }
+      const dims = (await db('nivaro_scope_dimensions')
+        .where({ is_active: true })
+        .pluck('name')) as string[]
+      const valid = new Set(dims)
+      const clean: Record<string, unknown[]> = {}
+      for (const [dim, vals] of Object.entries(body)) {
+        if (!valid.has(dim)) {
+          return reply.code(400).send({ error: `Unknown scope dimension "${dim}"` })
+        }
+        if (!Array.isArray(vals)) {
+          return reply.code(400).send({ error: `Values for "${dim}" must be an array` })
+        }
+        const filtered = vals.filter((v) => v !== null && v !== undefined && v !== '')
+        if (filtered.length > 0) clean[dim] = filtered.slice(0, 200)
+      }
+      // Replace-all: rows absent from the payload are deleted (= unrestricted).
+      await db('nivaro_team_scopes').where({ team_id: id }).delete()
+      for (const [dim, vals] of Object.entries(clean)) {
+        await db('nivaro_team_scopes').insert({
+          team_id: id,
+          dimension: dim,
+          values: JSON.stringify(vals)
+        })
+      }
+      await logActivity({
+        action: 'user-group-scopes',
+        user: req.user!.id,
+        collection: 'nivaro_user_groups',
+        item: String(id),
+        comment:
+          Object.keys(clean).length === 0
+            ? 'scopes cleared'
+            : Object.entries(clean)
+                .map(([d, v]) => `${d}: ${v.length} value(s)`)
+                .join(', '),
+        req
+      })
+      const scopes = await loadTeamScopes([id])
+      return reply.send({ data: { scopes: scopes.get(id) ?? {} } })
+    }
+  )
+
+  /**
+   * Roster candidates ranked by the team's scope: people whose restrict-mode
+   * User Scopes OVERLAP the team's values on every scoped dimension rank
+   * first, unrestricted people next, mismatches last (still addable — the
+   * ranking is advice, not a gate). A user with no restriction on a dimension
+   * counts as covering all of it.
+   */
+  app.get<{ Params: { id: string }; Querystring: { search?: string } }>(
+    '/:id/candidates',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const team = await db('nivaro_user_groups').where({ id }).first('id')
+      if (!team) return reply.code(404).send({ error: 'Team not found' })
+      const search = String(req.query.search ?? '').trim()
+      const teamScopes = (await loadTeamScopes([id])).get(id) ?? {}
+      const scopedDims = Object.keys(teamScopes)
+
+      const { data: users } = await listUsers({
+        limit: scopedDims.length > 0 ? 120 : 50,
+        search: search || undefined,
+        sort: 'first_name'
+      })
+      if (scopedDims.length === 0) {
+        return reply.send({ data: { ranked: false, users } })
+      }
+
+      const dimLabels = new Map(
+        ((await db('nivaro_scope_dimensions')
+          .whereIn('name', scopedDims)
+          .select('name', 'label')) as Array<{ name: string; label: string }>).map((d) => [
+          d.name,
+          d.label
+        ])
+      )
+      const restrictRows = (await db('nivaro_user_scopes')
+        .whereIn(
+          'user',
+          users.map((u: { id: string }) => u.id)
+        )
+        .where({ mode: 'restrict' })
+        .whereIn('dimension', scopedDims)
+        .select('user', 'dimension', 'values')) as Array<{
+        user: string
+        dimension: string
+        values: string
+      }>
+      const byUser = new Map<string, Map<string, Set<string>>>()
+      for (const r of restrictRows) {
+        const vals = parseJson(r.values)
+        if (!Array.isArray(vals)) continue
+        const m = byUser.get(String(r.user).toUpperCase()) ?? new Map<string, Set<string>>()
+        m.set(r.dimension, new Set(vals.map(String)))
+        byUser.set(String(r.user).toUpperCase(), m)
+      }
+
+      type Tier = 'match' | 'unrestricted' | 'mismatch'
+      const classified = users.map((u: { id: string }) => {
+        const mine = byUser.get(String(u.id).toUpperCase())
+        let explicitMatch = false
+        const mismatchDims: string[] = []
+        for (const dim of scopedDims) {
+          const teamVals = new Set((teamScopes[dim] ?? []).map(String))
+          const userVals = mine?.get(dim)
+          if (!userVals) continue // unrestricted on this dimension = covers it
+          const overlap = [...userVals].some((v) => teamVals.has(v))
+          if (overlap) explicitMatch = true
+          else mismatchDims.push(dimLabels.get(dim) ?? dim)
+        }
+        const tier: Tier =
+          mismatchDims.length > 0 ? 'mismatch' : explicitMatch ? 'match' : 'unrestricted'
+        return { ...u, scope_tier: tier, scope_mismatch: mismatchDims }
+      })
+      const order: Record<Tier, number> = { match: 0, unrestricted: 1, mismatch: 2 }
+      classified.sort(
+        (a: { scope_tier: Tier }, b: { scope_tier: Tier }) =>
+          order[a.scope_tier] - order[b.scope_tier]
+      )
+      return reply.send({ data: { ranked: true, users: classified.slice(0, 60) } })
+    }
+  )
 
   app.post<{ Body: { name?: string; slug?: string; description?: string } }>(
     '/',

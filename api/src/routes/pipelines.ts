@@ -2336,6 +2336,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       slug: string
       member_count: number | string
     }>
+    // Team scopes ride along so the cell picker can rank in-scope teams first.
+    const teamScopeRows = (await selectInChunks(
+      [...new Set(teamLinks.map((t) => t.id))],
+      2000,
+      (chunk) =>
+        db('nivaro_team_scopes').whereIn('team_id', chunk).select('team_id', 'dimension', 'values')
+    )) as Array<{ team_id: number; dimension: string; values: string }>
+    const scopesByTeam = new Map<number, Record<string, unknown[]>>()
+    for (const r of teamScopeRows) {
+      const vals = parseJson(r.values)
+      if (!Array.isArray(vals) || vals.length === 0) continue
+      const entry = scopesByTeam.get(r.team_id) ?? {}
+      entry[r.dimension] = vals
+      scopesByTeam.set(r.team_id, entry)
+    }
     const teamsByGroup = new Map<string, Array<Record<string, unknown>>>()
     for (const t of teamLinks) {
       const arr = teamsByGroup.get(String(t.group)) ?? []
@@ -2344,7 +2359,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         id: t.id,
         name: t.name,
         slug: t.slug,
-        member_count: Number(t.member_count ?? 0)
+        member_count: Number(t.member_count ?? 0),
+        scopes: scopesByTeam.get(t.id) ?? {}
       })
       teamsByGroup.set(String(t.group), arr)
     }

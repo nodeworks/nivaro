@@ -8,6 +8,13 @@ import { del, get, patch, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
+import {
+  type CellFilterLite,
+  rankTeamForFilters,
+  tierOrder,
+  useScopeDimensions
+} from './teamScopes'
+import { TeamScopeEditor } from './TeamScopeEditor'
 import type {
   CMSRelation,
   PipelineBinding,
@@ -161,8 +168,9 @@ function getIdValue(
   colFilterItems: Record<string, unknown>[] | undefined
 ): number | null {
   const parts = dim.field.split('.')
-  const subField = parts.length > 1 ? parts[parts.length - 1] : null
-  if (!subField) return null
+  // A plain (undotted) field means the row values live on the bound
+  // collection's own records — the field itself is the display column.
+  const subField = parts.length > 1 ? parts[parts.length - 1] : dim.field
   const candidates = [...(rowItems ?? []), ...(colFilterItems ?? [])]
   const match = candidates.find((item) => String(item[subField] ?? '') === displayValue)
   if (!match) return null
@@ -255,6 +263,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const [bulkOpen, setBulkOpen] = useState(false)
+  const scopeDims = useScopeDimensions()
   const firstCollection = bindings[0]?.collection ?? ''
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', firstCollection],
@@ -312,6 +321,13 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     rowRelM2MParent?.many_collection ??
     rowRelO2M?.many_collection ??
     null
+
+  // A plain (undotted) field with no relation means the axis values are a
+  // column ON the bound collection itself — fetch its own rows so auto-rows
+  // and id_value resolution work exactly like a sub-field path.
+  const rowIsSelf = !!rowDim && rowFieldParts.length === 1 && !rowRelatedCollection
+  const rowFetchCollection = rowRelatedCollection ?? (rowIsSelf ? firstCollection : null)
+  const effectiveRowSubField = rowSubField ?? (rowIsSelf ? rowBaseField : null)
 
   // Pre-parse dotted paths from FieldPicker (e.g. "project.project_type.name")
   const colFilterPaths = colFilterDims.map((dim) => {
@@ -454,14 +470,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   })
 
   const { data: rowItems } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['items-picker', rowRelatedCollection],
+    queryKey: ['items-picker', rowFetchCollection],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${rowRelatedCollection}`, { limit: 100 })
+          get(`/items/${rowFetchCollection}`, { limit: 100 })
         )
         .then((r) => r.data),
-    enabled: !!rowRelatedCollection
+    enabled: !!rowFetchCollection
   })
 
   const { data: rowRelMeta } = useQuery({
@@ -505,10 +521,10 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       if (r.value !== '' && !base.some((x) => x.value === r.value)) base.push(r)
     }
     if (rowItems) {
-      if (rowSubField) {
-        // Sub-field path (regions.short_name): one row per distinct sub-field
-        // value, deduped (legacy data carries duplicate short names).
-        const vals = [...new Set(rowItems.map((i) => String(i[rowSubField] ?? '')).filter(Boolean))]
+      if (effectiveRowSubField) {
+        // Sub-field path (regions.short_name) or plain self-column: one row
+        // per distinct value, deduped (legacy data carries duplicate names).
+        const vals = [...new Set(rowItems.map((i) => String(i[effectiveRowSubField] ?? '')).filter(Boolean))]
         vals.sort((a, b) => a.localeCompare(b))
         for (const v of vals) push({ value: v, label: v })
       } else {
@@ -520,7 +536,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     }
     for (const r of rowsFromGroups) push(r)
     for (const r of customRows) push(r)
-    if (rowSubField || !rowRelatedCollection || !rowItems) return base
+    if (effectiveRowSubField || !rowRelatedCollection || !rowItems) return base
     // Pure ID-based relation: enrich labels from fetched items
     const displayTemplate: string | null = rowRelMeta?.display_template ?? null
     return base.map((r) => {
@@ -528,7 +544,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       if (!item) return r
       return { value: r.value, label: renderDisplayTemplate(displayTemplate, item) }
     })
-  }, [rowsFromGroups, customRows, rowSubField, rowRelatedCollection, rowItems, rowRelMeta])
+  }, [rowsFromGroups, customRows, effectiveRowSubField, rowRelatedCollection, rowItems, rowRelMeta])
 
   function getCellResult(
     stateId: string,
@@ -1103,11 +1119,18 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             </div>
                           ) : (
                             <div className='space-y-2 min-w-[200px]'>
-                              {(group?.teams ?? []).map((t) => (
+                              {(group?.teams ?? []).map((t) => {
+                                const rank = rankTeamForFilters(
+                                  t.scopes,
+                                  buildCellFilters(s.id, row.value) as CellFilterLite[],
+                                  scopeDims,
+                                  firstCollection || null
+                                )
+                                return (
                                 <div key={`t${t.link_id}`} className='flex items-center gap-1.5'>
                                   <button
                                     type='button'
-                                    data-tip='Manage this team’s members'
+                                    data-tip='Manage this team’s members and scope'
                                     onClick={() => setManagingTeam({ id: t.id, name: t.name })}
                                     className='flex flex-1 items-center gap-1.5 text-left text-[12px] font-medium text-violet-700 hover:underline dark:text-violet-300'
                                   >
@@ -1116,6 +1139,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                     <span className='font-normal tabular-nums text-slate-400'>
                                       {t.member_count} member{t.member_count === 1 ? '' : 's'}
                                     </span>
+                                    {rank.tier === 'out' && (
+                                      <span
+                                        data-tip={`Assigned outside its scope — ${rank.mismatches.join('; ')}`}
+                                        className='rounded bg-amber-100 px-1 py-px text-[9px] font-semibold uppercase text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
+                                      >
+                                        out of scope
+                                      </span>
+                                    )}
                                   </button>
                                   <button
                                     type='button'
@@ -1128,7 +1159,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                     <X className='h-3 w-3' />
                                   </button>
                                 </div>
-                              ))}
+                                )
+                              })}
                               {users.map((u) => (
                                 <div key={u.link_id} className='flex items-center gap-1.5'>
                                   <span className='flex-1 text-[12px] text-slate-700'>
@@ -1162,6 +1194,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                 teams={(allTeams ?? []).filter(
                                   (t) => !(group?.teams ?? []).some((lt) => lt.id === t.id)
                                 )}
+                                cellFilters={buildCellFilters(s.id, row.value) as CellFilterLite[]}
+                                scopeDims={scopeDims}
+                                boundCollection={firstCollection || null}
                                 onAdd={(userId) =>
                                   addUserToCell.mutate({
                                     stateId: s.id,
@@ -1407,6 +1442,9 @@ function AddUserToCell({
   rowValue: _rowValue,
   existingUserIds,
   teams = [],
+  cellFilters = [],
+  scopeDims = [],
+  boundCollection = null,
   onAdd,
   onAddTeam,
   onCreateTeam,
@@ -1415,7 +1453,15 @@ function AddUserToCell({
   stateId: string
   rowValue: string
   existingUserIds: string[]
-  teams?: Array<{ id: number; name: string; member_count: number }>
+  teams?: Array<{
+    id: number
+    name: string
+    member_count: number
+    scopes?: Record<string, Array<string | number>>
+  }>
+  cellFilters?: CellFilterLite[]
+  scopeDims?: ReturnType<typeof useScopeDimensions>
+  boundCollection?: string | null
   onAdd: (userId: string) => void
   onAddTeam?: (teamId: number) => void
   onCreateTeam?: (name: string) => void
@@ -1444,10 +1490,16 @@ function AddUserToCell({
   const excluded = new Set(
     existingUserIds.filter(Boolean).map((id) => String(id).toUpperCase())
   )
-  const filteredTeams = (q
-    ? teams.filter((t) => t.name.toLowerCase().includes(q))
-    : teams
-  ).slice().sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  const rankedTeams = (q ? teams.filter((t) => t.name.toLowerCase().includes(q)) : teams)
+    .map((t) => ({
+      ...t,
+      rank: rankTeamForFilters(t.scopes, cellFilters, scopeDims, boundCollection)
+    }))
+    .sort(
+      (a, b) =>
+        tierOrder(a.rank.tier) - tierOrder(b.rank.tier) ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    )
   const filteredUsers = people.filter((u) => !excluded.has(String(u.id).toUpperCase()))
 
   if (creating) {
@@ -1521,23 +1573,43 @@ function AddUserToCell({
           </div>
         </div>
         <div className='max-h-64 overflow-y-auto py-1'>
-          {onAddTeam && (filteredTeams.length > 0 || onCreateTeam) && (
+          {onAddTeam && (rankedTeams.length > 0 || onCreateTeam) && (
             <>
               <p className='px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                 Teams
               </p>
-              {filteredTeams.map((t) => (
+              {rankedTeams.map((t) => (
                 <button
                   key={t.id}
                   type='button'
+                  data-tip={
+                    t.rank.tier === 'out'
+                      ? `Outside this cell's scope — ${t.rank.mismatches.join('; ')}. Adding it is an override.`
+                      : t.rank.tier === 'suggested'
+                        ? 'Scoped to this combination'
+                        : undefined
+                  }
                   onClick={() => {
                     onAddTeam(t.id)
                     setOpen(false)
                   }}
-                  className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                  className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
                 >
-                  <Users2 className='h-3.5 w-3.5 shrink-0 text-violet-500' />
-                  <span className='flex-1 truncate'>{t.name}</span>
+                  <Users2
+                    className={`h-3.5 w-3.5 shrink-0 ${t.rank.tier === 'out' ? 'text-amber-500' : 'text-violet-500'}`}
+                  />
+                  <span className='min-w-0 flex-1 truncate font-medium'>{t.name}</span>
+                  {t.rank.tier === 'suggested' && (
+                    <span className='flex items-center gap-1 text-[10.5px] font-medium text-emerald-600 dark:text-emerald-400'>
+                      <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+                      in scope
+                    </span>
+                  )}
+                  {t.rank.tier === 'out' && (
+                    <span className='text-[10.5px] font-medium text-amber-600 dark:text-amber-400'>
+                      out of scope
+                    </span>
+                  )}
                   <span className='tabular-nums text-[11px] text-slate-400'>
                     {t.member_count}
                   </span>
@@ -1581,7 +1653,7 @@ function AddUserToCell({
               </span>
             </button>
           ))}
-          {filteredUsers.length === 0 && filteredTeams.length === 0 && (
+          {filteredUsers.length === 0 && rankedTeams.length === 0 && (
             <p className='px-3 py-2 text-[12px] text-slate-400'>
               No matches — people already in this cell are hidden
             </p>
@@ -1875,6 +1947,20 @@ function TeamManagerPanel({
     onError: () => toast.error('Failed to remove member')
   })
   const memberIds = new Set((members ?? []).map((m) => String(m.id).toUpperCase()))
+  // Saved scopes ride the /user-groups list (already cached by the pickers).
+  const { data: teamRows } = useQuery<
+    Array<{ id: number; scopes?: Record<string, Array<string | number>> }>
+  >({
+    queryKey: ['user-groups-teams'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; scopes?: Record<string, Array<string | number>> }> }>(
+          get('/user-groups')
+        )
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  const savedScopes = teamRows?.find((t) => t.id === team.id)?.scopes ?? {}
 
   return createPortal(
     <div
@@ -1928,10 +2014,14 @@ function TeamManagerPanel({
           </div>
         )}
         <MemberPickerCombobox
+          teamId={team.id}
           excludeIds={[...memberIds]}
           isPending={addMember.isPending}
           onPick={(userId) => addMember.mutate(userId)}
         />
+        <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border/60'>
+          <TeamScopeEditor teamId={team.id} scopes={savedScopes} />
+        </div>
         <div className='mt-3 flex justify-end'>
           <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={onClose}>
             Done
@@ -1945,15 +2035,26 @@ function TeamManagerPanel({
 
 /** People-only styled picker for the team roster manager — same combobox
  *  vocabulary as the cell's owner picker. */
+type ScopedCandidate = User & { scope_tier?: 'match' | 'unrestricted' | 'mismatch'; scope_mismatch?: string[] }
+
+const CANDIDATE_TIER_LABEL: Record<string, string> = {
+  match: 'Matches team scope',
+  unrestricted: 'No restrictions',
+  mismatch: 'Outside team scope'
+}
+
 function MemberPickerCombobox({
+  teamId,
   excludeIds,
   isPending,
   onPick
 }: {
+  teamId: number
   excludeIds: string[]
   isPending: boolean
   onPick: (userId: string) => void
 }) {
+  const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -1962,10 +2063,23 @@ function MemberPickerCombobox({
     else setQuery('')
   }, [open])
   const roleNames = useRoleNames()
-  const { people } = usePeopleSearch(open ? query : '')
+  // Candidates come pre-ranked by the team's scope: people whose User Scopes
+  // overlap it first, unrestricted next, mismatches last (still addable).
+  const { data: cand } = useQuery<{ ranked: boolean; users: ScopedCandidate[] }>({
+    queryKey: ['team-candidates', teamId, query.trim()],
+    queryFn: () =>
+      client
+        .request<{ data: { ranked: boolean; users: ScopedCandidate[] } }>(
+          get(`/user-groups/${teamId}/candidates`, { search: query.trim() || undefined })
+        )
+        .then((r) => r.data),
+    enabled: open,
+    staleTime: 60_000
+  })
   const label = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
   const excluded = new Set(excludeIds.map((id) => id.toUpperCase()))
-  const filtered = people.filter((u) => !excluded.has(String(u.id).toUpperCase()))
+  const filtered = (cand?.users ?? []).filter((u) => !excluded.has(String(u.id).toUpperCase()))
+  const ranked = !!cand?.ranked
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -1995,25 +2109,44 @@ function MemberPickerCombobox({
           </div>
         </div>
         <div className='max-h-56 overflow-y-auto py-1'>
-          {filtered.map((u) => (
-            <button
-              key={u.id}
-              type='button'
-              onClick={() => {
-                onPick(u.id)
-                setOpen(false)
-              }}
-              className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
-            >
-              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[9.5px] font-semibold text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
-                {initials(u)}
-              </span>
-              <span className='min-w-0 flex-1 truncate font-medium'>{label(u)}</span>
-              <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
-                {personSecondary(u, roleNames)}
-              </span>
-            </button>
-          ))}
+          {filtered.map((u, i) => {
+            const tier = u.scope_tier ?? 'unrestricted'
+            const showHeader = ranked && (i === 0 || (filtered[i - 1].scope_tier ?? 'unrestricted') !== tier)
+            return (
+              <Fragment key={u.id}>
+                {showHeader && (
+                  <p
+                    className={`px-3 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide ${tier === 'mismatch' ? 'text-amber-500' : tier === 'match' ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}
+                  >
+                    {CANDIDATE_TIER_LABEL[tier]}
+                  </p>
+                )}
+                <button
+                  type='button'
+                  data-tip={
+                    tier === 'mismatch' && (u.scope_mismatch ?? []).length > 0
+                      ? `Restricted elsewhere on ${(u.scope_mismatch ?? []).join(', ')} — adding is an override`
+                      : undefined
+                  }
+                  onClick={() => {
+                    onPick(u.id)
+                    setOpen(false)
+                  }}
+                  className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                >
+                  <span
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9.5px] font-semibold ${tier === 'mismatch' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' : 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'}`}
+                  >
+                    {initials(u)}
+                  </span>
+                  <span className='min-w-0 flex-1 truncate font-medium'>{label(u)}</span>
+                  <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
+                    {personSecondary(u, roleNames)}
+                  </span>
+                </button>
+              </Fragment>
+            )
+          })}
           {filtered.length === 0 && (
             <p className='px-3 py-2 text-[12px] text-slate-400'>
               No matches — people already on the team are hidden

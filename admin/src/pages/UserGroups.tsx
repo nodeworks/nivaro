@@ -14,8 +14,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { NivaroProvider, TeamScopeEditor } from '@nivaro/shared'
+import { createNivaro } from '@nivaro/sdk'
 import { api, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+
+// SDK client for the shared TeamScopeEditor (CollectionBrowserV2Page pattern).
+const sdkClient = createNivaro(window.location.origin)
 
 /**
  * User groups (#682) — named user sets, mentionable in comments as
@@ -29,6 +34,7 @@ interface UserGroup {
   slug: string
   description: string | null
   member_count: number
+  scopes?: Record<string, Array<string | number>>
 }
 
 interface GroupMember {
@@ -53,30 +59,47 @@ function memberInitials(u: {
   return u.email[0].toUpperCase()
 }
 
+type ScopedUser = User & {
+  scope_tier?: 'match' | 'unrestricted' | 'mismatch'
+  scope_mismatch?: string[]
+}
+
+const TIER_LABEL: Record<string, string> = {
+  match: 'Matches team scope',
+  unrestricted: 'No restrictions',
+  mismatch: 'Outside team scope'
+}
+
 /** Popover + Command user search — never a native select. */
 function AddMemberPicker({
+  teamId,
   excludeIds,
   onPick,
   disabled
 }: {
+  teamId: number
   excludeIds: Set<string>
   onPick: (userId: string) => void
   disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  // Server-side search — the directory exceeds any client fetch cap, so a
-  // sliced list silently hides people (the "can't find my own name" bug).
-  const { data: users } = useQuery<User[]>({
-    queryKey: ['users', 'combobox', query.trim()],
+  // Server-side search, pre-ranked by the team's scope: people whose User
+  // Scopes overlap it first, unrestricted next, mismatches last (still
+  // addable — the ranking is advice, not a gate).
+  const { data: cand } = useQuery<{ ranked: boolean; users: ScopedUser[] }>({
+    queryKey: ['team-candidates', teamId, query.trim()],
     queryFn: () =>
       api
-        .get<{ data: User[] }>('/users', {
-          params: { limit: 50, sort: 'first_name', search: query.trim() || undefined }
-        })
+        .get<{ data: { ranked: boolean; users: ScopedUser[] } }>(
+          `/user-groups/${teamId}/candidates`,
+          { params: { search: query.trim() || undefined } }
+        )
         .then((r) => r.data.data),
     enabled: open
   })
+  const users = cand?.users
+  const ranked = !!cand?.ranked
   // Role id → name, for the identity line when a person has no title.
   const { data: roleNames } = useQuery<Map<string, string>>({
     queryKey: ['roles-name-map'],
@@ -91,9 +114,7 @@ function AddMemberPicker({
     const role = u.role ? (roleNames?.get(String(u.role).toUpperCase()) ?? null) : null
     return [u.title || role, u.department].filter(Boolean).join(' · ') || u.email
   }
-  const options = (users ?? [])
-    .filter((u) => !excludeIds.has(u.id))
-    .sort((a, b) => memberLabel(a).localeCompare(memberLabel(b), undefined, { sensitivity: 'base' }))
+  const options = (users ?? []).filter((u) => !excludeIds.has(u.id))
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -123,27 +144,65 @@ function AddMemberPicker({
             <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
               No matches — people already on the team are hidden here
             </CommandEmpty>
-            <CommandGroup>
-              {options.map((u) => (
-                <CommandItem
-                  key={u.id}
-                  value={`${memberLabel(u)} ${u.email} ${secondary(u)}`}
-                  onSelect={() => {
-                    onPick(u.id)
-                    setOpen(false)
-                  }}
-                  className='gap-2 whitespace-nowrap text-[13px]'
+            {(ranked
+              ? (['match', 'unrestricted', 'mismatch'] as const).map((tier) => ({
+                  tier,
+                  rows: options.filter((u) => (u.scope_tier ?? 'unrestricted') === tier)
+                }))
+              : [{ tier: null as null | string, rows: options }]
+            )
+              .filter((g) => g.rows.length > 0)
+              .map((g) => (
+                <CommandGroup
+                  key={String(g.tier)}
+                  heading={
+                    g.tier ? (
+                      <span
+                        className={
+                          g.tier === 'mismatch'
+                            ? 'text-amber-500'
+                            : g.tier === 'match'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : undefined
+                        }
+                      >
+                        {TIER_LABEL[g.tier]}
+                      </span>
+                    ) : undefined
+                  }
                 >
-                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
-                    {memberInitials(u)}
-                  </span>
-                  <span className='min-w-0 flex-1 truncate font-medium'>{memberLabel(u)}</span>
-                  <span className='max-w-[55%] shrink-0 truncate text-[11px] text-muted-foreground'>
-                    {secondary(u)}
-                  </span>
-                </CommandItem>
+                  {g.rows.map((u) => (
+                    <CommandItem
+                      key={u.id}
+                      value={`${memberLabel(u)} ${u.email} ${secondary(u)}`}
+                      data-tip={
+                        u.scope_tier === 'mismatch' && (u.scope_mismatch ?? []).length > 0
+                          ? `Restricted elsewhere on ${(u.scope_mismatch ?? []).join(', ')} — adding is an override`
+                          : undefined
+                      }
+                      onSelect={() => {
+                        onPick(u.id)
+                        setOpen(false)
+                      }}
+                      className='gap-2 whitespace-nowrap text-[13px]'
+                    >
+                      <span
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9.5px] font-semibold ${
+                          u.scope_tier === 'mismatch'
+                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
+                            : 'bg-[#00ceff1a] text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        {memberInitials(u)}
+                      </span>
+                      <span className='min-w-0 flex-1 truncate font-medium'>{memberLabel(u)}</span>
+                      <span className='max-w-[55%] shrink-0 truncate text-[11px] text-muted-foreground'>
+                        {secondary(u)}
+                      </span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
               ))}
-            </CommandGroup>
           </CommandList>
         </Command>
       </PopoverContent>
@@ -551,6 +610,18 @@ function GroupDetail({
         )}
       </div>
 
+      {isAdmin && (
+        <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+          <NivaroProvider client={sdkClient}>
+            <TeamScopeEditor
+              teamId={group.id}
+              scopes={group.scopes ?? {}}
+              onSaved={() => onChanged()}
+            />
+          </NivaroProvider>
+        </div>
+      )}
+
       <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <h3 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
@@ -559,6 +630,7 @@ function GroupDetail({
           </h3>
           {isAdmin && (
             <AddMemberPicker
+              teamId={group.id}
               excludeIds={new Set(members.map((m) => m.id))}
               onPick={(id) => addMember.mutate(id)}
               disabled={addMember.isPending}
