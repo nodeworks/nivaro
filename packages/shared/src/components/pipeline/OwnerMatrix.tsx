@@ -178,6 +178,35 @@ interface OwnerMatrixProps {
 
 type MatrixRow = { value: string; label: string }
 
+/** One-line secondary identity for picker rows — title · department, falling
+ *  back to the role name, then the email. */
+function personSecondary(u: User, roleNames: Map<string, string> | null): string {
+  const role = u.role ? (roleNames?.get(String(u.role).toUpperCase()) ?? null) : null
+  const parts = [u.title || role, u.department].filter(Boolean) as string[]
+  return parts.join(' · ') || u.email
+}
+
+function sortPeople(users: User[]): User[] {
+  const label = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  return [...users].sort((a, b) => label(a).localeCompare(label(b), undefined, { sensitivity: 'base' }))
+}
+
+/** Role id → name, best-effort: /roles is admin-only, so a non-admin host
+ *  simply renders rows without role names. */
+function useRoleNames(): Map<string, string> | null {
+  const client = useNivaroClient()
+  const { data } = useQuery<Map<string, string> | null>({
+    queryKey: ['roles-name-map'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; name: string }> }>(get('/roles'))
+        .then((r) => new Map(r.data.map((x) => [String(x.id).toUpperCase(), x.name])))
+        .catch(() => null),
+    staleTime: 5 * 60_000
+  })
+  return data ?? null
+}
+
 function initials(u: {
   first_name: string | null
   last_name: string | null
@@ -1358,6 +1387,10 @@ function CellImpactHint({
   )
 }
 
+/** Searchable owner picker — Teams and People in one styled combobox
+ *  (Popover + search, same vocabulary as FilterCombobox; never a native
+ *  select). Picking adds immediately; "New team…" swaps to an inline name
+ *  form that creates + links the team. */
 function AddUserToCell({
   stateId: _stateId,
   rowValue: _rowValue,
@@ -1379,24 +1412,57 @@ function AddUserToCell({
   onCreateTeam?: (name: string) => void
   isPending: boolean
 }) {
-  const [picked, setPicked] = useState('')
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
   const [newTeamName, setNewTeamName] = useState('')
-  const available = allUsers.filter((u) => !existingUserIds.includes(u.id))
-  if (picked === 'team:__new__') {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 50)
+    else {
+      setQuery('')
+      setCreating(false)
+      setNewTeamName('')
+    }
+  }, [open])
+
+  const roleNames = useRoleNames()
+  const available = sortPeople(allUsers.filter((u) => !existingUserIds.includes(u.id)))
+  const q = query.trim().toLowerCase()
+  const userLabel = (u: User) =>
+    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const filteredTeams = (q
+    ? teams.filter((t) => t.name.toLowerCase().includes(q))
+    : teams
+  ).slice().sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  const filteredUsers = (q
+    ? available.filter(
+        (u) =>
+          userLabel(u).toLowerCase().includes(q) ||
+          (u.email ?? '').toLowerCase().includes(q) ||
+          personSecondary(u, roleNames).toLowerCase().includes(q)
+      )
+    : available
+  ).slice(0, 50)
+
+  if (creating) {
     return (
       <div className='flex items-center gap-1.5'>
         <input
+          // biome-ignore lint/a11y/noAutofocus: swapping an in-place form — focus continues the flow
+          autoFocus
           value={newTeamName}
           onChange={(e) => setNewTeamName(e.target.value)}
           placeholder='New team name…'
-          className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
+          className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px] focus:outline-none focus:ring-1 focus:ring-violet-400/50 dark:border-border dark:bg-card'
           onKeyDown={(e) => {
             if (e.key === 'Enter' && newTeamName.trim()) {
               onCreateTeam?.(newTeamName.trim())
-              setPicked('')
+              setCreating(false)
               setNewTeamName('')
             }
-            if (e.key === 'Escape') setPicked('')
+            if (e.key === 'Escape') setCreating(false)
           }}
         />
         <button
@@ -1404,7 +1470,7 @@ function AddUserToCell({
           disabled={!newTeamName.trim() || isPending}
           onClick={() => {
             onCreateTeam?.(newTeamName.trim())
-            setPicked('')
+            setCreating(false)
             setNewTeamName('')
           }}
           className='h-7 rounded bg-violet-600 px-2 text-[11px] font-medium text-white disabled:opacity-40'
@@ -1413,7 +1479,7 @@ function AddUserToCell({
         </button>
         <button
           type='button'
-          onClick={() => setPicked('')}
+          onClick={() => setCreating(false)}
           className='h-7 rounded px-1.5 text-[11px] text-slate-400 hover:text-slate-600'
         >
           ✕
@@ -1421,48 +1487,104 @@ function AddUserToCell({
       </div>
     )
   }
+
   return (
-    <div className='flex items-center gap-1.5'>
-      <select
-        value={picked}
-        onChange={(e) => setPicked(e.target.value)}
-        className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
-      >
-        <option value=''>Add owner…</option>
-        {onAddTeam && (
-          <optgroup label='Teams'>
-            {teams.map((t) => (
-              <option key={`team:${t.id}`} value={`team:${t.id}`}>
-                {t.name} ({t.member_count})
-              </option>
-            ))}
-            {onCreateTeam && <option value='team:__new__'>＋ New team…</option>}
-          </optgroup>
-        )}
-        <optgroup label='People'>
-          {available.map((u) => (
-            <option key={u.id} value={u.id}>
-              {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
-            </option>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={isPending}
+          className='flex h-7 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] text-slate-500 transition-colors hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-300'
+        >
+          <span className='flex items-center gap-1.5'>
+            {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Plus className='h-3 w-3' />}
+            Add owner…
+          </span>
+          <ChevronDown className='h-3 w-3 opacity-50' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-96 p-0' sideOffset={4}>
+        <div className='border-b border-slate-100 px-2 py-1.5 dark:border-border'>
+          <div className='relative'>
+            <Search className='absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Search teams and people…'
+              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan/40 dark:bg-muted'
+            />
+          </div>
+        </div>
+        <div className='max-h-64 overflow-y-auto py-1'>
+          {onAddTeam && (filteredTeams.length > 0 || onCreateTeam) && (
+            <>
+              <p className='px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                Teams
+              </p>
+              {filteredTeams.map((t) => (
+                <button
+                  key={t.id}
+                  type='button'
+                  onClick={() => {
+                    onAddTeam(t.id)
+                    setOpen(false)
+                  }}
+                  className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                >
+                  <Users2 className='h-3.5 w-3.5 shrink-0 text-violet-500' />
+                  <span className='flex-1 truncate'>{t.name}</span>
+                  <span className='tabular-nums text-[11px] text-slate-400'>
+                    {t.member_count}
+                  </span>
+                </button>
+              ))}
+              {onCreateTeam && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    setOpen(false)
+                    setCreating(true)
+                    setNewTeamName(query.trim())
+                  }}
+                  className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-violet-700 hover:bg-muted dark:text-violet-300'
+                >
+                  <Plus className='h-3.5 w-3.5 shrink-0' />
+                  New team…
+                </button>
+              )}
+            </>
+          )}
+          <p className='px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            People
+          </p>
+          {filteredUsers.map((u) => (
+            <button
+              key={u.id}
+              type='button'
+              onClick={() => {
+                onAdd(u.id)
+                setOpen(false)
+              }}
+              className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+            >
+              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
+                {initials(u)}
+              </span>
+              <span className='min-w-0 flex-1 truncate font-medium'>{userLabel(u)}</span>
+              <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
+                {personSecondary(u, roleNames)}
+              </span>
+            </button>
           ))}
-        </optgroup>
-      </select>
-      <button
-        type='button'
-        disabled={!picked || isPending}
-        onClick={() => {
-          if (picked.startsWith('team:')) onAddTeam?.(Number(picked.slice(5)))
-          else onAdd(picked)
-          setPicked('')
-        }}
-        className='h-7 rounded bg-nvr-cyan px-2 text-[11px] font-medium text-white disabled:opacity-40'
-      >
-        {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : '+'}
-      </button>
-    </div>
+          {filteredUsers.length === 0 && filteredTeams.length === 0 && (
+            <p className='px-3 py-2 text-[12px] text-slate-400'>No matches</p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
-
 function InlineM2OPicker({
   relatedCollection,
   displayTemplate,
@@ -1723,7 +1845,6 @@ function TeamManagerPanel({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [picked, setPicked] = useState('')
   const { data: members, isLoading } = useQuery<
     Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
   >({
@@ -1767,7 +1888,7 @@ function TeamManagerPanel({
       }}
     >
       <div
-        className='w-full max-w-sm rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
+        className='w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
         onClick={(e) => e.stopPropagation()}
       >
         <div className='mb-1 flex items-center gap-2'>
@@ -1809,31 +1930,11 @@ function TeamManagerPanel({
             )}
           </div>
         )}
-        <div className='flex items-center gap-1.5'>
-          <select
-            value={picked}
-            onChange={(e) => setPicked(e.target.value)}
-            className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
-          >
-            <option value=''>Add member…</option>
-            {available.map((u) => (
-              <option key={u.id} value={u.id}>
-                {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
-              </option>
-            ))}
-          </select>
-          <button
-            type='button'
-            disabled={!picked || addMember.isPending}
-            onClick={() => {
-              addMember.mutate(picked)
-              setPicked('')
-            }}
-            className='h-7 rounded bg-violet-600 px-2 text-[11px] font-medium text-white disabled:opacity-40'
-          >
-            {addMember.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : '+'}
-          </button>
-        </div>
+        <MemberPickerCombobox
+          available={available}
+          isPending={addMember.isPending}
+          onPick={(userId) => addMember.mutate(userId)}
+        />
         <div className='mt-3 flex justify-end'>
           <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={onClose}>
             Done
@@ -1842,5 +1943,91 @@ function TeamManagerPanel({
       </div>
     </div>,
     document.body
+  )
+}
+
+/** People-only styled picker for the team roster manager — same combobox
+ *  vocabulary as the cell's owner picker. */
+function MemberPickerCombobox({
+  available,
+  isPending,
+  onPick
+}: {
+  available: User[]
+  isPending: boolean
+  onPick: (userId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 50)
+    else setQuery('')
+  }, [open])
+  const roleNames = useRoleNames()
+  const q = query.trim().toLowerCase()
+  const label = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const sorted = sortPeople(available)
+  const filtered = (q
+    ? sorted.filter(
+        (u) =>
+          label(u).toLowerCase().includes(q) ||
+          (u.email ?? '').toLowerCase().includes(q) ||
+          personSecondary(u, roleNames).toLowerCase().includes(q)
+      )
+    : sorted
+  ).slice(0, 50)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={isPending}
+          className='flex h-7 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] text-slate-500 transition-colors hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-300'
+        >
+          <span className='flex items-center gap-1.5'>
+            {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Plus className='h-3 w-3' />}
+            Add member…
+          </span>
+          <ChevronDown className='h-3 w-3 opacity-50' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='z-[140] w-96 p-0' sideOffset={4}>
+        <div className='border-b border-slate-100 px-2 py-1.5 dark:border-border'>
+          <div className='relative'>
+            <Search className='absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Search people…'
+              className='h-7 w-full rounded-md bg-slate-50 pl-7 pr-2 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-violet-400/40 dark:bg-muted'
+            />
+          </div>
+        </div>
+        <div className='max-h-56 overflow-y-auto py-1'>
+          {filtered.map((u) => (
+            <button
+              key={u.id}
+              type='button'
+              onClick={() => {
+                onPick(u.id)
+                setOpen(false)
+              }}
+              className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+            >
+              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[9.5px] font-semibold text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'>
+                {initials(u)}
+              </span>
+              <span className='min-w-0 flex-1 truncate font-medium'>{label(u)}</span>
+              <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
+                {personSecondary(u, roleNames)}
+              </span>
+            </button>
+          ))}
+          {filtered.length === 0 && <p className='px-3 py-2 text-[12px] text-slate-400'>No matches</p>}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }

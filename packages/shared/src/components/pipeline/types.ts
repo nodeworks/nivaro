@@ -20,6 +20,9 @@ export type User = {
   is_admin?: boolean
   is_redacted?: boolean
   redacted_at?: string | null
+  title?: string | null
+  department?: string | null
+  company?: string | null
 }
 
 export type Collection = {

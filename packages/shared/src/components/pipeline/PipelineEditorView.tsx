@@ -4529,7 +4529,12 @@ function CoveragePeoplePicker({
   })
   const selectedIds = new Set(selected.map((u) => u.id))
   const nameOf = (u: User) =>
-    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id
+    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const secondaryOf = (u: User) =>
+    [u.title, u.department].filter(Boolean).join(' · ') || u.email
+  const sorted = [...(users ?? [])].sort((a, b) =>
+    nameOf(a).localeCompare(nameOf(b), undefined, { sensitivity: 'base' })
+  )
   return (
     <div className='space-y-1.5'>
       {selected.length > 0 && (
@@ -4559,7 +4564,7 @@ function CoveragePeoplePicker({
         className='h-7 text-[12px]'
       />
       <div className='max-h-36 divide-y divide-slate-100 overflow-y-auto rounded-md border border-slate-200 dark:divide-border/60 dark:border-border'>
-        {(users ?? []).map((u) => {
+        {sorted.map((u) => {
           const picked = selectedIds.has(String(u.id))
           return (
             <button
@@ -4587,8 +4592,12 @@ function CoveragePeoplePicker({
               >
                 {picked && <Check className='h-2.5 w-2.5' />}
               </span>
-              <span className='truncate text-slate-700 dark:text-slate-200'>{nameOf(u)}</span>
-              <span className='ml-auto truncate text-[10.5px] text-slate-400'>{u.email}</span>
+              <span className='min-w-0 flex-1 truncate whitespace-nowrap font-medium text-slate-700 dark:text-slate-200'>
+                {nameOf(u)}
+              </span>
+              <span className='max-w-[55%] shrink-0 truncate text-[10.5px] text-slate-400'>
+                {secondaryOf(u)}
+              </span>
             </button>
           )
         })}
