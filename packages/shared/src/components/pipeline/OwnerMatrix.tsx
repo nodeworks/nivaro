@@ -1,6 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Loader2, Plus, Search, Users2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
@@ -682,6 +683,52 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     onError: () => toast.error('Failed to unassign team')
   })
 
+  // Create a brand-new team and link it to the cell in one go — the manager
+  // popover opens right after so members can be added without leaving Owners.
+  const [managingTeam, setManagingTeam] = useState<{ id: number; name: string } | null>(null)
+  const createTeamForCell = useMutation({
+    mutationFn: async ({
+      stateId,
+      rowValue,
+      name
+    }: {
+      stateId: string
+      rowValue: string
+      name: string
+    }) => {
+      const created = await client.request<{ data: { id: number; name: string } }>(
+        post('/user-groups', { name })
+      )
+      const { group: existing, isInherited } = getCellResult(stateId, rowValue)
+      let group = !isInherited ? existing : null
+      if (!group) {
+        const r = await client.request<{ data: PipelineOwnerGroup }>(
+          post(`/pipelines/states/${stateId}/owner-groups`, {
+            filters: buildCellFilters(stateId, rowValue),
+            is_default: false,
+            sort: 0,
+            priority: 0
+          })
+        )
+        group = r.data
+      }
+      await client.request(
+        post(`/pipelines/owner-groups/${group.id}/teams`, { team_id: created.data.id })
+      )
+      return created.data
+    },
+    onSuccess: (team) => {
+      invalidate()
+      void qc.invalidateQueries({ queryKey: ['user-groups-teams'] })
+      toast.success(`Team "${team.name}" created and assigned — add its members`)
+      setManagingTeam({ id: team.id, name: team.name })
+    },
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { error?: string } })?.response?.error ?? 'Failed to create team'
+      )
+  })
+
   const createOverride = useMutation({
     mutationFn: async ({ stateId, rowValue }: { stateId: string; rowValue: string }) => {
       const colFilterItems = colFilterItemQueries.flatMap(
@@ -754,6 +801,17 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
 
   return (
     <div className='space-y-4'>
+      {managingTeam && (
+        <TeamManagerPanel
+          team={managingTeam}
+          allUsers={allUsers ?? []}
+          onClose={() => {
+            setManagingTeam(null)
+            invalidate()
+            void qc.invalidateQueries({ queryKey: ['user-groups-teams'] })
+          }}
+        />
+      )}
       {/* Bulk matrix membership (#387) */}
       <div className='flex justify-end'>
         <button
@@ -1006,13 +1064,18 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             <div className='space-y-2 min-w-[200px]'>
                               {(group?.teams ?? []).map((t) => (
                                 <div key={`t${t.link_id}`} className='flex items-center gap-1.5'>
-                                  <span className='flex flex-1 items-center gap-1.5 text-[12px] font-medium text-violet-700 dark:text-violet-300'>
+                                  <button
+                                    type='button'
+                                    data-tip='Manage this team’s members'
+                                    onClick={() => setManagingTeam({ id: t.id, name: t.name })}
+                                    className='flex flex-1 items-center gap-1.5 text-left text-[12px] font-medium text-violet-700 hover:underline dark:text-violet-300'
+                                  >
                                     <Users2 className='h-3.5 w-3.5' />
                                     {t.name}
                                     <span className='font-normal tabular-nums text-slate-400'>
                                       {t.member_count} member{t.member_count === 1 ? '' : 's'}
                                     </span>
-                                  </span>
+                                  </button>
                                   <button
                                     type='button'
                                     data-tip='Unassign this team from the cell (the team itself is untouched)'
@@ -1073,7 +1136,18 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                     teamId
                                   })
                                 }
-                                isPending={addUserToCell.isPending || addTeamToCell.isPending}
+                                onCreateTeam={(name) =>
+                                  createTeamForCell.mutate({
+                                    stateId: s.id,
+                                    rowValue: row.value,
+                                    name
+                                  })
+                                }
+                                isPending={
+                                  addUserToCell.isPending ||
+                                  addTeamToCell.isPending ||
+                                  createTeamForCell.isPending
+                                }
                               />
                               {group && (
                                 <div className='flex items-center gap-2 border-t border-slate-100 pt-2'>
@@ -1292,6 +1366,7 @@ function AddUserToCell({
   teams = [],
   onAdd,
   onAddTeam,
+  onCreateTeam,
   isPending
 }: {
   stateId: string
@@ -1301,10 +1376,51 @@ function AddUserToCell({
   teams?: Array<{ id: number; name: string; member_count: number }>
   onAdd: (userId: string) => void
   onAddTeam?: (teamId: number) => void
+  onCreateTeam?: (name: string) => void
   isPending: boolean
 }) {
   const [picked, setPicked] = useState('')
+  const [newTeamName, setNewTeamName] = useState('')
   const available = allUsers.filter((u) => !existingUserIds.includes(u.id))
+  if (picked === 'team:__new__') {
+    return (
+      <div className='flex items-center gap-1.5'>
+        <input
+          value={newTeamName}
+          onChange={(e) => setNewTeamName(e.target.value)}
+          placeholder='New team name…'
+          className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newTeamName.trim()) {
+              onCreateTeam?.(newTeamName.trim())
+              setPicked('')
+              setNewTeamName('')
+            }
+            if (e.key === 'Escape') setPicked('')
+          }}
+        />
+        <button
+          type='button'
+          disabled={!newTeamName.trim() || isPending}
+          onClick={() => {
+            onCreateTeam?.(newTeamName.trim())
+            setPicked('')
+            setNewTeamName('')
+          }}
+          className='h-7 rounded bg-violet-600 px-2 text-[11px] font-medium text-white disabled:opacity-40'
+        >
+          {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : 'Create'}
+        </button>
+        <button
+          type='button'
+          onClick={() => setPicked('')}
+          className='h-7 rounded px-1.5 text-[11px] text-slate-400 hover:text-slate-600'
+        >
+          ✕
+        </button>
+      </div>
+    )
+  }
   return (
     <div className='flex items-center gap-1.5'>
       <select
@@ -1313,13 +1429,14 @@ function AddUserToCell({
         className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
       >
         <option value=''>Add owner…</option>
-        {teams.length > 0 && onAddTeam && (
+        {onAddTeam && (
           <optgroup label='Teams'>
             {teams.map((t) => (
               <option key={`team:${t.id}`} value={`team:${t.id}`}>
                 {t.name} ({t.member_count})
               </option>
             ))}
+            {onCreateTeam && <option value='team:__new__'>＋ New team…</option>}
           </optgroup>
         )}
         <optgroup label='People'>
@@ -1588,5 +1705,142 @@ function BulkMembershipPanel({
         </button>
       </div>
     </div>
+  )
+}
+
+
+/** Inline team roster manager — opened from a team chip in the Owner Matrix
+ *  so rosters are editable without leaving the pipeline. Edits apply to the
+ *  TEAM itself: every cell (and mention) using it follows. */
+function TeamManagerPanel({
+  team,
+  allUsers,
+  onClose
+}: {
+  team: { id: number; name: string }
+  allUsers: User[]
+  onClose: () => void
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [picked, setPicked] = useState('')
+  const { data: members, isLoading } = useQuery<
+    Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
+  >({
+    queryKey: ['team-members', team.id],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string
+          }>
+        }>(get(`/user-groups/${team.id}/members`))
+        .then((r) => r.data)
+  })
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['team-members', team.id] })
+    void qc.invalidateQueries({ queryKey: ['user-groups-teams'] })
+  }
+  const addMember = useMutation({
+    mutationFn: (userId: string) =>
+      client.request(post(`/user-groups/${team.id}/members`, { user_ids: [userId] })),
+    onSuccess: refresh,
+    onError: () => toast.error('Failed to add member')
+  })
+  const removeMember = useMutation({
+    mutationFn: (userId: string) => client.request(del(`/user-groups/${team.id}/members/${userId}`)),
+    onSuccess: refresh,
+    onError: () => toast.error('Failed to remove member')
+  })
+  const memberIds = new Set((members ?? []).map((m) => String(m.id).toUpperCase()))
+  const available = allUsers.filter((u) => !memberIds.has(String(u.id).toUpperCase()))
+
+  return createPortal(
+    <div
+      className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose()
+      }}
+    >
+      <div
+        className='w-full max-w-sm rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className='mb-1 flex items-center gap-2'>
+          <Users2 className='h-4 w-4 text-violet-500' />
+          <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+            {team.name}
+          </h2>
+          <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
+            {(members ?? []).length} member{(members ?? []).length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <p className='mb-3 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          Roster edits apply everywhere this team is assigned.
+        </p>
+        {isLoading ? (
+          <div className='flex justify-center py-4'>
+            <Loader2 className='h-4 w-4 animate-spin text-slate-400' />
+          </div>
+        ) : (
+          <div className='mb-2 max-h-56 divide-y divide-slate-100 overflow-y-auto dark:divide-border/60'>
+            {(members ?? []).map((m) => (
+              <div key={m.id} className='flex items-center gap-1.5 py-1.5'>
+                <span className='flex-1 truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
+                  {[m.first_name, m.last_name].filter(Boolean).join(' ') || m.email}
+                </span>
+                <button
+                  type='button'
+                  aria-label='Remove from team'
+                  disabled={removeMember.isPending}
+                  onClick={() => removeMember.mutate(m.id)}
+                  className='text-slate-400 hover:text-red-500'
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </div>
+            ))}
+            {(members ?? []).length === 0 && (
+              <p className='py-2 text-[12px] text-slate-400'>No members yet — add people below.</p>
+            )}
+          </div>
+        )}
+        <div className='flex items-center gap-1.5'>
+          <select
+            value={picked}
+            onChange={(e) => setPicked(e.target.value)}
+            className='h-7 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[12px]'
+          >
+            <option value=''>Add member…</option>
+            {available.map((u) => (
+              <option key={u.id} value={u.id}>
+                {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+              </option>
+            ))}
+          </select>
+          <button
+            type='button'
+            disabled={!picked || addMember.isPending}
+            onClick={() => {
+              addMember.mutate(picked)
+              setPicked('')
+            }}
+            className='h-7 rounded bg-violet-600 px-2 text-[11px] font-medium text-white disabled:opacity-40'
+          >
+            {addMember.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : '+'}
+          </button>
+        </div>
+        <div className='mt-3 flex justify-end'>
+          <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }

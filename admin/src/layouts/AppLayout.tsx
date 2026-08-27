@@ -172,6 +172,7 @@ export const navCategories: NavCategory[] = [
     label: 'People',
     items: [
       { icon: Users, label: 'Users', to: '/users' },
+      { icon: Users2, label: 'Teams', to: '/user-groups' },
       { icon: Shield, label: 'Roles', to: '/roles' },
       { icon: Building2, label: 'Workspaces', to: '/workspaces' },
       { icon: SlidersHorizontal, label: 'User Scopes', to: '/scope-dimensions' }
@@ -261,7 +262,6 @@ export const navCategories: NavCategory[] = [
       { icon: Package, label: 'Blueprints', to: '/blueprints' },
       { icon: ClipboardList, label: 'Change Sets', to: '/change-sets' },
       { icon: Trash2, label: 'Trash', to: '/trash' },
-      { icon: Users2, label: 'Teams', to: '/user-groups' },
       { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags' },
       { icon: Link2, label: 'External APIs', to: '/external-apis' },
       { icon: Braces, label: 'GraphQL', to: '/graphql' },
