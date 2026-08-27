@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-27T23:07:56.994Z",
+  "generated_at": "2026-08-27T23:27:31.527Z",
   "releases": [
+    {
+      "version": "0.1.166",
+      "tag": "v0.1.166",
+      "date": "2026-08-27T19:27:24-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "cascading matrix filters — dimensions narrow by sibling picks",
+              "hash": "2147becb"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "collapsed Notes preview resolves record references",
+              "hash": "413fc6ac"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.165",
       "tag": "v0.1.165",
-      "date": "2026-08-27T19:07:50-04:00",
+      "date": "2026-08-27T19:07:57-04:00",
       "sections": [
         {
           "label": "Added",
