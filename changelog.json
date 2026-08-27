@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T22:50:44.421Z",
+  "generated_at": "2026-08-27T23:07:56.994Z",
   "releases": [
+    {
+      "version": "0.1.165",
+      "tag": "v0.1.165",
+      "date": "2026-08-27T19:07:50-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "matrix polish — Add Row removed, state headers redesigned",
+              "hash": "657a6960"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.164",
       "tag": "v0.1.164",
-      "date": "2026-08-27T18:50:39-04:00",
+      "date": "2026-08-27T18:50:44-04:00",
       "sections": [
         {
           "label": "Added",
