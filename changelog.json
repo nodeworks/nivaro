@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T13:59:51.398Z",
+  "generated_at": "2026-08-27T14:16:25.475Z",
   "releases": [
+    {
+      "version": "0.1.155",
+      "tag": "v0.1.155",
+      "date": "2026-08-27T10:16:17-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "Owner coverage is actionable — assign, merge, staff, strip, remove in place",
+              "hash": "7ed3bcbc"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.154",
       "tag": "v0.1.154",
-      "date": "2026-08-27T09:59:46-04:00",
+      "date": "2026-08-27T09:59:51-04:00",
       "sections": [
         {
           "label": "Added",
