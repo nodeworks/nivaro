@@ -122,6 +122,13 @@ function DockInner() {
   } | null>(null)
   const { totalUnread, rooms } = useChatRooms()
   useUnreadChirp(totalUnread, rooms)
+  // Online-people bubble (Rob): who's around, before opening the panel.
+  // Same query the panel's Online tab uses — react-query dedupes them.
+  const { user: dockUser } = useAuth()
+  const { users: onlineUsers } = useOnlineUsers()
+  const othersOnline = onlineUsers.filter(
+    (u) => String(u.user_id).toUpperCase() !== String(dockUser?.id ?? '').toUpperCase()
+  ).length
 
   // UserChip "Send message" → open the slide-over on that DM. The dock is
   // mounted app-wide, so the action works from any page.
@@ -167,11 +174,18 @@ function DockInner() {
                   {totalUnread > 99 ? '99+' : totalUnread}
                 </span>
               )}
+              {othersOnline > 0 && (
+                <span className='absolute -bottom-1.5 -right-1.5 flex h-[13px] min-w-[13px] items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-bold leading-none text-white'>
+                  {othersOnline > 99 ? '99+' : othersOnline}
+                </span>
+              )}
             </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side='right' sideOffset={8}>
           Team chat
+          {totalUnread > 0 && ` · ${totalUnread} unread`}
+          {othersOnline > 0 && ` · ${othersOnline} online`}
         </TooltipContent>
       </Tooltip>
       <ChatPanel
