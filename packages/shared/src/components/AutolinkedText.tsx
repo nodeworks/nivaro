@@ -90,7 +90,7 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
     <button
       type='button'
       onClick={open}
-      className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+      className='inline-flex max-w-full items-center gap-1 align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
       data-record-token={token}
     >
       {token}
@@ -173,7 +173,7 @@ function RecordPathToken({
     <button
       type='button'
       onClick={open}
-      className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+      className='inline-flex max-w-full items-center align-baseline font-medium text-nvr-navy underline decoration-nvr-cyan/50 decoration-[1.5px] underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
       data-record-path={raw}
       data-tip={raw}
     >
