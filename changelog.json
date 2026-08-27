@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-26T23:45:57.888Z",
+  "generated_at": "2026-08-27T00:02:13.805Z",
   "releases": [
+    {
+      "version": "0.1.151",
+      "tag": "v0.1.151",
+      "date": "2026-08-26T20:02:08-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "chat dock shows unread AND online bubbles",
+              "hash": "8ffce5bf"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.150",
       "tag": "v0.1.150",
-      "date": "2026-08-26T19:45:53-04:00",
+      "date": "2026-08-26T19:45:57-04:00",
       "sections": [
         {
           "label": "Added",
