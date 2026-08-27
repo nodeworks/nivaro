@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T17:40:53.839Z",
+  "generated_at": "2026-08-27T21:09:23.279Z",
   "releases": [
+    {
+      "version": "0.1.163",
+      "tag": "v0.1.163",
+      "date": "2026-08-27T17:09:17-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "scope ranking matched the wrong dimension on dotted paths",
+              "hash": "2d212cb0"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.162",
       "tag": "v0.1.162",
-      "date": "2026-08-27T13:40:47-04:00",
+      "date": "2026-08-27T13:40:53-04:00",
       "sections": [
         {
           "label": "Added",
