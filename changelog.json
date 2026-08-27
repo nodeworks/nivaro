@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T23:27:31.527Z",
+  "generated_at": "2026-08-27T23:40:31.520Z",
   "releases": [
+    {
+      "version": "0.1.167",
+      "tag": "v0.1.167",
+      "date": "2026-08-27T19:40:26-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "record links in autolinked text carry a persistent underline",
+              "hash": "598b3fd4"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.166",
       "tag": "v0.1.166",
-      "date": "2026-08-27T19:27:24-04:00",
+      "date": "2026-08-27T19:27:31-04:00",
       "sections": [
         {
           "label": "Added",
