@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T13:29:49.275Z",
+  "generated_at": "2026-08-27T13:59:51.398Z",
   "releases": [
+    {
+      "version": "0.1.154",
+      "tag": "v0.1.154",
+      "date": "2026-08-27T09:59:46-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "pipeline editor moves to @nivaro/shared as PipelineEditorView",
+              "hash": "c7e4d943"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.153",
       "tag": "v0.1.153",
-      "date": "2026-08-27T09:29:44-04:00",
+      "date": "2026-08-27T09:29:49-04:00",
       "sections": [
         {
           "label": "Added",
