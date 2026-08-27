@@ -87,6 +87,7 @@ export {
 } from './components/pipeline/PipelineEditorView'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export { TeamScopeEditor } from './components/pipeline/TeamScopeEditor'
+export { TeamsView, type TeamRow } from './components/pipeline/TeamsView'
 export type { ScopeDimensionLite, TeamScopeMap, TeamTier } from './components/pipeline/teamScopes'
 export {
   matchFilterDimension,

@@ -168,6 +168,7 @@ export {
   type PipelineEditorSection,
   PipelineEditorView,
   TeamScopeEditor,
+  TeamsView,
   rankTeamForFilters,
   useScopeDimensions,
   PipelinePanel,

@@ -42,12 +42,14 @@ import {
   GitFork
 } from 'lucide-react'
 import type React from 'react'
+import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useRef, useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { TeamsView } from './TeamsView'
 import { rankTeamForFilters, tierOrder, useScopeDimensions } from './teamScopes'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
@@ -2504,6 +2506,7 @@ export function PipelineEditorView({
   const [bindingCollection, setBindingCollection] = useState('')
   const [stateField, setStateField] = useState('')
   const [expandedStateId, setExpandedStateId] = useState<string | null>(null)
+  const [teamsSheetOpen, setTeamsSheetOpen] = useState(false)
 
   // Local order for optimistic drag reordering of states
   const [localStateOrder, setLocalStateOrder] = useState<string[]>([])
@@ -3547,16 +3550,28 @@ export function PipelineEditorView({
         {/* Owner Matrix */}
         {!hiddenSet.has('matrix') && hasMatrix && (
           <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
-            <h2 className='text-[13px] font-semibold text-slate-800'>
-              Owner Matrix
-              <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
-                Who is responsible in each state, per dimension value. Records resolve their
-                owners from this grid automatically — notifications, queues, and SLAs follow it.
-              </span>
-            </h2>
+            <div className='flex items-start justify-between gap-4'>
+              <h2 className='text-[13px] font-semibold text-slate-800'>
+                Owner Matrix
+                <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
+                  Who is responsible in each state, per dimension value. Records resolve their
+                  owners from this grid automatically — notifications, queues, and SLAs follow it.
+                </span>
+              </h2>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 shrink-0 gap-1.5 text-[12px]'
+                onClick={() => setTeamsSheetOpen(true)}
+              >
+                <ListChecks className='h-3.5 w-3.5' /> Manage teams
+              </Button>
+            </div>
             <OwnerMatrix templateId={templateId} states={orderedStates} bindings={bindings} />
           </div>
         )}
+
+        {teamsSheetOpen && <TeamsSheet onClose={() => setTeamsSheetOpen(false)} />}
 
         {/* Simulator */}
         {!hiddenSet.has('simulator') && <PipelineSimulatorCard bindings={bindings} />}
@@ -6304,5 +6319,50 @@ function PipelineReplayCard({ templateId }: { templateId: string }) {
         </span>
       </div>
     </div>
+  )
+}
+
+
+/** Slide-over hosting the full Teams surface from the Owner Matrix header —
+ *  create teams, edit rosters and scopes without leaving the pipeline. */
+function TeamsSheet({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+  // Portal to body — the admin page-enter animation's transform re-anchors
+  // position:fixed, which strands an inline sheet inside the card.
+  return createPortal(
+    <div className='fixed inset-0 z-[120]'>
+      <button
+        type='button'
+        aria-label='Close'
+        className='absolute inset-0 bg-black/30'
+        onClick={onClose}
+      />
+      <div className='absolute inset-y-0 right-0 flex w-full max-w-[860px] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-card'>
+        <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
+          <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>Teams</h2>
+          <span className='text-[11.5px] text-slate-400'>
+            roster and scope edits apply everywhere a team is used
+          </span>
+          <button
+            type='button'
+            aria-label='Close teams'
+            onClick={onClose}
+            className='ml-auto rounded p-1 text-slate-400 hover:bg-muted hover:text-slate-700 dark:hover:text-slate-200'
+          >
+            <X className='h-4 w-4' />
+          </button>
+        </div>
+        <div className='min-h-0 flex-1'>
+          <TeamsView compact />
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }

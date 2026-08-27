@@ -930,14 +930,15 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       )}
 
       {unmetRequired.length > 0 && (
-        <div className='flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700'>
-          <span className='font-medium'>Select a value for:</span>
-          {unmetRequired.map((d) => (
-            <span key={d.id} className='font-mono'>
-              {d.label}
+        <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400'>
+          <span className='font-medium'>Select a value for </span>
+          {unmetRequired.map((d, i) => (
+            <span key={d.id}>
+              <span className='font-semibold'>{d.label}</span>
+              {i < unmetRequired.length - 2 ? ', ' : i === unmetRequired.length - 2 ? ' and ' : ''}
             </span>
           ))}
-          <span>before managing owners.</span>
+          <span> before managing owners.</span>
         </div>
       )}
 
@@ -2043,7 +2044,7 @@ const CANDIDATE_TIER_LABEL: Record<string, string> = {
   mismatch: 'Outside team scope'
 }
 
-function MemberPickerCombobox({
+export function MemberPickerCombobox({
   teamId,
   excludeIds,
   isPending,
