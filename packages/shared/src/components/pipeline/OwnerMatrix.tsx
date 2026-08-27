@@ -474,7 +474,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${rowFetchCollection}`, { limit: 100 })
+          get(`/items/${rowFetchCollection}`, { limit: 500 })
         )
         .then((r) => r.data),
     enabled: !!rowFetchCollection
@@ -490,10 +490,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const [expandedCell, setExpandedCell] = useState<{ stateId: string; rowValue: string } | null>(
     null
   )
-  const [addingRow, setAddingRow] = useState(false)
-  const [newRowValue, setNewRowValue] = useState('')
-  const [newRowLabel, setNewRowLabel] = useState('')
-  const [customRows, setCustomRows] = useState<Array<{ value: string; label: string }>>([])
 
   const rowsFromGroups = useMemo<MatrixRow[]>(() => {
     if (!rowDim || !groupsMap) return []
@@ -535,7 +531,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       }
     }
     for (const r of rowsFromGroups) push(r)
-    for (const r of customRows) push(r)
     if (effectiveRowSubField || !rowRelatedCollection || !rowItems) return base
     // Pure ID-based relation: enrich labels from fetched items
     const displayTemplate: string | null = rowRelMeta?.display_template ?? null
@@ -544,7 +539,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       if (!item) return r
       return { value: r.value, label: renderDisplayTemplate(displayTemplate, item) }
     })
-  }, [rowsFromGroups, customRows, effectiveRowSubField, rowRelatedCollection, rowItems, rowRelMeta])
+  }, [rowsFromGroups, effectiveRowSubField, rowRelatedCollection, rowItems, rowRelMeta])
 
   function getCellResult(
     stateId: string,
@@ -869,16 +864,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           }}
         />
       )}
-      {/* Bulk matrix membership (#387) */}
-      <div className='flex justify-end'>
-        <button
-          type='button'
-          onClick={() => setBulkOpen((v) => !v)}
-          className='rounded-md border border-dashed border-slate-300 px-2.5 py-1 text-[12px] text-slate-500 hover:bg-slate-50 dark:border-border'
-        >
-          ＋ Add a user to many cells…
-        </button>
-      </div>
       {bulkOpen && (
         <BulkMembershipPanel
           templateId={templateId}
@@ -891,9 +876,11 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
           }}
         />
       )}
-      {colFilterDims.length > 0 && (
-        <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5'>
-          <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0'>
+      {/* One toolbar: dimension filters left, bulk action right */}
+      <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 dark:border-border dark:bg-muted/40'>
+        {colFilterDims.length > 0 && (
+          <>
+          <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0 dark:text-muted-foreground'>
             Filter
           </span>
           {colFilterDims.map((dim, i) => {
@@ -926,8 +913,16 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
               </div>
             )
           })}
-        </div>
-      )}
+          </>
+        )}
+        <button
+          type='button'
+          onClick={() => setBulkOpen((v) => !v)}
+          className='ml-auto shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan/50 hover:text-nvr-cyan-dark dark:border-border dark:bg-card dark:text-slate-300 dark:hover:text-nvr-cyan'
+        >
+          ＋ Add a user to many cells…
+        </button>
+      </div>
 
       {unmetRequired.length > 0 && (
         <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400'>
@@ -942,29 +937,42 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         </div>
       )}
 
-      <div className='overflow-x-auto rounded-lg border border-slate-200'>
+      <div className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
         <table className='min-w-full border-collapse text-[12px]'>
           <thead>
             <tr className='bg-slate-50'>
               <th className='sticky left-0 z-10 bg-slate-50 dark:bg-muted border-b border-r border-slate-200 dark:border-border px-3 py-2 text-left text-[12px] font-semibold text-slate-700 dark:text-slate-200 min-w-[100px]'>
                 {rowDim.label}
               </th>
-              {states.map((s) => (
-                <th
-                  key={s.id}
-                  className='border-b border-r border-slate-200 px-3 py-2 text-left text-[11px] font-medium text-slate-500 min-w-[100px] last:border-r-0'
-                >
-                  <span
-                    className='inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium'
-                    style={{
-                      backgroundColor: s.color ? `${s.color}22` : '#f1f5f9',
-                      color: s.color ?? '#475569'
-                    }}
+              {states.map((s) => {
+                // Long state names read as a two-tier label instead of a fat
+                // wrapped pill: a shared "Waiting on" prefix de-emphasizes to
+                // a micro-eyebrow line, the distinctive part carries the
+                // weight, and the state color lives in a small dot.
+                const waiting = /^waiting on\s+/i.test(s.label)
+                const main = waiting ? s.label.replace(/^waiting on\s+/i, '') : s.label
+                return (
+                  <th
+                    key={s.id}
+                    className='min-w-[110px] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-left align-bottom last:border-r-0 dark:border-border dark:bg-muted'
                   >
-                    {s.label}
-                  </span>
-                </th>
-              ))}
+                    {waiting && (
+                      <span className='block text-[9px] font-medium uppercase tracking-[0.06em] leading-tight text-slate-400'>
+                        Waiting on
+                      </span>
+                    )}
+                    <span className='flex items-center gap-1.5'>
+                      <span
+                        className='h-2 w-2 shrink-0 rounded-full'
+                        style={{ backgroundColor: s.color ?? '#94a3b8' }}
+                      />
+                      <span className='whitespace-nowrap text-[11.5px] font-semibold leading-tight text-slate-700 dark:text-slate-200'>
+                        {main}
+                      </span>
+                    </span>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
@@ -987,7 +995,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                     return (
                       <td
                         key={s.id}
-                        className={`border-b border-r border-slate-200 px-2 py-1.5 last:border-r-0 transition-colors ${unmetRequired.length > 0 ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-nvr-cyan/5'} ${isExpanded ? 'bg-nvr-cyan/5' : ''}`}
+                        className={`border-b border-r border-slate-200 bg-white px-2 py-1.5 last:border-r-0 transition-colors dark:border-border dark:bg-card ${
+                          // Locked (required filters unset): gate the INTERACTION,
+                          // not the contrast — the banner above explains why, and
+                          // an opacity fade made the whole grid illegible.
+                          unmetRequired.length > 0
+                            ? 'cursor-not-allowed select-none'
+                            : 'cursor-pointer hover:bg-nvr-cyan/5'
+                        } ${isExpanded ? 'bg-nvr-cyan/5' : ''}`}
                         onClick={() => {
                           if (unmetRequired.length > 0) return
                           setExpandedCell(
@@ -1016,7 +1031,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             </span>
                           ))}
                           {users.length === 0 && (group?.teams ?? []).length === 0 ? (
-                            <span className='text-slate-300 text-[11px]'>—</span>
+                            <span className='text-slate-400 text-[11px] dark:text-slate-500'>—</span>
                           ) : (
                             users.slice(0, 4).map((u) => (
                               <span
@@ -1291,7 +1306,8 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                   colSpan={states.length + 1}
                   className='px-4 py-6 text-center text-[13px] text-slate-400'
                 >
-                  No rows yet — click "+ Add Row" to begin.
+                  No rows yet — the axis fills in automatically once the row dimension's
+                  collection has records.
                 </td>
               </tr>
             )}
@@ -1299,73 +1315,6 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
         </table>
       </div>
 
-      {addingRow ? (
-        <div className='flex items-center gap-2'>
-          {rowRelatedCollection ? (
-            <InlineM2OPicker
-              relatedCollection={rowRelatedCollection}
-              displayTemplate={rowSubField ? null : (rowRelMeta?.display_template ?? null)}
-              valueField={rowSubField}
-              value={newRowValue}
-              label={newRowLabel}
-              onChange={(value, label) => {
-                setNewRowValue(value)
-                setNewRowLabel(label)
-              }}
-            />
-          ) : (
-            <input
-              value={newRowValue}
-              onChange={(e) => {
-                setNewRowValue(e.target.value)
-                setNewRowLabel(e.target.value)
-              }}
-              placeholder={`${rowDim.label} value…`}
-              className='h-8 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] focus:border-nvr-cyan/50 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
-            />
-          )}
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-8 text-[12px]'
-            disabled={!newRowValue}
-            onClick={() => {
-              if (!newRowValue) return
-              setCustomRows((r) => [
-                ...r,
-                { value: newRowValue, label: newRowLabel || newRowValue }
-              ])
-              setNewRowValue('')
-              setNewRowLabel('')
-              setAddingRow(false)
-            }}
-          >
-            Add
-          </Button>
-          <Button
-            size='sm'
-            variant='ghost'
-            className='h-8 text-[12px]'
-            onClick={() => {
-              setAddingRow(false)
-              setNewRowValue('')
-              setNewRowLabel('')
-            }}
-          >
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <Button
-          size='sm'
-          variant='outline'
-          className='gap-1.5 text-[12px]'
-          onClick={() => setAddingRow(true)}
-        >
-          <Plus className='h-3.5 w-3.5' />
-          Add Row
-        </Button>
-      )}
     </div>
   )
 }
@@ -1664,94 +1613,6 @@ function AddUserToCell({
     </Popover>
   )
 }
-function InlineM2OPicker({
-  relatedCollection,
-  displayTemplate,
-  valueField,
-  value,
-  label,
-  onChange
-}: {
-  relatedCollection: string
-  displayTemplate: string | null
-  valueField?: string | null
-  value: string
-  label: string
-  onChange: (value: string, label: string) => void
-}) {
-  const client = useNivaroClient()
-  const [search, setSearch] = useState('')
-  const [open, setOpen] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    function handler(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  const { data: items, isLoading } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['items-picker', relatedCollection, search],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${relatedCollection}`, { limit: 30, search: search || undefined })
-        )
-        .then((r) => r.data),
-    enabled: open
-  })
-
-  return (
-    <div className='relative' ref={containerRef}>
-      <input
-        value={open ? search : label || value}
-        onChange={(e) => {
-          setSearch(e.target.value)
-        }}
-        onFocus={() => setOpen(true)}
-        placeholder='Search…'
-        className='h-8 w-48 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] focus:border-nvr-cyan/50 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
-      />
-      {open && (
-        <div className='absolute z-50 top-full mt-0.5 w-full min-w-[200px] max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'>
-          {isLoading ? (
-            <div className='flex justify-center py-3'>
-              <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />
-            </div>
-          ) : (items ?? []).length === 0 ? (
-            <div className='px-3 py-2 text-[12px] text-slate-400'>No results</div>
-          ) : (
-            (items ?? []).map((item) => {
-              const lbl = valueField
-                ? String(item[valueField] ?? '')
-                : renderDisplayTemplate(displayTemplate, item)
-              const val = valueField ? String(item[valueField] ?? '') : String(item.id)
-              return (
-                <button
-                  key={String(item.id)}
-                  type='button'
-                  onClick={() => {
-                    onChange(val, lbl)
-                    setOpen(false)
-                    setSearch('')
-                  }}
-                  className='w-full px-3 py-1.5 text-left text-[13px] text-slate-700 hover:bg-slate-50'
-                >
-                  {lbl}
-                </button>
-              )
-            })
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Bulk matrix membership (#387) ───────────────────────────────────────────
 function BulkMembershipPanel({
   templateId,
   groupsMap,
