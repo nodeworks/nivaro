@@ -129,6 +129,8 @@ interface OwnerDimension {
   sort: number
   is_row_axis: boolean
   required: boolean
+  /** JSON: [{parent_field, filter, via_many?}] — cascading option filters. */
+  cascade?: string | null
 }
 
 interface InstanceOwner {
@@ -766,7 +768,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const dimsByBinding = new Map<number, OwnerDimension[]>()
     for (const d of dimensions) {
       const arr = dimsByBinding.get(d.binding) ?? []
-      arr.push({ ...d, is_row_axis: coerceBool(d.is_row_axis), required: coerceBool(d.required) })
+      arr.push({
+        ...d,
+        is_row_axis: coerceBool(d.is_row_axis),
+        required: coerceBool(d.required),
+        cascade: parseJson(d.cascade ?? null)
+      } as unknown as OwnerDimension)
       dimsByBinding.set(d.binding, arr)
     }
     const bindingsWithDimensions = bindings.map((b) => ({
@@ -2655,7 +2662,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const dims = await db<OwnerDimension>('nivaro_pipeline_owner_dimensions')
       .where({ binding: bindingId })
       .orderBy('sort')
-    const data = dims.map((d) => ({ ...d, is_row_axis: coerceBool(d.is_row_axis) }))
+    const data = dims.map((d) => ({
+      ...d,
+      is_row_axis: coerceBool(d.is_row_axis),
+      cascade: parseJson(d.cascade ?? null)
+    }))
     return reply.send({ data })
   })
 
@@ -2672,6 +2683,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       sort?: number
       is_row_axis?: boolean
       required?: boolean
+      cascade?: unknown
     }
     if (!body.field?.trim()) return reply.code(400).send({ error: 'field is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
@@ -2689,7 +2701,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         label: body.label.trim(),
         sort: body.sort ?? 0,
         is_row_axis: body.is_row_axis ? 1 : 0,
-        required: body.required ? 1 : 0
+        required: body.required ? 1 : 0,
+        cascade: body.cascade !== undefined ? toJsonStr(body.cascade) : null
       })
       .returning('id')
     const id = typeof insertedId === 'object' ? insertedId.id : insertedId
@@ -2723,6 +2736,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       sort?: number
       is_row_axis?: boolean
       required?: boolean
+      cascade?: unknown
     }
     if (body.is_row_axis === true) {
       await db('nivaro_pipeline_owner_dimensions')
@@ -2738,7 +2752,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         sort: body.sort ?? existing.sort,
         is_row_axis:
           body.is_row_axis !== undefined ? (body.is_row_axis ? 1 : 0) : existing.is_row_axis,
-        required: body.required !== undefined ? (body.required ? 1 : 0) : existing.required
+        required: body.required !== undefined ? (body.required ? 1 : 0) : existing.required,
+        cascade: body.cascade !== undefined ? toJsonStr(body.cascade) : existing.cascade
       })
 
     const row = await db<OwnerDimension>('nivaro_pipeline_owner_dimensions')

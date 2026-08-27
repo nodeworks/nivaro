@@ -189,6 +189,15 @@ export type PipelineOwnerGroupUser = {
   email: string
 }
 
+export type DimensionCascadeRule = {
+  /** Sibling dimension's field whose picked value drives this filter. */
+  parent_field: string
+  /** Column (dotted ok) on THIS dimension's option collection. */
+  filter: string
+  /** Wrap the first hop in _some (junction/M2M path). */
+  via_many?: boolean
+}
+
 export type PipelineOwnerDimension = {
   id: number
   binding: number
@@ -197,6 +206,7 @@ export type PipelineOwnerDimension = {
   sort: number
   is_row_axis: boolean
   required: boolean
+  cascade?: DimensionCascadeRule[] | null
 }
 
 export type PipelineInstanceOwner = {

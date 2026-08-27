@@ -178,6 +178,21 @@ function getIdValue(
   return typeof id === 'number' ? id : typeof id === 'string' ? Number(id) || null : null
 }
 
+/** Compile one cascade rule into an /items filter clause — identical
+ *  semantics to record-form cascade_filters: dotted paths fold into nested
+ *  relation filters, via_many wraps the first hop in _some. */
+function cascadeClause(
+  filter: string,
+  viaMany: boolean | undefined,
+  value: string | number
+): Record<string, unknown> {
+  const segs = filter.split('.')
+  let clause: Record<string, unknown> = { _eq: value }
+  for (let i = segs.length - 1; i >= 1; i--) clause = { [segs[i]]: clause }
+  if (viaMany) return { [segs[0]]: { _some: clause } }
+  return segs.length > 1 ? { [segs[0]]: clause } : { [segs[0]]: { _eq: value } }
+}
+
 interface OwnerMatrixProps {
   templateId: string
   states: PipelineState[]
@@ -424,22 +439,63 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const [searchTerms, setSearchTerms] = useState<Record<number, string>>({})
 
   // Fetch items for each col-filter dim's terminal collection
+  // Cascading option filters (migration 285): a dimension's cascade rules
+  // narrow its option list by sibling dimensions' picked values. Parent
+  // display values resolve to ids inside the queryFn (one tiny id lookup —
+  // id-based parents skip it), and the parent values ride the query key so
+  // changing a parent refetches the child options.
+  const cascadeSignature = (dim: PipelineOwnerDimension): string =>
+    (dim.cascade ?? [])
+      .map((r) => {
+        const parent = colFilterDims.find((d) => d.field === r.parent_field)
+        return parent ? `${r.parent_field}=${filterValues[parent.id] ?? ''}` : ''
+      })
+      .join('&')
+
   const colFilterItemQueries = useQueries({
     queries: colFilterDims.map((dim, i) => {
       const resolved = colFilterResolved[i]
       const term = searchTerms[dim.id] ?? ''
       if (resolved?.relatedCollection) {
+        const sig = cascadeSignature(dim)
         return {
-          queryKey: ['items-picker', resolved.relatedCollection, term],
-          queryFn: () =>
-            client
+          queryKey: ['items-picker', resolved.relatedCollection, term, sig],
+          queryFn: async () => {
+            const clauses: Record<string, unknown>[] = []
+            for (const rule of dim.cascade ?? []) {
+              const pIdx = colFilterDims.findIndex((d) => d.field === rule.parent_field)
+              if (pIdx < 0) continue
+              const pVal = filterValues[colFilterDims[pIdx].id]
+              if (!pVal) continue // unset parent = rule prunes (no narrowing)
+              const pResolved = colFilterResolved[pIdx]
+              let pId: string | number = pVal
+              if (pResolved?.relatedCollection && pResolved.subField) {
+                // Display-valued parent: resolve its id with one narrow lookup.
+                const rows = await client
+                  .request<{ data: Array<{ id: string | number }> }>(
+                    get(`/items/${pResolved.relatedCollection}`, {
+                      limit: 1,
+                      fields: 'id',
+                      filter: JSON.stringify({ [pResolved.subField]: { _eq: pVal } })
+                    })
+                  )
+                  .then((r) => r.data)
+                  .catch(() => [])
+                if (rows.length === 0) continue
+                pId = rows[0].id
+              }
+              clauses.push(cascadeClause(rule.filter, rule.via_many, pId))
+            }
+            return client
               .request<{ data: Record<string, unknown>[] }>(
                 get(`/items/${resolved.relatedCollection}`, {
                   limit: 100,
-                  ...(term ? { search: term } : {})
+                  ...(term ? { search: term } : {}),
+                  ...(clauses.length > 0 ? { filter: JSON.stringify({ _and: clauses }) } : {})
                 })
               )
               .then((r) => r.data)
+          }
         }
       }
       return {
@@ -906,7 +962,19 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                   label={dim.label}
                   value={filterValues[dim.id] ?? ''}
                   options={options}
-                  onChange={(v) => setFilterValues((prev) => ({ ...prev, [dim.id]: v }))}
+                  onChange={(v) =>
+                    setFilterValues((prev) => {
+                      const next = { ...prev, [dim.id]: v }
+                      // Changing a parent clears every dimension cascading
+                      // off it — its old pick may no longer be an option.
+                      for (const child of colFilterDims) {
+                        if ((child.cascade ?? []).some((r) => r.parent_field === dim.field)) {
+                          next[child.id] = ''
+                        }
+                      }
+                      return next
+                    })
+                  }
                   onSearch={(q) => setSearchTerms((prev) => ({ ...prev, [dim.id]: q }))}
                   loading={colFilterItemQueries[i]?.isLoading}
                 />

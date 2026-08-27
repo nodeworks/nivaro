@@ -79,6 +79,7 @@ import type {
   TransitionRequirement,
   User
 } from './types'
+import type { DimensionCascadeRule } from './types'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 
@@ -2093,14 +2094,144 @@ function SortableStateRow({
 
 // ─── Sortable dimension row ───────────────────────────────────────────────────
 
-function SortableDimensionRow({
+/** Cascade rules editor — narrows a dimension's matrix options by sibling
+ *  picks ("Project filtered by the chosen Zone and Project Type"). Rule shape
+ *  mirrors record-form cascade_filters: dotted filter column, via_many for
+ *  junction hops. */
+function DimensionCascadeEditor({
   d,
-  onEdit,
-  onDelete
+  siblings,
+  onSave,
+  saving
 }: {
   d: PipelineOwnerDimension
+  siblings: PipelineOwnerDimension[]
+  onSave: (rules: DimensionCascadeRule[]) => void
+  saving: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [rules, setRules] = useState<DimensionCascadeRule[]>(d.cascade ?? [])
+  useEffect(() => {
+    if (open) setRules(d.cascade ?? [])
+  }, [open, d.cascade])
+  const parents = siblings.filter((x) => x.id !== d.id && !x.is_row_axis)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-tip='Cascade — narrow this dimension’s filter options by sibling picks'
+          className={cn(
+            'rounded p-1 transition-colors',
+            (d.cascade ?? []).length > 0
+              ? 'text-nvr-cyan hover:text-[#00b8e0]'
+              : 'text-slate-400 hover:text-slate-700'
+          )}
+        >
+          <Filter className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[380px] p-3' sideOffset={4}>
+        <p className='text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+          Cascade {d.label}
+        </p>
+        <p className='mt-0.5 text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          Options narrow by each parent's picked value; an unset parent doesn't filter. The filter
+          column lives on this dimension's option collection — dotted paths fold, “via many” wraps
+          the first hop in _some for junction links.
+        </p>
+        <div className='mt-2 space-y-2'>
+          {rules.map((r, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: positional editor rows
+            <div key={i} className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'>
+              <div className='flex items-center gap-1.5'>
+                <span className='w-14 shrink-0 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+                  Parent
+                </span>
+                <SimpleCombobox
+                  value={r.parent_field}
+                  options={parents.map((p) => ({ value: p.field, label: p.label }))}
+                  placeholder='Pick a dimension…'
+                  onChange={(v) =>
+                    setRules(rules.map((x, xi) => (xi === i ? { ...x, parent_field: v } : x)))
+                  }
+                />
+                <button
+                  type='button'
+                  aria-label='Remove rule'
+                  className='ml-auto text-slate-400 hover:text-red-500'
+                  onClick={() => setRules(rules.filter((_, xi) => xi !== i))}
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </div>
+              <div className='flex items-center gap-1.5'>
+                <span className='w-14 shrink-0 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+                  Filter
+                </span>
+                <Input
+                  value={r.filter}
+                  onChange={(e) =>
+                    setRules(rules.map((x, xi) => (xi === i ? { ...x, filter: e.target.value } : x)))
+                  }
+                  placeholder='project_type or divisions.divisions_id'
+                  className='h-7 flex-1 font-mono text-[11.5px]'
+                />
+                <label className='flex shrink-0 items-center gap-1 text-[11px] text-slate-500'>
+                  <Switch
+                    checked={!!r.via_many}
+                    onCheckedChange={(v) =>
+                      setRules(rules.map((x, xi) => (xi === i ? { ...x, via_many: v } : x)))
+                    }
+                  />
+                  via many
+                </label>
+              </div>
+            </div>
+          ))}
+          <button
+            type='button'
+            onClick={() => setRules([...rules, { parent_field: '', filter: '' }])}
+            className='flex w-full items-center justify-center gap-1 rounded border border-dashed border-slate-300 px-2 py-1.5 text-[12px] text-slate-500 hover:border-nvr-cyan/50 hover:text-nvr-cyan dark:border-border'
+          >
+            <Plus className='h-3.5 w-3.5' /> Add cascade rule
+          </button>
+        </div>
+        <div className='mt-2 flex justify-end gap-1.5'>
+          <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            size='sm'
+            className='h-6 px-2.5 text-[11px]'
+            disabled={saving}
+            onClick={() => {
+              onSave(rules.filter((r) => r.parent_field && r.filter.trim()))
+              setOpen(false)
+            }}
+          >
+            {saving ? 'Saving…' : 'Save cascade'}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function SortableDimensionRow({
+  d,
+  siblings,
+  onEdit,
+  onDelete,
+  onSaveCascade,
+  cascadeSaving
+}: {
+  d: PipelineOwnerDimension
+  siblings: PipelineOwnerDimension[]
   onEdit: () => void
   onDelete: () => void
+  onSaveCascade: (rules: DimensionCascadeRule[]) => void
+  cascadeSaving: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: d.id
@@ -2140,8 +2271,19 @@ function SortableDimensionRow({
             required
           </Badge>
         )}
+        {(d.cascade ?? []).length > 0 && (
+          <Badge variant='secondary' className='text-[10px] h-4 px-1.5 shrink-0'>
+            cascades ({(d.cascade ?? []).length})
+          </Badge>
+        )}
       </div>
       <div className='flex items-center gap-1 shrink-0'>
+        <DimensionCascadeEditor
+          d={d}
+          siblings={siblings}
+          onSave={onSaveCascade}
+          saving={cascadeSaving}
+        />
         <button
           type='button'
           onClick={onEdit}
@@ -2382,10 +2524,20 @@ function BindingDimensionsPanel({
                   <SortableDimensionRow
                     key={d.id}
                     d={d}
+                    siblings={orderedDims}
                     onEdit={() => startEdit(d)}
                     onDelete={() => {
                       if (confirm(`Delete dimension "${d.label}"?`)) deleteDimension.mutate(d.id)
                     }}
+                    onSaveCascade={(rules) =>
+                      updateDimension.mutate({
+                        dimId: d.id,
+                        body: { cascade: rules } as Partial<DimensionFormData> & {
+                          cascade: DimensionCascadeRule[]
+                        }
+                      })
+                    }
+                    cascadeSaving={updateDimension.isPending}
                   />
                 )
               )}
