@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-27T14:58:24.221Z",
+  "generated_at": "2026-08-27T15:03:50.978Z",
   "releases": [
+    {
+      "version": "0.1.159",
+      "tag": "v0.1.159",
+      "date": "2026-08-27T11:03:46-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "rich alphabetical member picker on the Teams page",
+              "hash": "921faa21"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.158",
       "tag": "v0.1.158",
-      "date": "2026-08-27T10:58:19-04:00",
+      "date": "2026-08-27T10:58:24-04:00",
       "sections": [
         {
           "label": "Added",
