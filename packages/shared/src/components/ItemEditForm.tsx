@@ -3120,8 +3120,46 @@ export function ItemEditForm({
   ])
   const jumpToField = (key: string): boolean => {
     const el = document.querySelector(`[data-field="${key}"]`)
-    if (!el) return false
-    flashField(key)
+    if (el) {
+      flashField(key)
+      return true
+    }
+    // Not mounted — the field lives on another tab/step. Switch to its tab
+    // (top-level steps AND container steps), then flash once it paints.
+    // Section-group fields on tabbed layouts live under the __general__ step.
+    const groupKey = Object.entries(groupedMap).find(([, fs]) =>
+      fs.some((f) => f.field === key)
+    )?.[0]
+    if (!groupKey) return false
+    const group = groups.find((g) => g.key === groupKey)
+    if (!group) return false
+    let switched = false
+    if (group.type === 'tab' && group.container_id != null) {
+      const container = groups.find((g) => g.id === group.container_id)
+      if (container) {
+        setContainerTab(container, groupKey)
+        switched = true
+      }
+    } else if (group.type === 'tab' && allSteps.some((s) => s.key === groupKey)) {
+      setActiveTab(groupKey)
+      switched = true
+    } else if (
+      (group.type === 'section' || group.type === 'metadata') &&
+      hasTabs &&
+      allSteps.some((s) => s.key === '__general__')
+    ) {
+      setActiveTab('__general__')
+      switched = true
+    }
+    if (!switched) return false
+    const tryFlash = (attempt: number) => {
+      if (document.querySelector(`[data-field="${key}"]`)) {
+        flashField(key)
+        return
+      }
+      if (attempt < 12) setTimeout(() => tryFlash(attempt + 1), 150)
+    }
+    setTimeout(() => tryFlash(0), 150)
     return true
   }
 
