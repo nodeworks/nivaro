@@ -18,6 +18,36 @@ type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, u
  */
 
 /** Fallback when the setting is unset or nonsense — the historic value. */
+
+/**
+ * Attach restrict-mode scope labels ("Zone 1", "BLT") to recording rows so an
+ * admin can see WHO a replay belongs to in access terms, not just by name.
+ * One batched resolve per request; decoration only — never fails the list.
+ */
+async function attachUserScopes(rows: Array<Record<string, unknown>>): Promise<void> {
+  try {
+    const ids = [...new Set(rows.map((r) => String(r.user ?? '')).filter(Boolean))]
+    if (ids.length === 0) return
+    const { listScopeDimensions, resolveScopeLabelsForUsers } = await import(
+      '../services/user-scopes.js'
+    )
+    const dims = (await listScopeDimensions()).map((d) => d.name)
+    if (dims.length === 0) return
+    const resolved = await resolveScopeLabelsForUsers(ids, dims)
+    const byUpper = new Map<string, Map<string, string[]>>()
+    for (const [uid, perDim] of resolved) byUpper.set(uid.toUpperCase(), perDim)
+    for (const r of rows) {
+      const perDim = byUpper.get(String(r.user ?? '').toUpperCase())
+      if (!perDim) continue
+      const labels: string[] = []
+      for (const vals of perDim.values()) labels.push(...vals)
+      if (labels.length > 0) r.scopes = labels
+    }
+  } catch {
+    // Scope labels are decoration — never fail the recordings list over them.
+  }
+}
+
 export const RECORDING_RETENTION_DAYS = 7
 
 /**
@@ -282,6 +312,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         })
       }
       const rows = await q.offset((page - 1) * limit).limit(limit)
+      await attachUserScopes(rows)
       return reply.send({ data: rows, page })
     }
   )
@@ -312,6 +343,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         )
       )) as Record<string, unknown> | undefined
     if (!rec) return reply.code(404).send({ error: 'Not found' })
+    await attachUserScopes([rec])
     return reply.send({ data: rec })
   })
 

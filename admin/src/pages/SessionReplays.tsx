@@ -23,6 +23,7 @@ interface Recording {
   app: string | null
   origin: string | null
   user_name: string | null
+  scopes?: string[]
   started_at: string
   ended_at: string | null
   last_event_at: string | null
@@ -963,6 +964,14 @@ export function SessionReplaysPage() {
                   {selected.count} session{selected.count === 1 ? '' : 's'} ·{' '}
                   {formatFileSize(selected.totalBytes)} recorded
                 </span>
+                {(selectedRecordings[0]?.scopes ?? []).map((sc) => (
+                  <span
+                    key={sc}
+                    className='rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
+                  >
+                    {sc}
+                  </span>
+                ))}
               </div>
 
               {days.map(([label, recs]) => (
@@ -1062,6 +1071,14 @@ export function SessionReplaysPage() {
                   {playing.app}
                 </span>
               )}
+              {(playing?.scopes ?? []).map((sc) => (
+                <span
+                  key={sc}
+                  className='rounded bg-[#00ceff1a] px-1.5 py-px text-[10.5px] font-medium text-[#009abe]'
+                >
+                  {sc}
+                </span>
+              ))}
               <span className='text-[12px] font-normal text-slate-400'>
                 {playing && formatRelative(playing.started_at)}
               </span>
