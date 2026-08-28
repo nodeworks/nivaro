@@ -428,7 +428,13 @@ async function renderWidget(
         ): unknown
         on(ev: 'error', h: (e: Error) => void): unknown
         once(ev: 'requestCompleted', h: () => void): unknown
+        setTimeout?: (ms: number) => void
       }
+      // Heavy report procs outlive the connection-level 15s requestTimeout —
+      // same per-request escape hatch custom-query-exec.ts uses (a Budget
+      // Breakdown render was timing out at 15s and surfacing as a sticky
+      // "Render failed" on the record page).
+      req.setTimeout?.(120_000)
       const collected: unknown[] = []
       req.on('row', (cols) => {
         const row: Record<string, unknown> = {}
