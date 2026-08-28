@@ -7117,7 +7117,7 @@ export function ItemEditForm({
                                             {viewingAddendum
                                               ? (addendumData.find((a) => a.id === addendumViewId)
                                                   ?.title ?? 'Addendum')
-                                              : 'Viewing: Original'}
+                                              : 'Viewing: Current record'}
                                           </span>
                                           <ChevronDown className='h-3 w-3 opacity-60' />
                                         </button>
@@ -7136,7 +7136,7 @@ export function ItemEditForm({
                                               )}
                                             >
                                               <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
-                                              Original
+                                              Current record
                                             </button>
                                             {addendumData.map((a) => (
                                               <button

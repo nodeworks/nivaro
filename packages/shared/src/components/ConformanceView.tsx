@@ -264,7 +264,7 @@ function ScheduleToggle({ collection }: { collection: string }) {
   if (isError || !schedules) return null
   const active = schedules.some((sc) => sc.collection === collection && sc.is_active)
   return (
-    <label className='flex cursor-pointer items-center gap-1.5 pb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+    <label className='flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap pb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
       <button
         type='button'
         role='switch'
@@ -277,7 +277,7 @@ function ScheduleToggle({ collection }: { collection: string }) {
             .then(() => qc.invalidateQueries({ queryKey: ['conformance-schedules'] }))
         }
         className={cn(
-          'relative h-4 w-7 rounded-full transition-colors',
+          'relative h-4 w-7 shrink-0 rounded-full transition-colors',
           active ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
         )}
       >
