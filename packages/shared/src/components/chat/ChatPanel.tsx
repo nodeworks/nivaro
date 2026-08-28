@@ -363,16 +363,45 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
   }, [open])
-  const tips: Array<[string, string]> = [
-    ['@name', 'Mention someone — they get notified even with the panel closed.'],
+  // Two label treatments: things you TYPE render as code chips, PLACES in the
+  // UI render as plain labels — cramming prose like "Hover a message" into a
+  // fake-code chip read as buttons that did nothing.
+  const tips: Array<{ k: string; v: string; kind: 'code' | 'place' }> = [
+    { k: '@name', kind: 'code', v: 'Mention someone — they get notified even with the panel closed.' },
     ...(botName
-      ? ([[`@${botName} …`, 'Ask the AI assistant anything about your data, right in the room.']] as Array<[string, string]>)
+      ? [
+          {
+            k: `@${botName} …`,
+            kind: 'code' as const,
+            v: 'Ask the AI assistant anything about your data, right in the room.'
+          }
+        ]
       : []),
-    ['CR26-12345', 'Type a workflow or request ID and it becomes a live card showing its current state — click it to open the record.'],
-    ['📎 / paste', 'Attach files, or paste a screenshot straight into the message box.'],
-    ['Hover a message', 'React with an emoji; edit your own within 15 minutes; delete your own anytime.'],
-    ['Search box', 'The box above your conversations searches rooms AND every message in them.'],
-    ['Record pages', 'Workflows and requests have a "Chat" button in their header — discuss the record in its own room or send it to any conversation.']
+    {
+      k: 'CR26-12345',
+      kind: 'code',
+      v: 'Type a workflow or request ID and it becomes a live card showing its current state — click it to open the record.'
+    },
+    {
+      k: '📎 / paste',
+      kind: 'code',
+      v: 'Attach files, or paste a screenshot straight into the message box.'
+    },
+    {
+      k: 'Hover a message',
+      kind: 'place',
+      v: 'React with an emoji; edit your own within 15 minutes; delete your own anytime.'
+    },
+    {
+      k: 'Search box',
+      kind: 'place',
+      v: 'The box above your conversations searches rooms AND every message in them.'
+    },
+    {
+      k: 'Record pages',
+      kind: 'place',
+      v: 'Workflows and requests have a "Chat" button in their header — discuss the record in its own room or send it to any conversation.'
+    }
   ]
   return (
     <div ref={rootRef} className='relative flex items-center'>
@@ -392,21 +421,36 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
       {open && (
         <div
           className={cn(
-            'absolute right-0 top-full z-30 mt-1 w-[290px] rounded-xl border p-3 shadow-lg',
+            'absolute right-0 top-full z-30 mt-1 w-[420px] max-w-[92vw] rounded-xl border shadow-lg',
             th.surface,
             'border-slate-200 dark:border-border'
           )}
         >
-          <p className='mb-2 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+          <p className='border-b border-slate-100 px-4 py-2.5 text-[12.5px] font-semibold text-slate-800 dark:border-border/60 dark:text-slate-100'>
             Things this chat can do
           </p>
-          <div className='space-y-1.5'>
-            {tips.map(([k, v]) => (
-              <div key={k} className='flex gap-2 text-[11.5px] leading-snug'>
-                <code className={cn('shrink-0 self-start rounded px-1 py-px text-[10.5px] font-semibold', th.accentSoft)}>
-                  {k}
-                </code>
-                <span className='text-slate-600 dark:text-slate-300'>{v}</span>
+          {/* Fixed label gutter — chips and place-labels align into one
+              column, descriptions read as a second clean column. */}
+          <div className='grid grid-cols-[122px_1fr] gap-x-3 gap-y-0 px-4 py-1.5'>
+            {tips.map((t) => (
+              <div key={t.k} className='col-span-2 grid grid-cols-subgrid border-b border-slate-100/70 py-2 last:border-b-0 dark:border-border/40'>
+                {t.kind === 'code' ? (
+                  <code
+                    className={cn(
+                      'h-fit w-fit self-start whitespace-nowrap rounded px-1.5 py-0.5 text-[10.5px] font-semibold',
+                      th.accentSoft
+                    )}
+                  >
+                    {t.k}
+                  </code>
+                ) : (
+                  <span className='self-start pt-0.5 text-[11px] font-semibold leading-snug text-slate-700 dark:text-slate-200'>
+                    {t.k}
+                  </span>
+                )}
+                <span className='text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+                  {t.v}
+                </span>
               </div>
             ))}
           </div>

@@ -1266,6 +1266,11 @@ export function WidgetSlot({
       onContentChange(Array.isArray(rows) && rows.length > 0)
       return
     }
+    if (widget?.widget_type === 'custom-query' && 'rows' in (renderData as object)) {
+      const rows = (renderData as { rows?: unknown }).rows
+      onContentChange(Array.isArray(rows) && rows.length > 0)
+      return
+    }
     onContentChange(true)
   }, [renderData, error, widget?.widget_type, onContentChange])
 
@@ -1505,6 +1510,7 @@ export function WidgetSlot({
           <QueryTable
             rows={(renderData.rows ?? []) as Array<Record<string, unknown>>}
             config={(widget.config as { table?: QueryTableConfig })?.table}
+            emptyLabel={title}
           />
         )}
         {widget.widget_type === 'review_list' && (
@@ -1513,12 +1519,14 @@ export function WidgetSlot({
             config={(widget.config ?? {}) as unknown as ReviewListConfig}
             onRefetch={() => setRefetchTick((t) => t + 1)}
             hostRecordId={inputs.record_id as string | number | null}
+            emptyLabel={title}
           />
         )}
         {widget.widget_type === 'rollup' && (
           <RollupWidget
             data={renderData as unknown as RollupResult}
             config={(widget.config ?? {}) as unknown as RollupConfig}
+            emptyLabel={title}
           />
         )}
         {widget.widget_type === 'report_widget' && (

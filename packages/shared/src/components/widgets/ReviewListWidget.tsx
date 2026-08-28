@@ -206,6 +206,8 @@ export interface ReviewListWidgetProps {
   /** Host record id (the workflow the widget is slotted on) — forwarded to
    *  action_endpoint as workflow_id so a rejection note can anchor to it. */
   hostRecordId?: string | number | null
+  /** Names the empty state instead of a bare 'No rows'. */
+  emptyLabel?: string
 }
 
 export function ReviewListWidget({
@@ -214,7 +216,8 @@ export function ReviewListWidget({
   loading,
   error,
   onRefetch,
-  hostRecordId
+  hostRecordId,
+  emptyLabel
 }: ReviewListWidgetProps) {
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
@@ -244,7 +247,11 @@ export function ReviewListWidget({
   }
 
   if (!data || data.rows.length === 0) {
-    return <p className='text-[12px] text-slate-400'>No rows</p>
+    return (
+      <p className='text-[12px] italic text-slate-400'>
+        {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'Nothing here yet'}
+      </p>
+    )
   }
 
   const toggleGroup = (key: string) => {

@@ -271,9 +271,11 @@ export interface RollupWidgetProps {
   config: RollupConfig
   loading?: boolean
   error?: string | null
+  /** Names the empty state ("No deployments yet") instead of a bare "No rows". */
+  emptyLabel?: string
 }
 
-export function RollupWidget({ data, config, loading, error }: RollupWidgetProps) {
+export function RollupWidget({ data, config, loading, error, emptyLabel }: RollupWidgetProps) {
   const [collapsedL1, setCollapsedL1] = useState<Set<string>>(() => new Set())
   const [expandedL2, setExpandedL2] = useState<Set<string>>(() => new Set())
 
@@ -294,7 +296,11 @@ export function RollupWidget({ data, config, loading, error }: RollupWidgetProps
   }
 
   if (!data || data.rows.length === 0 || !tree) {
-    return <p className='text-[12px] text-slate-400'>No rows</p>
+    return (
+      <p className='text-[12px] italic text-slate-400'>
+        {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'Nothing here yet'}
+      </p>
+    )
   }
 
   const toggleL1 = (key: string) => {

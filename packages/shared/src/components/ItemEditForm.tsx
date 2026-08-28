@@ -6007,16 +6007,22 @@ export function ItemEditForm({
   // ── Loading state ──────────────────────────────────────────────────────────
   const isLoading = fieldsLoading || (!isNew && itemLoading)
   if (isLoading) {
+    // A big, centered loading state — the sparse two-skeleton layout read as a
+    // blank page for the first second on record open.
     return (
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
         {showHeader && (
-          <div className='shrink-0 border-b px-6 py-4 flex items-center gap-3'>
+          <div className='shrink-0 border-b border-slate-200 px-6 py-4 flex items-center gap-3 dark:border-border'>
             <Skeleton className='h-6 w-40' />
           </div>
         )}
-        <div className='flex-1 overflow-y-auto p-6 space-y-4'>
-          <Skeleton className='h-40 rounded-xl' />
-          <Skeleton className='h-32 rounded-xl' />
+        <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6'>
+          <span className='relative flex h-10 w-10 items-center justify-center'>
+            <span className='absolute inset-0 animate-spin rounded-full border-2 border-slate-200 border-t-nvr-cyan dark:border-border dark:border-t-nvr-cyan' />
+          </span>
+          <p className='text-[13px] font-medium text-slate-500 dark:text-muted-foreground'>
+            Loading record…
+          </p>
         </div>
       </div>
     )

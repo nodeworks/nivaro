@@ -235,7 +235,8 @@ export function QueryTable({
   config,
   onRowClick,
   pivotYear,
-  rowActions
+  rowActions,
+  emptyLabel
 }: {
   rows: Array<Record<string, unknown>>
   config?: QueryTableConfig
@@ -243,6 +244,8 @@ export function QueryTable({
   onRowClick?: (row: Record<string, unknown>) => void
   /** Resolved pivot year (from the widget's params) — overrides config.pivot.year. */
   pivotYear?: number
+  /** Names the empty state ("No deployments yet") instead of a bare "No data". */
+  emptyLabel?: string
   /** Trailing action buttons per row (and on the totals row, receiving null). */
   rowActions?: Array<{ label: string; onClick: (row: Record<string, unknown> | null) => void }>
 }) {
@@ -255,7 +258,11 @@ export function QueryTable({
       new Set((config?.toggles ?? []).filter((t) => t.default_on === false).map((t) => t.label))
   )
   if (!rows || rows.length === 0) {
-    return <p className='px-1 py-2 text-[12px] text-slate-400'>No data</p>
+    return (
+      <p className='px-1 py-2 text-[12px] italic text-slate-400'>
+        {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'No data'}
+      </p>
+    )
   }
 
   // Pivot long month rows into columns when configured.
