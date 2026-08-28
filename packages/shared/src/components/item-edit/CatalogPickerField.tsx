@@ -458,6 +458,52 @@ export function CatalogPickerField({
       </button>
     ) : null
 
+  // Full-catalog search: the box otherwise only narrows the filtered section
+  // rows, so an item outside the request's project-type/zone filter was
+  // unfindable. Matches not already visible above render in their own
+  // "Full catalog" band with the same qty inputs — picking one behaves
+  // exactly like "Add any item" (filter is curation, not a gate).
+  const [fullSearchQ, setFullSearchQ] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setFullSearchQ(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+  const catalogSortField = useMemo(() => {
+    const first = [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)][0]?.[1]
+    return first && !first.includes('.') ? first : 'id'
+  }, [tmpl])
+  const { data: fullSearchRows = [], isFetching: fullSearchFetching } = useQuery<
+    Record<string, unknown>[]
+  >({
+    queryKey: ['catalog-full-search', catalogCol, catalogFields, fullSearchQ],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${catalogCol}`, {
+            search: fullSearchQ,
+            fields: catalogFields,
+            limit: 25,
+            sort: catalogSortField
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!catalogCol && fullSearchQ.trim().length > 0,
+    staleTime: 30_000,
+    placeholderData: (p) => p
+  })
+  const fullMatches = useMemo(() => {
+    const q = search.trim()
+    return fullSearchRows.filter((r) => {
+      const id = String(r.id)
+      if (pinnedSet.has(id)) return false
+      // In-filter rows only render above when their LABEL matches the search —
+      // a description-only match would otherwise vanish from both lists.
+      const inFilter = catalogById.get(id)
+      if (inFilter && matchesAllTokens(applyDisplayTemplate(tmpl, inFilter), q)) return false
+      return true
+    })
+  }, [fullSearchRows, catalogById, pinnedSet, search, tmpl])
+
   // Related per-item lookups (config.related_columns): one batched query per
   // column against its collection, matched by the item FK plus resolved match
   // tokens ('$parent.<field>'). Chunked _in keeps MSSQL parameter limits safe.
@@ -466,8 +512,9 @@ export function CatalogPickerField({
     for (const r of catalogRows) ids.add(String(r.id))
     for (const e of pickedEntries) ids.add(e.key)
     for (const id of pinnedIds) ids.add(id)
+    for (const r of fullMatches) ids.add(String(r.id))
     return [...ids]
-  }, [catalogRows, pickedEntries, pinnedIds])
+  }, [catalogRows, pickedEntries, pinnedIds, fullMatches])
   const relatedResults = useQueries({
     queries: (config.related_columns ?? []).map((rc) => {
       const match = resolveRelatedMatch(rc.match, parentDraft)
@@ -1248,6 +1295,48 @@ export function CatalogPickerField({
               </Fragment>
             )
           })}
+
+        {missingParents.length === 0 && search.trim().length > 0 && fullMatches.length > 0 && (
+          <Fragment>
+            <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
+              <Search className='h-3 w-3 shrink-0 text-sky-500' />
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                Full catalog
+              </span>
+              <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                {fullMatches.length}
+              </span>
+              <span className='text-[10px] text-slate-400'>
+                not in this request's filter — adding works like "Add any item"
+              </span>
+              {fullSearchFetching && (
+                <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+              )}
+            </div>
+            {fullMatches.map((r, i) => {
+              const id = String(r.id)
+              const qty = currentQty(id)
+              return (
+                <div
+                  key={id}
+                  className={cn(
+                    'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                    i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30',
+                    (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
+                  )}
+                >
+                  {starButton(id)}
+                  <span className={itemLabelCls}>{applyDisplayTemplate(tmpl, r)}</span>
+                  {colCells(id, r)}
+                  {savingIds.has(id) && (
+                    <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                  )}
+                  {qtyInput(id, r)}
+                </div>
+              )
+            })}
+          </Fragment>
+        )}
       </div>
 
       {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
