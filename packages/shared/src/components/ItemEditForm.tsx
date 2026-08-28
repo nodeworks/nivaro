@@ -1187,10 +1187,18 @@ export function ItemEditForm({
   )
   const stagingKeyToFieldRef = useRef<Map<string, string>>(new Map())
   const crossFillInFlightRef = useRef(0)
+  // Derived-fill ledger: which links each SOURCE pick auto-staged, so a new
+  // pick on the same source REPLACES its old derivations instead of stacking
+  // them, and so option filters can ignore self-derived parents.
+  const derivedFillsRef = useRef<
+    Map<string, Array<{ parent: string; stagingKey: string; ids: string[] }>>
+  >(new Map())
+  const derivedOriginRef = useRef<Map<string, string>>(new Map())
   const m2mStagingCtx = useMemo<M2MStagingCtx>(
     () => ({
       getStagedLinks: (k) => m2mLinks.get(k) ?? [],
       getStagedUnlinks: (k) => m2mUnlinks.get(k) ?? new Set(),
+      getDerivedOrigin: (parentField) => derivedOriginRef.current.get(parentField) ?? null,
       stageLink: (k, id) => {
         setM2mLinks((prev) => {
           const existing = prev.get(k) ?? []
@@ -2055,12 +2063,44 @@ export function ItemEditForm({
   // rule's own field resolves filter_column on the PICKED record and fills
   // parent_field from it — the cascade run in reverse. Shares the origin
   // guard with cross-record defaults so a programmatic fill can't re-fire.
+  // Undo everything a previous pick on `source` derived: unstage its links
+  // and clear origin markers, so a NEW pick replaces rather than stacks.
+  const undoDerivedFills = useCallback(
+    (source: string) => {
+      const entries = derivedFillsRef.current.get(source)
+      if (!entries) return
+      crossFillInFlightRef.current += 1
+      try {
+        for (const e of entries) {
+          for (const id of e.ids) m2mStagingCtx.unstageLink(e.stagingKey, id)
+          if (derivedOriginRef.current.get(e.parent) === source)
+            derivedOriginRef.current.delete(e.parent)
+        }
+      } finally {
+        crossFillInFlightRef.current -= 1
+      }
+      derivedFillsRef.current.delete(source)
+    },
+    [m2mStagingCtx]
+  )
+  const recordDerivedFill = useCallback((source: string, parent: string, stagingKey: string, ids: string[]) => {
+    if (ids.length === 0) return
+    const list = derivedFillsRef.current.get(source) ?? []
+    list.push({ parent, stagingKey, ids })
+    derivedFillsRef.current.set(source, list)
+    derivedOriginRef.current.set(parent, source)
+  }, [])
+
   const runUpstreamCascades = useCallback(
-    (field: string, pickedId: unknown, depth = 0, seen?: Set<string>) => {
+    (field: string, pickedId: unknown, depth = 0, seen?: Set<string>, rootSource?: string) => {
       if (pickedId === null || pickedId === undefined || pickedId === '') return
       // Chains all the way up (shipping location → region → zone), capped and
       // cycle-guarded so a config loop can't ping-pong.
       if (depth > 3) return
+      const root = rootSource ?? field
+      // A fresh pick REPLACES the previous pick's derivations (changing the
+      // region must swap the derived zone, not add a second one).
+      if (depth === 0) undoDerivedFills(root)
       const chainSeen = seen ?? new Set<string>()
       const seenKey = `${field}:${String(pickedId)}`
       if (chainSeen.has(seenKey)) return
@@ -2174,19 +2214,23 @@ export function ItemEditForm({
               const already = new Set(
                 (m2mAliasFieldStatesRef.current[parent]?.ids ?? []).map((x) => String(x))
               )
+              const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
                 for (const v of values) {
                   if (already.has(v)) continue
                   m2mStagingCtx.stageLink(info.stagingKey, v)
+                  stagedNow.push(v)
                 }
               } finally {
                 crossFillInFlightRef.current -= 1
               }
+              recordDerivedFill(root, parent, info.stagingKey, stagedNow)
               // Chain: the filled parent may have its own upstream rule
               // (region → zone). Explicit recursion, not the stageLink hook —
               // the origin guard stays intact for user-pick detection.
-              for (const v of values) upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen)
+              for (const v of values)
+                upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen, root)
             } else if (values.length === 1) {
               // Scalar parent: fill only when unambiguous; overwrite is
               // deliberate — the pick is the newest statement of intent.
@@ -2195,7 +2239,8 @@ export function ItemEditForm({
               setDraft((prev) => ({ ...prev, [parent]: v }))
               setIsDirty(true)
               crossDefaultsRef.current?.(parent, v, 1)
-              upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen)
+              derivedOriginRef.current.set(parent, root)
+              upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen, root)
             }
           } catch {
             /* one rule failing must not take the rest down */
@@ -2203,7 +2248,7 @@ export function ItemEditForm({
         }
       })()
     },
-    [fieldConfig, relations, collection, m2mAliasFieldsForRules, m2mStagingCtx, client]
+    [fieldConfig, relations, collection, m2mAliasFieldsForRules, m2mStagingCtx, client, undoDerivedFills, recordDerivedFill]
   )
   const upstreamCascadesRef = useRef(runUpstreamCascades)
   upstreamCascadesRef.current = runUpstreamCascades
@@ -2228,6 +2273,7 @@ export function ItemEditForm({
         }
         const fkField = cfg?.source_fk_field || fc.field
         if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
+        if (depth === 0) undoDerivedFills(field)
         const map = cfg.field_map
         // Alias-mapped source fields must stay OUT of the readOne fields= —
         // readOne 500s on explicit alias selections (documented gotcha);
@@ -2313,15 +2359,18 @@ export function ItemEditForm({
               const already = new Set(
                 (m2mAliasFieldStatesRef.current[target]?.ids ?? []).map((x) => String(x))
               )
+              const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
                 for (const rid of ids) {
                   if (already.has(String(rid))) continue
                   m2mStagingCtx.stageLink(info.stagingKey, rid)
+                  stagedNow.push(String(rid))
                 }
               } finally {
                 crossFillInFlightRef.current -= 1
               }
+              recordDerivedFill(field, target, info.stagingKey, stagedNow)
             }
             for (const [target, sourceField] of entryList) {
               const sf = String(sourceField).split('||')[0].trim()
@@ -2377,7 +2426,7 @@ export function ItemEditForm({
           })
       }
     },
-    [fieldConfig, client, m2mAliasFieldsForRules, m2mStagingCtx]
+    [fieldConfig, client, m2mAliasFieldsForRules, m2mStagingCtx, undoDerivedFills, recordDerivedFill]
   )
   crossDefaultsRef.current = runCrossDefaults
 

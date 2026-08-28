@@ -732,6 +732,11 @@ export function FieldRow({
   let unsatisfiedParentLabel: string | null = null
   let requiredParentLabel: string | null = null
   for (const rule of cascadeRules) {
+    // A parent whose value THIS field's own pick derived must not narrow this
+    // field's options — otherwise picking a region locks the region picker
+    // into the zone the pick itself filled, and cross-zone changes read as
+    // "No results".
+    if (m2mStaging?.getDerivedOrigin?.(rule.parent_field) === field.field) continue
     const parentVal =
       draft[rule.parent_field] ??
       (() => {
