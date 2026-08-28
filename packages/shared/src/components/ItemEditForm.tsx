@@ -2214,6 +2214,18 @@ export function ItemEditForm({
               const already = new Set(
                 (m2mAliasFieldStatesRef.current[parent]?.ids ?? []).map((x) => String(x))
               )
+              // Fill only EMPTY parents: a set parent already agreed with this
+              // pick (the option filter guaranteed compatibility) — stacking
+              // the picked record's OTHER links on top replaces the user's
+              // explicit choice (the CDO → BSO bug). Ledgered derivations were
+              // undone above, so a re-pick still re-derives.
+              if (already.size > 0) continue
+              const parentMeta = (fieldConfig ?? []).find((f) => f.field === parent)
+              const maxVals = parseJson<{ max_values?: number | null }>(parentMeta?.options ?? null)
+                ?.max_values
+              // More values than the field allows = ambiguous, fill nothing
+              // (a 5-region project cannot answer a single-region field).
+              if (maxVals != null && values.length > maxVals) continue
               const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
@@ -2232,8 +2244,11 @@ export function ItemEditForm({
               for (const v of values)
                 upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen, root)
             } else if (values.length === 1) {
-              // Scalar parent: fill only when unambiguous; overwrite is
-              // deliberate — the pick is the newest statement of intent.
+              // Scalar parent: fill only when unambiguous AND empty — a value
+              // the user set (or an earlier fill set) already agreed with
+              // this pick via the option filter.
+              const existing = draftRef.current[parent]
+              if (existing !== null && existing !== undefined && existing !== '') continue
               const v = values[0]
               draftRef.current = { ...draftRef.current, [parent]: v }
               setDraft((prev) => ({ ...prev, [parent]: v }))
@@ -2359,6 +2374,13 @@ export function ItemEditForm({
               const already = new Set(
                 (m2mAliasFieldStatesRef.current[target]?.ids ?? []).map((x) => String(x))
               )
+              // Same fill-only-when-empty rule as upstream cascades — a set
+              // parent already agreed with this pick.
+              if (already.size > 0) return
+              const targetMeta = (fieldConfig ?? []).find((f) => f.field === target)
+              const maxV = parseJson<{ max_values?: number | null }>(targetMeta?.options ?? null)
+                ?.max_values
+              if (maxV != null && ids.length > maxV) return
               const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
