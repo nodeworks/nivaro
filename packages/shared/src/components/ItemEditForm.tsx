@@ -6543,7 +6543,12 @@ export function ItemEditForm({
   }
 
   // ── Loading state ──────────────────────────────────────────────────────────
-  const isLoading = fieldsLoading || (!isNew && itemLoading)
+  // NOT fieldsLoading: the field-config query is DISABLED while the layout
+  // resolves, and a disabled pending query reports isLoading false — so a
+  // reload painted the empty form shell (comments/tasks slot chrome included)
+  // for the layout round-trip, THEN swapped to the loader. isFetched is false
+  // through both phases.
+  const isLoading = !fieldConfigFetched || (!isNew && itemLoading)
   if (isLoading) {
     // A big, centered loading state — the sparse two-skeleton layout read as a
     // blank page for the first second on record open.
