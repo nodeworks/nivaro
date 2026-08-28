@@ -449,6 +449,7 @@ export function SummaryPanel({
   errors,
   staleFields,
   aliasEmptiness,
+  layoutFields,
   onFieldClick
 }: {
   allSteps: StepDef[]
@@ -466,6 +467,9 @@ export function SummaryPanel({
   /** Emptiness for alias fields the draft cannot answer for: true/false, or
    *  null while the junction state is still settling. */
   aliasEmptiness?: Record<string, boolean | null>
+  /** Fields assigned to the resolved layout — when present, the Related
+   *  catch-all only lists O2M aliases the layout actually carries. */
+  layoutFields?: Set<string> | null
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -501,7 +505,9 @@ export function SummaryPanel({
           r.many_collection &&
           (r.one_collection === collection || r.one_collection == null) &&
           r.one_field != null &&
-          !renderedFieldNames.has(r.one_field)
+          !renderedFieldNames.has(r.one_field) &&
+          // Off-layout aliases stay out — the sidebar summarizes THIS layout.
+          (!layoutFields || layoutFields.has(r.one_field))
       )
     : []
 

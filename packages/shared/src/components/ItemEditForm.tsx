@@ -7624,6 +7624,15 @@ export function ItemEditForm({
                                     >
                                       <div className='w-[232px] overflow-y-auto h-full'>
                                         <SummaryPanel
+                                          layoutFields={
+                                            (activeLayoutData?.assignments?.length ?? 0) > 0
+                                              ? new Set(
+                                                  (activeLayoutData?.assignments ?? []).map(
+                                                    (a) => a.field
+                                                  )
+                                                )
+                                              : null
+                                          }
                                           allSteps={
                                             allTabGroups.length > 0
                                               ? allTabGroups.map((g) => ({
