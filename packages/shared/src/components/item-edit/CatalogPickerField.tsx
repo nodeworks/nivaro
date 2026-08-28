@@ -1097,8 +1097,12 @@ export function CatalogPickerField({
           </span>
         </div>
 
-        {hasExtraCols && missingParents.length === 0 && (
-          <div className='flex items-center gap-2 border-b border-slate-200 bg-slate-50/60 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/50'>
+        {hasExtraCols && (
+          // Sticky: the catalog list is tall and the page scroller carries it —
+          // without this the labels scroll away and favorites/section rows
+          // read as headerless columns. Opaque bg (not the /60 tint) so rows
+          // never bleed through while pinned.
+          <div className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'>
             {config.favorites && <span className='w-[18px] shrink-0' />}
             <span className='w-36 shrink-0'>Item</span>
             {displayCols.map((c) => (
@@ -1118,9 +1122,10 @@ export function CatalogPickerField({
           </div>
         )}
 
-        {missingParents.length > 0 && (
+        {missingParents.length > 0 && !search.trim() && (
           <p className='px-3 py-6 text-center text-slate-400'>
-            Select {missingParents.map((f) => titleCase(f)).join(', ')} first to load the catalog
+            Search the full catalog above, or select{' '}
+            {missingParents.map((f) => titleCase(f)).join(', ')} to browse by category
           </p>
         )}
         {missingParents.length === 0 && catalogLoading && (
@@ -1296,7 +1301,15 @@ export function CatalogPickerField({
             )
           })}
 
-        {missingParents.length === 0 && search.trim().length > 0 && fullMatches.length > 0 && (
+        {search.trim().length > 0 &&
+          fullMatches.length === 0 &&
+          !fullSearchFetching &&
+          missingParents.length > 0 && (
+            <p className='px-3 py-4 text-center text-slate-400'>
+              No CIFAs match "{search.trim()}"
+            </p>
+          )}
+        {search.trim().length > 0 && fullMatches.length > 0 && (
           <Fragment>
             <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
               <Search className='h-3 w-3 shrink-0 text-sky-500' />
@@ -1307,7 +1320,9 @@ export function CatalogPickerField({
                 {fullMatches.length}
               </span>
               <span className='text-[10px] text-slate-400'>
-                not in this request's filter — adding works like "Add any item"
+                {missingParents.length > 0
+                  ? 'matches across the full catalog'
+                  : 'not in this request\'s filter — adding works like "Add any item"'}
               </span>
               {fullSearchFetching && (
                 <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
