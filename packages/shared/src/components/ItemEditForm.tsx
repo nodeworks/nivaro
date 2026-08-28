@@ -3798,19 +3798,22 @@ export function ItemEditForm({
       if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) return false
       return true
     })
-    if (fields.length === 0) return null
+    // Completeness = REQUIRED layout fields only — optional fields being
+    // blank is normal, not incompleteness. No required fields → no pill.
+    const required = fields.filter((f) => f.required)
+    if (required.length === 0) return null
     const isFilled = (f: (typeof fields)[number]): boolean => {
       const alias = m2mAliasFieldsForRules.get(f.field)
       if (alias) return (m2mAliasFieldStates[f.field]?.ids ?? []).length > 0
       const v = draft[f.field]
       return v !== undefined && v !== null && v !== '' && v !== false
     }
-    const filled = fields.filter(isFilled)
-    const requiredMissing = fields.filter((f) => f.required && !isFilled(f))
+    const filled = required.filter(isFilled)
+    const requiredMissing = required.filter((f) => !isFilled(f))
     return {
-      pct: Math.round((filled.length / fields.length) * 100),
+      pct: Math.round((filled.length / required.length) * 100),
       filled: filled.length,
-      total: fields.length,
+      total: required.length,
       requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
     }
   }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates, activeLayoutData])
@@ -6309,9 +6312,9 @@ export function ItemEditForm({
                                                   ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
                                                   : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
                                             }`}
-                                            data-tip={`${completeness.filled} of ${completeness.total} fields filled${
+                                            data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
                                               completeness.requiredMissing.length > 0
-                                                ? ` · required missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
+                                                ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
                                                 : ''
                                             }`}
                                           >
