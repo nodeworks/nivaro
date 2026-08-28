@@ -87,6 +87,27 @@ export function setNumberFormat(opts: { locale?: string; compact?: boolean } | n
   _compactNumbers = opts?.compact === true
 }
 
+
+/** Hours → the largest sensible unit: "45m", "18h", "3d 7h", "26d", "1mo 5d".
+ *  "845h" is not a duration anyone can read — past a couple of days, people
+ *  think in days; past a month, in months. */
+export function humanHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return '—'
+  const h = Math.max(0, hours)
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m`
+  if (h < 48) return `${Math.round(h)}h`
+  const days = h / 24
+  if (days < 7) {
+    const d = Math.floor(days)
+    const rem = Math.round(h - d * 24)
+    return rem > 0 ? `${d}d ${rem}h` : `${d}d`
+  }
+  if (days < 60) return `${Math.round(days)}d`
+  const months = Math.floor(days / 30)
+  const remDays = Math.round(days - months * 30)
+  return remDays > 0 ? `${months}mo ${remDays}d` : `${months}mo`
+}
+
 export function formatRelative(date: string | Date) {
   // Timestamp pref (#229): 'exact' renders the full stamp everywhere the
   // relative form would have appeared.

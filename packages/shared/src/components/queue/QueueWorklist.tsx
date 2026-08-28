@@ -55,7 +55,7 @@ import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-valu
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { RowHighlightLegend } from '../RowHighlightLegend'
-import { titleCase, cn, formatDate, formatDateTime, formatNumber } from '../../lib/utils'
+import { titleCase, cn, formatDate, formatDateTime, formatNumber, humanHours } from '../../lib/utils'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import {
@@ -219,10 +219,7 @@ const SCOPE_TABS: { value: Scope; label: string }[] = [
 ]
 
 function formatAging(hours: number | null): string {
-  if (hours == null) return '—'
-  if (hours < 1) return '<1h'
-  if (hours < 24) return `${Math.round(hours)}h`
-  return `${Math.round(hours / 24)}d`
+  return humanHours(hours)
 }
 
 function SlaPill({ status }: { status: QueueItemRow['sla_status'] }) {

@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatRelative , humanHours} from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { Button } from '../ui/button'
 import {
@@ -143,10 +143,7 @@ function StateBadge({
 function fmtDur(ms: number): string {
   const m = Math.floor(ms / 60000)
   if (m < 60) return `${Math.max(1, m)}m`
-  const h = Math.floor(m / 60)
-  if (h < 48) return `${h}h`
-  const d = Math.floor(h / 24)
-  return `${d}d ${h % 24}h`
+  return humanHours(ms / 3_600_000)
 }
 
 function StateDurationTimeline({

@@ -14,7 +14,7 @@ import {
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { buildGroups } from '../../lib/queue-grouping'
-import { cn, formatNumber } from '../../lib/utils'
+import { cn, formatNumber, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from './OwnerAvatars'
 
 export interface QueueOwner {
@@ -37,10 +37,7 @@ export interface QueueItemRow {
 }
 
 function formatAging(hours: number | null): string {
-  if (hours == null) return '—'
-  if (hours < 1) return '<1h'
-  if (hours < 24) return `${Math.round(hours)}h`
-  return `${Math.round(hours / 24)}d`
+  return humanHours(hours)
 }
 
 const NO_STATE = '__no_state__'

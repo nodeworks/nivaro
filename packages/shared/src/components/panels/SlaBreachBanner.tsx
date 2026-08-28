@@ -1,3 +1,4 @@
+import { humanHours } from '../../lib/utils'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
@@ -44,13 +45,13 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
   })
 
   if (!data || data.status !== 'breached') return null
-  const hoursPast = Math.max(0, Math.round((data.elapsed_hours ?? 0) - (data.total_hours ?? 0)))
+  const hoursPast = Math.max(0, (data.elapsed_hours ?? 0) - (data.total_hours ?? 0))
 
   return (
     <div className='flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
       <p className='min-w-0 flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
         <span className='font-semibold'>SLA breached</span>
-        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {hoursPast}h past the limit
+        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(hoursPast)} past the limit
         {data.acknowledged
           ? ` · acknowledged by ${data.acknowledged.by || 'someone'}`
           : data.has_ladder

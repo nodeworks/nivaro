@@ -16,7 +16,7 @@ import {
 } from '../panels/TransitionRequirementsDialog'
 import { get, post } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { OwnerAvatars } from './OwnerAvatars'
@@ -70,10 +70,7 @@ interface CommentRow {
 }
 
 function formatAging(hours: number | null): string {
-  if (hours == null) return '—'
-  if (hours < 1) return '<1h'
-  if (hours < 24) return `${Math.round(hours)}h`
-  return `${Math.round(hours / 24)}d`
+  return humanHours(hours)
 }
 
 function formatFieldHeader(path: string): string {
