@@ -1,6 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Loader2, Search, Star, X } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase , matchesAllTokens} from '../../lib/utils'
@@ -56,7 +57,7 @@ export interface CatalogModeConfig {
     value_field: string
     match?: Record<string, unknown>
     copy_to?: string
-    format?: 'currency' | 'number'
+    format?: 'currency' | 'number' | 'presence'
     summary_only?: boolean
     sections_only?: boolean
     /** 'sum' turns the lookup into an aggregate: value = SUM(value_field)
@@ -80,6 +81,12 @@ export interface CatalogModeConfig {
   submission_errors?: boolean | { match_fields?: string[] }
   /** Per-user starred catalog items: star toggles + a Favorites section pinned first. */
   favorites?: boolean
+  /** related_columns KEYS shown as table columns in the favorites manager
+   *  drawer (full-catalog browse + star). Values roll up across ALL rows the
+   *  column's `match` currently resolves to — i.e. only the warehouses the
+   *  form's field selection filters to; numeric values sum, text takes the
+   *  first. Omit = no related columns in the drawer. */
+  favorites_manager_columns?: string[]
   /** Import template NAME — renders that template's upload button above the Summary
    *  table (existing records; wired through ItemEditForm's reimport flow). */
   upload_template?: string
@@ -424,6 +431,11 @@ export function CatalogPickerField({
     await client.request(post(`/pinned/${catalogCol}/${catalogId}/toggle`)).catch(() => {})
     qc.invalidateQueries({ queryKey: ['pinned-items', catalogCol] })
   }
+  // Favorites manager drawer (full-catalog search + star). anchorEl resolves
+  // the portal container — inside a modal sheet the drawer must portal into
+  // the dialog content, not document.body.
+  const [favMgrOpen, setFavMgrOpen] = useState(false)
+  const favMgrAnchorRef = useRef<HTMLButtonElement>(null)
   const starButton = (catalogId: string) =>
     config.favorites ? (
       <button
@@ -700,7 +712,9 @@ export function CatalogPickerField({
     }
     return cur
   }
-  const fmtVal = (v: unknown, format?: 'currency' | 'number'): string => {
+  const fmtVal = (v: unknown, format?: 'currency' | 'number' | 'presence'): string => {
+    if (format === 'presence')
+      return v === undefined || v === null || v === '' || Number(v) === 0 ? 'No' : 'Yes'
     if (v === undefined || v === null || v === '') return '—'
     const n = Number(v)
     if (format === 'currency')
@@ -1073,34 +1087,49 @@ export function CatalogPickerField({
           </p>
         )}
 
-        {config.favorites && pinnedIds.length > 0 && (
+        {config.favorites && (
           <Fragment>
-            <button
-              type='button'
-              onClick={() =>
-                setCollapsed((p) => {
-                  const n = new Set(p)
-                  if (n.has('__favorites__')) n.delete('__favorites__')
-                  else n.add('__favorites__')
-                  return n
-                })
-              }
-              className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-amber-50/70 px-2 py-1.5 text-left dark:border-border dark:bg-amber-900/10'
-            >
-              <ChevronRight
-                className={cn(
-                  'h-3 w-3 shrink-0 text-slate-400 transition-transform',
-                  !collapsed.has('__favorites__') && 'rotate-90'
-                )}
-              />
-              <Star className='h-3 w-3 shrink-0 fill-amber-400 text-amber-400' />
-              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                Favorites
-              </span>
-              <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                {pinnedRowsData.length}
-              </span>
-            </button>
+            <div className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-amber-50/70 px-2 py-1 dark:border-border dark:bg-amber-900/10'>
+              <button
+                type='button'
+                onClick={() =>
+                  setCollapsed((p) => {
+                    const n = new Set(p)
+                    if (n.has('__favorites__')) n.delete('__favorites__')
+                    else n.add('__favorites__')
+                    return n
+                  })
+                }
+                className='flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left'
+              >
+                <ChevronRight
+                  className={cn(
+                    'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                    !collapsed.has('__favorites__') && 'rotate-90'
+                  )}
+                />
+                <Star className='h-3 w-3 shrink-0 fill-amber-400 text-amber-400' />
+                <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                  Favorites
+                </span>
+                <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                  {pinnedRowsData.length}
+                </span>
+              </button>
+              <button
+                ref={favMgrAnchorRef}
+                type='button'
+                onClick={() => setFavMgrOpen(true)}
+                className='shrink-0 rounded border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-400/10'
+              >
+                Manage
+              </button>
+            </div>
+            {!collapsed.has('__favorites__') && pinnedRowsData.length === 0 && (
+              <p className='border-b border-slate-100 px-3 py-2 text-center text-[11px] text-slate-400 dark:border-border/50'>
+                No favorites yet — Manage lets you search the full catalog and star items.
+              </p>
+            )}
             {!collapsed.has('__favorites__') &&
               pinnedRowsData
                 .filter(
@@ -1277,7 +1306,9 @@ export function CatalogPickerField({
             const descCol = line1TextCols[0]
             const chipCols = line1TextCols.slice(1)
             const statDisplayCols = summaryDisplayCols.filter((c) => !!c.format)
-            const statVal = (v: unknown, format?: 'currency' | 'number'): string => {
+            const statVal = (v: unknown, format?: 'currency' | 'number' | 'presence'): string => {
+              if (format === 'presence')
+                return v === undefined || v === null || v === '' || Number(v) === 0 ? 'No' : 'Yes'
               if (v === true || v === 'true') return '✓'
               if (v === false || v === 'false') return '—'
               if (v == null || v === '') return '—'
@@ -1488,6 +1519,22 @@ export function CatalogPickerField({
           })()
         )}
       </div>
+      {favMgrOpen && catalogCol && (
+        <FavoritesManagerDrawer
+          catalogCol={catalogCol}
+          tmpl={tmpl}
+          sectionBy={config.section_by}
+          pinnedSet={pinnedSet}
+          pinnedIds={pinnedIds}
+          relatedCols={(config.favorites_manager_columns ?? [])
+            .map((k) => (config.related_columns ?? []).find((rc) => rc.key === k))
+            .filter((rc): rc is NonNullable<typeof rc> => !!rc)}
+          parentDraft={parentDraft}
+          onToggle={(id) => void togglePin(id)}
+          onClose={() => setFavMgrOpen(false)}
+          anchor={favMgrAnchorRef.current}
+        />
+      )}
     </div>
   )
 }
@@ -1755,5 +1802,453 @@ function AttrSelect({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Favorites manager — a static 50%-width drawer for browsing the FULL catalog
+ * (unfiltered by the record's project type / zone gating) and starring items.
+ * The section list only ever shows in-scope items, so without this a user
+ * could never favorite a CIFA outside the current request's filter. Related
+ * columns (config.favorites_manager_columns) roll up across only the rows
+ * their `match` resolves to — the same warehouse filter the form drives.
+ */
+function FavoritesManagerDrawer({
+  catalogCol,
+  tmpl,
+  sectionBy,
+  pinnedSet,
+  pinnedIds,
+  relatedCols,
+  parentDraft,
+  onToggle,
+  onClose,
+  anchor
+}: {
+  catalogCol: string
+  tmpl: string | null | undefined
+  sectionBy: string
+  pinnedSet: Set<string>
+  pinnedIds: string[]
+  relatedCols: Array<{
+    key: string
+    label?: string
+    collection: string
+    item_field: string
+    value_field: string
+    match?: Record<string, unknown>
+    format?: 'currency' | 'number' | 'presence'
+  }>
+  parentDraft: Record<string, unknown> | undefined
+  onToggle: (id: string) => void
+  onClose: () => void
+  anchor: HTMLElement | null
+}) {
+  const client = useNivaroClient()
+  const [q, setQ] = useState('')
+  const [dq, setDq] = useState('')
+  const [pageNum, setPageNum] = useState(1)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const t = setTimeout(() => setDq(q), 300)
+    return () => clearTimeout(t)
+  }, [q])
+  useEffect(() => setPageNum(1), [dq])
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  // Full rows ('*') so a description-ish column shows without the component
+  // knowing the catalog's schema; the dotted section path rides alongside for
+  // the category column. Sorted by the display template's first plain column
+  // (cifa_number on EFP) so the default listing reads as the catalog index.
+  const sortField = useMemo(() => {
+    const first = [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)][0]?.[1]
+    return first && !first.includes('.') ? first : 'id'
+  }, [tmpl])
+  const listFields = sectionBy.includes('.') ? `*,${sectionBy}` : '*'
+  const PAGE = 50
+  const { data: listData, isFetching } = useQuery<{
+    data: Record<string, unknown>[]
+    total?: number
+  }>({
+    queryKey: ['favorites-manager-list', catalogCol, dq, sortField, pageNum],
+    queryFn: () =>
+      client.request<{ data: Record<string, unknown>[]; total?: number }>(
+        get(`/items/${catalogCol}`, {
+          fields: listFields,
+          limit: PAGE,
+          page: pageNum,
+          sort: sortField,
+          ...(dq.trim() ? { search: dq } : {})
+        })
+      ),
+    staleTime: 30_000,
+    placeholderData: (p) => p
+  })
+  // Starred rows live ONLY in the favorites group — drop them from All CIFAs.
+  const results = (listData?.data ?? []).filter((r) => !pinnedSet.has(String(r.id)))
+  const total = listData?.total ?? results.length
+  const pageCount = Math.max(1, Math.ceil(total / PAGE))
+
+  // Favorites rows fetched here (not the parent's projection) so description /
+  // category columns are populated for them too.
+  const { data: favRows = [] } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['favorites-manager-pinned', catalogCol, listFields, pinnedIds.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${catalogCol}`, {
+            filter: JSON.stringify({ id: { _in: pinnedIds } }),
+            fields: listFields,
+            limit: pinnedIds.length,
+            sort: sortField
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: pinnedIds.length > 0,
+    staleTime: 30_000
+  })
+
+  const label = (row: Record<string, unknown>) =>
+    tmpl ? applyDisplayTemplate(tmpl, row) : String(row.cifa_number ?? row.name ?? `#${row.id}`)
+  const description = (row: Record<string, unknown>) => {
+    const d = row.description ?? row.long_description ?? row.name
+    return typeof d === 'string' && d.trim() && d.trim() !== label(row) ? d : ''
+  }
+  const category = (row: Record<string, unknown>) => {
+    if (!sectionBy) return ''
+    const v = applyDisplayTemplate(`{{${sectionBy}}}`, row)
+    return v === `{{${sectionBy}}}` ? '' : v
+  }
+  const fmt = (v: unknown, format?: 'currency' | 'number' | 'presence'): string => {
+    if (format === 'presence')
+      return v === null || v === undefined || v === '' || Number(v) === 0 ? 'No' : 'Yes'
+    if (v === null || v === undefined || v === '') return '—'
+    const n = Number(v)
+    if (format === 'currency' && Number.isFinite(n))
+      return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+    if (format === 'number' && Number.isFinite(n)) return n.toLocaleString()
+    return String(v)
+  }
+
+  // One batched lookup per related column over the visible ids (page + pinned),
+  // restricted by the resolved match — i.e. only the warehouses the form's
+  // current field selection filters to. Multiple matching rows per item ROLL
+  // UP: numeric values sum, text takes the first row.
+  const visibleIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of results) ids.add(String(r.id))
+    for (const id of pinnedIds) ids.add(id)
+    return [...ids]
+  }, [results, pinnedIds])
+  const relatedResults = useQueries({
+    queries: relatedCols.map((rc) => {
+      const match = resolveRelatedMatch(rc.match, parentDraft)
+      return {
+        queryKey: [
+          'favorites-manager-related',
+          rc.key,
+          rc.collection,
+          JSON.stringify(match),
+          visibleIds.join(',')
+        ],
+        queryFn: async () => {
+          const rows = await client
+            .request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${rc.collection}`, {
+                filter: JSON.stringify({ [rc.item_field]: { _in: visibleIds }, ...(match ?? {}) }),
+                fields: `${rc.item_field},${rc.value_field}`,
+                limit: 1000
+              })
+            )
+            .then((r) => r.data ?? [])
+          const map = new Map<string, unknown>()
+          for (const row of rows) {
+            const id = String(row[rc.item_field])
+            const v = row[rc.value_field]
+            const prev = map.get(id)
+            if (prev === undefined) map.set(id, v)
+            else if (Number.isFinite(Number(prev)) && Number.isFinite(Number(v)))
+              map.set(id, Number(prev) + Number(v))
+          }
+          return map
+        },
+        enabled: visibleIds.length > 0 && (rc.match === undefined || match !== null),
+        staleTime: 30_000
+      }
+    })
+  })
+  const relatedGated = relatedCols.filter(
+    (rc) => rc.match !== undefined && resolveRelatedMatch(rc.match, parentDraft) === null
+  )
+
+  const starBtn = (id: string) => {
+    const pinned = pinnedSet.has(id)
+    return (
+      <button
+        type='button'
+        title={pinned ? 'Remove from favorites' : 'Add to favorites'}
+        onClick={() => onToggle(id)}
+        className='shrink-0 rounded p-1 transition-colors hover:bg-amber-100/60 dark:hover:bg-amber-400/10'
+      >
+        <Star
+          className={cn(
+            'h-4 w-4',
+            pinned ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-400'
+          )}
+        />
+      </button>
+    )
+  }
+
+  const bandRow = (content: ReactNode, cls: string) => (
+    <tr>
+      <td colSpan={4 + relatedCols.length} className={cn('border-b px-3 py-1.5', cls)}>
+        {content}
+      </td>
+    </tr>
+  )
+
+  const itemRow = (row: Record<string, unknown>, i: number) => {
+    const id = String(row.id)
+    const desc = description(row)
+    return (
+      <tr
+        key={id}
+        className={cn(
+          'border-b border-slate-100 dark:border-border/50',
+          i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30'
+        )}
+      >
+        <td className='px-2 py-1'>{starBtn(id)}</td>
+        <td className='px-2 py-1 font-medium tabular-nums text-slate-700 dark:text-slate-200'>
+          {label(row)}
+        </td>
+        <td className='max-w-0 px-2 py-1'>
+          <p className='truncate text-slate-600 dark:text-slate-300' data-tip={desc || undefined}>
+            {desc || '—'}
+          </p>
+        </td>
+        <td className='px-2 py-1'>
+          <p className='truncate text-slate-500 dark:text-slate-400'>{category(row) || '—'}</p>
+        </td>
+        {relatedCols.map((rc, ci) => {
+          const gated = rc.match !== undefined && resolveRelatedMatch(rc.match, parentDraft) === null
+          const v = gated ? undefined : relatedResults[ci]?.data?.get(id)
+          return (
+            <td
+              key={rc.key}
+              className='whitespace-nowrap px-2 py-1 text-right tabular-nums text-slate-600 dark:text-slate-300'
+            >
+              {gated ? '—' : fmt(v, rc.format)}
+            </td>
+          )
+        })}
+      </tr>
+    )
+  }
+
+  // Inside a modal sheet, body-level portals inherit the modal lock's
+  // pointer-events: none — portal into the dialog content instead
+  // (RelationCombobox / DropPanel precedent).
+  const container = (anchor?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+
+  const filteredPinned = q.trim()
+    ? favRows.filter((r) =>
+        matchesAllTokens(`${label(r)} ${description(r)} ${category(r)}`, q)
+      )
+    : favRows
+
+  return createPortal(
+    <div className='fixed inset-0 z-[125]' role='presentation'>
+      <div
+        className='absolute inset-0 bg-slate-900/30 motion-safe:animate-in motion-safe:fade-in'
+        onClick={onClose}
+      />
+      <div
+        role='dialog'
+        aria-label='Manage CIFA favorites'
+        style={{ width: '50vw' }}
+        className='absolute inset-y-0 right-0 flex flex-col border-l border-slate-200 bg-white shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-right dark:border-border dark:bg-background'
+      >
+        <div className='flex items-start gap-2.5 border-b border-slate-200 px-4 py-3 dark:border-border'>
+          <Star className='mt-0.5 h-4 w-4 shrink-0 fill-amber-400 text-amber-400' />
+          <div className='min-w-0 flex-1'>
+            <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+              CIFA favorites
+            </p>
+            <p className='text-[11px] leading-snug text-slate-500 dark:text-slate-400'>
+              Browse the full catalog and star items — favorites appear at the top of every
+              request's item list.
+            </p>
+          </div>
+          <button
+            type='button'
+            onClick={onClose}
+            className='shrink-0 rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/[0.06]'
+            aria-label='Close'
+          >
+            <X className='h-4 w-4' />
+          </button>
+        </div>
+
+        <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
+          <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 focus-within:border-[#00ceff] focus-within:bg-white dark:border-border dark:bg-muted/40 dark:focus-within:bg-background'>
+            <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+            <input
+              ref={inputRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder='Search by number or description…'
+              className='min-w-0 flex-1 bg-transparent text-[12px] text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-200'
+            />
+            {q && (
+              <button
+                type='button'
+                onClick={() => setQ('')}
+                className='shrink-0 text-slate-400 hover:text-slate-600'
+                aria-label='Clear search'
+              >
+                <X className='h-3.5 w-3.5' />
+              </button>
+            )}
+          </div>
+          {relatedGated.length > 0 && (
+            <p className='mt-1.5 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400'>
+              <AlertTriangle className='h-3 w-3 shrink-0' />
+              {relatedGated.map((rc) => rc.label ?? titleCase(rc.key)).join(', ')} fill in once the
+              form's warehouse selection is made.
+            </p>
+          )}
+        </div>
+
+        <div className='min-h-0 flex-1 overflow-y-auto'>
+          <table className='w-full table-fixed border-collapse text-[11px]'>
+            <colgroup>
+              <col className='w-9' />
+              <col className='w-[88px]' />
+              <col />
+              <col className='w-[130px]' />
+              {relatedCols.map((rc) => (
+                <col key={rc.key} className='w-[86px]' />
+              ))}
+            </colgroup>
+            <thead className='sticky top-0 z-[1]'>
+              <tr className='bg-slate-100 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-muted dark:text-slate-400'>
+                <th className='px-2 py-1.5' aria-label='Favorite' />
+                <th className='px-2 py-1.5'>CIFA #</th>
+                <th className='px-2 py-1.5'>Description</th>
+                <th className='px-2 py-1.5'>Category</th>
+                {relatedCols.map((rc) => (
+                  <th key={rc.key} className='px-2 py-1.5 text-right'>
+                    {rc.label ?? titleCase(rc.key)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className={cn(isFetching && 'opacity-50 transition-opacity')}>
+              {bandRow(
+                <span className='flex items-center gap-1.5'>
+                  <Star className='h-3 w-3 shrink-0 fill-amber-400 text-amber-400' />
+                  <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                    Your favorites
+                  </span>
+                  <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                    {pinnedIds.length}
+                  </span>
+                </span>,
+                'border-slate-200 bg-amber-50/70 dark:border-border dark:bg-amber-900/10'
+              )}
+              {filteredPinned.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={4 + relatedCols.length}
+                    className='border-b border-slate-100 px-4 py-3 text-center text-[11px] text-slate-400 dark:border-border/50'
+                  >
+                    {pinnedIds.length === 0
+                      ? 'No favorites yet — star the items you order most.'
+                      : 'No favorites match your search.'}
+                  </td>
+                </tr>
+              )}
+              {filteredPinned.map((r, i) => itemRow(r, i))}
+
+              {bandRow(
+                <span className='flex items-center gap-1.5'>
+                  <Search className='h-3 w-3 shrink-0 text-slate-400' />
+                  <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                    All CIFAs
+                  </span>
+                  <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                    {total.toLocaleString()}
+                  </span>
+                  {isFetching && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+                </span>,
+                'border-t border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/40'
+              )}
+              {!isFetching && results.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={4 + relatedCols.length}
+                    className='px-4 py-4 text-center text-[11px] text-slate-400'
+                  >
+                    {dq.trim() ? `No CIFAs match "${dq}".` : 'No catalog items.'}
+                  </td>
+                </tr>
+              )}
+              {results.map((r, i) => itemRow(r, i))}
+            </tbody>
+          </table>
+        </div>
+
+        {pageCount > 1 && (
+          <div className='flex shrink-0 items-center justify-between border-t border-slate-200 px-3 py-2 dark:border-border'>
+            <span className='flex items-center gap-2 text-[10px] tabular-nums text-slate-400'>
+              {(pageNum - 1) * PAGE + 1}–{Math.min(pageNum * PAGE, total)} of{' '}
+              {total.toLocaleString()}
+              {isFetching && (
+                <span className='flex items-center gap-1 text-slate-500'>
+                  <Loader2 className='h-3 w-3 animate-spin' /> Loading…
+                </span>
+              )}
+            </span>
+            <div className='flex items-center gap-1'>
+              <button
+                type='button'
+                disabled={pageNum <= 1 || isFetching}
+                onClick={() => setPageNum((n) => Math.max(1, n - 1))}
+                className='rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:bg-white/[0.04]'
+              >
+                ‹ Prev
+              </button>
+              <span className='px-1 text-[10px] tabular-nums text-slate-400'>
+                {pageNum} / {pageCount.toLocaleString()}
+              </span>
+              <button
+                type='button'
+                disabled={pageNum >= pageCount || isFetching}
+                onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))}
+                className='rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:bg-white/[0.04]'
+              >
+                Next ›
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    container
   )
 }
