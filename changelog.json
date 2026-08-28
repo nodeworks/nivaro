@@ -1,10 +1,130 @@
 {
-  "generated_at": "2026-08-28T14:08:25.296Z",
+  "generated_at": "2026-08-28T20:41:29.355Z",
   "releases": [
+    {
+      "version": "0.1.172",
+      "tag": "v0.1.172",
+      "date": "2026-08-28T16:41:23-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "replays",
+              "text": "show the recording user's scope labels",
+              "hash": "729faa41"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog",
+              "text": "search box covers the full catalog, matches addable in place",
+              "hash": "286ec186"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog",
+              "text": "favorites manager drawer — full-catalog browse, star, rollup columns",
+              "hash": "179a978e"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "multi-value M2M cascade parents compile to _in",
+              "hash": "b109d38b"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "upstream cascades chain all the way up",
+              "hash": "7149ac29"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "upstream cascades — 'upstream: true' reverses a cascade on pick",
+              "hash": "9017edd9"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "upstream M2M fill in cross-record defaults (circular cascades)",
+              "hash": "5c1f6046"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "catalog",
+              "text": "search shows results only — favorites and sections stay put",
+              "hash": "3ab11948"
+            },
+            {
+              "section": "Fixed",
+              "scope": "catalog",
+              "text": "parent-field hints use the layout's labels, not the column name",
+              "hash": "8560ff2a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "catalog",
+              "text": "search and headers work before Division/Project Type are picked",
+              "hash": "8851e305"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "new-record reload flashed the form shell before the loading state",
+              "hash": "f1a8cb56"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "upstream fills only fill EMPTY parents, bounded by max_values",
+              "hash": "a8845b29"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "upstream fills are replaceable derivations, and never trap their source",
+              "hash": "ab114abb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "changing an M2M cascade parent drops the replaced value",
+              "hash": "f23ebcb1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "steps-bar unsaved-edits dot no longer sits in the chevron notch",
+              "hash": "6169ea93"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "multi-word picker search works everywhere",
+              "hash": "63524239"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "durations render in the largest sensible unit",
+              "hash": "f0ea293c"
+            }
+          ]
+        }
+      ],
+      "count": 17
+    },
     {
       "version": "0.1.171",
       "tag": "v0.1.171",
-      "date": "2026-08-28T10:08:20-04:00",
+      "date": "2026-08-28T10:08:25-04:00",
       "sections": [
         {
           "label": "Added",
