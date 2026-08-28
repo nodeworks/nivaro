@@ -2040,6 +2040,15 @@ export function ItemEditForm({
   // field's effective id array (committed ± staged). Unsettled aliases are
   // omitted, so '$parent.<alias>' tokens prune their clause instead of
   // filtering on a stale empty set.
+  // Layout-effective labels for every field — 'division' renders as 'Zone'
+  // when the layout overrides it; child grids naming parent fields consume
+  // this through ParentDraftContext.
+  const parentFieldLabels = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const f of fieldConfig ?? []) if (f.label) out[f.field] = f.label
+    return out
+  }, [fieldConfig])
+
   const parentDraftWithAliases = useMemo(() => {
     const merged: Record<string, unknown> = { ...draft }
     for (const [field, state] of Object.entries(m2mAliasFieldStates)) {
@@ -6591,7 +6600,8 @@ export function ItemEditForm({
                 value={{
                   draft: parentDraftWithAliases,
                   collection,
-                  dirtyFields: userTouchedRef.current
+                  dirtyFields: userTouchedRef.current,
+                  fieldLabels: parentFieldLabels
                 }}
               >
                 <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>

@@ -1125,7 +1125,7 @@ export function CatalogPickerField({
         {missingParents.length > 0 && !search.trim() && (
           <p className='px-3 py-6 text-center text-slate-400'>
             Search the full catalog above, or select{' '}
-            {missingParents.map((f) => titleCase(f)).join(', ')} to browse by category
+            {missingParents.map((f) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f)).join(', ')} to browse by category
           </p>
         )}
         {missingParents.length === 0 && catalogLoading && (

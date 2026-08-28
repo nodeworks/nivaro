@@ -164,6 +164,10 @@ export type ParentDraftContextValue = {
    *  auto-clears when one of its parents is here; a record loaded with a
    *  stale saved value keeps it (the picker flags it amber instead). */
   dirtyFields?: ReadonlySet<string>
+  /** Effective display label per parent field (layout overrides applied) —
+   *  child components naming a parent field ("select Zone first") must use
+   *  these, never titleCase over the raw column name. */
+  fieldLabels?: Record<string, string>
 }
 
 export const ParentDraftContext = createContext<ParentDraftContextValue | null>(null)
