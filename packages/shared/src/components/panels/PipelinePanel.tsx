@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Check, ChevronDown, GitBranch, Loader2, Minus, Search, UserPlus, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatRelative } from '../../lib/utils'
@@ -1350,6 +1351,9 @@ function PipelinePanelInner({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
+      // A transition changes owners, integrations pushes and audience —
+      // refresh the Record Insights popover caches too.
+      invalidateRecordInsights(queryClient, collection, String(item))
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -1839,6 +1843,9 @@ function PipelineTransitionButtonsInner({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
+      // A transition changes owners, integrations pushes and audience —
+      // refresh the Record Insights popover caches too.
+      invalidateRecordInsights(queryClient, collection, String(item))
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)

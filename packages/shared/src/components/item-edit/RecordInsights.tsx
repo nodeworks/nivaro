@@ -16,6 +16,26 @@ import { get } from '../../lib/commands'
 
 type Tab = 'audience' | 'integrations' | 'owners' | 'mail' | 'chat'
 
+/** Every query the insights popover holds — call after a save or transition
+ *  so a popover opened next shows current data, not 30s-stale caches. */
+export function invalidateRecordInsights(
+  qc: { invalidateQueries: (o: { queryKey: unknown[] }) => unknown },
+  collection: string,
+  itemId: string
+): void {
+  for (const key of [
+    ['record-audience', collection, itemId],
+    ['erp-submissions', collection, String(itemId)],
+    ['record-integrations', collection, itemId],
+    ['record-external-ids', collection, itemId],
+    ['record-owner-history', collection, itemId],
+    ['record-mail-log', collection, itemId],
+    ['record-chat-mentions', collection, itemId]
+  ]) {
+    void qc.invalidateQueries({ queryKey: key })
+  }
+}
+
 export function RecordInsightsButton({
   collection,
   itemId

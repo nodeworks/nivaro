@@ -95,7 +95,7 @@ import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
-import { RecordInsightsButton } from './item-edit/RecordInsights'
+import { RecordInsightsButton, invalidateRecordInsights } from './item-edit/RecordInsights'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { setFormulaConstants } from '../lib/expression'
 import { extSlotKey } from '../lib/layout-slots'
@@ -4670,6 +4670,10 @@ export function ItemEditForm({
       setStagedRelsByGrid(new Map())
       qc.invalidateQueries({ queryKey: ['item', collection] })
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      // Record Insights caches (audience, integrations, owner history, mail,
+      // mentions) go stale the moment a save lands — refresh them so the
+      // popover answers with current data.
+      invalidateRecordInsights(qc, collection, String(id))
       // Refresh the attached document so it reflects what was just saved.
       // Fire-and-forget: the save is already committed and the record must not
       // appear to fail because a PDF could not be produced.
