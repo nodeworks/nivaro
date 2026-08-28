@@ -1732,7 +1732,13 @@ export function GroupSection({
       <button
         type='button'
         onClick={toggle}
-        className='flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-xl'
+        className={cn(
+          'flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-t-xl',
+          // Round the bottom only when nothing renders below the header — an
+          // expanded body (or collapsed summary strip) square-joins it, and a
+          // rounded hover overlay would leave see-through notches at the seam.
+          collapsed && !(summaryFields && summaryFields.length > 0) && 'rounded-b-xl'
+        )}
       >
         {GroupIcon && (
           <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />
