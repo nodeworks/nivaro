@@ -7657,14 +7657,27 @@ export function ItemEditForm({
                                           // cannot judge them empty on its own — it would mark a
                                           // populated field "required". Hand it the state the form
                                           // already tracks, and say nothing while it is unsettled.
-                                          aliasEmptiness={Object.fromEntries(
-                                            Object.entries(m2mAliasFieldStates).map(
-                                              ([field, st]) => [
+                                          aliasEmptiness={{
+                                            // O2M aliases: effective row count (saved − staged
+                                            // deletes + pending) — without this a populated grid
+                                            // read as "required" in the summary. Unsettled = null.
+                                            ...Object.fromEntries(
+                                              [...o2mAliasFields].map((field) => [
                                                 field,
-                                                st.known ? st.ids.length === 0 : null
-                                              ]
+                                                field in o2mEffectiveCounts
+                                                  ? o2mEffectiveCounts[field] === 0
+                                                  : null
+                                              ])
+                                            ),
+                                            ...Object.fromEntries(
+                                              Object.entries(m2mAliasFieldStates).map(
+                                                ([field, st]) => [
+                                                  field,
+                                                  st.known ? st.ids.length === 0 : null
+                                                ]
+                                              )
                                             )
-                                          )}
+                                          }}
                                           onFieldClick={(stepKey, fieldKey) => {
                                             // An empty step key means the field belongs to no step
                                             // (the Related child collections) — there is no tab to

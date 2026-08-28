@@ -1418,6 +1418,32 @@ export function InlineTableField({
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   const editStateRef = useRef<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   useEffect(() => { editStateRef.current = editState }, [editState])
+  // Clicking anywhere outside the row editor commits it — same as Save.
+  // Portaled layers (combobox panels, Radix poppers, dialogs, overlays) are
+  // part of the interaction even though they live outside the table's DOM.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-registers per editState change, so saveEdit's closure is always current
+  useEffect(() => {
+    if (!editState || readOnly) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (
+        t.closest('[data-o2m-editing]') ||
+        t.closest('[data-radix-popper-content-wrapper]') ||
+        t.closest('[data-nvr-combobox-panel]') ||
+        t.closest('[role="dialog"]') ||
+        t.closest('[data-omx-overlay]')
+      )
+        return
+      if (blurTimerRef.current) {
+        clearTimeout(blurTimerRef.current)
+        blurTimerRef.current = null
+      }
+      void saveEdit()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [editState, readOnly])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
   const [crChallenge, setCrChallenge] = useState<{ challenge: ChangeReasonChallenge; retry: (reason: string) => Promise<void> } | null>(null)
@@ -2659,6 +2685,13 @@ export function InlineTableField({
 
   async function saveEdit() {
     if (!editState) return
+    // If the user opened ANOTHER row while this save was in flight (outside
+    // click commits, then the click lands on the next row), finishing must
+    // not close the editor they just opened.
+    const savedRowId = editState.rowId
+    const clearIfStillEditing = () => {
+      if (editStateRef.current?.rowId === savedRowId) setEditState(null)
+    }
 
     if (uniqueBy?.length) {
       const isPendingIdx = editState.rowId.startsWith('pending:')
@@ -2690,14 +2723,14 @@ export function InlineTableField({
         if (existingRow?.__prefilled && existingRow?.id != null) {
           setEditedPendingIds(prev => new Set([...prev, existingRow.id as string | number]))
         }
-        setEditState(null)
+        clearIfStillEditing()
         setSaving(false)
         return
       }
       if (editState.rowId === 'new') {
         if ((isNew || isPendingMode) && staging) {
           staging.queueRow(relatedCollection, manyField, { ...editState.draft })
-          setEditState(null)
+          clearIfStillEditing()
           return
         }
         // Strip __m2m_*/__o2m_* staging keys before POST — those are handled separately below
@@ -2749,7 +2782,7 @@ export function InlineTableField({
                 String(v ?? '') !== String((baseRow as Record<string, unknown>)[k] ?? '')))
             : rowPayload
           staging.queueEdit(relatedCollection, manyField, editState.rowId, { ...queuedPayload, ...Object.fromEntries(nestedOpsEntries) })
-          setEditState(null)
+          clearIfStillEditing()
           return
         }
         try {
@@ -2763,7 +2796,7 @@ export function InlineTableField({
               retry: async (reason: string) => {
                 await client.request(patch(url, { ...rowPayload, _change_reason: reason }))
                 qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
-                setEditState(null)
+                clearIfStillEditing()
               }
             })
             setSaving(false)
@@ -2773,7 +2806,7 @@ export function InlineTableField({
         }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
-      setEditState(null)
+      clearIfStillEditing()
     } catch {
       /* ignore */
     } finally {
@@ -3861,6 +3894,7 @@ export function InlineTableField({
               {sectionHeader}
               <tr
                 data-o2m-row={`${relatedCollection}:${id}`}
+                data-o2m-editing={isEditing ? '' : undefined}
                 draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
@@ -4040,7 +4074,7 @@ export function InlineTableField({
                 </tr>
               )}
               {isEditing && !isPendingDelete && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
-                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
+                <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
                   <td colSpan={nestedColSpan} className='px-3 py-2'>
                     <div className='space-y-2'>
                       {drawerRelations.map((dr) => {
@@ -4085,7 +4119,7 @@ export function InlineTableField({
           {/* New row being entered. Distinct from both the saved rows and the
               staged pending ones: this is the row currently being typed. */}
           {isEditingNew && (
-            <tr className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
+            <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
               {rowEditorMode !== 'panel' && (
                 <>
                   {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
@@ -4432,7 +4466,7 @@ export function InlineTableField({
               {/* Panel mode renders the drawer INSIDE the panel — this strip is
                   the inline-mode placement only, or the editors double up. */}
               {isEditing && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
-                <tr className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
+                <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
                   <td colSpan={nestedColSpan} className='px-3 py-2'>
                     <div className='space-y-2'>
                       {drawerRelations.map((dr) => {

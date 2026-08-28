@@ -368,6 +368,30 @@ export async function evaluateSkipCriteria(
   return result.skipped
 }
 
+
+/** The state a record occupied before entering its CURRENT state — the
+ *  newest history entry INTO the current state whose from_state still exists
+ *  on the template. Null when history can't answer (no entries, started in
+ *  this state, prior state removed). */
+async function resolvePreviousState(instance: WorkflowInstance): Promise<string | null> {
+  const entries = (await db('nivaro_workflow_history')
+    .where({ instance: instance.id, to_state: instance.current_state })
+    .orderBy('timestamp', 'desc')
+    .limit(10)
+    .select('from_state')) as Array<{ from_state: string | null }>
+  const candidates = [
+    ...new Set(entries.map((e) => e.from_state).filter((f): f is string => !!f))
+  ].filter((f) => String(f).toUpperCase() !== String(instance.current_state).toUpperCase())
+  if (candidates.length === 0) return null
+  const valid = (await db('nivaro_workflow_states')
+    .whereIn('id', candidates)
+    .where({ template: instance.template })
+    .pluck('id')) as string[]
+  const validSet = new Set(valid.map((v) => String(v).toUpperCase()))
+  for (const c of candidates) if (validSet.has(String(c).toUpperCase())) return c
+  return null
+}
+
 export async function resolveTransitionTarget(
   toStateId: string,
   templateId: string,
@@ -501,9 +525,20 @@ export async function applyTransition(opts: {
   const { instance, transition } = opts
   const previousState = instance.current_state
 
+  // Return-to-previous (uncancel, generalized): a to_previous transition
+  // targets whatever state the record was in before entering the current
+  // one, mined from history. The row's own to_state is the fallback when no
+  // usable history exists (started directly in this state, prior state
+  // deleted from the template).
+  let nominalTarget = transition.to_state
+  if (coerceBool((transition as { to_previous?: boolean | number }).to_previous)) {
+    const prev = await resolvePreviousState(instance)
+    if (prev) nominalTarget = prev
+  }
+
   // Resolve skip criteria — may advance past the nominal target state
   const resolvedTarget = await resolveTransitionTarget(
-    transition.to_state,
+    nominalTarget,
     instance.template,
     instance.collection,
     instance.item,

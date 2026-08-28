@@ -74,6 +74,7 @@ interface WorkflowTransition {
   required_roles: string | null
   actions: string | null
   auto_trigger: boolean | number
+  to_previous?: boolean | number
   sort: number
   group_label: string | null
   condition_rules: string | null
@@ -229,6 +230,7 @@ function formatTransition(t: WorkflowTransition) {
     required_roles: parseJson(t.required_roles) as string[] | null,
     actions: parseJson(t.actions) as unknown[] | null,
     auto_trigger: coerceBool(t.auto_trigger),
+    to_previous: coerceBool(t.to_previous),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -1111,6 +1113,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'required_roles'
       | 'actions'
       | 'auto_trigger'
+      | 'to_previous'
       | 'sort'
       | 'group_label'
       | 'condition_rules'
@@ -1133,6 +1136,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       required_roles: toJsonStr(body.required_roles),
       actions: toJsonStr(body.actions),
       auto_trigger: body.auto_trigger ? 1 : 0,
+      to_previous: body.to_previous ? 1 : 0,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
       condition_rules: toJsonStr(body.condition_rules),
@@ -1177,6 +1181,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         actions: body.actions !== undefined ? toJsonStr(body.actions) : tx.actions,
         auto_trigger:
           body.auto_trigger !== undefined ? (body.auto_trigger ? 1 : 0) : tx.auto_trigger,
+        to_previous:
+          body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
         sort: body.sort ?? tx.sort,
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,
@@ -2061,14 +2067,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .first()
       if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
 
-      if (instance.completed_at) {
-        return reply.code(400).send({ error: 'Pipeline is already completed' })
-      }
-
       const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
         .where({ id: body.transition_id, template: instance.template })
         .first()
       if (!transition) return reply.code(404).send({ error: 'Transition not found' })
+
+      // A completed instance normally refuses transitions — EXCEPT when the
+      // template explicitly authors an escape hatch out of the terminal state
+      // the record sits in (Uncancel: canceled → previous). applyTransition
+      // clears completed_at when the resolved target is non-terminal.
+      if (instance.completed_at) {
+        const escapes =
+          String(transition.from_state ?? '').toUpperCase() ===
+          String(instance.current_state ?? '').toUpperCase()
+        if (!escapes) return reply.code(400).send({ error: 'Pipeline is already completed' })
+      }
 
       // Validate the transition is valid from current state
       const fromOk =

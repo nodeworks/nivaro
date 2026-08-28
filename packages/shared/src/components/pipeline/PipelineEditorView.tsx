@@ -681,6 +681,7 @@ type RouteEntry = {
   required_roles: string[] | null
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
+  to_previous: boolean
   comment_mode: string
   actions: TransitionAction[] | null
   minSort: number
@@ -750,6 +751,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         required_roles: tx.required_roles,
         requirements: tx.requirements,
         auto_trigger: !!tx.auto_trigger,
+        to_previous: !!(tx as { to_previous?: boolean }).to_previous,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
         minSort: tx.sort
@@ -1466,6 +1468,7 @@ interface TransitionFormData {
   condition_rules: ConditionRule[] | null
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
+  to_previous: boolean
   comment_mode: string
   actions: TransitionAction[] | null
 }
@@ -1762,6 +1765,7 @@ function TransitionForm({
     condition_rules: initial.condition_rules ?? null,
     requirements: initial.requirements ?? null,
     auto_trigger: initial.auto_trigger ?? false,
+    to_previous: initial.to_previous ?? false,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
   })
@@ -1804,12 +1808,22 @@ function TransitionForm({
           />
         </div>
         <div className='space-y-1.5'>
-          <Label className='text-[12px]'>To State{form.to_states.length !== 1 ? 's' : ''}</Label>
+          <Label className='text-[12px]'>
+            {form.to_previous
+              ? 'Fallback state'
+              : `To State${form.to_states.length !== 1 ? 's' : ''}`}
+          </Label>
+          {form.to_previous && (
+            <p className='text-[11px] text-slate-400'>
+              The real target is the record's previous state — this only applies when history
+              can't answer (the record started in this state, or the prior state was removed).
+            </p>
+          )}
           <MultiStateCombobox
             values={form.to_states}
             onChange={(v) => set('to_states', v)}
             options={states.map((s) => ({ value: s.id, label: s.label }))}
-            placeholder='Select one or more states…'
+            placeholder={form.to_previous ? 'Select a fallback state…' : 'Select one or more states…'}
           />
           {form.to_states.length > 1 && (
             <div className='flex flex-wrap gap-1 pt-1'>
@@ -1905,6 +1919,20 @@ function TransitionForm({
           </p>
         </div>
         <Switch checked={form.auto_trigger} onCheckedChange={(v) => set('auto_trigger', v)} />
+      </label>
+
+      <label className='flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 dark:border-border'>
+        <div>
+          <span className='text-[12px] font-medium text-slate-700'>
+            Return to the record's previous state
+          </span>
+          <p className='text-[11px] text-slate-400'>
+            Uncancel and friends: the target becomes whatever state the record was in before it
+            entered this one, mined from its history. The state picked above is only the fallback
+            for records with no usable history.
+          </p>
+        </div>
+        <Switch checked={form.to_previous} onCheckedChange={(v) => set('to_previous', v)} />
       </label>
 
       <div className='flex gap-2 justify-end'>
@@ -2787,6 +2815,7 @@ export function PipelineEditorView({
         condition_rules: data.condition_rules,
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
+        to_previous: data.to_previous,
         comment_mode: data.comment_mode,
         group_label: null,
         actions: data.actions,
@@ -2821,6 +2850,7 @@ export function PipelineEditorView({
           condition_rules: data.condition_rules,
           requirements: data.requirements,
           auto_trigger: data.auto_trigger,
+          to_previous: data.to_previous,
           group_label: null,
           actions: data.actions,
           sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
@@ -2854,6 +2884,7 @@ export function PipelineEditorView({
         condition_rules: data.condition_rules,
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
+        to_previous: data.to_previous,
         comment_mode: data.comment_mode,
         actions: data.actions
       }
@@ -3383,6 +3414,7 @@ export function PipelineEditorView({
                                               condition_rules: route.condition_rules,
                                               requirements: route.requirements,
                                               auto_trigger: route.auto_trigger,
+                                              to_previous: route.to_previous,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
                                               // and saving then wrote that back.
@@ -3429,6 +3461,14 @@ export function PipelineEditorView({
                                               >
                                                 <Zap className='h-2.5 w-2.5' />
                                                 Auto
+                                              </span>
+                                            )}
+                                            {route.to_previous && (
+                                              <span
+                                                className='ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                                                title="Returns the record to its previous state (mined from history); the listed state is only the no-history fallback"
+                                              >
+                                                ↩ Previous
                                               </span>
                                             )}
                                             {(route.actions ?? []).length > 0 && (
