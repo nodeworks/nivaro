@@ -432,7 +432,7 @@ function WorkspaceSwitcher() {
  * Stored on the user's own preferences, so it follows them between machines.
  */
 /**
- * Pin control for the current page. The favourites themselves live in their own
+ * Pin control for the current page. The favorites themselves live in their own
  * rail category — they cut across categories, so listing them inside one was
  * always the wrong shape — and this is just the way to add and remove the page
  * you are looking at.
@@ -465,9 +465,9 @@ function FavoritePinButton() {
     try {
       await api.patch('/users/me/preferences', { nav_favorites: next })
       await refetch()
-      toast.success(pinned ? 'Removed from favourites' : 'Added to favourites')
+      toast.success(pinned ? 'Removed from favorites' : 'Added to favorites')
     } catch {
-      toast.error('Could not save favourites')
+      toast.error('Could not save favorites')
     } finally {
       setSaving(false)
     }
@@ -489,7 +489,7 @@ function FavoritePinButton() {
       type='button'
       disabled={saving}
       onClick={toggle}
-      title={pinned ? 'Remove this page from favourites' : 'Add this page to favourites'}
+      title={pinned ? 'Remove this page from favorites' : 'Add this page to favorites'}
       className='rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-nvr-cyan disabled:opacity-50'
     >
       <Star className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')} strokeWidth={2} />
@@ -651,7 +651,7 @@ export function AppLayout() {
   }, [settings?.project_color, workspaceColor, settings])
 
   useEffect(() => {
-    // Following a favourite keeps you in Favourites. The panel otherwise jumps
+    // Following a favorite keeps you in Favorites. The panel otherwise jumps
     // to whichever category owns the destination, which throws away the list
     // the reader was working from — they chose the shortcut list, so leave
     // them in it until they pick a category themselves.
@@ -733,7 +733,7 @@ export function AppLayout() {
   const favoritesCategory: NavCategory = {
     id: 'favorites',
     icon: Star,
-    label: 'Favourites',
+    label: 'Favorites',
     items: navFavorites.map((f) => ({ icon: iconForPath(f.path), label: f.label, to: f.path }))
   }
 
@@ -997,15 +997,15 @@ export function AppLayout() {
                 <div className='space-y-0.5'>
                   {panelItems.map((item) =>
                     activeCategory === 'favorites' ? (
-                      // Favourites are removable HERE — the star toggle lives on
+                      // Favorites are removable HERE — the star toggle lives on
                       // the page itself, which may no longer exist (a deleted
-                      // page-builder page left an unremovable favourite).
+                      // page-builder page left an unremovable favorite).
                       <div key={item.to} className='group/fav relative'>
                         <PanelNavItem {...item} />
                         <button
                           type='button'
-                          aria-label={`Remove ${item.label} from favourites`}
-                          title='Remove from favourites'
+                          aria-label={`Remove ${item.label} from favorites`}
+                          title='Remove from favorites'
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()

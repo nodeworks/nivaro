@@ -546,6 +546,28 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const [expandedCell, setExpandedCell] = useState<{ stateId: string; rowValue: string } | null>(
     null
   )
+  // Clicking anywhere outside the open cell editor closes it — portaled
+  // layers (Radix poppers, combobox panels, the team-manager overlay,
+  // dialogs) are inside the interaction even though they're outside the DOM
+  // subtree, so they never count as "outside".
+  useEffect(() => {
+    if (!expandedCell) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (
+        t.closest('[data-omx-editor]') ||
+        t.closest('[data-omx-overlay]') ||
+        t.closest('[data-radix-popper-content-wrapper]') ||
+        t.closest('[data-nvr-combobox-panel]') ||
+        t.closest('[role="dialog"]')
+      )
+        return
+      setExpandedCell(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [expandedCell])
 
   const rowsFromGroups = useMemo<MatrixRow[]>(() => {
     if (!rowDim || !groupsMap) return []
@@ -1159,6 +1181,7 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                       return (
                         <td
                           key={s.id}
+                          data-omx-editor
                           data-tip={
                             oooCount > 0
                               ? `${oooCount}/${users.length} member(s) out of office`
@@ -1894,6 +1917,7 @@ function TeamManagerPanel({
 
   return createPortal(
     <div
+      data-omx-overlay
       className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'
       onClick={onClose}
       onKeyDown={(e) => {
