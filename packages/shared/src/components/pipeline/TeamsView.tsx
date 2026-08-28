@@ -555,7 +555,7 @@ function TeamDetail({
         <StatTile label='Actions · 30d' value={overview ? overview.throughput.total_30d : '—'} />
       </div>
 
-      <div className='grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_400px]'>
+      <div className='grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_400px]'>
         <div className='min-w-0 space-y-4'>
       <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
         {canManage ? (
