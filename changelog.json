@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-28T01:18:41.936Z",
+  "generated_at": "2026-08-28T13:13:40.739Z",
   "releases": [
+    {
+      "version": "0.1.169",
+      "tag": "v0.1.169",
+      "date": "2026-08-28T09:13:35-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "team pages show ownership footprint, live workload, and activity",
+              "hash": "92956139"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.168",
       "tag": "v0.1.168",
-      "date": "2026-08-27T21:18:37-04:00",
+      "date": "2026-08-27T21:18:41-04:00",
       "sections": [
         {
           "label": "Added",
