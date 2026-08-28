@@ -147,6 +147,10 @@ export function RichTextEditor({
     ],
     content: initialHtml,
     editable: !disabled,
+    // NEVER undefined: an explicit `editorProps: undefined` overrides tiptap's
+    // `{}` default in the options merge, and 3.26's createView reads
+    // `editorProps.dispatchTransaction` unguarded — every non-pastePlain
+    // editor crashed at mount ("Cannot read properties of undefined").
     editorProps: pastePlain
       ? {
           handlePaste(view, event) {
@@ -157,7 +161,7 @@ export function RichTextEditor({
             return true
           }
         }
-      : undefined,
+      : {},
     onUpdate({ editor }) {
       onChange(editor.getHTML())
     }
