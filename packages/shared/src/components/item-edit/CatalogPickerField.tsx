@@ -3,7 +3,7 @@ import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Loader2, Search,
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn, titleCase } from '../../lib/utils'
+import { cn, titleCase , matchesAllTokens} from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import { useO2MStaging } from './O2MStagingContext'
@@ -779,7 +779,7 @@ export function CatalogPickerField({
     >()
     for (const row of catalogRows) {
       const label = applyDisplayTemplate(tmpl, row)
-      if (q && !label.toLowerCase().includes(q)) continue
+      if (q && !matchesAllTokens(label, q)) continue
       const sec = sectionValue(row) || 'Uncategorized'
       if (!bySection.has(sec)) bySection.set(sec, [])
       bySection.get(sec)!.push({ id: String(row.id), label, row })

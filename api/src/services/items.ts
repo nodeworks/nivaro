@@ -1733,10 +1733,20 @@ export async function readItems(
     }
 
     if (searchCols.length) {
+      // Tokenized: EVERY word must match at least one column. A single
+      // per-column LIKE of the whole phrase made "Robert Lee" match nothing —
+      // first_name has Robert, last_name has Lee, no one column has both —
+      // which read as "search doesn't work" on any picker whose display label
+      // concatenates columns.
+      const tokens = escapedSearch.split(/\s+/).filter(Boolean)
       const applySearch = (qb: QB) => {
-        qb.where((inner) => {
-          for (const f of searchCols) {
-            inner.orWhere(db.raw('??', [f]), 'like', `%${escapedSearch}%`)
+        qb.where((outer) => {
+          for (const token of tokens.length > 0 ? tokens : [escapedSearch]) {
+            outer.andWhere((inner) => {
+              for (const f of searchCols) {
+                inner.orWhere(db.raw('??', [f]), 'like', `%${token}%`)
+              }
+            })
           }
         })
       }

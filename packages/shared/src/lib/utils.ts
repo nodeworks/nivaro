@@ -91,6 +91,16 @@ export function setNumberFormat(opts: { locale?: string; compact?: boolean } | n
 /** Hours → the largest sensible unit: "45m", "18h", "3d 7h", "26d", "1mo 5d".
  *  "845h" is not a duration anyone can read — past a couple of days, people
  *  think in days; past a month, in months. */
+
+/** Case-insensitive token match: every whitespace-separated word of the query
+ *  must appear somewhere in the text. "lee robert" matches "Robert Lee". */
+export function matchesAllTokens(text: string, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const t = text.toLowerCase()
+  return q.split(/\s+/).every((tok) => t.includes(tok))
+}
+
 export function humanHours(hours: number | null | undefined): string {
   if (hours == null || Number.isNaN(hours)) return '—'
   const h = Math.max(0, hours)

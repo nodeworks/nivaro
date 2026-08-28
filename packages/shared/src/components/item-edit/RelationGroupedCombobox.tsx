@@ -3,7 +3,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Search, X } f
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn , matchesAllTokens} from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { useStaleTip } from './RelationCombobox'
 
@@ -138,7 +138,7 @@ export function RelationGroupedCombobox({
       const groupLabel = g ? applyDisplayTemplate(groupTmpl, g) : '—'
       const optionLabel = o ? applyDisplayTemplate(optionTmpl, o) : String(item.id ?? '')
 
-      if (q && !groupLabel.toLowerCase().includes(q) && !optionLabel.toLowerCase().includes(q)) continue
+      if (q && !matchesAllTokens(`${groupLabel} ${optionLabel}`, q)) continue
 
       if (!groupMap.has(groupId)) groupMap.set(groupId, { label: groupLabel, items: [] })
       groupMap.get(groupId)!.items.push(item)
