@@ -491,18 +491,10 @@ export function CatalogPickerField({
     staleTime: 30_000,
     placeholderData: (p) => p
   })
-  const fullMatches = useMemo(() => {
-    const q = search.trim()
-    return fullSearchRows.filter((r) => {
-      const id = String(r.id)
-      if (pinnedSet.has(id)) return false
-      // In-filter rows only render above when their LABEL matches the search —
-      // a description-only match would otherwise vanish from both lists.
-      const inFilter = catalogById.get(id)
-      if (inFilter && matchesAllTokens(applyDisplayTemplate(tmpl, inFilter), q)) return false
-      return true
-    })
-  }, [fullSearchRows, catalogById, pinnedSet, search, tmpl])
+  // Pure search results: the box searches the FULL catalog and shows matches
+  // in their own band — it never filters the favorites or section lists
+  // (narrowing those alongside read as everything vanishing).
+  const fullMatches = fullSearchRows
 
   // Related per-item lookups (config.related_columns): one batched query per
   // column against its collection, matched by the item FK plus resolved match
@@ -840,7 +832,6 @@ export function CatalogPickerField({
     >()
     for (const row of catalogRows) {
       const label = applyDisplayTemplate(tmpl, row)
-      if (q && !matchesAllTokens(label, q)) continue
       const sec = sectionValue(row) || 'Uncategorized'
       if (!bySection.has(sec)) bySection.set(sec, [])
       bySection.get(sec)!.push({ id: String(row.id), label, row })
@@ -1122,6 +1113,60 @@ export function CatalogPickerField({
           </div>
         )}
 
+        {search.trim().length > 0 && fullMatches.length === 0 && fullSearchFetching && (
+          <div className='flex items-center justify-center gap-2 border-b border-slate-100 px-3 py-3 text-slate-400 dark:border-border/50'>
+            <Loader2 className='h-3.5 w-3.5 animate-spin' /> Searching the catalog…
+          </div>
+        )}
+        {search.trim().length > 0 &&
+          fullMatches.length === 0 &&
+          !fullSearchFetching && (
+            <p className='px-3 py-4 text-center text-slate-400'>
+              No CIFAs match "{search.trim()}"
+            </p>
+          )}
+        {search.trim().length > 0 && fullMatches.length > 0 && (
+          <Fragment>
+            <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
+              <Search className='h-3 w-3 shrink-0 text-sky-500' />
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                Search results
+              </span>
+              <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                {fullMatches.length}
+              </span>
+              <span className='text-[10px] text-slate-400'>
+                across the entire catalog — enter a quantity to add
+              </span>
+              {fullSearchFetching && (
+                <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+              )}
+            </div>
+            {fullMatches.map((r, i) => {
+              const id = String(r.id)
+              const qty = currentQty(id)
+              return (
+                <div
+                  key={id}
+                  className={cn(
+                    'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                    i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30',
+                    (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
+                  )}
+                >
+                  {starButton(id)}
+                  <span className={itemLabelCls}>{applyDisplayTemplate(tmpl, r)}</span>
+                  {colCells(id, r)}
+                  {savingIds.has(id) && (
+                    <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                  )}
+                  {qtyInput(id, r)}
+                </div>
+              )
+            })}
+          </Fragment>
+        )}
+
         {missingParents.length > 0 && !search.trim() && (
           <p className='px-3 py-6 text-center text-slate-400'>
             Search the full catalog above, or select{' '}
@@ -1134,9 +1179,7 @@ export function CatalogPickerField({
           </div>
         )}
         {missingParents.length === 0 && !catalogLoading && sections.length === 0 && (
-          <p className='px-3 py-6 text-center text-slate-400'>
-            No catalog items{search ? ' match your search' : ''}
-          </p>
+          <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
         )}
 
         {config.favorites && (
@@ -1184,13 +1227,6 @@ export function CatalogPickerField({
             )}
             {!collapsed.has('__favorites__') &&
               pinnedRowsData
-                .filter(
-                  (r) =>
-                    !search.trim() ||
-                    applyDisplayTemplate(tmpl, r)
-                      .toLowerCase()
-                      .includes(search.trim().toLowerCase())
-                )
                 .map((r, i) => {
                   const id = String(r.id)
                   const qty = currentQty(id)
@@ -1301,57 +1337,6 @@ export function CatalogPickerField({
             )
           })}
 
-        {search.trim().length > 0 &&
-          fullMatches.length === 0 &&
-          !fullSearchFetching &&
-          missingParents.length > 0 && (
-            <p className='px-3 py-4 text-center text-slate-400'>
-              No CIFAs match "{search.trim()}"
-            </p>
-          )}
-        {search.trim().length > 0 && fullMatches.length > 0 && (
-          <Fragment>
-            <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
-              <Search className='h-3 w-3 shrink-0 text-sky-500' />
-              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                Full catalog
-              </span>
-              <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                {fullMatches.length}
-              </span>
-              <span className='text-[10px] text-slate-400'>
-                {missingParents.length > 0
-                  ? 'matches across the full catalog'
-                  : 'not in this request\'s filter — adding works like "Add any item"'}
-              </span>
-              {fullSearchFetching && (
-                <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-              )}
-            </div>
-            {fullMatches.map((r, i) => {
-              const id = String(r.id)
-              const qty = currentQty(id)
-              return (
-                <div
-                  key={id}
-                  className={cn(
-                    'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
-                    i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30',
-                    (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
-                  )}
-                >
-                  {starButton(id)}
-                  <span className={itemLabelCls}>{applyDisplayTemplate(tmpl, r)}</span>
-                  {colCells(id, r)}
-                  {savingIds.has(id) && (
-                    <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                  )}
-                  {qtyInput(id, r)}
-                </div>
-              )
-            })}
-          </Fragment>
-        )}
       </div>
 
       {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
