@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-28T13:13:40.739Z",
+  "generated_at": "2026-08-28T13:23:07.193Z",
   "releases": [
+    {
+      "version": "0.1.170",
+      "tag": "v0.1.170",
+      "date": "2026-08-28T09:23:01-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "matrix cell editor closes on outside click; Favorites spelling",
+              "hash": "a274662f"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.169",
       "tag": "v0.1.169",
-      "date": "2026-08-28T09:13:35-04:00",
+      "date": "2026-08-28T09:13:40-04:00",
       "sections": [
         {
           "label": "Added",
