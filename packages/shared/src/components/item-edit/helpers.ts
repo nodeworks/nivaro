@@ -55,6 +55,11 @@ export type CascadeRule = {
   value_map_default?: unknown
   clear_on_parent_change?: boolean
   clear_on_unavailable?: boolean
+  /** Reverse the cascade on PICK: choosing this field resolves filter_column
+   *  on the picked record and fills parent_field from it (a Region pick fills
+   *  its Zone). Scalar parents fill only when exactly one value resolves;
+   *  alias parents stage every resolved link (additive). */
+  upstream?: boolean
   show_all_if_no_parent?: boolean // default true; when false, field is disabled until parent is set
 }
 

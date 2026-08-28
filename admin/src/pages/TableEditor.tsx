@@ -7911,6 +7911,9 @@ interface CascadeFilterRule {
   clear_on_unavailable: boolean
   filter_is_m2m?: boolean
   show_all_if_no_parent?: boolean
+  /** Reverse on pick: choosing this field fills parent_field from the picked
+   *  record's filter_column value(s) — upstream cascading. */
+  upstream?: boolean
 }
 
 interface CascadeParentField {
@@ -8045,6 +8048,10 @@ function CascadeFiltersEditor({
 
   function toggleShowAll(idx: number, val: boolean) {
     onChange(rules.map((r, i) => (i === idx ? { ...r, show_all_if_no_parent: val } : r)))
+  }
+
+  function toggleUpstream(idx: number, val: boolean) {
+    onChange(rules.map((r, i) => (i === idx ? { ...r, upstream: val } : r)))
   }
 
   return (
@@ -8284,6 +8291,20 @@ function CascadeFiltersEditor({
                   <Switch
                     checked={rule.show_all_if_no_parent ?? true}
                     onCheckedChange={(val) => toggleShowAll(idx, val)}
+                    className='scale-75'
+                  />
+                </div>
+                <div className='mt-1 flex items-center gap-1.5'>
+                  <span
+                    className='text-[10px] text-slate-400'
+                    title="Picking this field fills the parent from the picked record's filter column — the cascade run in reverse. Scalar parents fill only when one value resolves; multi-select parents add every resolved link."
+                  >
+                    Also fill parent upstream on pick
+                  </span>
+                  <span className='flex-1' />
+                  <Switch
+                    checked={rule.upstream ?? false}
+                    onCheckedChange={(val) => toggleUpstream(idx, val)}
                     className='scale-75'
                   />
                 </div>

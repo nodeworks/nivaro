@@ -68,6 +68,7 @@ import {
   StripFieldValue
 } from './item-edit/GroupSection'
 import {
+  type CascadeRule,
   applyDisplayTemplate,
   isSentinelKey,
   parseJson,
@@ -1177,11 +1178,20 @@ export function ItemEditForm({
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
   const [m2mUnlinks, setM2mUnlinks] = useState<Map<string, Set<unknown>>>(new Map())
 
+  // Upstream cross-record defaults for M2M PICKS: staging a link is the
+  // alias world's handleFieldChange, so it fires the same evaluator (pick a
+  // Region → its Zone fills). Assigned after runCrossDefaults is defined;
+  // origin tracking stops a programmatic fill from re-firing itself.
+  const crossDefaultsRef = useRef<((field: string, value: unknown, depth?: number) => void) | null>(
+    null
+  )
+  const stagingKeyToFieldRef = useRef<Map<string, string>>(new Map())
+  const crossFillInFlightRef = useRef(0)
   const m2mStagingCtx = useMemo<M2MStagingCtx>(
     () => ({
       getStagedLinks: (k) => m2mLinks.get(k) ?? [],
       getStagedUnlinks: (k) => m2mUnlinks.get(k) ?? new Set(),
-      stageLink: (k, id) =>
+      stageLink: (k, id) => {
         setM2mLinks((prev) => {
           const existing = prev.get(k) ?? []
           const next = appendUniqueM2MId(existing, id)
@@ -1189,7 +1199,17 @@ export function ItemEditForm({
           const nextMap = new Map(prev)
           nextMap.set(k, next)
           return nextMap
-        }),
+        })
+        // Only USER picks cascade — links staged by a cross-default fill
+        // (crossFillInFlightRef > 0) must not fire another round.
+        if (crossFillInFlightRef.current === 0) {
+          const field = stagingKeyToFieldRef.current.get(k)
+          if (field) {
+            crossDefaultsRef.current?.(field, id)
+            upstreamCascadesRef.current?.(field, id)
+          }
+        }
+      },
       stageUnlink: (k, jId) =>
         setM2mUnlinks((prev) => {
           const next = new Map(prev)
@@ -1991,6 +2011,9 @@ export function ItemEditForm({
   // the same returned ids twice.
   const m2mAliasFieldStatesRef = useRef(m2mAliasFieldStates)
   m2mAliasFieldStatesRef.current = m2mAliasFieldStates
+  stagingKeyToFieldRef.current = new Map(
+    [...m2mAliasFieldsForRules.entries()].map(([f, info]) => [info.stagingKey, f])
+  )
 
   // undefined = not an alias field (existing scalar/M2O behavior unaffected).
   // An alias field's ids default to [] while unknown — callers that need to
@@ -2027,6 +2050,152 @@ export function ItemEditForm({
   // Cross-record defaults evaluator — fired for USER edits (handleFieldChange)
   // and for FKs set by field rules (applyFieldRuleResults), so a rule-driven
   // cascade (e.g. unit pick → install_location) still autofills its targets.
+
+  // Upstream cascades (`upstream: true` on a cascade rule): a pick on the
+  // rule's own field resolves filter_column on the PICKED record and fills
+  // parent_field from it — the cascade run in reverse. Shares the origin
+  // guard with cross-record defaults so a programmatic fill can't re-fire.
+  const runUpstreamCascades = useCallback(
+    (field: string, pickedId: unknown) => {
+      if (pickedId === null || pickedId === undefined || pickedId === '') return
+      const fc = (fieldConfig ?? []).find((f) => f.field === field)
+      if (!fc?.dependency_config) return
+      let rules: CascadeRule[] = []
+      try {
+        const cfg = (
+          typeof fc.dependency_config === 'string'
+            ? JSON.parse(fc.dependency_config)
+            : fc.dependency_config
+        ) as { cascade_filters?: CascadeRule[] }
+        rules = (cfg.cascade_filters ?? []).filter((r) => r.upstream && r.parent_field)
+      } catch {
+        return
+      }
+      if (rules.length === 0) return
+      // The picked record's collection: M2O target, or the alias companion.
+      const m2oRel = relations.find(
+        (r) => r.many_collection === collection && r.many_field === field && !r.junction_field
+      )
+      let pickedCollection = m2oRel?.one_collection ?? null
+      if (!pickedCollection) {
+        const aliasInfo = m2mAliasFieldsForRules.get(field)
+        if (aliasInfo) {
+          const companion = relations.find(
+            (r) =>
+              r.many_collection === aliasInfo.manyCollection &&
+              r.many_field === aliasInfo.junctionField
+          )
+          pickedCollection = (companion?.one_collection as string | null) ?? null
+        }
+      }
+      if (!pickedCollection) return
+      void (async () => {
+        let pickedRels: CMSRelation[] | null = null
+        for (const rule of rules) {
+          try {
+            const col = String(rule.filter_column)
+            let values: string[] = []
+            if (col.includes('.')) {
+              // 'regions.regions_id' — first hop is an alias on the picked
+              // record's collection, leaf a junction/child column.
+              const [aliasName, leaf] = [col.slice(0, col.indexOf('.')), col.slice(col.indexOf('.') + 1)]
+              pickedRels ??= await client
+                .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${pickedCollection}`))
+                .then((r) => r.data ?? [])
+                .catch(() => [])
+              const aliasRel = pickedRels.find(
+                (r) => r.one_collection === pickedCollection && r.one_field === aliasName
+              )
+              if (!aliasRel?.many_collection || !aliasRel.many_field) continue
+              const rows = await client
+                .request<{ data: Record<string, unknown>[] }>(
+                  get(`/items/${aliasRel.many_collection}`, {
+                    filter: JSON.stringify({ [aliasRel.many_field]: { _eq: pickedId } }),
+                    limit: 200,
+                    fields: `id,${leaf.split('.')[0]}`
+                  })
+                )
+                .then((r) => r.data ?? [])
+                .catch(() => [])
+              values = rows
+                .map((row) => row[leaf.split('.')[0]])
+                .filter((v) => v != null)
+                .map((v) => String(v))
+            } else {
+              // A bare column may itself be an ALIAS on the picked collection
+              // (filter_is_m2m rules store 'project_types', not a dotted
+              // path) — resolve via its junction; the pairing-marker
+              // junction_field IS the related-id column.
+              pickedRels ??= await client
+                .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${pickedCollection}`))
+                .then((r) => r.data ?? [])
+                .catch(() => [])
+              const bareAlias = pickedRels.find(
+                (r) => r.one_collection === pickedCollection && r.one_field === col && r.junction_field
+              )
+              if (bareAlias?.many_collection && bareAlias.many_field) {
+                const rows = await client
+                  .request<{ data: Record<string, unknown>[] }>(
+                    get(`/items/${bareAlias.many_collection}`, {
+                      filter: JSON.stringify({ [bareAlias.many_field]: { _eq: pickedId } }),
+                      limit: 200,
+                      fields: `id,${bareAlias.junction_field}`
+                    })
+                  )
+                  .then((r) => r.data ?? [])
+                  .catch(() => [])
+                values = rows
+                  .map((row) => row[bareAlias.junction_field as string])
+                  .filter((v) => v != null)
+                  .map((v) => String(v))
+              } else {
+                const row = await client
+                  .request<{ data: Record<string, unknown> }>(
+                    get(`/items/${pickedCollection}/${String(pickedId)}`, { fields: `id,${col}` })
+                  )
+                  .then((r) => r.data)
+                  .catch(() => null)
+                const v = row?.[col]
+                if (v != null && v !== '') values = [String(v)]
+              }
+            }
+            values = [...new Set(values)]
+            if (values.length === 0) continue
+            const parent = rule.parent_field
+            if (m2mAliasFieldsForRules.has(parent)) {
+              const info = m2mAliasFieldsForRules.get(parent)!
+              const already = new Set(
+                (m2mAliasFieldStatesRef.current[parent]?.ids ?? []).map((x) => String(x))
+              )
+              crossFillInFlightRef.current += 1
+              try {
+                for (const v of values) {
+                  if (already.has(v)) continue
+                  m2mStagingCtx.stageLink(info.stagingKey, v)
+                }
+              } finally {
+                crossFillInFlightRef.current -= 1
+              }
+            } else if (values.length === 1) {
+              // Scalar parent: fill only when unambiguous; overwrite is
+              // deliberate — the pick is the newest statement of intent.
+              const v = values[0]
+              draftRef.current = { ...draftRef.current, [parent]: v }
+              setDraft((prev) => ({ ...prev, [parent]: v }))
+              setIsDirty(true)
+              crossDefaultsRef.current?.(parent, v, 1)
+            }
+          } catch {
+            /* one rule failing must not take the rest down */
+          }
+        }
+      })()
+    },
+    [fieldConfig, relations, collection, m2mAliasFieldsForRules, m2mStagingCtx, client]
+  )
+  const upstreamCascadesRef = useRef(runUpstreamCascades)
+  upstreamCascadesRef.current = runUpstreamCascades
+
   const runCrossDefaults = useCallback(
     (field: string, value: unknown, depth = 0) => {
       if (value === null || value === undefined || value === '') return
@@ -2070,58 +2239,100 @@ export function ItemEditForm({
               fields: sourceFields.length > 0 ? sourceFields.join(',') : 'id'
             })
           )
+          // A map naming an alias SOURCE puts an alias in fields=, which
+          // readOne rejects — refetch id-only and let the relation branches
+          // resolve everything.
+          .catch(() =>
+            client.request<{ data: Record<string, unknown> }>(
+              get(`/items/${cfg.source_collection}/${value}`, { fields: 'id' })
+            )
+          )
           .then(async (res) => {
             const src = res.data
             if (!src) return
             const patch: Record<string, unknown> = {}
-            // Upstream M2M fill: a map target that is an M2M alias on THIS
-            // collection copies the PICKED record's own alias links (pick a
-            // Project → its Zones/Regions stage onto the form). ADDITIVE —
-            // a default never unlinks something explicitly chosen; scalars
-            // keep their overwrite semantics.
-            const m2mEntries = Object.entries(map).filter(([target]) =>
-              m2mAliasFieldsForRules.has(target)
+            // Upstream fill covers all four source/target shapes:
+            //   scalar → scalar  copy (overwrite — picking is explicit)
+            //   scalar → alias   stage the single id as a junction link
+            //   alias  → alias   copy the picked record's own links
+            //   alias  → scalar  fill ONLY when the source has exactly one
+            //                    link (multiple would be a guess)
+            // Alias fills are ADDITIVE — a default never unlinks an explicit
+            // choice. Best-effort throughout so scalar defaults survive.
+            const entryList = Object.entries(map)
+            const maybeAliasSources = entryList.some(
+              ([target, sourceField]) =>
+                m2mAliasFieldsForRules.has(target) || !(String(sourceField).trim() in src)
             )
-            if (m2mEntries.length > 0) {
+            let srcRels: CMSRelation[] = []
+            if (maybeAliasSources) {
               try {
-                const srcRels = await client
+                srcRels = await client
                   .request<{ data: CMSRelation[] }>(
                     get(`/data-model/relations/for/${cfg.source_collection}`)
                   )
                   .then((r) => r.data ?? [])
-                for (const [target, sourceField] of m2mEntries) {
-                  const srcAlias = srcRels.find(
-                    (r) =>
-                      r.one_collection === cfg!.source_collection &&
-                      r.one_field === String(sourceField).trim() &&
-                      r.junction_field
-                  )
-                  const info = m2mAliasFieldsForRules.get(target)
-                  if (!srcAlias?.many_collection || !srcAlias.many_field || !info) continue
-                  const junctionRows = await client
-                    .request<{ data: Record<string, unknown>[] }>(
-                      get(`/items/${srcAlias.many_collection}`, {
-                        filter: JSON.stringify({ [srcAlias.many_field]: { _eq: value } }),
-                        limit: 200,
-                        fields: `id,${srcAlias.junction_field}`
-                      })
-                    )
-                    .then((r) => r.data ?? [])
-                  const already = new Set(
-                    (m2mAliasFieldStatesRef.current[target]?.ids ?? []).map((x) => String(x))
-                  )
-                  for (const jr of junctionRows) {
-                    const rid = jr[srcAlias.junction_field as string]
-                    if (rid == null || already.has(String(rid))) continue
-                    m2mStagingCtx.stageLink(info.stagingKey, rid)
-                  }
+              } catch {
+                srcRels = []
+              }
+            }
+            const srcAliasFor = (sourceField: string) =>
+              srcRels.find(
+                (r) =>
+                  r.one_collection === cfg!.source_collection &&
+                  r.one_field === sourceField &&
+                  r.junction_field
+              )
+            const srcAliasIds = async (rel: CMSRelation): Promise<unknown[]> => {
+              const rows = await client
+                .request<{ data: Record<string, unknown>[] }>(
+                  get(`/items/${rel.many_collection}`, {
+                    filter: JSON.stringify({ [rel.many_field as string]: { _eq: value } }),
+                    limit: 200,
+                    fields: `id,${rel.junction_field}`
+                  })
+                )
+                .then((r) => r.data ?? [])
+              return rows.map((jr) => jr[rel.junction_field as string]).filter((x) => x != null)
+            }
+            const stageInto = (target: string, ids: unknown[]) => {
+              const info = m2mAliasFieldsForRules.get(target)
+              if (!info) return
+              const already = new Set(
+                (m2mAliasFieldStatesRef.current[target]?.ids ?? []).map((x) => String(x))
+              )
+              crossFillInFlightRef.current += 1
+              try {
+                for (const rid of ids) {
+                  if (already.has(String(rid))) continue
+                  m2mStagingCtx.stageLink(info.stagingKey, rid)
+                }
+              } finally {
+                crossFillInFlightRef.current -= 1
+              }
+            }
+            for (const [target, sourceField] of entryList) {
+              const sf = String(sourceField).split('||')[0].trim()
+              const targetIsAlias = m2mAliasFieldsForRules.has(target)
+              const srcAlias = srcAliasFor(sf)
+              if (!targetIsAlias && !srcAlias) continue // plain scalar copy below
+              try {
+                if (targetIsAlias && srcAlias) {
+                  stageInto(target, await srcAliasIds(srcAlias))
+                } else if (targetIsAlias) {
+                  const v = src[sf]
+                  if (v != null && v !== '') stageInto(target, [v])
+                } else if (srcAlias) {
+                  const ids = await srcAliasIds(srcAlias)
+                  if (ids.length === 1) patch[target] = ids[0]
                 }
               } catch {
-                /* alias fill is best-effort — scalar defaults still apply */
+                /* one entry failing must not take down the rest */
               }
             }
             for (const [target, sourceField] of Object.entries(map)) {
               if (m2mAliasFieldsForRules.has(target)) continue
+              if (srcAliasFor(String(sourceField).split('||')[0].trim())) continue
               // 'a||b' = first non-null of the listed source fields; 'id'
               // refers to the source record itself (EFP: a location's
               // designated shipping_location, else the location itself).
@@ -2152,6 +2363,7 @@ export function ItemEditForm({
     },
     [fieldConfig, client, m2mAliasFieldsForRules, m2mStagingCtx]
   )
+  crossDefaultsRef.current = runCrossDefaults
 
   const applyFieldRuleResults = useCallback(
     (results: Record<string, unknown> | null | undefined) => {
@@ -2325,6 +2537,8 @@ export function ItemEditForm({
       // Cross-record defaults: any field whose cross_record_defaults watches this
       // FK copies mapped source-record values into the draft when the FK is set.
       if (!isEmpty) runCrossDefaults(field, value)
+      // Upstream cascades: a pick fills its own cascade parents in reverse.
+      if (!isEmpty) upstreamCascadesRef.current(field, value)
     },
     [fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
   )
