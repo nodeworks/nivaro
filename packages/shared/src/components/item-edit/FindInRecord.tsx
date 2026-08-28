@@ -122,8 +122,8 @@ export function FindInRecordButton({
     const m = new Map<string, string | null>()
     targets.forEach((t, i) => m.set(t, metaQs[i]?.data ?? null))
     return m
-    // biome-ignore lint/correctness/useExhaustiveDependencies: metaQs identity churns per render; data is what matters
-  }, [targets, ...metaQs.map((mq) => mq.data)])
+    // biome-ignore lint/correctness/useExhaustiveDependencies: metaQs identity churns per render; the joined signature captures its data with a STABLE deps-array size
+  }, [targets, metaQs.map((mq) => mq.dataUpdatedAt ?? 0).join(',')])
 
   // One batched id → row lookup per target collection (M2O + M2M ids merged).
   const idBatches = useMemo(() => {
@@ -232,14 +232,14 @@ export function FindInRecordButton({
       out.set(f.field, { text: labels.join(', '), count: ids.length, pending: false })
     }
     return out
-    // biome-ignore lint/correctness/useExhaustiveDependencies: query arrays churn identity per render; success/data drive the map
+    // biome-ignore lint/correctness/useExhaustiveDependencies: query arrays churn identity per render; joined signatures capture their data with a STABLE deps-array size
   }, [
     relFields,
     idBatches,
     o2mList,
     tmplByTarget,
-    ...rowQs.map((rq) => rq.data),
-    ...o2mQs.map((oq) => oq.data)
+    rowQs.map((rq) => rq.dataUpdatedAt ?? 0).join(','),
+    o2mQs.map((oq) => oq.dataUpdatedAt ?? 0).join(',')
   ])
 
   const needle = q.trim().toLowerCase()

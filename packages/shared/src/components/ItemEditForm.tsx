@@ -2315,6 +2315,48 @@ export function ItemEditForm({
     return map
   }, [o2mRelations, o2mQueryResults])
 
+  // Required O2M support: effective row count per O2M alias field — saved
+  // rows minus staged deletes plus staged pending rows. "Required" on an O2M
+  // means "at least one row, pending or existing". A field absent from the
+  // map means its saved count hasn't settled yet — never block on that.
+  const o2mAliasFields = useMemo(
+    () => new Set(o2mRelations.map((r) => r.one_field as string)),
+    [o2mRelations]
+  )
+  const o2mEffectiveCounts = useMemo<Record<string, number>>(() => {
+    const out: Record<string, number> = {}
+    for (const r of o2mRelations) {
+      const field = r.one_field as string
+      const key = `${r.many_collection}.${r.many_field}`
+      const pending = pendingO2MRows.get(key)?.length ?? 0
+      if (isNew) {
+        out[field] = pending
+        continue
+      }
+      const saved = o2mCounts[field]
+      if (saved === undefined) continue
+      const dels = pendingO2MDeletes.get(key)?.size ?? 0
+      out[field] = Math.max(0, saved - dels) + pending
+    }
+    return out
+  }, [o2mRelations, o2mCounts, pendingO2MRows, pendingO2MDeletes, isNew])
+
+  // Adding a row to a required grid clears its error without waiting for the
+  // next full validation pass (grids never call handleFieldChange).
+  useEffect(() => {
+    setValidationErrors((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const f of Object.keys(prev)) {
+        if (o2mAliasFields.has(f) && (o2mEffectiveCounts[f] ?? 0) > 0) {
+          delete next[f]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [o2mEffectiveCounts, o2mAliasFields])
+
   const handleM2MCountChange = useCallback(
     (field: string, count: number) => {
       setFieldCounts((prev) => (prev[field] === count ? prev : { ...prev, [field]: count }))
@@ -3476,6 +3518,11 @@ export function ItemEditForm({
             const st = m2mAliasFieldStates[f.field]
             return !st || st.ids.length > 0
           }
+          // Required O2M = at least one row; unsettled count never blocks.
+          if (o2mAliasFields.has(f.field)) {
+            const n = o2mEffectiveCounts[f.field]
+            return n === undefined || n > 0
+          }
           const v = draft[f.field]
           return v !== null && v !== undefined && v !== ''
         })
@@ -3492,7 +3539,9 @@ export function ItemEditForm({
     visitedSteps,
     isStepsMode,
     m2mAliasFieldsForRules,
-    m2mAliasFieldStates
+    m2mAliasFieldStates,
+    o2mAliasFields,
+    o2mEffectiveCounts
   ])
 
   function handleNext() {
@@ -3805,6 +3854,8 @@ export function ItemEditForm({
     const isFilled = (f: (typeof fields)[number]): boolean => {
       const alias = m2mAliasFieldsForRules.get(f.field)
       if (alias) return (m2mAliasFieldStates[f.field]?.ids ?? []).length > 0
+      // Required O2M = at least one row; treat an unsettled count as filled.
+      if (o2mAliasFields.has(f.field)) return (o2mEffectiveCounts[f.field] ?? 1) > 0
       const v = draft[f.field]
       return v !== undefined && v !== null && v !== '' && v !== false
     }
@@ -3816,7 +3867,7 @@ export function ItemEditForm({
       total: required.length,
       requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
     }
-  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates, activeLayoutData])
+  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates, activeLayoutData, o2mAliasFields, o2mEffectiveCounts])
 
   // Provenance (#29): where the record came from — shown as a chip beside the
   // last-touched line.
@@ -4030,6 +4081,10 @@ export function ItemEditForm({
     const errs: Record<string, string> = {}
     for (const f of allFields) {
       if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)) continue
+      // A field the RESOLVED layout doesn't render can never be filled from
+      // this form — a CAR's layout has no vendor or lines, so their required
+      // flags must not block its save (same gate the completeness pill uses).
+      if ((f as { layout_assigned?: boolean }).layout_assigned === false) continue
       if (f.required) {
         if (f.field in fieldCounts) {
           if (fieldCounts[f.field] === 0) errs[f.field] = 'This field is required'
@@ -4040,10 +4095,15 @@ export function ItemEditForm({
           // field's combobox hadn't mounted to report a count.
           const st = m2mAliasFieldStates[f.field]
           if (st.known && st.ids.length === 0) errs[f.field] = 'This field is required'
+        } else if (o2mAliasFields.has(f.field)) {
+          // Required O2M = at least one row, pending or existing. An
+          // unsettled count (query in flight) never blocks.
+          const n = o2mEffectiveCounts[f.field]
+          if (n !== undefined && n === 0) errs[f.field] = 'At least one row is required'
         } else if (
           relations.some((r) => r.one_collection === collection && r.one_field === f.field)
         ) {
-          // Other alias shapes (O2M, unresolvable M2A) — no draft value exists
+          // Other alias shapes (unresolvable M2A) — no draft value exists
           // and no count was reported; skip rather than false-block.
         } else {
           const v = draft[f.field]
@@ -5116,6 +5176,11 @@ export function ItemEditForm({
           if (m2mAliasFieldsForRules.has(f.field)) {
             const st = m2mAliasFieldStates[f.field]
             return !st || st.ids.length > 0
+          }
+          // Required O2M = at least one row; unsettled count never blocks.
+          if (o2mAliasFields.has(f.field)) {
+            const n = o2mEffectiveCounts[f.field]
+            return n === undefined || n > 0
           }
           const v = draft[f.field]
           return v !== null && v !== undefined && v !== ''
