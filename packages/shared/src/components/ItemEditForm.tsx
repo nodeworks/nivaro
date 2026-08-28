@@ -2048,27 +2048,80 @@ export function ItemEditForm({
         const fkField = cfg?.source_fk_field || fc.field
         if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
         const map = cfg.field_map
+        // Alias-mapped source fields must stay OUT of the readOne fields= —
+        // readOne 500s on explicit alias selections (documented gotcha);
+        // the M2M branch resolves them via junction queries instead.
         const sourceFields = [
           ...new Set(
-            Object.values(map).flatMap((v) =>
-              String(v)
-                .split('||')
-                .map((c) => c.trim())
-            )
+            Object.entries(map)
+              .filter(([target]) => !m2mAliasFieldsForRules.has(target))
+              .flatMap(([, v]) =>
+                String(v)
+                  .split('||')
+                  .map((c) => c.trim())
+              )
           )
         ].filter(Boolean)
-        if (sourceFields.length === 0) continue
+        const hasM2MTargets = Object.keys(map).some((t) => m2mAliasFieldsForRules.has(t))
+        if (sourceFields.length === 0 && !hasM2MTargets) continue
         void client
           .request<{ data: Record<string, unknown> }>(
             get(`/items/${cfg.source_collection}/${value}`, {
-              fields: sourceFields.join(',')
+              fields: sourceFields.length > 0 ? sourceFields.join(',') : 'id'
             })
           )
-          .then((res) => {
+          .then(async (res) => {
             const src = res.data
             if (!src) return
             const patch: Record<string, unknown> = {}
+            // Upstream M2M fill: a map target that is an M2M alias on THIS
+            // collection copies the PICKED record's own alias links (pick a
+            // Project → its Zones/Regions stage onto the form). ADDITIVE —
+            // a default never unlinks something explicitly chosen; scalars
+            // keep their overwrite semantics.
+            const m2mEntries = Object.entries(map).filter(([target]) =>
+              m2mAliasFieldsForRules.has(target)
+            )
+            if (m2mEntries.length > 0) {
+              try {
+                const srcRels = await client
+                  .request<{ data: CMSRelation[] }>(
+                    get(`/data-model/relations/for/${cfg.source_collection}`)
+                  )
+                  .then((r) => r.data ?? [])
+                for (const [target, sourceField] of m2mEntries) {
+                  const srcAlias = srcRels.find(
+                    (r) =>
+                      r.one_collection === cfg!.source_collection &&
+                      r.one_field === String(sourceField).trim() &&
+                      r.junction_field
+                  )
+                  const info = m2mAliasFieldsForRules.get(target)
+                  if (!srcAlias?.many_collection || !srcAlias.many_field || !info) continue
+                  const junctionRows = await client
+                    .request<{ data: Record<string, unknown>[] }>(
+                      get(`/items/${srcAlias.many_collection}`, {
+                        filter: JSON.stringify({ [srcAlias.many_field]: { _eq: value } }),
+                        limit: 200,
+                        fields: `id,${srcAlias.junction_field}`
+                      })
+                    )
+                    .then((r) => r.data ?? [])
+                  const already = new Set(
+                    (m2mAliasFieldStatesRef.current[target]?.ids ?? []).map((x) => String(x))
+                  )
+                  for (const jr of junctionRows) {
+                    const rid = jr[srcAlias.junction_field as string]
+                    if (rid == null || already.has(String(rid))) continue
+                    m2mStagingCtx.stageLink(info.stagingKey, rid)
+                  }
+                }
+              } catch {
+                /* alias fill is best-effort — scalar defaults still apply */
+              }
+            }
             for (const [target, sourceField] of Object.entries(map)) {
+              if (m2mAliasFieldsForRules.has(target)) continue
               // 'a||b' = first non-null of the listed source fields; 'id'
               // refers to the source record itself (EFP: a location's
               // designated shipping_location, else the location itself).
@@ -2097,7 +2150,7 @@ export function ItemEditForm({
           })
       }
     },
-    [fieldConfig, client]
+    [fieldConfig, client, m2mAliasFieldsForRules, m2mStagingCtx]
   )
 
   const applyFieldRuleResults = useCallback(
