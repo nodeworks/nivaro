@@ -191,6 +191,20 @@ export function FieldRenderer({
       />
     )
   }
+  // Single-file fields target nivaro_files by construction — render the
+  // picker regardless of whether a nivaro_relations row is registered.
+  if (iface === 'file-image' || iface === 'file') {
+    const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
+    return (
+      <FilePickerField
+        value={value}
+        onChange={onChange}
+        disabled={field.readonly}
+        allowUpload={fOpts?.allow_upload !== false}
+        allowPick={fOpts?.allow_pick !== false}
+      />
+    )
+  }
   const isRelIface =
     !iface ||
     iface.startsWith('relation-') ||
@@ -205,10 +219,6 @@ export function FieldRenderer({
       )
     : null
   if (m2oRel?.one_collection) {
-    if (iface === 'file-image') {
-      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean }>(field.options)
-      return <FilePickerField value={value} onChange={onChange} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} />
-    }
     if (iface === 'relation-grouped') {
       const gOpts = parseJson<{ group_field?: string; option_field?: string }>(field.options)
       if (gOpts?.group_field && gOpts?.option_field) {
