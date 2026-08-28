@@ -652,11 +652,20 @@ export function FieldRow({
       staleTime: 30_000
     }))
   })
+  // Committed rows keep their junction ROW id so pending unlinks (which are
+  // staged by junction id) can subtract them — replacing the single allowed
+  // region must not leave the OLD one in the cascade filter.
   const m2mParentCommitted = Object.fromEntries(
-    parentM2mRelPairs.map(({ rule, rel }, i) => [
-      rule.parent_field,
-      (m2mParentResults[i]?.data ?? []).map((ji) => ji[rel.junction_field!])
-    ])
+    parentM2mRelPairs.map(({ rule, rel }, i) => {
+      const key = rel.one_field ?? `${rel.many_collection}.${rel.junction_field}`
+      const unlinked = m2mStaging?.getStagedUnlinks(key) ?? new Set()
+      return [
+        rule.parent_field,
+        (m2mParentResults[i]?.data ?? [])
+          .filter((ji) => !unlinked.has(ji.id))
+          .map((ji) => ji[rel.junction_field!])
+      ]
+    })
   )
 
   const addendumHints = useAddendumFields()[field.field] ?? []
