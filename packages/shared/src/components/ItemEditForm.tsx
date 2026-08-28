@@ -2056,8 +2056,15 @@ export function ItemEditForm({
   // parent_field from it — the cascade run in reverse. Shares the origin
   // guard with cross-record defaults so a programmatic fill can't re-fire.
   const runUpstreamCascades = useCallback(
-    (field: string, pickedId: unknown) => {
+    (field: string, pickedId: unknown, depth = 0, seen?: Set<string>) => {
       if (pickedId === null || pickedId === undefined || pickedId === '') return
+      // Chains all the way up (shipping location → region → zone), capped and
+      // cycle-guarded so a config loop can't ping-pong.
+      if (depth > 3) return
+      const chainSeen = seen ?? new Set<string>()
+      const seenKey = `${field}:${String(pickedId)}`
+      if (chainSeen.has(seenKey)) return
+      chainSeen.add(seenKey)
       const fc = (fieldConfig ?? []).find((f) => f.field === field)
       if (!fc?.dependency_config) return
       let rules: CascadeRule[] = []
@@ -2176,6 +2183,10 @@ export function ItemEditForm({
               } finally {
                 crossFillInFlightRef.current -= 1
               }
+              // Chain: the filled parent may have its own upstream rule
+              // (region → zone). Explicit recursion, not the stageLink hook —
+              // the origin guard stays intact for user-pick detection.
+              for (const v of values) upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen)
             } else if (values.length === 1) {
               // Scalar parent: fill only when unambiguous; overwrite is
               // deliberate — the pick is the newest statement of intent.
@@ -2184,6 +2195,7 @@ export function ItemEditForm({
               setDraft((prev) => ({ ...prev, [parent]: v }))
               setIsDirty(true)
               crossDefaultsRef.current?.(parent, v, 1)
+              upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen)
             }
           } catch {
             /* one rule failing must not take the rest down */
@@ -2350,10 +2362,14 @@ export function ItemEditForm({
             setDraft((prev) => ({ ...prev, ...patch }))
             setIsDirty(true)
             // Chain: a target that is itself a watched FK cascades its own
-            // defaults (billing location → shipping location → address copy).
+            // defaults (billing location → shipping location → address copy)
+            // AND its own upstream cascades (shipping → region → zone).
             // Depth-capped to break config cycles.
             for (const [target, v] of Object.entries(patch)) {
-              if (target !== field && v != null && v !== '') runCrossDefaults(target, v, depth + 1)
+              if (target !== field && v != null && v !== '') {
+                runCrossDefaults(target, v, depth + 1)
+                upstreamCascadesRef.current?.(target, v, depth + 1)
+              }
             }
           })
           .catch(() => {
