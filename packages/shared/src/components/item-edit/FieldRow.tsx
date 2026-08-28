@@ -643,7 +643,7 @@ export function FieldRow({
           .request<{ data: Record<string, unknown>[] }>(
             get(`/items/${rel.many_collection}`, {
               filter: JSON.stringify({ [rel.many_field!]: { _eq: itemId } }),
-              limit: 1,
+              limit: 200,
               fields: `id,${rel.junction_field}`
             })
           )
@@ -740,18 +740,24 @@ export function FieldRow({
         }
         const key =
           parentM2mRel.one_field ?? `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
+        // EVERY linked value counts — two linked regions filter options to
+        // records reachable from either, not silently just the first.
         const staged = m2mStaging?.getStagedLinks(key) ?? []
-        if (staged.length > 0) return staged[0]
         const committed = m2mParentCommitted[rule.parent_field] ?? []
-        if (committed.length > 0) return committed[0]
-        return null
+        const all = [...new Set([...staged, ...committed].map((v) => String(v)))]
+        if (all.length === 0) return null
+        return all.length === 1 ? all[0] : all
       })()
     if (parentVal != null && parentVal !== '') {
       if (!cascadeFilter) cascadeFilter = {}
       // value_map: parent value → derived filter value(s); arrays become _in
       let filterVal: unknown = parentVal
       if (rule.value_map && typeof rule.value_map === 'object') {
-        filterVal = rule.value_map[String(parentVal)] ?? rule.value_map_default ?? parentVal
+        const vm = rule.value_map
+        const mapOne = (v: unknown) => vm[String(v)] ?? rule.value_map_default ?? v
+        filterVal = Array.isArray(parentVal)
+          ? [...new Set(parentVal.flatMap((v) => { const m = mapOne(v); return Array.isArray(m) ? m : [m] }))]
+          : mapOne(parentVal)
       }
       const clause = Array.isArray(filterVal) ? { _in: filterVal } : { _eq: filterVal }
       if (rule.filter_is_m2m) {
