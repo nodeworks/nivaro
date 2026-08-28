@@ -164,9 +164,12 @@ export function StepsBar({
               >
                 {s.label}
               </span>
+              {/* Unsaved-edits dot rides the flex row beside the label — the
+                  old absolute top-right position sat in the chevron notch and
+                  the arrow clip-path sliced it in half. */}
               {dirtySteps?.has(s.key) && !isActive && (
                 <span
-                  className='absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-400'
+                  className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400'
                   data-tip='Unsaved edits on this step'
                 />
               )}
