@@ -1416,7 +1416,19 @@ function PipelinePanelInner({
     ? (transitions ?? []).find((t) => t.id === pendingTransition)
     : null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
-  const hasTransitions = !instance?.completed_at && transitions && transitions.length > 0
+  // A completed instance normally shows no actions — EXCEPT escape hatches
+  // authored FROM the terminal state the record sits in (Uncancel). Mirrors
+  // the server guard exactly: any other transition would 400.
+  const escapeTransitions =
+    instance?.completed_at && transitions
+      ? transitions.filter(
+          (t) =>
+            t.from_state &&
+            String(t.from_state).toUpperCase() === String(instance.current_state).toUpperCase()
+        )
+      : null
+  const visibleTransitions = instance?.completed_at ? (escapeTransitions ?? []) : (transitions ?? [])
+  const hasTransitions = visibleTransitions.length > 0
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
     const byLabel = new Map<string, PipelineTransition[]>()
@@ -1591,7 +1603,7 @@ function PipelinePanelInner({
           <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
             {!expanded && hasTransitions && (
               <div className='flex flex-wrap items-center gap-1.5'>
-                {renderTransitionButtons(transitions, true)}
+                {renderTransitionButtons(visibleTransitions, true)}
               </div>
             )}
             {!expanded && !instance && data?.binding && (
@@ -1710,7 +1722,7 @@ function PipelinePanelInner({
                 {hasTransitions && (
                   <div className='space-y-3 px-5 py-4'>
                     <div className='flex flex-wrap justify-end gap-2'>
-                      {renderTransitionButtons(transitions)}
+                      {renderTransitionButtons(visibleTransitions)}
                     </div>
                     {pendingTransition && confirmForm}
                   </div>
@@ -1884,8 +1896,15 @@ function PipelineTransitionButtonsInner({
       }
     }
   })
-  if (!data?.binding || !data?.instance || data.instance.completed_at) return null
-  const transitions = data.available_transitions ?? []
+  if (!data?.binding || !data?.instance) return null
+  // Completed instances keep only escape hatches from their terminal state
+  // (Uncancel) — everything else would 400 server-side.
+  const transitions = (data.available_transitions ?? []).filter(
+    (t) =>
+      !data.instance!.completed_at ||
+      (t.from_state &&
+        String(t.from_state).toUpperCase() === String(data.instance!.current_state).toUpperCase())
+  )
   if (transitions.length === 0) return null
   const stateById = new Map((data.states ?? []).map((s) => [s.id, s]))
   const currentState = data.instance.current_state_obj ?? null
