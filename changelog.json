@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-08-28T13:23:07.193Z",
+  "generated_at": "2026-08-28T14:08:25.296Z",
   "releases": [
+    {
+      "version": "0.1.171",
+      "tag": "v0.1.171",
+      "date": "2026-08-28T10:08:20-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "return-to-previous transitions (uncancel, generalized)",
+              "hash": "10c6c4c0"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "addendum switcher says 'Current record'; sweep label un-clipped",
+              "hash": "7bce7705"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "teams split view was overridden in headless hosts",
+              "hash": "18fd1469"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "completed instances show their escape-hatch transitions",
+              "hash": "49119a2a"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.170",
       "tag": "v0.1.170",
-      "date": "2026-08-28T09:23:01-04:00",
+      "date": "2026-08-28T09:23:07-04:00",
       "sections": [
         {
           "label": "Fixed",
