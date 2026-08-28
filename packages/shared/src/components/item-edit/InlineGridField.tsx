@@ -23,13 +23,16 @@ export function InlineGridField({
   manyField,
   parentId,
   layoutSlug,
-  parentFieldKey
+  parentFieldKey,
+  emptyLabel
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
   layoutSlug?: string | null
   parentFieldKey?: string
+  /** Names the empty state ("No deployments yet") instead of a bare "No rows". */
+  emptyLabel?: string
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -445,7 +448,7 @@ export function InlineGridField({
               if (rows.length === 0) return (
                 <tr>
                   <td colSpan={displayCols.length + 1} className='px-3 py-4 text-center text-[11px] text-slate-400'>
-                    No rows
+                    {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'No rows'}
                   </td>
                 </tr>
               )
@@ -511,7 +514,11 @@ export function InlineGridField({
           {activeView === 'original' && displayRows.length === 0 && !addingNew && (
             <tr>
               <td colSpan={displayCols.length + (isNew ? 2 : 1)} className='px-3 py-4 text-center text-slate-400'>
-                {isNew ? 'No pending rows' : 'No rows'}
+                {emptyLabel
+                  ? `No ${emptyLabel.toLowerCase()} yet`
+                  : isNew
+                    ? 'No pending rows'
+                    : 'No rows'}
               </td>
             </tr>
           )}

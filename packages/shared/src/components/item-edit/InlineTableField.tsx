@@ -1137,7 +1137,8 @@ export function InlineTableField({
   submissionErrors,
   prefillParentId,
   parentFieldKey,
-  readOnly = false
+  readOnly = false,
+  emptyLabel
 }: {
   relatedCollection: string
   manyField: string
@@ -1145,6 +1146,8 @@ export function InlineTableField({
   /** Same table display, but no editing: hides the Add toolbar, + Add row,
    *  row delete/undo, and blocks cell edit entry. */
   readOnly?: boolean
+  /** Names the empty state ("No deployments yet") instead of a bare "No rows". */
+  emptyLabel?: string
   parentCollection?: string
   layoutId?: number | null
   showRowRevisions?: boolean
@@ -4169,7 +4172,11 @@ export function InlineTableField({
           {rows.length === 0 && pendingRows.length === 0 && !isEditingNew && (
             <tr>
               <td colSpan={effectiveCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
-                {isNew ? 'No pending rows' : 'No rows yet'}
+                {emptyLabel
+                  ? `No ${emptyLabel.toLowerCase()} yet`
+                  : isNew
+                    ? 'No pending rows'
+                    : 'No rows yet'}
               </td>
             </tr>
           )}
@@ -4189,7 +4196,7 @@ export function InlineTableField({
               if (rows.length === 0) return (
                 <tr>
                   <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-slate-400'>
-                    No rows
+                    {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'No rows'}
                   </td>
                 </tr>
               )

@@ -226,7 +226,7 @@ function O2MSummary({
     return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
   if (!rows || rows.length === 0)
     return (
-      <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>No rows</span>
+      <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>None yet</span>
     )
 
   const capped = rows.length >= O2M_FETCH_LIMIT
