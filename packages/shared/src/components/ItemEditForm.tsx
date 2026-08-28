@@ -3022,24 +3022,102 @@ export function ItemEditForm({
   // Find-in-record (#82): searchable field list from the deduped config +
   // current draft values; jump = the same flash, reporting a miss when the
   // field's DOM node isn't mounted (another tab/step).
-  const findableFields = useMemo<FindableField[]>(
-    () =>
-      allFields
-        .filter((f) => !f.hidden && !f.field.startsWith('__'))
-        .map((f) => {
-          const v = draft[f.field]
+  const findableFields = useMemo<FindableField[]>(() => {
+    const m2oByField = new Map(
+      relations
+        .filter((r) => r.many_collection === collection && !r.junction_field && r.many_field)
+        .map((r) => [r.many_field as string, r.one_collection as string])
+    )
+    // O2M aliases — the alias is named by one_field (normal) or by the child
+    // table itself (legacy child-table-name form).
+    const o2mByField = new Map<string, { target: string; fk: string }>()
+    for (const r of relations) {
+      if (r.junction_field || r.one_collection !== collection || !r.many_collection || !r.many_field)
+        continue
+      const aliasName = (r.one_field as string | null) ?? r.many_collection
+      if (!o2mByField.has(aliasName))
+        o2mByField.set(aliasName, { target: r.many_collection, fk: r.many_field })
+    }
+    return allFields
+      .filter((f) => !f.hidden && !f.field.startsWith('__'))
+      .map((f): FindableField => {
+        // `||` not `??` — legacy alias fields carry an EMPTY-string label.
+        const label = f.label || titleCase(f.field)
+        // M2M alias — value = committed+staged junction ids, resolved to
+        // labels lazily inside the search popover.
+        const aliasInfo = m2mAliasFieldsForRules.get(f.field)
+        if (aliasInfo) {
+          const companion = relations.find(
+            (r) =>
+              r.many_collection === aliasInfo.manyCollection &&
+              r.many_field === aliasInfo.junctionField
+          )
+          const st = m2mAliasFieldStates[f.field]
           return {
             field: f.field,
-            label: f.label ?? titleCase(f.field),
+            label,
             group: null,
-            value:
-              v == null || typeof v === 'object'
-                ? ''
-                : String(v).replace(/<[^>]+>/g, ' ').slice(0, 120)
+            value: '',
+            relation: companion?.one_collection
+              ? {
+                  kind: 'm2m',
+                  target: companion.one_collection as string,
+                  ids: st?.known ? st.ids : []
+                }
+              : undefined
           }
-        }),
-    [allFields, draft]
-  )
+        }
+        const o2m = o2mByField.get(f.field)
+        if (o2m && itemId && !isNew) {
+          return {
+            field: f.field,
+            label,
+            group: null,
+            value: '',
+            relation: { kind: 'o2m', target: o2m.target, fkField: o2m.fk, parentId: itemId }
+          }
+        }
+        const v = draft[f.field]
+        const m2oTarget = m2oByField.get(f.field)
+        if (m2oTarget && v != null && v !== '' && typeof v !== 'object') {
+          return {
+            field: f.field,
+            label,
+            group: null,
+            value: '',
+            relation: { kind: 'm2o', target: m2oTarget, ids: [v as string | number] }
+          }
+        }
+        let value = ''
+        if (v != null && typeof v !== 'object') {
+          if (typeof v === 'boolean' || f.type === 'boolean') {
+            value = v === true || v === 1 || v === '1' || v === 'true' ? 'Yes' : 'No'
+          } else {
+            const choices = parseJson<{ choices?: Array<{ text: string; value: string }> }>(
+              f.options
+            )?.choices
+            const choice = choices?.find((c) => String(c.value) === String(v))
+            value = choice
+              ? choiceLabel(choice.text)
+              : String(v)
+                  .replace(/<[^>]+>/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+                  .slice(0, 120)
+          }
+        }
+        return { field: f.field, label, group: null, value }
+      })
+  }, [
+    allFields,
+    draft,
+    relations,
+    collection,
+    m2mAliasFieldsForRules,
+    m2mAliasFieldStates,
+    itemId,
+    isNew
+  ])
   const jumpToField = (key: string): boolean => {
     const el = document.querySelector(`[data-field="${key}"]`)
     if (!el) return false
