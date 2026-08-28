@@ -1,10 +1,105 @@
 {
-  "generated_at": "2026-08-27T23:40:31.520Z",
+  "generated_at": "2026-08-28T01:18:41.936Z",
   "releases": [
+    {
+      "version": "0.1.168",
+      "tag": "v0.1.168",
+      "date": "2026-08-27T21:18:37-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "required O2M fields — at least one row, pending or existing",
+              "hash": "154fcaf9"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "find-in-record jumps to the field's tab when unmounted",
+              "hash": "1b2cb517"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "find-in-record searches friendly values incl. M2O/M2M/O2M",
+              "hash": "03f9d813"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "summary Related section only lists the layout's own O2M aliases",
+              "hash": "e94e4d8f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "rich text editor crashed at mount when paste-plain was off",
+              "hash": "00b97588"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "section-header hover overlay squares off against its body",
+              "hash": "2cbc45db"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "inline grids name their empty states",
+              "hash": "852fd26f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "completeness pill counts required layout fields only",
+              "hash": "388ffbf0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "'file' interface renders the file picker",
+              "hash": "442e43ed"
+            },
+            {
+              "section": "Fixed",
+              "scope": "widgets",
+              "text": "custom-query renders get the 120s per-request timeout",
+              "hash": "9441c7b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record-insights",
+              "text": "popover refreshes after saves and transitions",
+              "hash": "8ff9077e"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "chat tips panel, named widget empty states, centered record loader",
+              "hash": "287a9a26"
+            }
+          ]
+        }
+      ],
+      "count": 12
+    },
     {
       "version": "0.1.167",
       "tag": "v0.1.167",
-      "date": "2026-08-27T19:40:26-04:00",
+      "date": "2026-08-27T19:40:31-04:00",
       "sections": [
         {
           "label": "Fixed",
