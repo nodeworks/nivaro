@@ -1274,7 +1274,9 @@ export function WidgetSlot({
     onContentChange(true)
   }, [renderData, error, widget?.widget_type, onContentChange])
 
-  const title = label || widget?.name || `Widget ${widgetId}`
+  // No id fallback while the definition loads — "Widget 8" flashing before
+  // the real name reads as a bug. Blank until we know the name.
+  const title = label || widget?.name || ''
 
   // Report-widget payloads nest their numbers under `data` — reduce to the
   // flat {value, display} shape the strip/pill/stat cells render.
@@ -1481,7 +1483,11 @@ export function WidgetSlot({
         className='flex w-full items-center justify-between px-4 py-3 text-left'
         onClick={() => setOpen((o) => !o)}
       >
-        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>{title}</span>
+        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
+          {title || (
+            <span className='inline-block h-3 w-28 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))] align-middle' />
+          )}
+        </span>
         <span className={`text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
       </button>
       {open && (
