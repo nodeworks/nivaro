@@ -46,7 +46,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.meta.outputs.already != 'true'
-        run: npm publish --access public --provenance
+        run: npm publish --access public
         working-directory: packages/sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
