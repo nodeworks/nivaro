@@ -501,22 +501,28 @@ export function RecordReadView({
       return []
     }
   }
-  const renderWidgets = (groupKey: string | null) =>
-    widgetSlots
+  const renderWidgets = (groupKey: string | null) => {
+    const slots = widgetSlots
       .filter((w) => w.group_key === groupKey)
       .sort((a, b) => a.sort - b.sort)
-      .map((w) => (
-        <WidgetSlot
-          key={w.field}
-          widgetId={w.widget_id as number}
-          inputBindings={slotBindings(w)}
-          itemDraft={record ?? {}}
-          itemCollection={collection}
-          ready={!!record}
-          label={w.label_override ?? undefined}
-          defaultExpanded={w.default_expanded == null ? true : !!w.default_expanded}
-        />
-      ))
+    if (slots.length === 0) return null
+    return (
+      <div className='mt-3 space-y-4'>
+        {slots.map((w) => (
+          <WidgetSlot
+            key={w.field}
+            widgetId={w.widget_id as number}
+            inputBindings={slotBindings(w)}
+            itemDraft={record ?? {}}
+            itemCollection={collection}
+            ready={!!record}
+            label={w.label_override ?? undefined}
+            defaultExpanded={w.default_expanded == null ? true : !!w.default_expanded}
+          />
+        ))}
+      </div>
+    )
+  }
   const groups = [...layoutData.groups].sort((a, b) => a.sort - b.sort)
   const sectionGroups = groups.filter((g) => g.type !== 'tab')
   const tabGroups = groups.filter((g) => g.type === 'tab')
