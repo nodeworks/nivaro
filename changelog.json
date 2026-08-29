@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-29T20:05:47.020Z",
+  "generated_at": "2026-08-29T20:40:46.650Z",
   "releases": [
+    {
+      "version": "0.1.175",
+      "tag": "v0.1.175",
+      "date": "2026-08-29T16:40:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Related records layout slot + relational display-template labels",
+              "hash": "f35b4dff"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.174",
       "tag": "v0.1.174",
-      "date": "2026-08-29T16:05:41-04:00",
+      "date": "2026-08-29T16:05:47-04:00",
       "sections": [
         {
           "label": "Added",
