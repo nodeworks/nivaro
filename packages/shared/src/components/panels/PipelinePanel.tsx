@@ -1774,11 +1774,15 @@ function PipelinePanelInner({
 export function PipelineTransitionButtons({
   collection,
   item,
-  onBeforeTransition
+  onBeforeTransition,
+  wrap = true
 }: {
   collection: string
   item: string
   onBeforeTransition?: () => boolean | Promise<boolean>
+  /** false = single-line buttons (header hosting): wrapping would absorb the
+   *  width pressure the header's overflow-collapse logic needs to see. */
+  wrap?: boolean
 }) {
   if (item === 'new') return null
   return (
@@ -1786,6 +1790,7 @@ export function PipelineTransitionButtons({
       collection={collection}
       item={item}
       onBeforeTransition={onBeforeTransition}
+      wrap={wrap}
     />
   )
 }
@@ -1793,11 +1798,13 @@ export function PipelineTransitionButtons({
 function PipelineTransitionButtonsInner({
   collection,
   item,
-  onBeforeTransition
+  onBeforeTransition,
+  wrap = true
 }: {
   collection: string
   item: string
   onBeforeTransition?: () => boolean | Promise<boolean>
+  wrap?: boolean
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -1916,7 +1923,7 @@ function PipelineTransitionButtonsInner({
 
   return (
     <div className='relative'>
-      <div className='flex flex-wrap justify-end gap-2'>
+      <div className={wrap ? 'flex flex-wrap justify-end gap-2' : 'flex shrink-0 items-center justify-end gap-2'}>
         {Array.from(byLabel.entries()).map(([label, txs]) => {
           const txColor = txs[0]?.color ?? null
           const isActive = txs.some((t) => t.id === pendingTransition)

@@ -58,6 +58,7 @@ import {
   changeReasonChallenge
 } from './item-edit/ChangeReasonDialog'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { HeaderTools } from './item-edit/HeaderTools'
 import { FieldRow } from './item-edit/FieldRow'
 import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
 import {
@@ -6326,6 +6327,7 @@ export function ItemEditForm({
             )}
             {isLast && !isNew && showPipeline && (
               <PipelineTransitionButtons
+                wrap={false}
                 key={`${pipelineCollection}:${pipelineItem}`}
                 collection={pipelineCollection}
                 item={pipelineItem}
@@ -6682,6 +6684,7 @@ export function ItemEditForm({
                                     headerCondensed ? 'py-1.5' : 'py-3.5',
                                     headerClassName
                                   )}
+                                  data-nvr-header-row
                                   data-nvr-condensed={headerCondensed || undefined}
                                 >
                                   {onBack && (
@@ -6866,6 +6869,7 @@ export function ItemEditForm({
                                     )}
                                   </div>
                                   <div className='ml-auto flex items-center gap-1.5'>
+                                    <HeaderTools>
                                     {isNew && (
                                       <ImportFromFileButton
                                         collection={collection}
@@ -7440,6 +7444,7 @@ export function ItemEditForm({
                                         <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
                                       </>
                                     ) : null}
+                                    </HeaderTools>
                                     {!isStepsMode && (
                                       <div className='relative'>
                                         {isDirty && !saveMut.isPending && (
@@ -7545,6 +7550,7 @@ export function ItemEditForm({
                                       showPipeline &&
                                       (!isStepsMode || viewingAddendum) && (
                                         <PipelineTransitionButtons
+                                          wrap={false}
                                           key={`${pipelineCollection}:${pipelineItem}`}
                                           collection={pipelineCollection}
                                           item={pipelineItem}
