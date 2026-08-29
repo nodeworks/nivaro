@@ -1,7 +1,7 @@
 {
   "name": "nivaro-cms",
   "private": true,
-  "version": "0.1.173",
+  "version": "0.1.174",
   "scripts": {
     "dev": "concurrently --kill-others-on-fail -n redis,inngest,api,admin -c cyan,magenta,blue,green \"pnpm dev:redis\" \"wait-on tcp:6379 && pnpm dev:inngest\" \"wait-on tcp:6379 && pnpm dev:api\" \"pnpm --filter @nivaro/admin dev\"",
     "dev:api": "pnpm --filter @nivaro/api dev",

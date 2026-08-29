@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-08-29T19:17:56.519Z",
+  "generated_at": "2026-08-29T20:05:47.020Z",
   "releases": [
+    {
+      "version": "0.1.174",
+      "tag": "v0.1.174",
+      "date": "2026-08-29T16:05:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "read-view",
+              "text": "widget slots render in drill-down detail layouts",
+              "hash": "c782373c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "widget-slot",
+              "text": "skeleton instead of 'Widget N' while the definition loads",
+              "hash": "975e63f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "read-view",
+              "text": "vertical spacing between widget slots",
+              "hash": "ddd4b6cf"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.173",
       "tag": "v0.1.173",
-      "date": "2026-08-29T15:17:51-04:00",
+      "date": "2026-08-29T15:17:56-04:00",
       "sections": [
         {
           "label": "Added",
