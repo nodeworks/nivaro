@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Network } from 'lucide-react'
 import { useState } from 'react'
-import { useItemNavigation, useNivaroClient } from '../../context'
+import { useDrilldown, useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 
 /**
@@ -33,6 +33,10 @@ export function ReferencedByPanel({
 }) {
   const client = useNivaroClient()
   const { open: openItem } = useItemNavigation()
+  // Inside a record page a drill-down sheet host is present — open samples in
+  // the detail sheet (record stays put) instead of navigating away. Hosts
+  // without one keep the navigation fallback.
+  const drill = useDrilldown()
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   const { data: refs = [] } = useQuery({
@@ -93,11 +97,15 @@ export function ReferencedByPanel({
                     <button
                       key={s.id}
                       type='button'
-                      onClick={() => openItem({ collection: r.collection, itemId: s.id })}
+                      onClick={() =>
+                        drill
+                          ? drill.open({ collection: r.collection, itemId: s.id })
+                          : openItem({ collection: r.collection, itemId: s.id })
+                      }
                       className='max-w-[220px] truncate text-[11.5px] text-nvr-navy underline decoration-nvr-cyan/50 underline-offset-2 hover:decoration-nvr-cyan dark:text-nvr-cyan'
                       title={s.label}
                     >
-                      {s.label}
+                      {s.label.trim() || `#${s.id}`}
                     </button>
                   ))}
                   {r.count > r.samples.length && (

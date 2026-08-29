@@ -28,10 +28,13 @@ interface RecordLink {
 export function RelatedRecordsPanel({
   collection,
   itemId,
+  title,
   defaultExpanded = false
 }: {
   collection: string
   itemId: string
+  /** Layout-slot label override. */
+  title?: string
   defaultExpanded?: boolean
 }) {
   const client = useNivaroClient()
@@ -113,7 +116,7 @@ export function RelatedRecordsPanel({
       >
         <Link2 className='h-3.5 w-3.5 text-slate-400' />
         <span className='text-[12.5px] font-semibold text-slate-700 dark:text-slate-200'>
-          Related records
+          {title ?? 'Related records'}
         </span>
         {links.length > 0 && (
           <span className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>

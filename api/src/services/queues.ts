@@ -1008,6 +1008,58 @@ const LABEL_CANDIDATES = ['title', 'name', 'label', 'subject']
 /** Render {{field}}-template labels for a set of ids of one collection. Template
  *  fields are limited to REAL columns of the collection (dotted tokens render
  *  empty — same contract as ItemEdit display templates). */
+/** Resolve dotted M2O paths on already-fetched rows: for each path root, look
+ *  up the relation, fetch the parent rows, splice them in place of the fk, and
+ *  recurse into the remaining path segments (depth-capped). Rows whose fk or
+ *  relation cannot be resolved keep a null — the placeholder renders empty. */
+async function attachRelationPaths(
+  collection: string,
+  rows: Array<Record<string, unknown>>,
+  paths: string[],
+  depth = 0
+): Promise<void> {
+  if (rows.length === 0 || paths.length === 0 || depth > 3) return
+  const byRoot = new Map<string, Set<string>>()
+  for (const path of paths) {
+    const [root, ...rest] = path.split('.')
+    if (rest.length === 0) continue
+    const set = byRoot.get(root) ?? new Set<string>()
+    set.add(rest.join('.'))
+    byRoot.set(root, set)
+  }
+  for (const [root, subPaths] of byRoot) {
+    try {
+      const rel = (await db('nivaro_relations')
+        .where({ many_collection: collection, many_field: root })
+        .first('one_collection')) as { one_collection: string | null } | undefined
+      if (!rel?.one_collection) continue
+      const fks = [...new Set(rows.map((r) => r[root]).filter((v) => v != null))] as Array<
+        string | number
+      >
+      if (fks.length === 0) continue
+      const targetFields = (await db('nivaro_fields')
+        .where({ collection: rel.one_collection })
+        .select('field')) as Array<{ field: string }>
+      const targetCols = new Set(targetFields.map((f) => f.field))
+      const leaves = [...subPaths].map((p) => p.split('.')[0]).filter((f) => targetCols.has(f))
+      const pickCols = [...new Set(['id', ...leaves])]
+      if (pickCols.length === 1) continue
+      const parents = (await selectInChunks(fks.map(String), 2000, (chunk) =>
+        db(rel.one_collection!).whereIn('id', chunk).select(pickCols)
+      )) as Array<Record<string, unknown>>
+      const deeper = [...subPaths].filter((p) => p.includes('.'))
+      if (deeper.length > 0) await attachRelationPaths(rel.one_collection, parents, deeper, depth + 1)
+      const parentOf = new Map(parents.map((row) => [String(row.id), row]))
+      for (const row of rows) {
+        const fk = row[root]
+        if (fk != null) row[root] = parentOf.get(String(fk)) ?? null
+      }
+    } catch {
+      // Missing relation/table — leave the fk; placeholder renders empty.
+    }
+  }
+}
+
 export async function renderTemplateLabels(
   collection: string,
   ids: string[],
@@ -1028,6 +1080,16 @@ export async function renderTemplateLabels(
     const rows = (await selectInChunks(ids, 2000, (chunk) =>
       db(collection).whereIn('id', chunk).select(selectCols)
     )) as Array<Record<string, unknown>>
+
+    // Dotted template paths ({{unit.name}}, {{workflow_line.workflow.workflow_id}})
+    // reference M2O parents — the raw row only holds the fk, so walk each hop
+    // through nivaro_relations and attach nested objects for resolveDisplayValue.
+    // Unknown relations/paths degrade to empty, same as before.
+    const dotted = [...template.matchAll(/\{\{([\w.]+)\}\}/g)]
+      .map((m) => m[1])
+      .filter((k) => k.includes('.') && columns.has(k.split('.')[0]))
+    await attachRelationPaths(collection, rows, dotted)
+
     for (const row of rows) {
       labels[`${collection}:${row.id}`] = resolveDisplayValue(row, template)
     }

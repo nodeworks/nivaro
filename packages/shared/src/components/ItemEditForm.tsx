@@ -3938,6 +3938,7 @@ export function ItemEditForm({
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
   const addendumSlot = assignments.find((a) => a.field === '__addendums__')
   const referencedBySlot = assignments.find((a) => a.field === '__referenced_by__')
+  const relatedRecordsSlot = assignments.find((a) => a.field === '__related_records__')
   const widgetSlots = assignments.filter(
     (a) => a.field.startsWith('__widget_') && a.field.endsWith('__') && a.widget_id != null
   )
@@ -4355,6 +4356,7 @@ export function ItemEditForm({
       | '__tasks__'
       | '__addendums__'
       | '__referenced_by__'
+      | '__related_records__'
       | '__owners__'
       | '__pdf__'
       | string
@@ -4397,6 +4399,8 @@ export function ItemEditForm({
       entries.push({ item: '__addendums__', sort: addendumSlot.sort, tie: 7 })
     if (!isNew && referencedBySlot && isVisible(referencedBySlot))
       entries.push({ item: '__referenced_by__', sort: referencedBySlot.sort, tie: 8 })
+    if (!isNew && relatedRecordsSlot && isVisible(relatedRecordsSlot))
+      entries.push({ item: '__related_records__', sort: relatedRecordsSlot.sort, tie: 9 })
     if (
       showPipeline &&
       ownersSlot &&
@@ -5355,6 +5359,17 @@ export function ItemEditForm({
         />
       )
     }
+    if (key === '__related_records__' && !isNew && itemId) {
+      return (
+        <RelatedRecordsPanel
+          key='__related_records__'
+          collection={collection}
+          itemId={String(itemId)}
+          title={relatedRecordsSlot?.label_override ?? undefined}
+          defaultExpanded={relatedRecordsSlot?.default_expanded ?? false}
+        />
+      )
+    }
     if (key === '__owners__' && showPipeline) {
       return <div key='__owners__'>{renderOwnersPanel()}</div>
     }
@@ -5990,7 +6005,9 @@ export function ItemEditForm({
         )}
         {!isNew && itemId && (
           <>
-            <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            {!relatedRecordsSlot && (
+              <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            )}
             {!referencedBySlot && (
               <ReferencedByPanel collection={collection} itemId={String(itemId)} />
             )}
@@ -6240,7 +6257,9 @@ export function ItemEditForm({
         )}
         {!isNew && itemId && (
           <>
-            <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            {!relatedRecordsSlot && (
+              <RelatedRecordsPanel collection={collection} itemId={String(itemId)} />
+            )}
             {!referencedBySlot && (
               <ReferencedByPanel collection={collection} itemId={String(itemId)} />
             )}

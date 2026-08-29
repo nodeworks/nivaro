@@ -38299,9 +38299,9 @@
     "/items/mwf_queue": {
       "get": {
         "tags": [
-          "Mwf Queue"
+          "MWF Queue"
         ],
-        "operationId": "listMwfQueue",
+        "operationId": "listMWFQueue",
         "summary": "List mwf_queue",
         "parameters": [
           {
@@ -38363,7 +38363,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/MwfQueue"
+                        "$ref": "#/components/schemas/MWFQueue"
                       }
                     },
                     "total": {
@@ -38384,16 +38384,16 @@
       },
       "post": {
         "tags": [
-          "Mwf Queue"
+          "MWF Queue"
         ],
-        "operationId": "createMwfQueue",
-        "summary": "Create mwf_queue",
+        "operationId": "createMWFQueue",
+        "summary": "Create MWF Queue",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MwfQueue"
+                "$ref": "#/components/schemas/MWFQueue"
               }
             }
           }
@@ -38407,7 +38407,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/MwfQueue"
+                      "$ref": "#/components/schemas/MWFQueue"
                     }
                   }
                 }
@@ -38420,10 +38420,10 @@
     "/items/mwf_queue/{id}": {
       "get": {
         "tags": [
-          "Mwf Queue"
+          "MWF Queue"
         ],
-        "operationId": "getMwfQueue",
-        "summary": "Get mwf_queue by id",
+        "operationId": "getMWFQueue",
+        "summary": "Get MWF Queue by id",
         "parameters": [
           {
             "name": "id",
@@ -38443,7 +38443,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/MwfQueue"
+                      "$ref": "#/components/schemas/MWFQueue"
                     }
                   }
                 }
@@ -38457,10 +38457,10 @@
       },
       "patch": {
         "tags": [
-          "Mwf Queue"
+          "MWF Queue"
         ],
-        "operationId": "updateMwfQueue",
-        "summary": "Update mwf_queue",
+        "operationId": "updateMWFQueue",
+        "summary": "Update MWF Queue",
         "parameters": [
           {
             "name": "id",
@@ -38476,7 +38476,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MwfQueue"
+                "$ref": "#/components/schemas/MWFQueue"
               }
             }
           }
@@ -38490,7 +38490,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/MwfQueue"
+                      "$ref": "#/components/schemas/MWFQueue"
                     }
                   }
                 }
@@ -38504,10 +38504,10 @@
       },
       "delete": {
         "tags": [
-          "Mwf Queue"
+          "MWF Queue"
         ],
-        "operationId": "deleteMwfQueue",
-        "summary": "Delete mwf_queue",
+        "operationId": "deleteMWFQueue",
+        "summary": "Delete MWF Queue",
         "parameters": [
           {
             "name": "id",
@@ -59223,7 +59223,7 @@
         "properties": {},
         "required": []
       },
-      "MwfQueue": {
+      "MWFQueue": {
         "type": "object",
         "properties": {
           "id": {

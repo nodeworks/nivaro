@@ -130,7 +130,9 @@ export async function referencedByRoutes(app: FastifyInstance) {
           count: r.count,
           samples: r.sample_ids.map((sid) => ({
             id: sid,
-            label: labels[`${r.collection}:${sid}`] ?? `#${sid}`
+            // Empty display values (e.g. label field unset) fall back too —
+            // `??` alone lets '' through and renders an invisible link.
+            label: (labels[`${r.collection}:${sid}`] ?? '').trim() || `#${sid}`
           }))
         }))
 
