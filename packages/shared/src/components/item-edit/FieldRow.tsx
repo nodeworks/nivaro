@@ -10,7 +10,7 @@ import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
-import { FieldRenderer } from './FieldRenderer'
+import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import {
   CascadeEffectController,
   getCascadeFilters,
@@ -18,6 +18,7 @@ import {
   parseJson,
   SYSTEM_FIELDS
 } from './helpers'
+import { useParentDraft } from '../../context'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
@@ -598,6 +599,7 @@ export function FieldRow({
   forceVisible?: boolean
 }) {
   // Hooks must be called before any early return
+  const parentDraftCtx = useParentDraft()
   const m2mStaging = useM2MStaging()
   const queryClient = useQueryClient()
   const client = useNivaroClient()
@@ -792,6 +794,33 @@ export function FieldRow({
       if (!unsatisfiedParentLabel) unsatisfiedParentLabel = titleCase(String(rule.parent_field))
       if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
         requiredParentLabel = titleCase(String(rule.parent_field))
+      }
+      // Parent unset but the parent's OWN picker curates its options
+      // (option_filter): inherit that filter through the cascade relation, so
+      // this picker never offers records the parent could not hold. E.g. Unit
+      // Form: project_type filtered to unit-tracking types → with no type
+      // picked yet, projects narrow to those whose type is unit-tracking.
+      // value_map rules are value arithmetic, not relational — skipped.
+      const parentFilterRaw =
+        parentDraftCtx?.collection === collection
+          ? parentDraftCtx.fieldOptionFilters?.[rule.parent_field]
+          : undefined
+      const parentFilter =
+        parentFilterRaw && !rule.value_map
+          ? resolveOptionFilterTokens(parentFilterRaw, draft, itemId)
+          : undefined
+      if (parentFilter) {
+        if (!cascadeFilter) cascadeFilter = {}
+        if (rule.filter_is_m2m) {
+          cascadeFilter[rule.filter_column] = { _some: parentFilter }
+        } else if (rule.filter_column.includes('.')) {
+          const segs = rule.filter_column.split('.')
+          let nested: Record<string, unknown> = parentFilter
+          for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+          cascadeFilter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
+        } else {
+          cascadeFilter[rule.filter_column] = parentFilter
+        }
       }
     }
   }

@@ -2050,6 +2050,19 @@ export function ItemEditForm({
     return out
   }, [fieldConfig])
 
+  // Effective option_filter per field (layout overrides already merged into
+  // fieldConfig.options) — cascading children read these to inherit an unset
+  // parent's own option curation. Raw (token-unresolved); consumers resolve.
+  const parentFieldOptionFilters = useMemo(() => {
+    const out: Record<string, Record<string, unknown>> = {}
+    for (const f of fieldConfig ?? []) {
+      const opts = parseJson<{ option_filter?: Record<string, unknown> }>(f.options)
+      if (opts?.option_filter && typeof opts.option_filter === 'object')
+        out[f.field] = opts.option_filter
+    }
+    return out
+  }, [fieldConfig])
+
   const parentDraftWithAliases = useMemo(() => {
     const merged: Record<string, unknown> = { ...draft }
     for (const [field, state] of Object.entries(m2mAliasFieldStates)) {
@@ -6622,7 +6635,8 @@ export function ItemEditForm({
                   draft: parentDraftWithAliases,
                   collection,
                   dirtyFields: userTouchedRef.current,
-                  fieldLabels: parentFieldLabels
+                  fieldLabels: parentFieldLabels,
+                  fieldOptionFilters: parentFieldOptionFilters
                 }}
               >
                 <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>

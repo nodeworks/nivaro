@@ -168,6 +168,11 @@ export type ParentDraftContextValue = {
    *  child components naming a parent field ("select Zone first") must use
    *  these, never titleCase over the raw column name. */
   fieldLabels?: Record<string, string>
+  /** Effective option_filter per field (layout overrides applied). Cascading
+   *  pickers inherit an UNSET parent's option filter through the cascade
+   *  relation, so an unfiltered child can't offer records the parent's own
+   *  picker would refuse. */
+  fieldOptionFilters?: Record<string, Record<string, unknown>>
 }
 
 export const ParentDraftContext = createContext<ParentDraftContextValue | null>(null)
