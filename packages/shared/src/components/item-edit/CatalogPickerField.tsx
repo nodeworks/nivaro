@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase , matchesAllTokens} from '../../lib/utils'
+import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import { useO2MStaging } from './O2MStagingContext'
@@ -793,6 +794,23 @@ export function CatalogPickerField({
     ? 'w-36 shrink-0 truncate text-slate-700 dark:text-slate-200'
     : 'min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'
 
+  // Host-provided detail drawer (e.g. efp-new's stock-planning drawer for
+  // cifa_items): when an opener is registered, item labels become links.
+  const itemOpenable = canOpenCatalogItem(catalogCol)
+  const itemLabel = (catalogId: string, text: string, cls: string) =>
+    itemOpenable ? (
+      <button
+        type='button'
+        onClick={() => catalogCol && openCatalogItem(catalogCol, catalogId)}
+        title='View stock & planning detail'
+        className={cn(cls, 'text-left underline-offset-2 hover:text-[#009abe] hover:underline')}
+      >
+        {text}
+      </button>
+    ) : (
+      <span className={cls}>{text}</span>
+    )
+
   const labelFor = (catalogId: string): string => {
     const row =
       catalogById.get(catalogId) ??
@@ -1155,7 +1173,7 @@ export function CatalogPickerField({
                   )}
                 >
                   {starButton(id)}
-                  <span className={itemLabelCls}>{applyDisplayTemplate(tmpl, r)}</span>
+                  {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
                   {colCells(id, r)}
                   {savingIds.has(id) && (
                     <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
@@ -1244,7 +1262,7 @@ export function CatalogPickerField({
                       )}
                     >
                       {starButton(id)}
-                      <span className={itemLabelCls}>{applyDisplayTemplate(tmpl, r)}</span>
+                      {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
                       {colCells(id, r)}
                       {shortfall && (
                         <AlertTriangle
@@ -1318,7 +1336,7 @@ export function CatalogPickerField({
                         )}
                       >
                         {starButton(it.id)}
-                        <span className={itemLabelCls}>{it.label}</span>
+                        {itemLabel(it.id, it.label, itemLabelCls)}
                         {colCells(it.id, it.row)}
                         {shortfall && (
                           <AlertTriangle
@@ -1438,9 +1456,11 @@ export function CatalogPickerField({
                     )}
                   >
                     <div className={cn('flex items-center gap-2', isStagedDelete && 'line-through decoration-slate-400')}>
-                      <span className='shrink-0 font-semibold text-slate-800 dark:text-slate-100'>
-                        {labelFor(e.key)}
-                      </span>
+                      {itemLabel(
+                        e.key,
+                        labelFor(e.key),
+                        'shrink-0 font-semibold text-slate-800 dark:text-slate-100'
+                      )}
                       {submissionError && (
                         <span className='group/suberr relative shrink-0'>
                           <AlertCircle className='h-3.5 w-3.5 text-red-500' strokeWidth={2} />
@@ -2123,7 +2143,18 @@ function FavoritesManagerDrawer({
       >
         <td className='px-2 py-1'>{starBtn(id)}</td>
         <td className='px-2 py-1 font-medium tabular-nums text-slate-700 dark:text-slate-200'>
-          {label(row)}
+          {canOpenCatalogItem(catalogCol) ? (
+            <button
+              type='button'
+              onClick={() => openCatalogItem(catalogCol, id)}
+              title='View stock & planning detail'
+              className='text-left underline-offset-2 hover:text-[#009abe] hover:underline'
+            >
+              {label(row)}
+            </button>
+          ) : (
+            label(row)
+          )}
         </td>
         <td className='max-w-0 px-2 py-1'>
           <p className='truncate text-slate-600 dark:text-slate-300' data-tip={desc || undefined}>

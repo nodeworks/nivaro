@@ -30,6 +30,7 @@ export {
   type ChatTheme
 } from './components/chat/ChatPanel'
 export * from './components/chat/chat-core'
+export * from './lib/catalog-item-open'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
 export * from './components/DataTable'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'

@@ -267,6 +267,11 @@ export {
 // missing — display-pref setters, the fiscal/formula/layout-slot libs,
 // field-interface registry, and the utility components/hooks below.
 export { useFeatureFlag, useFeatureFlags } from '@nivaro/shared'
+export {
+  registerCatalogItemOpener,
+  canOpenCatalogItem,
+  openCatalogItem
+} from '@nivaro/shared'
 export { playNotificationSound, type NotificationSound } from '@nivaro/shared'
 export {
   setDisplayTimezone,
