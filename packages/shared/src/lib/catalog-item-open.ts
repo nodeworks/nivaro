@@ -5,7 +5,10 @@
 // then renders item labels as clickable links. Hosts without one see plain
 // text — the affordance only exists where clicking actually goes somewhere.
 
-type CatalogItemOpener = (id: string) => void
+/** context = the hosting form's current values (parent draft) — lets the
+ *  host seed its drawer's filters (warehouse, project type, …) from the
+ *  record the click came from. Shape is host-interpreted. */
+type CatalogItemOpener = (id: string, context?: Record<string, unknown>) => void
 
 const openers = new Map<string, CatalogItemOpener>()
 
@@ -25,6 +28,10 @@ export function canOpenCatalogItem(collection: string | null | undefined): boole
   return !!collection && openers.has(collection)
 }
 
-export function openCatalogItem(collection: string, id: string): void {
-  openers.get(collection)?.(id)
+export function openCatalogItem(
+  collection: string,
+  id: string,
+  context?: Record<string, unknown>
+): void {
+  openers.get(collection)?.(id, context)
 }

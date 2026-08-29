@@ -427,10 +427,20 @@ export function CatalogPickerField({
     enabled: !!catalogCol && !!config.favorites && pinnedIds.length > 0,
     staleTime: 60_000
   })
+  const [pinSaving, setPinSaving] = useState<Set<string>>(new Set())
   async function togglePin(catalogId: string) {
-    if (!catalogCol) return
-    await client.request(post(`/pinned/${catalogCol}/${catalogId}/toggle`)).catch(() => {})
-    qc.invalidateQueries({ queryKey: ['pinned-items', catalogCol] })
+    if (!catalogCol || pinSaving.has(catalogId)) return
+    setPinSaving((p) => new Set(p).add(catalogId))
+    try {
+      await client.request(post(`/pinned/${catalogCol}/${catalogId}/toggle`)).catch(() => {})
+      await qc.invalidateQueries({ queryKey: ['pinned-items', catalogCol] })
+    } finally {
+      setPinSaving((p) => {
+        const n = new Set(p)
+        n.delete(catalogId)
+        return n
+      })
+    }
   }
   // Favorites manager drawer (full-catalog search + star). anchorEl resolves
   // the portal container — inside a modal sheet the drawer must portal into
@@ -442,20 +452,25 @@ export function CatalogPickerField({
       <button
         type='button'
         title={pinnedSet.has(catalogId) ? 'Remove from favorites' : 'Add to favorites'}
+        disabled={pinSaving.has(catalogId)}
         onClick={(e) => {
           e.stopPropagation()
           void togglePin(catalogId)
         }}
         className='shrink-0 rounded p-0.5 transition-colors'
       >
-        <Star
-          className={cn(
-            'h-3.5 w-3.5',
-            pinnedSet.has(catalogId)
-              ? 'fill-amber-400 text-amber-400'
-              : 'text-slate-300 hover:text-amber-400'
-          )}
-        />
+        {pinSaving.has(catalogId) ? (
+          <Loader2 className='h-3.5 w-3.5 animate-spin text-amber-400' />
+        ) : (
+          <Star
+            className={cn(
+              'h-3.5 w-3.5',
+              pinnedSet.has(catalogId)
+                ? 'fill-amber-400 text-amber-400'
+                : 'text-slate-300 hover:text-amber-400'
+            )}
+          />
+        )}
       </button>
     ) : null
 
@@ -744,6 +759,46 @@ export function CatalogPickerField({
   const summaryDisplayCols = allDisplayCols.filter((c) => !c.sections_only)
   const summaryRelatedCols = allRelatedCols.filter((c) => !c.sections_only)
   const hasExtraCols = displayCols.length > 0 || relatedCols.length > 0
+  // Sticky pins at the scroller's PADDING edge — a p-6 host scroller leaves a
+  // band above the pinned header where rows stay visible. Applied via a REF
+  // CALLBACK writing style.top directly: the header div is recreated as
+  // sibling branches (loading states, favorites rows) come and go, and a
+  // one-shot effect's work dies with the old node.
+  const stickyHeaderRef = useRef<HTMLDivElement | null>(null)
+  const applyStickyTop = (el: HTMLDivElement) => {
+    let a: HTMLElement | null = el.parentElement
+    while (a) {
+      const st = getComputedStyle(a)
+      // Must ACTUALLY scroll vertically — an overflow-x wrapper computes
+      // overflow-y 'auto' too and would report padding 0.
+      if (/(auto|scroll)/.test(st.overflowY) && a.scrollHeight > a.clientHeight + 4) {
+        el.style.top = `-${Number.parseFloat(st.paddingTop) || 0}px`
+        return
+      }
+      a = a.parentElement
+    }
+  }
+  const stickyHeaderRefCb = (el: HTMLDivElement | null) => {
+    stickyHeaderRef.current = el
+    if (el) applyStickyTop(el)
+  }
+  useEffect(() => {
+    // The scroller may not overflow at attach time (catalog loads async) —
+    // re-apply on scroll, rAF-throttled.
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        if (stickyHeaderRef.current) applyStickyTop(stickyHeaderRef.current)
+      })
+    }
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [])
   const pathValue = (row: Record<string, unknown>, path: string): unknown => {
     let cur: unknown = row
     for (const seg of path.split('.')) {
@@ -801,9 +856,9 @@ export function CatalogPickerField({
     itemOpenable ? (
       <button
         type='button'
-        onClick={() => catalogCol && openCatalogItem(catalogCol, catalogId)}
+        onClick={() => catalogCol && openCatalogItem(catalogCol, catalogId, parentDraft)}
         title='View stock & planning detail'
-        className={cn(cls, 'text-left underline-offset-2 hover:text-[#009abe] hover:underline')}
+        className={cn(cls, 'text-left underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe] hover:decoration-[#009abe] dark:decoration-slate-600')}
       >
         {text}
       </button>
@@ -1111,7 +1166,10 @@ export function CatalogPickerField({
           // without this the labels scroll away and favorites/section rows
           // read as headerless columns. Opaque bg (not the /60 tint) so rows
           // never bleed through while pinned.
-          <div className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'>
+          <div
+            ref={stickyHeaderRefCb}
+            className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'
+          >
             {config.favorites && <span className='w-[18px] shrink-0' />}
             <span className='w-36 shrink-0'>Item</span>
             {displayCols.map((c) => (
@@ -1623,6 +1681,47 @@ export function CatalogPickerField({
                   </div>
                   )
                 })}
+                {/* Totals — one footer row summing every numeric column across
+                    picked rows (staged deletes excluded); the currency Total
+                    is what the whole request costs. */}
+                {(() => {
+                  const liveEntries = pickedEntries.filter((e) => {
+                    const rowDbId = e.row.id != null ? String(e.row.id) : null
+                    return !(rowDbId != null && queuedDeletes.has(rowDbId))
+                  })
+                  const sumOf = (col: string): number =>
+                    liveEntries.reduce((acc, e) => {
+                      const n = Number(e.row[col])
+                      return acc + (Number.isFinite(n) ? n : 0)
+                    }, 0)
+                  const fmtFor = (col: string): 'currency' | 'number' =>
+                    (config.field_formats?.[col] as 'currency' | 'number') ?? 'number'
+                  const cell = (col: string) => (
+                    <span
+                      key={col}
+                      className='w-20 shrink-0 text-right text-[12px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'
+                    >
+                      {fmtVal(sumOf(col), fmtFor(col))}
+                    </span>
+                  )
+                  return (
+                    <div className='flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-muted/40'>
+                      <span className='flex-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+                        Total
+                      </span>
+                      {/* copy columns are UNIT values (price) — a sum of unit
+                          prices is meaningless, keep the cells blank */}
+                      {copyCols.map((c) => (
+                        <span key={c} className='w-20 shrink-0' />
+                      ))}
+                      <span className='w-20 shrink-0 text-right text-[12px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
+                        {fmtVal(sumOf(qtyField), 'number')}
+                      </span>
+                      {computeCols.map(cell)}
+                      {!readOnly && <span className='w-6 shrink-0' />}
+                    </div>
+                  )
+                })()}
               </div>
             )
           })()
@@ -1635,6 +1734,7 @@ export function CatalogPickerField({
           sectionBy={config.section_by}
           pinnedSet={pinnedSet}
           pinnedIds={pinnedIds}
+          savingIds={pinSaving}
           relatedCols={(config.favorites_manager_columns ?? [])
             .map((k) => (config.related_columns ?? []).find((rc) => rc.key === k))
             .filter((rc): rc is NonNullable<typeof rc> => !!rc)}
@@ -1928,6 +2028,7 @@ function FavoritesManagerDrawer({
   sectionBy,
   pinnedSet,
   pinnedIds,
+  savingIds,
   relatedCols,
   parentDraft,
   onToggle,
@@ -1939,6 +2040,7 @@ function FavoritesManagerDrawer({
   sectionBy: string
   pinnedSet: Set<string>
   pinnedIds: string[]
+  savingIds: Set<string>
   relatedCols: Array<{
     key: string
     label?: string
@@ -2109,15 +2211,20 @@ function FavoritesManagerDrawer({
       <button
         type='button'
         title={pinned ? 'Remove from favorites' : 'Add to favorites'}
+        disabled={savingIds.has(id)}
         onClick={() => onToggle(id)}
         className='shrink-0 rounded p-1 transition-colors hover:bg-amber-100/60 dark:hover:bg-amber-400/10'
       >
-        <Star
-          className={cn(
-            'h-4 w-4',
-            pinned ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-400'
-          )}
-        />
+        {savingIds.has(id) ? (
+          <Loader2 className='h-4 w-4 animate-spin text-amber-400' />
+        ) : (
+          <Star
+            className={cn(
+              'h-4 w-4',
+              pinned ? 'fill-amber-400 text-amber-400' : 'text-slate-300 hover:text-amber-400'
+            )}
+          />
+        )}
       </button>
     )
   }
@@ -2146,9 +2253,9 @@ function FavoritesManagerDrawer({
           {canOpenCatalogItem(catalogCol) ? (
             <button
               type='button'
-              onClick={() => openCatalogItem(catalogCol, id)}
+              onClick={() => openCatalogItem(catalogCol, id, parentDraft)}
               title='View stock & planning detail'
-              className='text-left underline-offset-2 hover:text-[#009abe] hover:underline'
+              className='text-left underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe] hover:decoration-[#009abe] dark:decoration-slate-600'
             >
               {label(row)}
             </button>
