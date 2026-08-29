@@ -367,7 +367,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'overrides')
+        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'overrides', 'widget_id', 'input_bindings')
         .orderBy('sort', 'asc')
     ])
     return reply.send({ data: { layout, groups, assignments } })

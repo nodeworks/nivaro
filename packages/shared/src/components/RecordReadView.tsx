@@ -7,6 +7,7 @@ import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { UserChip } from './item-edit/GroupSection'
 import { SimpleSelectXs } from './ui/SimpleSelect'
+import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
 // Read-only record presentation for drill-down sheets (display_mode='read'
 // detail layouts): section groups render as definition grids, tab groups as a
@@ -26,6 +27,9 @@ interface LayoutAssignment {
   label_override: string | null
   is_visible: boolean | number
   overrides?: string | Record<string, unknown> | null
+  widget_id?: number | null
+  input_bindings?: string | null
+  default_expanded?: boolean | number | null
 }
 export interface ReadViewLayout {
   layout: { id: number; name: string }
@@ -480,6 +484,39 @@ export function RecordReadView({
   const visible = layoutData.assignments.filter(
     (a) => (a.is_visible === undefined || !!a.is_visible) && !a.field.startsWith('__')
   )
+  // Widget slots (statistics / query tables) render in read views too — the
+  // slot itself is read-only by nature, and a drill-down without its numbers
+  // is just a field list.
+  const widgetSlots = layoutData.assignments.filter(
+    (a) =>
+      a.field.startsWith('__widget_') &&
+      a.widget_id != null &&
+      (a.is_visible === undefined || !!a.is_visible)
+  )
+  const slotBindings = (a: LayoutAssignment): InputBinding[] => {
+    if (!a.input_bindings) return []
+    try {
+      return JSON.parse(String(a.input_bindings)) as InputBinding[]
+    } catch {
+      return []
+    }
+  }
+  const renderWidgets = (groupKey: string | null) =>
+    widgetSlots
+      .filter((w) => w.group_key === groupKey)
+      .sort((a, b) => a.sort - b.sort)
+      .map((w) => (
+        <WidgetSlot
+          key={w.field}
+          widgetId={w.widget_id as number}
+          inputBindings={slotBindings(w)}
+          itemDraft={record ?? {}}
+          itemCollection={collection}
+          ready={!!record}
+          label={w.label_override ?? undefined}
+          defaultExpanded={w.default_expanded == null ? true : !!w.default_expanded}
+        />
+      ))
   const groups = [...layoutData.groups].sort((a, b) => a.sort - b.sort)
   const sectionGroups = groups.filter((g) => g.type !== 'tab')
   const tabGroups = groups.filter((g) => g.type === 'tab')
@@ -530,7 +567,8 @@ export function RecordReadView({
     const items = visible
       .filter((a) => a.group_key === g.key)
       .sort((a, b) => a.sort - b.sort)
-    if (items.length === 0) return null
+    const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
+    if (items.length === 0 && groupWidgets.length === 0) return null
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
     return (
@@ -560,6 +598,7 @@ export function RecordReadView({
             {renderGridAssignment(a)}
           </div>
         ))}
+        {renderWidgets(g.key)}
       </section>
     )
   }
@@ -594,6 +633,7 @@ export function RecordReadView({
                     .filter((a) => a.group_key === g.key)
                     .sort((a, b) => a.sort - b.sort)
                     .map((a) => (isGrid(a) ? renderGridAssignment(a) : null))}
+                  {renderWidgets(g.key)}
                 </div>
               ))}
           </div>
