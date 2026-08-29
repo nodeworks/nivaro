@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-08-28T20:41:29.355Z",
+  "generated_at": "2026-08-29T19:17:56.519Z",
   "releases": [
+    {
+      "version": "0.1.173",
+      "tag": "v0.1.173",
+      "date": "2026-08-29T15:17:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "record-header",
+              "text": "responsive actions — secondary tools collapse into a ⋯ menu",
+              "hash": "285c72ad"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog",
+              "text": "opener context, summary totals, star feedback, flush sticky header",
+              "hash": "2c5e06aa"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog",
+              "text": "host-registered detail opener — CIFA labels click through",
+              "hash": "b9bda33e"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.172",
       "tag": "v0.1.172",
-      "date": "2026-08-28T16:41:23-04:00",
+      "date": "2026-08-28T16:41:29-04:00",
       "sections": [
         {
           "label": "Added",
