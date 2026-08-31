@@ -407,6 +407,10 @@ export interface ItemEditFormProps {
   /** false = skip the document.title side effect — a workspace-tab host keeps
    *  several forms mounted and only the ACTIVE one may own the browser tab. */
   documentTitle?: boolean
+  /** Hands the host a stable save trigger (workspace "Save all"); called with
+   *  null on unmount. The trigger runs the same handleSave the button does —
+   *  validation and dialogs included. */
+  registerSaveHandler?: (fn: (() => void) | null) => void
   onDuplicate?: (payload: {
     values: Record<string, unknown>
     links: Record<string, unknown[]>
@@ -720,6 +724,7 @@ export function ItemEditForm({
   showItemActions = false,
   onDirtyChange,
   documentTitle = true,
+  registerSaveHandler,
   onDuplicate,
   showRevisions = true,
   showClone = true,
@@ -4604,6 +4609,15 @@ export function ItemEditForm({
     return null
   }
 
+  const handleSaveRef = useRef<() => void>(() => {})
+  // Function declarations hoist — safe to capture here, fresh every render.
+  handleSaveRef.current = () => handleSave()
+  useEffect(() => {
+    if (!registerSaveHandler) return
+    registerSaveHandler(() => handleSaveRef.current())
+    return () => registerSaveHandler(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ref indirection keeps the handle stable
+  }, [registerSaveHandler])
   function handleSave() {
     if (!validateAll()) return
     void (async () => {
