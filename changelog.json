@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-08-31T15:40:41.387Z",
+  "generated_at": "2026-08-31T19:04:54.265Z",
   "releases": [
+    {
+      "version": "0.1.179",
+      "tag": "v0.1.179",
+      "date": "2026-08-31T15:04:46-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "avatars",
+              "text": "chat and owner bubbles use the Microsoft Graph photo",
+              "hash": "959eac2e"
+            },
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "headerExtra slot in the form header action cluster",
+              "hash": "9af21926"
+            },
+            {
+              "section": "Added",
+              "scope": "monitors",
+              "text": "SSL certificate expiry watch",
+              "hash": "a09962dd"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "monitors",
+              "text": "type selector gets the full form row",
+              "hash": "f3176084"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "monitors",
+              "text": "header states the 5-minute evaluation cadence",
+              "hash": "9ac34ba8"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.178",
       "tag": "v0.1.178",
-      "date": "2026-08-31T11:40:35-04:00",
+      "date": "2026-08-31T11:40:41-04:00",
       "sections": [
         {
           "label": "Fixed",
