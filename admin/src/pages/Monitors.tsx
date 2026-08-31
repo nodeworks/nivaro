@@ -250,8 +250,9 @@ export default function Monitors() {
             <div>
               <h1 className="text-[17px] font-semibold text-slate-900 dark:text-foreground">Monitors</h1>
               <p className="mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground">
-                Always-on checks: data freshness, post-deploy performance, synthetic probes. Failures
-                raise issues and notify whoever created the monitor.
+                Always-on checks, evaluated every 5 minutes: data freshness, post-deploy
+                performance, synthetic probes, SSL certificates. Failures raise issues and notify
+                whoever created the monitor.
               </p>
             </div>
           </div>
