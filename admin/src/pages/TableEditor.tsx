@@ -6446,6 +6446,9 @@ interface BrowserConfig {
   page_size?: number
   quick_filters?: unknown[]
   default_sort?: string
+  /** Record workspace tabs in the portal: open records stack as tabs above
+   *  the form, unsaved edits survive switching. Opt-in. */
+  record_tabs?: boolean
 }
 
 // #620 — custom collection empty state. (The slug picker that briefly lived
@@ -6591,6 +6594,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.page_size && next.page_size > 0) clean.page_size = next.page_size
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
+    if (next.record_tabs === true) clean.record_tabs = true
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -6631,6 +6635,18 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           'show_actions'
         )}
         {row('New item button', 'Allow creating records from the browser', 'allow_create')}
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Record workspace tabs</p>
+            <p className='text-[11.5px] text-slate-500'>
+              Portal record pages stack open records as tabs — unsaved edits survive switching
+            </p>
+          </div>
+          <Switch
+            checked={cfg.record_tabs === true}
+            onCheckedChange={(v) => void patch({ record_tabs: v })}
+          />
+        </div>
         <div className='flex items-center justify-between gap-4'>
           <div>
             <p className='text-[12.5px] font-medium text-slate-700'>Page size</p>

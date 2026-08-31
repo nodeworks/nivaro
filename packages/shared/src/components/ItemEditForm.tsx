@@ -401,6 +401,12 @@ export interface ItemEditFormProps {
    * `<child>.<fk>`, ready for initialRows). The host stores it (sessionStorage
    * — too big for a URL) and navigates to its new-record route.
    */
+  /** Fires whenever the form's dirty state flips — lets a host (workspace
+   *  tabs, close guards) track unsaved edits without reaching inside. */
+  onDirtyChange?: (dirty: boolean) => void
+  /** false = skip the document.title side effect — a workspace-tab host keeps
+   *  several forms mounted and only the ACTIVE one may own the browser tab. */
+  documentTitle?: boolean
   onDuplicate?: (payload: {
     values: Record<string, unknown>
     links: Record<string, unknown[]>
@@ -712,6 +718,8 @@ export function ItemEditForm({
   showHeader = true,
   focusField,
   showItemActions = false,
+  onDirtyChange,
+  documentTitle = true,
   onDuplicate,
   showRevisions = true,
   showClone = true,
@@ -977,6 +985,10 @@ export function ItemEditForm({
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callback identity is the host's concern
+  }, [isDirty])
   const [justSaved, setJustSaved] = useState(false)
 
   // Cross-field writes from structured interfaces (range/date-range end
@@ -6553,7 +6565,7 @@ export function ItemEditForm({
   // Title derivation is duplicated inline (the display consts are declared
   // after the early returns) — same hooks-order constraint.
   useEffect(() => {
-    if (isNew) return
+    if (isNew || !documentTitle) return
     const t =
       itemData && colMeta?.display_template
         ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
@@ -6564,7 +6576,7 @@ export function ItemEditForm({
     return () => {
       document.title = prev
     }
-  }, [itemData, colMeta, collection, isNew])
+  }, [itemData, colMeta, collection, isNew, documentTitle])
 
   // ── Access denied / not found ──────────────────────────────────────────────
   // A 403/404 on the record load used to leave a silently empty form —
