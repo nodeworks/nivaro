@@ -3,12 +3,14 @@ import { Loader2, ShieldAlert, Wrench } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { get, patch } from '../../lib/commands'
+import { del, get, patch, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './ChangeReasonDialog'
 import { FieldRenderer } from './FieldRenderer'
+import { M2MCombobox, m2aWriteMeta } from './M2MCombobox'
+import { M2MStagingContext, type M2MStagingCtx } from './M2MStagingContext'
 import type { CMSField, CMSRelation } from './types'
 
 /**
@@ -20,8 +22,9 @@ import type { CMSField, CMSRelation } from './types'
  * (validation, RLS, caps, change-reason) still apply on save — this bypasses
  * the FORM's curation, not the API's enforcement.
  *
- * Alias fields (M2M/O2M/M2A) have no column to write — they're listed but
- * not editable here; junction data is edited through the normal form.
+ * M2M/M2A aliases edit here too: picks stage into a local map and flush as
+ * junction-row creates/deletes on Save (same mechanics as the normal form).
+ * O2M aliases stay read-only — their values are full child ROWS, not links.
  */
 export function RawEditSheet({
   collection,
@@ -39,6 +42,9 @@ export function RawEditSheet({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [draft, setDraft] = useState<Record<string, unknown>>({})
+  // M2M staging — same shape the full form uses; flushed as junction writes.
+  const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
+  const [m2mUnlinks, setM2mUnlinks] = useState<Map<string, Set<unknown>>>(new Map())
   const [saving, setSaving] = useState(false)
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
 
@@ -86,23 +92,112 @@ export function RawEditSheet({
           lock_condition: null,
           dependency_config: null
         } as CMSField,
-        alias: isAlias(f)
+        alias: isAlias(f),
+        m2mRel: relations.find(
+          (r) =>
+            r.one_collection === collection && r.one_field === f.field && r.junction_field != null
+        )
       }))
       .sort((a, b) => (a.field.sort ?? 0) - (b.field.sort ?? 0))
   }, [fieldConfig, collection])
 
-  const dirty = Object.keys(draft).length > 0
+  const relations = fieldConfig?.relations ?? []
+  const findM2MRel = (key: string) =>
+    relations.find(
+      (r) => r.one_collection === collection && r.one_field === key && r.junction_field != null
+    )
+
+  const stagingCtx = useMemo<M2MStagingCtx>(
+    () => ({
+      getStagedLinks: (k) => m2mLinks.get(k) ?? [],
+      getStagedUnlinks: (k) => m2mUnlinks.get(k) ?? new Set(),
+      stageLink: (k, id) =>
+        setM2mLinks((prev) => {
+          const next = new Map(prev)
+          next.set(k, [...(next.get(k) ?? []), id])
+          return next
+        }),
+      unstageLink: (k, id) =>
+        setM2mLinks((prev) => {
+          const next = new Map(prev)
+          next.set(k, (next.get(k) ?? []).filter((x) => String(x) !== String(id)))
+          return next
+        }),
+      stageUnlink: (k, jId) =>
+        setM2mUnlinks((prev) => {
+          const next = new Map(prev)
+          const set = new Set(next.get(k) ?? [])
+          set.add(jId)
+          next.set(k, set)
+          return next
+        }),
+      unstageUnlink: (k, jId) =>
+        setM2mUnlinks((prev) => {
+          const next = new Map(prev)
+          const set = new Set(next.get(k) ?? [])
+          set.delete(jId)
+          next.set(k, set)
+          return next
+        })
+    }),
+    [m2mLinks, m2mUnlinks]
+  )
+
+  const hasM2MChanges =
+    [...m2mLinks.values()].some((ids) => ids.length > 0) ||
+    [...m2mUnlinks.values()].some((ids) => ids.size > 0)
+  const dirty = Object.keys(draft).length > 0 || hasM2MChanges
 
   const doSave = async (changeReason?: string) => {
     setSaving(true)
     try {
-      const payload: Record<string, unknown> = { ...draft }
-      if (changeReason) payload._change_reason = changeReason
-      await client.request(patch(`/items/${collection}/${itemId}`, payload))
+      if (Object.keys(draft).length > 0) {
+        const payload: Record<string, unknown> = { ...draft }
+        if (changeReason) payload._change_reason = changeReason
+        await client.request(patch(`/items/${collection}/${itemId}`, payload))
+      }
+      // Junction flush — deletes then creates, mirroring the full form.
+      const m2mOps: Promise<unknown>[] = []
+      for (const [key, ids] of m2mUnlinks.entries()) {
+        if (!ids.size) continue
+        const rel = findM2MRel(key)
+        if (!rel) continue
+        for (const jId of ids)
+          m2mOps.push(client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {}))
+      }
+      for (const [key, ids] of m2mLinks.entries()) {
+        if (!ids.length) continue
+        const rel = findM2MRel(key)
+        if (!rel) continue
+        const companion = relations.find(
+          (c) =>
+            c.many_collection === rel.many_collection &&
+            c.many_field === rel.junction_field &&
+            c.id !== rel.id
+        )
+        const m2a = m2aWriteMeta(companion)
+        const extra = m2a ? { [m2a.field]: m2a.value } : {}
+        for (const relId of ids)
+          m2mOps.push(
+            client
+              .request(
+                post(`/items/${rel.many_collection}`, {
+                  [rel.many_field ?? '']: itemId,
+                  [rel.junction_field ?? '']: relId,
+                  ...extra
+                })
+              )
+              .catch(() => {})
+          )
+      }
+      await Promise.all(m2mOps)
       toast.success('Raw changes saved')
       setDraft({})
+      setM2mLinks(new Map())
+      setM2mUnlinks(new Map())
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
       void qc.invalidateQueries({ queryKey: ['raw-edit-record', collection, itemId] })
+      void qc.invalidateQueries({ queryKey: ['m2m-items'] })
       onSaved?.()
       onClose()
     } catch (err) {
@@ -119,7 +214,18 @@ export function RawEditSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && !saving && onClose()}>
+    <Sheet
+      open={open}
+      onOpenChange={(o) => {
+        if (o || saving) return
+        // Close without saving discards everything staged — reopening must
+        // never resurrect half-made junction edits.
+        setDraft({})
+        setM2mLinks(new Map())
+        setM2mUnlinks(new Map())
+        onClose()
+      }}
+    >
       <SheetContent side='right' className='flex w-[720px] max-w-[92vw] flex-col p-0 sm:max-w-[92vw]'>
         <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-3 dark:border-border'>
           <SheetTitle className='flex items-center gap-2 text-[14px]'>
@@ -139,7 +245,7 @@ export function RawEditSheet({
             </div>
           ) : (
             <div className='space-y-3'>
-              {rows.map(({ field, alias }) => {
+              {rows.map(({ field, alias, m2mRel }) => {
                 const raw = field.field in draft ? draft[field.field] : record?.[field.field]
                 return (
                   <div key={field.field} className='grid grid-cols-[220px_1fr] items-start gap-3'>
@@ -151,9 +257,17 @@ export function RawEditSheet({
                     </div>
                     {field.field === 'id' ? (
                       <p className='pt-1.5 font-mono text-[12px] text-slate-500'>{String(raw ?? '')}</p>
+                    ) : alias && m2mRel ? (
+                      <M2MStagingContext.Provider value={stagingCtx}>
+                        <M2MCombobox
+                          relation={m2mRel}
+                          parentId={itemId}
+                          allRelations={relations}
+                        />
+                      </M2MStagingContext.Provider>
                     ) : alias ? (
                       <p className='pt-1.5 text-[11.5px] italic text-slate-400'>
-                        Relation set (junction data) — edit through the normal form
+                        Child rows (one-to-many) — edit through the normal form
                       </p>
                     ) : (
                       <FieldRenderer
@@ -173,7 +287,14 @@ export function RawEditSheet({
         </div>
         <div className='flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 px-5 py-3 dark:border-border'>
           <span className='text-[11.5px] text-slate-400'>
-            {dirty ? `${Object.keys(draft).length} field${Object.keys(draft).length !== 1 ? 's' : ''} changed` : 'No changes yet'}
+            {(() => {
+              if (!dirty) return 'No changes yet'
+              const n =
+                Object.keys(draft).length +
+                [...m2mLinks.values()].filter((ids) => ids.length > 0).length +
+                [...m2mUnlinks.values()].filter((ids) => ids.size > 0).length
+              return `${n} field${n !== 1 ? 's' : ''} changed`
+            })()}
           </span>
           <div className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={onClose} disabled={saving}>
