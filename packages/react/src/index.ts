@@ -66,6 +66,8 @@ export {
   type AlertManagerViewProps,
   AlertRuleDrawer,
   AnomalyRuleDrawer,
+  SlaRulesView,
+  type SlaRule,
   ApiUpdateBanner,
   agingBucket,
   applyValidationRule,

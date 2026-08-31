@@ -1,5 +1,6 @@
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
+export { SlaRulesView, type SlaRule } from './components/SlaRulesView'
 export {
   AlertRuleDrawer,
   AnomalyRuleDrawer
