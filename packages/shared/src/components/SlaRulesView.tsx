@@ -43,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue
 } from './ui/select'
+import { SimpleSelectXs } from './ui/SimpleSelect'
 import { Switch } from './ui/switch'
 
 /**
@@ -792,6 +793,86 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
     breached: 'bg-red-500/10 text-red-700 dark:text-red-400'
   }
 
+  type SortKey = 'label' | 'status' | 'elapsed_hours' | 'remaining_hours' | 'entered_at'
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null)
+  const [fRecord, setFRecord] = useState('')
+  const [fStatus, setFStatus] = useState('')
+  const [fElapsed, setFElapsed] = useState<{ op: 'gte' | 'lte'; v: string }>({ op: 'gte', v: '' })
+  const [fLeft, setFLeft] = useState<{ op: 'gte' | 'lte'; v: string }>({ op: 'lte', v: '' })
+  const [fEntered, setFEntered] = useState('')
+
+  const toggleSort = (key: SortKey) =>
+    setSort((prev) =>
+      prev?.key === key
+        ? prev.dir === 'asc'
+          ? { key, dir: 'desc' }
+          : null
+        : { key, dir: 'asc' }
+    )
+
+  const STATUS_RANK: Record<string, number> = { breached: 0, warning: 1, ok: 2 }
+  const visibleRows = useMemo(() => {
+    let rows = data?.records ?? []
+    if (fRecord.trim()) {
+      const q = fRecord.trim().toLowerCase()
+      rows = rows.filter((r) => r.label.toLowerCase().includes(q))
+    }
+    if (fStatus) rows = rows.filter((r) => r.status === fStatus)
+    if (fElapsed.v !== '' && Number.isFinite(Number(fElapsed.v))) {
+      const n = Number(fElapsed.v)
+      rows = rows.filter((r) => (fElapsed.op === 'gte' ? r.elapsed_hours >= n : r.elapsed_hours <= n))
+    }
+    if (fLeft.v !== '' && Number.isFinite(Number(fLeft.v))) {
+      const n = Number(fLeft.v)
+      rows = rows.filter((r) => (fLeft.op === 'gte' ? r.remaining_hours >= n : r.remaining_hours <= n))
+    }
+    if (fEntered) {
+      const cutoff = new Date(`${fEntered}T00:00:00`)
+      if (!Number.isNaN(cutoff.getTime()))
+        rows = rows.filter((r) => new Date(r.entered_at) >= cutoff)
+    }
+    if (sort) {
+      const dir = sort.dir === 'asc' ? 1 : -1
+      rows = [...rows].sort((a, b) => {
+        if (sort.key === 'label') return a.label.localeCompare(b.label) * dir
+        if (sort.key === 'status') return (STATUS_RANK[a.status] - STATUS_RANK[b.status]) * dir
+        if (sort.key === 'entered_at')
+          return (new Date(a.entered_at).getTime() - new Date(b.entered_at).getTime()) * dir
+        return (a[sort.key] - b[sort.key]) * dir
+      })
+    }
+    return rows
+    // biome-ignore lint/correctness/useExhaustiveDependencies: STATUS_RANK is constant
+  }, [data?.records, fRecord, fStatus, fElapsed, fLeft, fEntered, sort])
+
+  const sortGlyph = (key: SortKey) =>
+    sort?.key === key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''
+  const filtered = visibleRows.length !== (data?.records.length ?? 0)
+
+  const numFilter = (
+    st: { op: 'gte' | 'lte'; v: string },
+    setSt: (v: { op: 'gte' | 'lte'; v: string }) => void,
+    label: string
+  ) => (
+    <span className='inline-flex items-center gap-0.5'>
+      <button
+        type='button'
+        onClick={() => setSt({ ...st, op: st.op === 'gte' ? 'lte' : 'gte' })}
+        className='rounded border border-slate-200 px-1 py-px text-[10.5px] text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
+        title={st.op === 'gte' ? 'At least' : 'At most'}
+      >
+        {st.op === 'gte' ? '≥' : '≤'}
+      </button>
+      <input
+        value={st.v}
+        onChange={(e) => setSt({ ...st, v: e.target.value })}
+        placeholder={label}
+        inputMode='numeric'
+        className='h-6 w-[64px] rounded border border-slate-200 bg-transparent px-1.5 text-right text-[11px] outline-none placeholder:text-slate-300 focus:border-nvr-cyan dark:border-border dark:placeholder:text-slate-600'
+      />
+    </span>
+  )
+
   return (
     <div className='border-t border-slate-100 bg-slate-50/60 px-4 py-3 dark:border-border dark:bg-muted/20'>
       {isLoading ? (
@@ -812,20 +893,76 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
             {' · '}
             <span className='text-emerald-600 dark:text-emerald-400'>{data.counts?.ok ?? 0} on track</span>
             {data.truncated ? ' (showing the worst 200)' : ''}
+            {filtered ? ` — ${visibleRows.length} match the filters` : ''}
           </p>
           <div className='overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-border dark:bg-card'>
             <table className='w-full text-[12px]' style={{ fontVariantNumeric: 'tabular-nums' }}>
               <thead>
                 <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border'>
-                  <th className='px-3 py-1.5 font-semibold'>Record</th>
-                  <th className='px-3 py-1.5 font-semibold'>Status</th>
-                  <th className='px-3 py-1.5 text-right font-semibold'>In state</th>
-                  <th className='px-3 py-1.5 text-right font-semibold'>Time left</th>
-                  <th className='px-3 py-1.5 text-right font-semibold'>Entered</th>
+                  <th className='px-3 py-1.5 font-semibold'>
+                    <button type='button' onClick={() => toggleSort('label')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                      Record{sortGlyph('label')}
+                    </button>
+                  </th>
+                  <th className='px-3 py-1.5 font-semibold'>
+                    <button type='button' onClick={() => toggleSort('status')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                      Status{sortGlyph('status')}
+                    </button>
+                  </th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>
+                    <button type='button' onClick={() => toggleSort('elapsed_hours')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                      In state{sortGlyph('elapsed_hours')}
+                    </button>
+                  </th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>
+                    <button type='button' onClick={() => toggleSort('remaining_hours')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                      Time left{sortGlyph('remaining_hours')}
+                    </button>
+                  </th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>
+                    <button type='button' onClick={() => toggleSort('entered_at')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                      Entered{sortGlyph('entered_at')}
+                    </button>
+                  </th>
+                </tr>
+                <tr className='border-b border-slate-100 dark:border-border'>
+                  <th className='px-3 py-1.5 font-normal'>
+                    <input
+                      value={fRecord}
+                      onChange={(e) => setFRecord(e.target.value)}
+                      placeholder='Contains…'
+                      className='h-6 w-full min-w-[110px] rounded border border-slate-200 bg-transparent px-1.5 text-[11px] font-normal outline-none placeholder:text-slate-300 focus:border-nvr-cyan dark:border-border dark:placeholder:text-slate-600'
+                    />
+                  </th>
+                  <th className='px-3 py-1.5 font-normal'>
+                    <SimpleSelectXs
+                      value={fStatus}
+                      onChange={setFStatus}
+                      ariaLabel='Filter status'
+                      options={[
+                        { value: '', label: 'All' },
+                        { value: 'breached', label: 'Breached' },
+                        { value: 'warning', label: 'Warning' },
+                        { value: 'ok', label: 'On track' }
+                      ]}
+                      className='w-[110px]'
+                    />
+                  </th>
+                  <th className='px-3 py-1.5 text-right font-normal'>{numFilter(fElapsed, setFElapsed, 'hours')}</th>
+                  <th className='px-3 py-1.5 text-right font-normal'>{numFilter(fLeft, setFLeft, 'hours')}</th>
+                  <th className='px-3 py-1.5 text-right font-normal'>
+                    <input
+                      type='date'
+                      value={fEntered}
+                      onChange={(e) => setFEntered(e.target.value)}
+                      title='Entered on or after'
+                      className='h-6 rounded border border-slate-200 bg-transparent px-1.5 text-[11px] font-normal outline-none focus:border-nvr-cyan dark:border-border'
+                    />
+                  </th>
                 </tr>
               </thead>
               <tbody className='divide-y divide-slate-100 dark:divide-border'>
-                {data.records.map((r) => (
+                {visibleRows.map((r) => (
                   <tr key={`${r.collection}:${r.item}`}>
                     <td className='px-3 py-1.5'>
                       <a
@@ -865,6 +1002,13 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
                     </td>
                   </tr>
                 ))}
+                {visibleRows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className='px-3 py-4 text-center text-[12px] text-slate-400'>
+                      No records match the filters.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
