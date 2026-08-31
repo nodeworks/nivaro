@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-31T01:20:20.220Z",
+  "generated_at": "2026-08-31T01:53:11.718Z",
   "releases": [
+    {
+      "version": "0.1.177",
+      "tag": "v0.1.177",
+      "date": "2026-08-30T21:53:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "registerSaveHandler prop — external save trigger for workspace hosts",
+              "hash": "51022c57"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.176",
       "tag": "v0.1.176",
-      "date": "2026-08-30T21:20:14-04:00",
+      "date": "2026-08-30T21:20:20-04:00",
       "sections": [
         {
           "label": "Added",
