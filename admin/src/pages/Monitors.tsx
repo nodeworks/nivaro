@@ -1,9 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, RefreshCw } from 'lucide-react'
+import { Bell, Radar, RefreshCw, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 
 /**
  * Monitors — the always-watching checks: data freshness (an integration-fed
@@ -34,6 +43,119 @@ const STATUS_DOT: Record<string, string> = {
   ok: 'bg-emerald-500',
   failing: 'bg-red-500',
   unknown: 'bg-slate-300'
+}
+
+interface Subscriber {
+  id: number
+  user: string
+  first_name: string | null
+  last_name: string | null
+  email: string
+}
+
+function subName(s: Subscriber): string {
+  return [s.first_name, s.last_name].filter(Boolean).join(' ') || s.email
+}
+
+/** Extra failing-flip recipients beyond the creator — chips + a user search. */
+function SubscribersControl({ monitorId }: { monitorId: number }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const { data: subs = [] } = useQuery<Subscriber[]>({
+    queryKey: ['monitor-subs', monitorId],
+    queryFn: () => api.get(`/monitors/${monitorId}/subscribers`).then((r) => r.data.data)
+  })
+  const { data: users = [] } = useQuery<
+    Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
+  >({
+    queryKey: ['monitor-sub-users', search],
+    enabled: open,
+    queryFn: () =>
+      api.get('/users', { params: { search, limit: 20 } }).then((r) => r.data.data ?? r.data),
+    staleTime: 60_000
+  })
+
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['monitor-subs', monitorId] })
+  const add = useMutation({
+    mutationFn: (user: string) => api.post(`/monitors/${monitorId}/subscribers`, { user }),
+    onSuccess: invalidate
+  })
+  const drop = useMutation({
+    mutationFn: (user: string) => api.delete(`/monitors/${monitorId}/subscribers/${user}`),
+    onSuccess: invalidate
+  })
+
+  const subIds = new Set(subs.map((s) => s.user.toUpperCase()))
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title="Who gets notified when this monitor starts failing (besides the creator)"
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11.5px]',
+            subs.length > 0
+              ? 'border-nvr-cyan/40 text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
+          )}
+        >
+          <Bell className="h-3 w-3" strokeWidth={2} />
+          {subs.length > 0 ? subs.length : 'Subscribe'}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[300px] p-0">
+        <div className="border-b border-slate-100 px-3 py-2 dark:border-border">
+          <p className="text-[12px] font-semibold text-slate-700 dark:text-foreground">Subscribers</p>
+          <p className="text-[11px] text-slate-400">
+            Notified on a failing flip, alongside the creator.
+          </p>
+        </div>
+        {subs.length > 0 && (
+          <div className="flex flex-wrap gap-1 px-3 py-2">
+            {subs.map((s) => (
+              <span
+                key={s.id}
+                className="inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200"
+              >
+                {subName(s)}
+                <button
+                  type="button"
+                  onClick={() => drop.mutate(s.user)}
+                  className="text-slate-400 hover:text-red-500"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Add a person…" value={search} onValueChange={setSearch} />
+          <CommandList>
+            <CommandEmpty>No matches.</CommandEmpty>
+            <CommandGroup>
+              {users
+                .filter((u) => !subIds.has(u.id.toUpperCase()))
+                .map((u) => (
+                  <CommandItem
+                    key={u.id}
+                    value={u.id}
+                    onSelect={() => add.mutate(u.id)}
+                    className="text-[12px]"
+                  >
+                    {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                    <span className="ml-auto truncate text-[10.5px] text-slate-400">{u.email}</span>
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function rel(ts: string | null): string {
@@ -252,7 +374,7 @@ export default function Monitors() {
               <p className="mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground">
                 Always-on checks, evaluated every 5 minutes: data freshness, post-deploy
                 performance, synthetic probes, SSL certificates. Failures raise issues and notify
-                whoever created the monitor.
+                the creator plus any subscribers.
               </p>
             </div>
           </div>
@@ -320,6 +442,7 @@ export default function Monitors() {
                 <p className="mt-0.5 text-[11px] text-slate-400">Checked {rel(m.last_checked_at)}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <SubscribersControl monitorId={m.id} />
                 <button
                   type="button"
                   disabled={checking === m.id}

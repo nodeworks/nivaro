@@ -95,6 +95,45 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
     return { data: { deleted: true } }
   })
 
+  /** Extra failing-flip recipients beyond the creator. */
+  app.get<{ Params: { id: string } }>('/:id/subscribers', async (req, reply) => {
+    const row = await db('nivaro_monitors').where('id', req.params.id).first('id')
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    const subs = await db('nivaro_monitor_subscribers as s')
+      .leftJoin('nivaro_users as u', 'u.id', 's.user')
+      .where('s.monitor_id', row.id)
+      .orderBy('u.first_name', 'asc')
+      .select('s.id', 's.user', 'u.first_name', 'u.last_name', 'u.email')
+    return { data: subs }
+  })
+
+  app.post<{ Params: { id: string } }>('/:id/subscribers', async (req, reply) => {
+    const row = await db('nivaro_monitors').where('id', req.params.id).first('id', 'name')
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    const userId = String((req.body as { user?: string })?.user ?? '').trim()
+    if (!userId) return reply.code(400).send({ error: 'user is required' })
+    const exists = await db('nivaro_monitor_subscribers')
+      .where({ monitor_id: row.id, user: userId })
+      .first('id')
+    if (!exists) {
+      await db('nivaro_monitor_subscribers').insert({
+        monitor_id: row.id,
+        user: userId,
+        created_at: new Date()
+      })
+      await logActivity({ action: 'monitor-subscribe', user: req.user?.id, item: String(row.id), comment: `${row.name} → ${userId}`, req })
+    }
+    return reply.code(201).send({ data: { subscribed: true } })
+  })
+
+  app.delete<{ Params: { id: string; userId: string } }>('/:id/subscribers/:userId', async (req, reply) => {
+    const row = await db('nivaro_monitors').where('id', req.params.id).first('id', 'name')
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    await db('nivaro_monitor_subscribers').where({ monitor_id: row.id, user: req.params.userId }).del()
+    await logActivity({ action: 'monitor-unsubscribe', user: req.user?.id, item: String(row.id), comment: `${row.name} → ${req.params.userId}`, req })
+    return { data: { deleted: true } }
+  })
+
   /** Evaluate now — the create-form's "test this" and the row's refresh. */
   app.post<{ Params: { id: string } }>('/:id/check', async (req, reply) => {
     const row = (await db('nivaro_monitors').where('id', req.params.id).first()) as MonitorRow | undefined

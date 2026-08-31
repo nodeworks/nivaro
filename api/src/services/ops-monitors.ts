@@ -9,7 +9,8 @@ import type { FastifyInstance } from 'fastify'
 /**
  * Ops monitors evaluator. Three check types share one lifecycle: evaluate on
  * the cron tick, record the run (kind 'monitor' in nivaro_job_runs), and on
- * an ok→failing flip raise a deduped nivaro_issues row + notify the creator.
+ * an ok→failing flip raise a deduped nivaro_issues row + notify the creator
+ * and every nivaro_monitor_subscribers row (deduped).
  * Recovery flips last_status back and resolves quietly (the issue stays for
  * triage — resolving it re-arms the alert, same contract as the sweeps).
  */
@@ -244,11 +245,19 @@ async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInsta
         updated_at: new Date()
       })
     }
-    if (app && monitor.created_by) {
-      await notifyUser(app, monitor.created_by, {
-        subject: `Monitor failing: ${monitor.name}`,
-        message: detail.slice(0, 500)
-      }).catch(() => {})
+    if (app) {
+      const subscribers = await db('nivaro_monitor_subscribers')
+        .where({ monitor_id: monitor.id })
+        .pluck('user')
+        .catch(() => [] as string[])
+      const recipients = new Set<string>(subscribers.map(String))
+      if (monitor.created_by) recipients.add(String(monitor.created_by))
+      for (const userId of recipients) {
+        await notifyUser(app, userId, {
+          subject: `Monitor failing: ${monitor.name}`,
+          message: detail.slice(0, 500)
+        }).catch(() => {})
+      }
     }
   } catch (err) {
     console.warn('ops-monitor issue write failed:', err)
