@@ -68,13 +68,34 @@ function SubscribersControl({ monitorId }: { monitorId: number }) {
     queryFn: () => api.get(`/monitors/${monitorId}/subscribers`).then((r) => r.data.data)
   })
   const { data: users = [] } = useQuery<
-    Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
+    Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string
+      role: string | null
+    }>
   >({
     queryKey: ['monitor-sub-users', search],
     enabled: open,
     queryFn: () =>
-      api.get('/users', { params: { search, limit: 20 } }).then((r) => r.data.data ?? r.data),
+      api
+        .get('/users', { params: { search, limit: 30, sort: 'first_name' } })
+        .then((r) => r.data.data ?? r.data),
     staleTime: 60_000
+  })
+  const { data: roleNames = {} } = useQuery<Record<string, string>>({
+    queryKey: ['monitor-sub-roles'],
+    enabled: open,
+    staleTime: 300_000,
+    queryFn: () =>
+      api.get('/roles').then((r) => {
+        const map: Record<string, string> = {}
+        for (const role of (r.data.data ?? []) as Array<{ id: string; name: string }>) {
+          map[String(role.id).toUpperCase()] = role.name
+        }
+        return map
+      })
   })
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['monitor-subs', monitorId] })
@@ -106,7 +127,7 @@ function SubscribersControl({ monitorId }: { monitorId: number }) {
           {subs.length > 0 ? subs.length : 'Subscribe'}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[300px] p-0">
+      <PopoverContent align="end" className="w-[420px] p-0">
         <div className="border-b border-slate-100 px-3 py-2 dark:border-border">
           <p className="text-[12px] font-semibold text-slate-700 dark:text-foreground">Subscribers</p>
           <p className="text-[11px] text-slate-400">
@@ -139,15 +160,29 @@ function SubscribersControl({ monitorId }: { monitorId: number }) {
             <CommandGroup>
               {users
                 .filter((u) => !subIds.has(u.id.toUpperCase()))
+                .sort((a, b) =>
+                  ([a.first_name, a.last_name].filter(Boolean).join(' ') || a.email).localeCompare(
+                    [b.first_name, b.last_name].filter(Boolean).join(' ') || b.email
+                  )
+                )
                 .map((u) => (
                   <CommandItem
                     key={u.id}
                     value={u.id}
                     onSelect={() => add.mutate(u.id)}
-                    className="text-[12px]"
+                    className="gap-2 text-[12px]"
                   >
-                    {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
-                    <span className="ml-auto truncate text-[10.5px] text-slate-400">{u.email}</span>
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap font-medium">
+                      {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                    </span>
+                    {u.role && roleNames[String(u.role).toUpperCase()] && (
+                      <span className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-px text-[10px] text-slate-500 dark:bg-muted dark:text-muted-foreground">
+                        {roleNames[String(u.role).toUpperCase()]}
+                      </span>
+                    )}
+                    <span className="max-w-[45%] shrink-0 truncate whitespace-nowrap text-[10.5px] text-slate-400">
+                      {u.email}
+                    </span>
                   </CommandItem>
                 ))}
             </CommandGroup>
