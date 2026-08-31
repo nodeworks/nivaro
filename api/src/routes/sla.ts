@@ -4,6 +4,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
+import { getLabels } from '../services/queues.js'
 
 interface SlaRule {
   id: number
@@ -461,6 +462,106 @@ export async function slaRoutes(app: FastifyInstance) {
       data: { total: instances.length, current: currentCounts, proposed: proposedCounts, flips }
     })
   })
+
+  // ── Rule preview: the actual records currently ok/warning/breached ───────
+  app.get<{ Params: { id: string } }>(
+    '/rules/:id/records',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const rule = (await db('nivaro_sla_rules').where('id', req.params.id).first()) as
+        | {
+            workflow_template: string
+            state_key: string
+            duration_hours: number
+            warning_threshold_pct: number
+            business_hours_only: boolean
+          }
+        | undefined
+      if (!rule) return reply.code(404).send({ error: 'Not found' })
+      const state = (await db('nivaro_workflow_states')
+        .where({ template: rule.workflow_template, key: rule.state_key })
+        .first('id')) as { id: string } | undefined
+      if (!state) return reply.send({ data: { total: 0, records: [] } })
+      const instances = (await db('nivaro_workflow_instances')
+        .where({ template: rule.workflow_template, current_state: state.id })
+        .whereNull('completed_at')
+        .limit(5000)
+        .select('id', 'collection', 'item', 'current_state')) as Array<{
+        id: string
+        collection: string
+        item: string
+        current_state: string
+      }>
+      if (instances.length === 0) return reply.send({ data: { total: 0, records: [] } })
+
+      const history = await selectInChunks(
+        instances.map((i) => i.id),
+        2000,
+        (chunk) =>
+          db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
+      )
+      const enteredAt = new Map<string, Date>()
+      for (const h of history as Array<{ instance: string; to_state: string; timestamp: Date }>) {
+        const key = `${h.instance}::${h.to_state}`
+        if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
+      }
+      const schedule = await getSlaSchedule()
+      const now = new Date()
+      const warn = rule.warning_threshold_pct ?? 80
+      const rows: Array<{
+        collection: string
+        item: string
+        status: 'ok' | 'warning' | 'breached'
+        elapsed_hours: number
+        remaining_hours: number
+        entered_at: string
+      }> = []
+      for (const inst of instances) {
+        const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
+        if (!entered) continue
+        const elapsed = rule.business_hours_only
+          ? businessHoursElapsed(entered, now, schedule)
+          : (now.getTime() - entered.getTime()) / 3_600_000
+        const pct = (elapsed / rule.duration_hours) * 100
+        rows.push({
+          collection: inst.collection,
+          item: String(inst.item),
+          status: pct >= 100 ? 'breached' : pct >= warn ? 'warning' : 'ok',
+          elapsed_hours: Math.round(elapsed * 10) / 10,
+          remaining_hours: Math.round((rule.duration_hours - elapsed) * 10) / 10,
+          entered_at: entered.toISOString()
+        })
+      }
+      // Worst first: breached by most-over, then warnings, then ok — capped so
+      // a huge state stays a preview, with honest totals per bucket.
+      const rank = { breached: 0, warning: 1, ok: 2 }
+      rows.sort((a, b) => rank[a.status] - rank[b.status] || b.elapsed_hours - a.elapsed_hours)
+      const counts = {
+        ok: rows.filter((r) => r.status === 'ok').length,
+        warning: rows.filter((r) => r.status === 'warning').length,
+        breached: rows.filter((r) => r.status === 'breached').length
+      }
+      const capped = rows.slice(0, 200)
+      const byCollection = new Map<string, Set<string>>()
+      for (const r of capped) {
+        const set = byCollection.get(r.collection) ?? new Set<string>()
+        set.add(r.item)
+        byCollection.set(r.collection, set)
+      }
+      const labels = await getLabels(byCollection).catch(() => ({}) as Record<string, string>)
+      return reply.send({
+        data: {
+          total: rows.length,
+          counts,
+          truncated: rows.length > capped.length,
+          records: capped.map((r) => ({
+            ...r,
+            label: labels[`${r.collection}:${r.item}`] ?? r.item
+          }))
+        }
+      })
+    }
+  )
 
   app.post('/rules', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as {

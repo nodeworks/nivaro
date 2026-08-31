@@ -5,13 +5,14 @@ import {
   Check,
   ChevronsUpDown,
   Clock,
+  Eye,
   Pencil,
   Plus,
   Trash2
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../context'
+import { useItemNavigation, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn, titleCase } from '../lib/utils'
 import { Badge } from './ui/badge'
@@ -71,6 +72,7 @@ interface CmsUser {
   first_name: string | null
   last_name: string | null
   email: string
+  role?: string | null
 }
 
 interface LadderTier {
@@ -161,6 +163,171 @@ function SlaTimeline({
   )
 }
 
+function RolePill({ name }: { name: string | undefined }) {
+  if (!name) return null
+  return (
+    <span className='shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-px text-[10px] text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+      {name}
+    </span>
+  )
+}
+
+/**
+ * Searchable person picker — alphabetical, role pill per person. `specials`
+ * render above the people (the ladder's "owners"/"managers" targets), and
+ * `userValue` maps a picked person to the stored value ('user:<id>' for
+ * ladder tiers, the bare id for the escalation user).
+ */
+function UserCombobox({
+  id,
+  value,
+  onChange,
+  users,
+  roleNames,
+  placeholder,
+  specials = [],
+  clearable = true,
+  userValue = (u) => u.id,
+  compact
+}: {
+  id?: string
+  value: string | null
+  onChange: (value: string | null) => void
+  users: CmsUser[]
+  roleNames: Record<string, string>
+  placeholder: string
+  specials?: Array<{ value: string; label: string }>
+  clearable?: boolean
+  userValue?: (u: CmsUser) => string
+  compact?: boolean
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  // A person picked via server search isn't in the preloaded list — remember
+  // them so the trigger can still render the selection.
+  const [picked, setPicked] = useState<CmsUser | null>(null)
+  const special = value ? specials.find((s) => s.value === value) : null
+  const selected =
+    value && !special
+      ? (users.find((u) => userValue(u).toUpperCase() === value.toUpperCase()) ??
+        (picked && userValue(picked).toUpperCase() === value.toUpperCase() ? picked : null))
+      : null
+  // Server-side search: the preloaded list is capped, so an older account
+  // would otherwise simply never appear no matter what is typed.
+  const { data: searched } = useQuery<CmsUser[]>({
+    queryKey: ['sla-user-search', search],
+    enabled: open && search.trim().length > 0,
+    staleTime: 60_000,
+    queryFn: async () =>
+      ((await client.request(
+        get<{ data: CmsUser[] }>(
+          `/users?search=${encodeURIComponent(search.trim())}&limit=30&sort=first_name`
+        )
+      )) as { data: CmsUser[] }).data
+  })
+  const sorted = useMemo(() => {
+    const base = search.trim() && searched ? searched : users
+    return [...base].sort((a, b) => userLabel(a).localeCompare(userLabel(b)))
+  }, [users, searched, search])
+  const roleFor = (u: CmsUser) => roleNames[String(u.role ?? '').toUpperCase()]
+  return (
+    <Popover modal open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          id={id}
+          type='button'
+          className={cn(
+            'flex w-full items-center gap-2 rounded-md border border-input bg-transparent px-3 text-left shadow-sm',
+            compact ? 'h-8 text-[12px]' : 'h-9 text-sm'
+          )}
+        >
+          {special ? (
+            <span className='min-w-0 flex-1 truncate'>{special.label}</span>
+          ) : selected ? (
+            <>
+              <span className='min-w-0 flex-1 truncate'>{userLabel(selected)}</span>
+              <RolePill name={roleFor(selected)} />
+            </>
+          ) : (
+            <span className='min-w-0 flex-1 truncate text-muted-foreground'>{placeholder}</span>
+          )}
+          <ChevronsUpDown className='ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[--radix-popover-trigger-width] min-w-[440px] p-0' align='start'>
+        <Command shouldFilter={false}>
+          <CommandInput placeholder='Search people…' value={search} onValueChange={setSearch} />
+          <CommandList>
+            <CommandEmpty>{search.trim() ? 'No matches.' : 'Type to search…'}</CommandEmpty>
+            <CommandGroup>
+              {clearable && value && (
+                <CommandItem
+                  value='__none__'
+                  onSelect={() => {
+                    onChange(null)
+                    setOpen(false)
+                  }}
+                  className='text-[12px] text-muted-foreground'
+                >
+                  No one
+                </CommandItem>
+              )}
+              {specials.map((s) => (
+                <CommandItem
+                  key={s.value}
+                  value={`${s.label} ${s.value}`}
+                  onSelect={() => {
+                    onChange(s.value)
+                    setOpen(false)
+                  }}
+                  className='gap-2 text-[12px]'
+                >
+                  <Check
+                    className={cn('h-3.5 w-3.5 shrink-0', value === s.value ? 'opacity-100' : 'opacity-0')}
+                  />
+                  <span className='font-medium'>{s.label}</span>
+                </CommandItem>
+              ))}
+              {sorted.map((u) => {
+                const v = userValue(u)
+                return (
+                  <CommandItem
+                    key={u.id}
+                    value={`${userLabel(u)} ${u.email}`}
+                    onSelect={() => {
+                      setPicked(u)
+                      onChange(v)
+                      setOpen(false)
+                    }}
+                    className='gap-2 text-[12px]'
+                  >
+                    <Check
+                      className={cn(
+                        'h-3.5 w-3.5 shrink-0',
+                        value && value.toUpperCase() === v.toUpperCase()
+                          ? 'opacity-100'
+                          : 'opacity-0'
+                      )}
+                    />
+                    <span className='min-w-0 flex-1 truncate whitespace-nowrap font-medium'>
+                      {userLabel(u)}
+                    </span>
+                    <RolePill name={roleFor(u)} />
+                    <span className='max-w-[42%] shrink-0 truncate whitespace-nowrap text-[10.5px] text-slate-400'>
+                      {u.email}
+                    </span>
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function ladderTierLabel(tier: LadderTier, users: CmsUser[]): string {
   if (tier.notify === 'owner') return 'owners again'
   if (tier.notify === 'manager') return 'managers'
@@ -177,6 +344,7 @@ function SlaRuleForm({
   initial,
   templates,
   users,
+  roleNames,
   multiState,
   onSave,
   onCancel,
@@ -185,6 +353,7 @@ function SlaRuleForm({
   initial?: SlaRuleFormValues
   templates: WorkflowTemplate[]
   users: CmsUser[]
+  roleNames: Record<string, string>
   /** create mode: pick many states, one rule per state; edit mode: single. */
   multiState: boolean
   onSave: (data: SlaRuleFormValues) => void
@@ -276,7 +445,7 @@ function SlaRuleForm({
 
           <div className='space-y-1.5'>
             <Label htmlFor='sla-state-key'>{multiState ? 'States it applies to' : 'State'}</Label>
-            <Popover open={statesOpen} onOpenChange={setStatesOpen}>
+            <Popover modal open={statesOpen} onOpenChange={setStatesOpen}>
               <PopoverTrigger asChild>
                 <button
                   id='sla-state-key'
@@ -335,7 +504,9 @@ function SlaRuleForm({
             <p className='text-sm font-medium'>Timing</p>
             <div className='grid grid-cols-2 gap-4'>
               <div className='space-y-1.5'>
-                <Label htmlFor='sla-duration'>Time allowed (hours)</Label>
+                <Label htmlFor='sla-duration' className='whitespace-nowrap'>
+                  Time allowed (hours)
+                </Label>
                 <Input
                   id='sla-duration'
                   type='number'
@@ -345,7 +516,9 @@ function SlaRuleForm({
                 />
               </div>
               <div className='space-y-1.5'>
-                <Label htmlFor='sla-warning-pct'>Warn at (% of that time)</Label>
+                <Label htmlFor='sla-warning-pct' className='whitespace-nowrap'>
+                  Warn at (%)
+                </Label>
                 <Input
                   id='sla-warning-pct'
                   type='number'
@@ -413,22 +586,14 @@ function SlaRuleForm({
             </div>
             <div className='space-y-1.5 pt-1'>
               <Label htmlFor='sla-escalation'>Also escalate to</Label>
-              <Select
-                value={form.escalation_user ?? '__none__'}
-                onValueChange={(v) => set('escalation_user', v === '__none__' ? null : v)}
-              >
-                <SelectTrigger id='sla-escalation'>
-                  <SelectValue placeholder='No one' />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='__none__'>No one</SelectItem>
-                  {users.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {userLabel(u)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <UserCombobox
+                id='sla-escalation'
+                value={form.escalation_user}
+                onChange={(v) => set('escalation_user', v)}
+                users={users}
+                roleNames={roleNames}
+                placeholder='No one'
+              />
               <p className='text-[11px] text-muted-foreground'>
                 A specific person who is copied on the breach notice.
               </p>
@@ -462,28 +627,29 @@ function SlaRuleForm({
                   className='h-8 w-[72px] text-[12px]'
                 />
                 <span className='shrink-0 text-[12px] text-muted-foreground'>h, notify</span>
-                <Select
-                  value={tier.notify}
-                  onValueChange={(v) =>
-                    set(
-                      'escalation_ladder',
-                      form.escalation_ladder.map((t, i) => (i === idx ? { ...t, notify: v } : t))
-                    )
-                  }
-                >
-                  <SelectTrigger className='h-8 flex-1 text-[12px]'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='owner'>Record owners (again)</SelectItem>
-                    <SelectItem value='manager'>Owners' managers</SelectItem>
-                    {users.map((u) => (
-                      <SelectItem key={u.id} value={`user:${u.id}`}>
-                        {userLabel(u)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className='min-w-0 flex-1'>
+                  <UserCombobox
+                    value={tier.notify}
+                    onChange={(v) =>
+                      set(
+                        'escalation_ladder',
+                        form.escalation_ladder.map((t, i) =>
+                          i === idx ? { ...t, notify: v ?? 'manager' } : t
+                        )
+                      )
+                    }
+                    users={users}
+                    roleNames={roleNames}
+                    placeholder='Who to notify'
+                    specials={[
+                      { value: 'owner', label: 'Record owners (again)' },
+                      { value: 'manager', label: "Owners' managers" }
+                    ]}
+                    clearable={false}
+                    userValue={(u) => `user:${u.id}`}
+                    compact
+                  />
+                </div>
                 <button
                   type='button'
                   onClick={() =>
@@ -582,6 +748,132 @@ function SlaRuleForm({
   )
 }
 
+/** The records currently sitting under a rule — worst first. */
+function RulePreviewPanel({ rule }: { rule: SlaRule }) {
+  const client = useNivaroClient()
+  const { urlFor, open } = useItemNavigation()
+  const { data, isLoading } = useQuery<{
+    total: number
+    counts?: { ok: number; warning: number; breached: number }
+    truncated?: boolean
+    records: Array<{
+      collection: string
+      item: string
+      label: string
+      status: 'ok' | 'warning' | 'breached'
+      elapsed_hours: number
+      remaining_hours: number
+      entered_at: string
+    }>
+  }>({
+    queryKey: ['sla-rule-records', rule.id],
+    queryFn: async () =>
+      ((await client.request(get<{ data: never }>(`/sla/rules/${rule.id}/records`))) as {
+        data: {
+          total: number
+          counts?: { ok: number; warning: number; breached: number }
+          truncated?: boolean
+          records: Array<{
+            collection: string
+            item: string
+            label: string
+            status: 'ok' | 'warning' | 'breached'
+            elapsed_hours: number
+            remaining_hours: number
+            entered_at: string
+          }>
+        }
+      }).data
+  })
+
+  const STATUS_PILL: Record<string, string> = {
+    ok: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+    warning: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+    breached: 'bg-red-500/10 text-red-700 dark:text-red-400'
+  }
+
+  return (
+    <div className='border-t border-slate-100 bg-slate-50/60 px-4 py-3 dark:border-border dark:bg-muted/20'>
+      {isLoading ? (
+        <div className='space-y-2'>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className='h-7 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+          ))}
+        </div>
+      ) : !data || data.total === 0 ? (
+        <p className='text-[12px] text-slate-400'>No open records are in this state right now.</p>
+      ) : (
+        <>
+          <p className='mb-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            {data.total} open record{data.total === 1 ? '' : 's'} in this state —{' '}
+            <span className='text-red-600 dark:text-red-400'>{data.counts?.breached ?? 0} breached</span>
+            {' · '}
+            <span className='text-amber-600 dark:text-amber-400'>{data.counts?.warning ?? 0} warning</span>
+            {' · '}
+            <span className='text-emerald-600 dark:text-emerald-400'>{data.counts?.ok ?? 0} on track</span>
+            {data.truncated ? ' (showing the worst 200)' : ''}
+          </p>
+          <div className='overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <table className='w-full text-[12px]' style={{ fontVariantNumeric: 'tabular-nums' }}>
+              <thead>
+                <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border'>
+                  <th className='px-3 py-1.5 font-semibold'>Record</th>
+                  <th className='px-3 py-1.5 font-semibold'>Status</th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>In state</th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>Time left</th>
+                  <th className='px-3 py-1.5 text-right font-semibold'>Entered</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100 dark:divide-border'>
+                {data.records.map((r) => (
+                  <tr key={`${r.collection}:${r.item}`}>
+                    <td className='px-3 py-1.5'>
+                      <a
+                        href={urlFor({ collection: r.collection, itemId: r.item })}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          open({ collection: r.collection, itemId: r.item })
+                        }}
+                        className='text-nvr-cyan underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe]'
+                      >
+                        {r.label}
+                      </a>
+                    </td>
+                    <td className='px-3 py-1.5'>
+                      <span
+                        className={cn(
+                          'rounded-full px-2 py-px text-[10.5px] font-medium capitalize',
+                          STATUS_PILL[r.status]
+                        )}
+                      >
+                        {r.status === 'ok' ? 'On track' : r.status}
+                      </span>
+                    </td>
+                    <td className='px-3 py-1.5 text-right'>{fmtHours(r.elapsed_hours)}</td>
+                    <td
+                      className={cn(
+                        'px-3 py-1.5 text-right',
+                        r.remaining_hours < 0 && 'text-red-600 dark:text-red-400'
+                      )}
+                    >
+                      {r.remaining_hours < 0
+                        ? `${fmtHours(Math.abs(r.remaining_hours))} over`
+                        : fmtHours(r.remaining_hours)}
+                    </td>
+                    <td className='px-3 py-1.5 text-right text-slate-400'>
+                      {new Date(r.entered_at).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── List view ─────────────────────────────────────────────────────────────
 
 export function SlaRulesView() {
@@ -605,6 +897,18 @@ export function SlaRulesView() {
     queryFn: async () =>
       ((await client.request(get<{ data: CmsUser[] }>('/users?limit=500'))) as { data: CmsUser[] })
         .data
+  })
+  const { data: roleNames = {} } = useQuery<Record<string, string>>({
+    queryKey: ['sla-role-names'],
+    staleTime: 300_000,
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: Array<{ id: string; name: string }> }>('/roles')
+      )) as { data: Array<{ id: string; name: string }> }
+      const map: Record<string, string> = {}
+      for (const r of res.data ?? []) map[String(r.id).toUpperCase()] = r.name
+      return map
+    }
   })
 
   // State labels/colors per template that actually has rules — feeds friendly
@@ -639,6 +943,7 @@ export function SlaRulesView() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<SlaRule | null>(null)
   const [deleting, setDeleting] = useState<SlaRule | null>(null)
+  const [previewId, setPreviewId] = useState<number | null>(null)
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['sla-rules'] })
 
@@ -804,13 +1109,13 @@ export function SlaRulesView() {
                     ? users.find((u) => u.id.toUpperCase() === rule.escalation_user?.toUpperCase())
                     : null
                   return (
-                    <li
-                      key={rule.id}
-                      className={cn(
-                        'group flex items-center gap-4 px-4 py-3',
-                        !rule.is_active && 'opacity-55'
-                      )}
-                    >
+                    <li key={rule.id}>
+                      <div
+                        className={cn(
+                          'group flex items-center gap-4 px-4 py-3',
+                          !rule.is_active && 'opacity-55'
+                        )}
+                      >
                       <div className='w-[220px] min-w-0 shrink-0'>
                         <p className='flex items-center gap-1.5 truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
                           {meta?.color && (
@@ -866,6 +1171,20 @@ export function SlaRulesView() {
                       </div>
 
                       <div className='flex shrink-0 items-center gap-1'>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          className={cn(
+                            'h-7 gap-1 px-2 text-[11.5px]',
+                            previewId === rule.id
+                              ? 'text-nvr-cyan'
+                              : 'text-slate-500 dark:text-muted-foreground'
+                          )}
+                          onClick={() => setPreviewId(previewId === rule.id ? null : rule.id)}
+                        >
+                          <Eye className='h-3.5 w-3.5' />
+                          Preview
+                        </Button>
                         <Switch
                           checked={rule.is_active}
                           onCheckedChange={(v) => toggleMut.mutate({ id: rule.id, active: v })}
@@ -887,7 +1206,9 @@ export function SlaRulesView() {
                         >
                           <Trash2 className='h-3.5 w-3.5' />
                         </Button>
+                        </div>
                       </div>
+                      {previewId === rule.id && <RulePreviewPanel rule={rule} />}
                     </li>
                   )
                 })}
@@ -898,7 +1219,7 @@ export function SlaRulesView() {
       )}
 
       <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-3xl'>
+        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-5xl'>
           <DialogHeader>
             <DialogTitle>New SLA rule</DialogTitle>
           </DialogHeader>
@@ -906,6 +1227,7 @@ export function SlaRulesView() {
             <SlaRuleForm
               templates={templates}
               users={users}
+              roleNames={roleNames}
               multiState
               onSave={(body) => createMut.mutate(body)}
               onCancel={() => setCreating(false)}
@@ -916,7 +1238,7 @@ export function SlaRulesView() {
       </Dialog>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-3xl'>
+        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-5xl'>
           <DialogHeader>
             <DialogTitle>Edit SLA rule</DialogTitle>
           </DialogHeader>
@@ -926,6 +1248,7 @@ export function SlaRulesView() {
                 initial={toFormData(editing)}
                 templates={templates}
                 users={users}
+                roleNames={roleNames}
                 multiState={false}
                 onSave={(body) => updateMut.mutate({ id: editing.id, body })}
                 onCancel={() => setEditing(null)}
