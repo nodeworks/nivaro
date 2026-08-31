@@ -16,6 +16,7 @@ import {
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { UserAvatar } from '../UserAvatar'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
 import type { CMSField, CMSRelation, PipelineOwnerGroup, User } from './types'
@@ -617,13 +618,20 @@ export function PipelineStateOwners({
                     {g.users.length > 0 && (
                       <div className='flex items-center gap-1 flex-wrap pt-0.5'>
                         {g.users.map((u) => (
-                          <span
+                          <UserAvatar
                             key={u.link_id}
-                            title={userSelectLabel(u)}
-                            className='flex h-7 w-7 items-center justify-center rounded-full bg-nvr-cyan/10 text-[11px] font-medium text-nvr-cyan'
-                          >
-                            {initials(u)}
-                          </span>
+                            userId={u.user}
+                            className='h-7 w-7'
+                            alt={userSelectLabel(u)}
+                            fallback={
+                              <span
+                                title={userSelectLabel(u)}
+                                className='flex h-7 w-7 items-center justify-center rounded-full bg-nvr-cyan/10 text-[11px] font-medium text-nvr-cyan'
+                              >
+                                {initials(u)}
+                              </span>
+                            }
+                          />
                         ))}
                       </div>
                     )}
@@ -721,9 +729,15 @@ export function PipelineStateOwners({
                               key={u.link_id}
                               className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5'
                             >
-                              <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-medium text-nvr-cyan'>
-                                {initials(u)}
-                              </span>
+                              <UserAvatar
+                                userId={u.user}
+                                className='h-6 w-6'
+                                fallback={
+                                  <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-medium text-nvr-cyan'>
+                                    {initials(u)}
+                                  </span>
+                                }
+                              />
                               <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700'>
                                 {userLabel(u)}
                               </span>

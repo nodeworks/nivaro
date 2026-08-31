@@ -3,6 +3,7 @@ import { ChevronDown, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { UserAvatar } from '../UserAvatar'
 
 interface Owner {
   id: number
@@ -103,9 +104,15 @@ export function OwnersSlot({
                         key={o.id}
                         className='flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5'
                       >
-                        <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-                          {initials(o)}
-                        </span>
+                        <UserAvatar
+                          userId={o.user}
+                          className='h-6 w-6'
+                          fallback={
+                            <span className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                              {initials(o)}
+                            </span>
+                          }
+                        />
                         <span className='text-[12px] text-slate-700'>{ownerName(o)}</span>
                       </div>
                     ))}

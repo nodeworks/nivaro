@@ -7,6 +7,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { UserAvatar } from '../UserAvatar'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
 import {
   type CellFilterLite,
@@ -1124,15 +1125,23 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             <span className='text-slate-400 text-[11px] dark:text-slate-500'>—</span>
                           ) : (
                             users.slice(0, 4).map((u) => (
-                              <span
+                              <UserAvatar
                                 key={u.link_id}
-                                title={
-                                  [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+                                userId={u.user}
+                                className={`h-6 w-6 ${isInherited ? 'opacity-50' : ''}`}
+                                alt={[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                                fallback={
+                                  <span
+                                    title={
+                                      [u.first_name, u.last_name].filter(Boolean).join(' ') ||
+                                      u.email
+                                    }
+                                    className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold ${isInherited ? 'bg-slate-100 text-slate-400' : 'bg-nvr-cyan/10 text-nvr-cyan'}`}
+                                  >
+                                    {initials(u)}
+                                  </span>
                                 }
-                                className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold ${isInherited ? 'bg-slate-100 text-slate-400' : 'bg-nvr-cyan/10 text-nvr-cyan'}`}
-                              >
-                                {initials(u)}
-                              </span>
+                              />
                             ))
                           )}
                           {users.length > 4 && (
@@ -1685,9 +1694,15 @@ function AddUserToCell({
               }}
               className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
             >
-              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
-                {initials(u)}
-              </span>
+              <UserAvatar
+                userId={u.id}
+                className='h-6 w-6'
+                fallback={
+                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
+                    {initials(u)}
+                  </span>
+                }
+              />
               <span className='min-w-0 flex-1 truncate font-medium'>{userLabel(u)}</span>
               <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
                 {personSecondary(u, roleNames)}
@@ -2088,11 +2103,17 @@ export function MemberPickerCombobox({
                   }}
                   className='flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
                 >
-                  <span
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9.5px] font-semibold ${tier === 'mismatch' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' : 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'}`}
-                  >
-                    {initials(u)}
-                  </span>
+                  <UserAvatar
+                    userId={u.id}
+                    className='h-6 w-6'
+                    fallback={
+                      <span
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9.5px] font-semibold ${tier === 'mismatch' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' : 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'}`}
+                      >
+                        {initials(u)}
+                      </span>
+                    }
+                  />
                   <span className='min-w-0 flex-1 truncate font-medium'>{label(u)}</span>
                   <span className='max-w-[55%] shrink-0 truncate text-[11px] text-slate-400'>
                     {personSecondary(u, roleNames)}

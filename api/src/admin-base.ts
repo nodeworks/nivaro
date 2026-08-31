@@ -22,6 +22,12 @@ import { config } from './config.js'
 const servesAdminSpa = existsSync(join(import.meta.dirname, '../../admin/dist'))
 
 export function adminBaseUrl(): string | null {
-  const url = servesAdminSpa ? (config.PUBLIC_URL ?? config.ADMIN_URL) : config.ADMIN_URL
+  // Development: admin runs on its own vite server, and a stale local
+  // admin/dist from a past build must not redirect links to the API origin —
+  // the configured ADMIN_URL is authoritative there.
+  const url =
+    config.NODE_ENV !== 'development' && servesAdminSpa
+      ? (config.PUBLIC_URL ?? config.ADMIN_URL)
+      : config.ADMIN_URL
   return url ? url.replace(/\/$/, '') : null
 }

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useApiFetchConfig } from '../context'
 
 /**
@@ -16,12 +16,15 @@ export function UserAvatar({
   userId,
   fallback,
   className,
+  style,
   alt
 }: {
   userId: string | number | null | undefined
   fallback: ReactNode
   /** Applied to the <img> when a photo exists — size + ring classes of the site's disc. */
   className?: string
+  /** Inline size for sites whose disc dimensions are dynamic (px-based avatars). */
+  style?: CSSProperties
   alt?: string
 }) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
@@ -49,6 +52,7 @@ export function UserAvatar({
         src={avatar}
         alt={alt ?? ''}
         className={`shrink-0 rounded-full object-cover ${className ?? ''}`}
+        style={style}
         draggable={false}
       />
     )

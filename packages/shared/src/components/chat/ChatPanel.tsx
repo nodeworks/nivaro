@@ -32,6 +32,7 @@ import { toast } from 'sonner'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { UserAvatar } from '../UserAvatar'
 import {
   CHAT_DEFAULTS,
   type ChatConfig,
@@ -200,7 +201,7 @@ function useTheme(): ChatTheme {
 }
 
 function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size?: number }) {
-  return (
+  const disc = (
     <span
       className='flex shrink-0 items-center justify-center rounded-full font-semibold text-[#04263b]'
       style={{ width: size, height: size, backgroundColor: chatAvatarColor(id), fontSize: size * 0.36 }}
@@ -209,6 +210,7 @@ function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size
       {chatInitials(name)}
     </span>
   )
+  return <UserAvatar userId={id} fallback={disc} style={{ width: size, height: size }} alt={name ?? ''} />
 }
 
 /**
