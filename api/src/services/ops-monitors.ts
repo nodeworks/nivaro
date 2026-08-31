@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import tls from 'node:tls'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { startJobRun } from './job-runs.js'
@@ -15,7 +16,7 @@ import type { FastifyInstance } from 'fastify'
 
 export interface MonitorRow {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey' | 'ssl_cert'
   name: string
   config: string | null
   state: string | null
@@ -294,6 +295,70 @@ async function evalJourney(
   return { status: 'ok', detail: results.join(' → ') }
 }
 
+/** TLS certificate expiry watch: connect, read the peer cert's valid_to,
+ *  fail when expired or inside the warning window. rejectUnauthorized is off
+ *  on purpose — corporate CA chains this process doesn't trust still have an
+ *  expiry worth reporting, and we only READ the certificate. */
+async function evalSslCert(cfg: {
+  host?: string
+  port?: number
+  warn_days?: number
+}): Promise<EvalResult> {
+  const host = String(cfg.host ?? '')
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .split('/')[0]
+    .split(':')[0]
+  if (!host) return { status: 'unknown', detail: 'No host configured' }
+  const port = Number(cfg.port) || 443
+  const warnDays = Number(cfg.warn_days) || 30
+  let cert: tls.PeerCertificate
+  try {
+    cert = await new Promise<tls.PeerCertificate>((resolve, reject) => {
+      const sock = tls.connect(
+        { host, port, servername: host, timeout: 10_000, rejectUnauthorized: false },
+        () => {
+          const c = sock.getPeerCertificate()
+          sock.end()
+          if (c && c.valid_to) resolve(c)
+          else reject(new Error('No certificate presented'))
+        }
+      )
+      sock.on('error', reject)
+      sock.setTimeout(10_000, () => {
+        sock.destroy()
+        reject(new Error('TLS connect timeout'))
+      })
+    })
+  } catch (err) {
+    return {
+      status: 'failing',
+      detail: `${host}:${port} — ${err instanceof Error ? err.message : String(err)}`
+    }
+  }
+  const expires = new Date(cert.valid_to)
+  const daysLeft = Math.floor((expires.getTime() - Date.now()) / 86_400_000)
+  const issuer = cert.issuer?.O ?? cert.issuer?.CN ?? 'unknown issuer'
+  const when = expires.toISOString().slice(0, 10)
+  if (daysLeft < 0)
+    return {
+      status: 'failing',
+      metric: daysLeft,
+      detail: `${host} certificate EXPIRED ${-daysLeft}d ago (${when}, ${issuer})`
+    }
+  if (daysLeft <= warnDays)
+    return {
+      status: 'failing',
+      metric: daysLeft,
+      detail: `${host} certificate expires in ${daysLeft}d (${when}, ${issuer}) — renew now`
+    }
+  return {
+    status: 'ok',
+    metric: daysLeft,
+    detail: `${host} expires ${when} (${daysLeft}d, ${issuer})`
+  }
+}
+
 export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance | null): Promise<EvalResult> {
   const cfg = parseJson<Record<string, unknown>>(monitor.config, {})
   const state = parseJson<Record<string, unknown>>(monitor.state, {})
@@ -304,6 +369,7 @@ export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance 
   try {
     if (monitor.type === 'freshness') result = await evalFreshness(cfg)
     else if (monitor.type === 'synthetic') result = await evalSynthetic(cfg)
+    else if (monitor.type === 'ssl_cert') result = await evalSslCert(cfg)
     else if (monitor.type === 'journey') result = await evalJourney(cfg, app)
     else {
       const r = await evalDeployRegression(cfg, state)

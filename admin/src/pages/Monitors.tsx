@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 
 interface Monitor {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert'
   name: string
   config: Record<string, unknown> | null
   is_active: boolean
@@ -26,7 +26,8 @@ interface Monitor {
 const TYPE_LABEL: Record<Monitor['type'], string> = {
   freshness: 'Data freshness',
   deploy_regression: 'Deploy regression',
-  synthetic: 'Synthetic probe'
+  synthetic: 'Synthetic probe',
+  ssl_cert: 'SSL certificate'
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -68,6 +69,9 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [latency, setLatency] = useState('5000')
   // deploy
   const [worsen, setWorsen] = useState('50')
+  // ssl_cert
+  const [sslHost, setSslHost] = useState('')
+  const [warnDays, setWarnDays] = useState('30')
 
   const create = useMutation({
     mutationFn: () => {
@@ -76,7 +80,9 @@ function CreateForm({ onDone }: { onDone: () => void }) {
           ? { collection: collection.trim(), max_age_hours: Number(maxAge) || 24 }
           : type === 'synthetic'
             ? { path: path.trim(), latency_warn_ms: Number(latency) || 5000 }
-            : { p95_worsen_pct: Number(worsen) || 50 }
+            : type === 'ssl_cert'
+              ? { host: sslHost.trim(), warn_days: Number(warnDays) || 30 }
+              : { p95_worsen_pct: Number(worsen) || 50 }
       return api.post('/monitors', { type, name: name.trim(), config })
     },
     onSuccess: () => {
@@ -89,7 +95,13 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 
   const canSave =
     name.trim().length > 0 &&
-    (type === 'freshness' ? collection.trim().length > 0 : type === 'synthetic' ? path.trim().length > 0 : true)
+    (type === 'freshness'
+      ? collection.trim().length > 0
+      : type === 'synthetic'
+        ? path.trim().length > 0
+        : type === 'ssl_cert'
+          ? sslHost.trim().length > 0
+          : true)
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card">
@@ -142,6 +154,16 @@ function CreateForm({ onDone }: { onDone: () => void }) {
             <input value={worsen} onChange={(e) => setWorsen(e.target.value)} type="number" className={inputCls} />
           </Field>
         )}
+        {type === 'ssl_cert' && (
+          <>
+            <Field label="Domain">
+              <input value={sslHost} onChange={(e) => setSslHost(e.target.value)} placeholder="efp-staging.cable.example.com" className={inputCls} />
+            </Field>
+            <Field label="Warn (days before expiry)">
+              <input value={warnDays} onChange={(e) => setWarnDays(e.target.value)} type="number" className={inputCls} />
+            </Field>
+          </>
+        )}
       </div>
       {type === 'freshness' && (
         <p className="mt-2 text-[11.5px] text-slate-400">
@@ -158,6 +180,12 @@ function CreateForm({ onDone }: { onDone: () => void }) {
       {type === 'synthetic' && (
         <p className="mt-2 text-[11.5px] text-slate-400">
           Requests the path every 5 minutes; a non-200 answer or a slow response fails the check.
+        </p>
+      )}
+      {type === 'ssl_cert' && (
+        <p className="mt-2 text-[11.5px] text-slate-400">
+          Reads the domain's TLS certificate on every sweep and fails when it is expired or inside
+          the warning window — an expiring cert raises an issue and notifies you before it bites.
         </p>
       )}
       <div className="mt-3">
