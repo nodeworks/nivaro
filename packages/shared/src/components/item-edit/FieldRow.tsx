@@ -729,6 +729,13 @@ export function FieldRow({
 
   // Cascade filter computation
   let cascadeFilter: Record<string, unknown> | undefined
+  // Layout-effective parent labels — 'division' reads as 'Zone' when the
+  // layout renames it; only trustworthy when the context describes THIS
+  // collection (grid cells carry the parent record's labels instead).
+  const parentFieldLabel = (f: string): string =>
+    (parentDraftCtx?.collection === collection
+      ? parentDraftCtx?.fieldLabels?.[f]
+      : undefined) ?? titleCase(String(f))
   const cascadeParentLabels: string[] = []
   const cascadeParentFieldKeys: string[] = []
   let unsatisfiedParentLabel: string | null = null
@@ -788,12 +795,12 @@ export function FieldRow({
       } else {
         cascadeFilter[rule.filter_column] = clause
       }
-      cascadeParentLabels.push(titleCase(String(rule.parent_field)))
+      cascadeParentLabels.push(parentFieldLabel(String(rule.parent_field)))
       cascadeParentFieldKeys.push(String(rule.parent_field))
     } else {
-      if (!unsatisfiedParentLabel) unsatisfiedParentLabel = titleCase(String(rule.parent_field))
+      if (!unsatisfiedParentLabel) unsatisfiedParentLabel = parentFieldLabel(String(rule.parent_field))
       if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
-        requiredParentLabel = titleCase(String(rule.parent_field))
+        requiredParentLabel = parentFieldLabel(String(rule.parent_field))
       }
       // Parent unset but the parent's OWN picker curates its options
       // (option_filter): inherit that filter through the cascade relation, so
@@ -969,7 +976,7 @@ export function FieldRow({
                 !!cascadeFilter &&
                 Object.keys(cascadeFilter).length > 0 &&
                 cascadeParentLabels.length > 0
-              const allParentLabels = cascadeRules.map((r) => titleCase(String(r.parent_field)))
+              const allParentLabels = cascadeRules.map((r) => parentFieldLabel(String(r.parent_field)))
               return (
                 <TooltipProvider delayDuration={100}>
                   <Tooltip>
