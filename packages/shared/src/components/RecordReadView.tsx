@@ -77,14 +77,18 @@ const fmtNumber = (v: unknown) => {
 
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
-function BoolPill({ value }: { value: unknown }) {
+function BoolPill({ value, trueTone = 'positive' }: { value: unknown; trueTone?: 'positive' | 'danger' }) {
   const yes = value === true || value === 1 || value === '1' || value === 'true'
+  // trueTone 'danger': for flags where "Yes" is the bad outcome (on hold,
+  // past due) — a green Yes there reads as reassurance.
+  const yesCls =
+    trueTone === 'danger'
+      ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
+      : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
   return (
     <span
       className={`inline-flex h-[18px] items-center rounded-full px-1.5 text-[10.5px] font-semibold ${
-        yes
-          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
-          : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+        yes ? yesCls : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
       }`}
     >
       {yes ? 'Yes' : 'No'}
@@ -542,7 +546,13 @@ export function RecordReadView({
       )
     if (target) return <RelatedValue collection={target} id={v} />
     if (v == null || v === '') return <Empty />
-    if (f?.type === 'boolean') return <BoolPill value={v} />
+    if (f?.type === 'boolean')
+      return (
+        <BoolPill
+          value={v}
+          trueTone={((ov.options ?? {}) as { trueTone?: 'positive' | 'danger' }).trueTone ?? 'positive'}
+        />
+      )
     const ovOpts = (ov.options ?? {}) as { format?: string }
     if (ovOpts.format === 'currency') return <span className='tabular-nums'>{fmtMoney(v)}</span>
     if (f?.type === 'decimal' || f?.type === 'float')
@@ -569,6 +579,12 @@ export function RecordReadView({
 
   const isGrid = (a: LayoutAssignment) => !!aliasChild(a.field)
 
+  // Sections render as cards on a two-column board (single column when
+  // narrow); a card whose section holds a child-record grid spans the full
+  // width so the table breathes. Inside a card the definition grid is capped
+  // at compact columns, so facts cluster instead of scattering across the
+  // whole sheet. An assignment override {"options":{"emphasis":true}} renders
+  // its value display-sized — the one or two numbers a reader came for.
   const renderSection = (g: LayoutGroup) => {
     const items = visible
       .filter((a) => a.group_key === g.key)
@@ -577,43 +593,66 @@ export function RecordReadView({
     if (items.length === 0 && groupWidgets.length === 0) return null
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
+    const fullWidth = grids.length > 0 || groupWidgets.length > 0
     return (
-      <section key={g.key}>
-        <h3 className='mb-2 border-b border-slate-100 pb-1 text-[10.5px] font-bold uppercase tracking-wider text-slate-400 dark:border-slate-800'>
+      <section
+        key={g.key}
+        className={`rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40 ${
+          fullWidth ? 'lg:col-span-2' : ''
+        }`}
+      >
+        <h3 className='border-b border-slate-100 px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:text-slate-400'>
           {g.label}
         </h3>
-        {scalars.length > 0 && (
-          <dl
-            className='grid gap-x-8 gap-y-3'
-            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}
-          >
-            {scalars.map((a) => (
-              <div key={a.field} className='min-w-0'>
-                <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                  {a.label_override ?? titleCase(a.field)}
-                </dt>
-                <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
-                  {record ? renderValue(a) : <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {grids.map((a) => (
-          <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
-            {renderGridAssignment(a)}
-          </div>
-        ))}
-        {renderWidgets(g.key)}
+        <div className='px-4 py-3'>
+          {scalars.length > 0 && (
+            <dl
+              className='grid gap-x-6 gap-y-4'
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))' }}
+            >
+              {scalars.map((a) => {
+                const ov = parseOverrides(a.overrides)
+                const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
+                const long = fieldByName.get(a.field)?.interface?.includes('rich-text')
+                return (
+                  <div
+                    key={a.field}
+                    className='min-w-0'
+                    style={long ? { gridColumn: '1 / -1' } : undefined}
+                  >
+                    <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                      {a.label_override ?? titleCase(a.field)}
+                    </dt>
+                    <dd
+                      className={`mt-0.5 min-w-0 ${
+                        emphasis
+                          ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
+                          : 'truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'
+                      }`}
+                    >
+                      {record ? renderValue(a) : <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />}
+                    </dd>
+                  </div>
+                )
+              })}
+            </dl>
+          )}
+          {grids.map((a) => (
+            <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
+              {renderGridAssignment(a)}
+            </div>
+          ))}
+          {renderWidgets(g.key)}
+        </div>
       </section>
     )
   }
 
   return (
-    <div className='min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4'>
-      {sectionGroups.map(renderSection)}
+    <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-5 py-4 dark:bg-transparent'>
+      <div className='grid items-start gap-4 lg:grid-cols-2'>{sectionGroups.map(renderSection)}</div>
       {tabGroups.length > 0 && (
-        <div>
+        <div className='mt-5'>
           <div className='flex gap-1 border-b border-slate-200 dark:border-slate-700'>
             {tabGroups.map((g) => (
               <button

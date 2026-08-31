@@ -1,6 +1,7 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { QueryClient, QueryClientContext, QueryClientProvider } from '@tanstack/react-query'
 import type React from 'react'
+import type { ReactNode } from 'react'
 import { createContext, useCallback, useContext, useState } from 'react'
 
 // ─── Grid flush registry ───────────────────────────────────────────────────
@@ -208,6 +209,20 @@ export interface DrilldownTarget {
 
 export interface DrilldownContextValue {
   open: (target: DrilldownTarget) => void
+}
+
+/** Per-collection replacement bodies for the drill-down sheet. A host app
+ *  registers a richer experience for a collection (e.g. a vendor 360 view)
+ *  and every RecordDrilldownSheet — queues, collection views, nested drills —
+ *  renders it instead of the default detail layout for that collection. */
+export interface DrilldownViewOverride {
+  render: (args: { itemId: string }) => ReactNode
+  /** Sheet width while this view is on top (e.g. '85%'). */
+  width?: string | number
+}
+export const DrilldownViewsContext = createContext<Record<string, DrilldownViewOverride>>({})
+export function useDrilldownViews(): Record<string, DrilldownViewOverride> {
+  return useContext(DrilldownViewsContext)
 }
 
 export const DrilldownContext = createContext<DrilldownContextValue | null>(null)

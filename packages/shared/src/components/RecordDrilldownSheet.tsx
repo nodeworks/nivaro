@@ -5,8 +5,7 @@ import {
   DrilldownContext,
   type DrilldownTarget,
   useItemNavigation,
-  useNivaroClient
-} from '../context'
+  useNivaroClient, useDrilldownViews } from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { ItemEditForm } from './ItemEditForm'
@@ -93,6 +92,11 @@ export function RecordDrilldownSheet({
 
   const drillCtx = useMemo(() => ({ open: pushDrill }), [pushDrill])
 
+  // A host-registered override replaces this level's body entirely (and may
+  // widen the sheet) — the breadcrumb strip and Open record link stay.
+  const views = useDrilldownViews()
+  const customView = views[current.collection] ?? null
+
   // The root record can render a pinned grouped layout (rootLayoutSlug) instead
   // of a resolved detail layout; nested drills always resolve detail layouts.
   const useRootSlug = stack.length === 1 && !!rootLayoutSlug
@@ -119,7 +123,7 @@ export function RecordDrilldownSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
-        style={{ width: current.width ?? width ?? 640, maxWidth: '96vw' }}
+        style={{ width: customView?.width ?? current.width ?? width ?? 640, maxWidth: '96vw' }}
         // Escape means the same as Back: step down one level. Letting Radix
         // close the sheet outright would discard every level at once, which is
         // never what someone three drills deep intended. The X button and the
@@ -169,7 +173,11 @@ export function RecordDrilldownSheet({
             and summary rail each get an independent scrollbar, which only works
             when this parent constrains height instead of growing unbounded. */}
         <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-          {layoutLoading && !useRootSlug ? (
+          {customView ? (
+            <DrilldownContext.Provider value={drillCtx}>
+              {customView.render({ itemId: String(current.itemId) })}
+            </DrilldownContext.Provider>
+          ) : layoutLoading && !useRootSlug ? (
             <div className='space-y-2 px-4 py-3'>
               {[0, 1, 2, 3, 4, 5].map((i) => (
                 <div key={i} className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
