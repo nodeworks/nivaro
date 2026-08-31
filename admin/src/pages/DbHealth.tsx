@@ -288,7 +288,9 @@ export function DbHealthPage() {
                         ? 'bg-emerald-400'
                         : d.status === 'down'
                           ? 'bg-red-500'
-                          : 'bg-slate-300 dark:bg-slate-600'
+                          : d.status === 'unconfigured'
+                            ? 'bg-amber-400'
+                            : 'bg-slate-300 dark:bg-slate-600'
                     }`}
                     title={d.status}
                   />

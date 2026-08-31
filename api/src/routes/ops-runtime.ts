@@ -5,6 +5,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bustAllCaches, bustCache, listCaches } from '../services/cache-registry.js'
 import { listInstances } from '../services/instance-roster.js'
+import { probeSmtp } from '../services/mail.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
 import { poolStats } from './ops-db.js'
 
@@ -55,9 +56,21 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       }
     }
     const redis = (app as unknown as { redis?: { ping: () => Promise<string> } }).redis
-    const [dbStatus, redisStatus] = await Promise.all([
+    // Inngest — same resolution as /health: configured health URL, dev-server
+    // fallback in development, otherwise honestly unprobed.
+    const inngestHealthUrl =
+      config.INNGEST_HEALTH_URL ??
+      (config.NODE_ENV === 'development' ? 'http://localhost:8288/health' : null)
+    const [dbStatus, redisStatus, inngestStatus, smtpStatus] = await Promise.all([
       probe(() => db.raw('SELECT 1')),
-      redis ? probe(() => redis.ping()) : Promise.resolve('down' as const)
+      redis ? probe(() => redis.ping()) : Promise.resolve('down' as const),
+      inngestHealthUrl
+        ? probe(async () => {
+            const res = await fetch(inngestHealthUrl, { signal: AbortSignal.timeout(2500) })
+            if (!res.ok) throw new Error(String(res.status))
+          })
+        : Promise.resolve('unprobed' as const),
+      probeSmtp().catch(() => 'down' as const)
     ])
     const rows = [
       {
@@ -74,13 +87,13 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       },
       {
         subsystem: 'Inngest',
-        status: 'unprobed' as const,
+        status: inngestStatus,
         impact_when_down:
           'Queue materialization backfills, scheduled flows and scheduled changes stop executing; everything interactive is unaffected.'
       },
       {
         subsystem: 'SMTP',
-        status: 'unprobed' as const,
+        status: smtpStatus,
         impact_when_down:
           'Outgoing email silently no-ops (documented behavior); in-app notifications continue.'
       }

@@ -372,6 +372,27 @@ function buildTransporter(smtp: SmtpConfig) {
   })
 }
 
+/**
+ * Live SMTP reachability — connects and EHLOs, never sends. 'unconfigured'
+ * when no host is set (mail deliberately no-ops there, that's not an outage).
+ */
+export async function probeSmtp(): Promise<'ok' | 'down' | 'unconfigured'> {
+  const smtp = await getSmtpConfig()
+  if (!smtp.host) return 'unconfigured'
+  const transporter = buildTransporter(smtp)
+  try {
+    await Promise.race([
+      transporter.verify(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
+    ])
+    return 'ok'
+  } catch {
+    return 'down'
+  } finally {
+    transporter.close()
+  }
+}
+
 export interface MailOptions {
   /** Record context (#261) — logged, powers the record communications view. */
   collection?: string | null
