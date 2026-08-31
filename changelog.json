@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-08-31T01:53:11.718Z",
+  "generated_at": "2026-08-31T15:40:41.387Z",
   "releases": [
+    {
+      "version": "0.1.178",
+      "tag": "v0.1.178",
+      "date": "2026-08-31T11:40:35-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ci",
+              "text": "changelog generation degrades to a plain commit list without an API key",
+              "hash": "640a957e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.177",
       "tag": "v0.1.177",
-      "date": "2026-08-30T21:53:05-04:00",
+      "date": "2026-08-30T21:53:11-04:00",
       "sections": [
         {
           "label": "Added",
