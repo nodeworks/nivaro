@@ -50,6 +50,14 @@ const commitText = commits
   })
   .join('\n');
 
+// No key (e.g. the private mirror's Actions have no ANTHROPIC_API_KEY
+// secret): emit a plain commit list instead of failing the whole publish —
+// the changelog is decoration, the release is not.
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.log(`## Changes\n\n${commits.map(c => `- ${c.subject}`).join('\n')}`);
+  process.exit(0);
+}
+
 const client = new Anthropic();
 
 const response = await client.messages.create({
