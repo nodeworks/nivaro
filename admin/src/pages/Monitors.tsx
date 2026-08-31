@@ -107,25 +107,27 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card">
       <p className="text-[13px] font-semibold text-slate-800 dark:text-foreground">New monitor</p>
       <div className="mt-3 grid max-w-[720px] grid-cols-1 gap-3 sm:grid-cols-3">
-        <Field label="Type">
-          <span className="flex rounded-md border border-slate-200 p-0.5 dark:border-border">
-            {(Object.keys(TYPE_LABEL) as Monitor['type'][]).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setType(t)}
-                className={cn(
-                  'flex-1 rounded px-2 py-1 text-[11px] font-medium',
-                  type === t
-                    ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                    : 'text-slate-400 hover:text-slate-600'
-                )}
-              >
-                {TYPE_LABEL[t]}
-              </button>
-            ))}
-          </span>
-        </Field>
+        <div className="sm:col-span-3">
+          <Field label="Type">
+            <span className="inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border">
+              {(Object.keys(TYPE_LABEL) as Monitor['type'][]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setType(t)}
+                  className={cn(
+                    'whitespace-nowrap rounded px-3 py-1 text-[11.5px] font-medium transition-colors',
+                    type === t
+                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  )}
+                >
+                  {TYPE_LABEL[t]}
+                </button>
+              ))}
+            </span>
+          </Field>
+        </div>
         <Field label="Name">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Warehouse inventory feed" className={inputCls} />
         </Field>
