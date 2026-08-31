@@ -106,9 +106,12 @@ export async function opsDbRoutes(app: FastifyInstance) {
         CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
         ORDER BY qs.total_worker_time DESC
       `)) as Array<Record<string, unknown>>
+      // Do NOT cap the statement short: Explain feeds this text back to
+      // SHOWPLAN, and an 800-char cut mid-identifier parses as garbage
+      // ("Invalid object name") on every longer query. 8000 bounds payload.
       return rows.map((r) => ({
         ...r,
-        statement_text: String(r.statement_text ?? '').slice(0, 800)
+        statement_text: String(r.statement_text ?? '').slice(0, 8000)
       }))
     })
     return reply.send(result)
@@ -293,9 +296,21 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #307 — estimated plan for a statement off the expensive-SQL panel. SELECT
   // only, same posture as the scratchpad's plan mode.
   app.post<{ Body: { sql?: string } }>('/explain', async (req, reply) => {
-    const sql = String(req.body?.sql ?? '').trim()
+    let sql = String(req.body?.sql ?? '').trim()
     if (!sql) return reply.code(400).send({ error: 'sql is required' })
-    const stripped = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()
+    let stripped = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()
+    // Parameterized DMV statements arrive as "(@P1 int, @P2 nvarchar(50))SELECT …"
+    // — strip the leading parameter-declaration block and DECLARE those params
+    // as NULL instead, so the estimated plan still compiles.
+    const paramBlock = stripped.match(/^\((@\w+\s+[^)]+)\)\s*/)
+    if (paramBlock) {
+      const decls = paramBlock[1]
+        .split(/,(?=\s*@)/)
+        .map((d) => `DECLARE ${d.trim()};`)
+        .join(' ')
+      sql = `${decls} ${stripped.slice(paramBlock[0].length)}`
+      stripped = stripped.slice(paramBlock[0].length).trim()
+    }
     if (!/^(select|with)\b/i.test(stripped)) {
       return reply.code(400).send({ error: 'Only SELECT statements can be explained here' })
     }
@@ -304,7 +319,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
       const plan = await explainSqlPlan(sql, {})
       return reply.send({ data: { plan } })
     } catch (err) {
-      return reply.code(422).send({ error: err instanceof Error ? err.message.slice(0, 300) : 'Explain failed' })
+      const msg = err instanceof Error ? err.message.slice(0, 300) : 'Explain failed'
+      // The DMV hands out statement FRAGMENTS for proc bodies (cursors, temp
+      // tables, undeclared variables) — name that instead of a raw SQL error.
+      const friendly = /must declare|invalid object name '#|incorrect syntax/i.test(msg)
+        ? `This statement is a fragment of a larger batch (proc body / temp tables) and can't be explained standalone. ${msg}`
+        : msg
+      return reply.code(422).send({ error: friendly })
     }
   })
 
