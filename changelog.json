@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-08-31T19:04:54.265Z",
+  "generated_at": "2026-08-31T20:02:05.955Z",
   "releases": [
+    {
+      "version": "0.1.180",
+      "tag": "v0.1.180",
+      "date": "2026-08-31T16:01:55-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "monitors",
+              "text": "per-monitor subscribers for failing-flip notifications",
+              "hash": "f706a139"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "monitors",
+              "text": "subscriber picker is wider, alphabetical, and shows roles",
+              "hash": "8f8a22d0"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.179",
       "tag": "v0.1.179",
-      "date": "2026-08-31T15:04:46-04:00",
+      "date": "2026-08-31T15:04:54-04:00",
       "sections": [
         {
           "label": "Added",
