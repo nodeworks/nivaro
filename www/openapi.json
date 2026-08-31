@@ -55997,6 +55997,12 @@
       "UnitWorkflows": {
         "type": "object",
         "properties": {
+          "unit_workflows": {
+            "type": "string"
+          },
+          "workflows": {
+            "type": "string"
+          },
           "id": {
             "type": "integer"
           },

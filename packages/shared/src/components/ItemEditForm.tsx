@@ -388,6 +388,10 @@ export interface ItemEditFormProps {
   onSaved?: (id: string) => void
   onDeleted?: () => void
   showHeader?: boolean
+  /** Host-provided content rendered at the start of the header's action
+   *  cluster (e.g. an "Open Project 360°" link) — keeps host actions inside
+   *  the toolbar instead of floating above the form. */
+  headerExtra?: ReactNode
   /** Render extension-registered item actions (Push to Fusion etc.) in the
    *  header toolbar. Off by default — the admin's ItemEdit page renders its
    *  own copy in the page header; headless hosts opt in. */
@@ -720,6 +724,7 @@ export function ItemEditForm({
   onSaved,
   onDeleted,
   showHeader = true,
+  headerExtra,
   focusField,
   showItemActions = false,
   onDirtyChange,
@@ -6928,6 +6933,7 @@ export function ItemEditForm({
                                     )}
                                   </div>
                                   <div className='ml-auto flex items-center gap-1.5'>
+                                    {headerExtra}
                                     <HeaderTools>
                                     {isNew && (
                                       <ImportFromFileButton
