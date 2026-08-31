@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-08-29T20:40:46.650Z",
+  "generated_at": "2026-08-31T01:20:20.220Z",
   "releases": [
+    {
+      "version": "0.1.176",
+      "tag": "v0.1.176",
+      "date": "2026-08-30T21:20:14-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "onDirtyChange + documentTitle props for workspace-tab hosts",
+              "hash": "4fd82aa4"
+            },
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "cascading pickers inherit an unset parent's option filter",
+              "hash": "dbb5ceff"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "cascade filter hints use the layout's field labels",
+              "hash": "7152a992"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "drop npm provenance from package publishes",
+              "hash": "adebe388"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.175",
       "tag": "v0.1.175",
-      "date": "2026-08-29T16:40:41-04:00",
+      "date": "2026-08-29T16:40:46-04:00",
       "sections": [
         {
           "label": "Added",
