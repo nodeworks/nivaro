@@ -1009,15 +1009,15 @@ function SsoProvidersSection() {
                 ))}
                 <button
                   type='button'
-                  onClick={() => setDraft((d) => ({ ...d, button_color: 'accent' }))}
+                  onClick={() => setDraft((d) => ({ ...d, button_color: 'signal' }))}
                   className={`h-7 rounded-full border-2 bg-[#00ceff] px-2.5 text-[11px] font-semibold text-slate-900 transition-transform hover:scale-105 ${
-                    draft.button_color.trim() === 'accent'
+                    draft.button_color.trim() === 'signal' || draft.button_color.trim() === 'accent'
                       ? 'border-slate-900 dark:border-white'
                       : 'border-transparent'
                   }`}
-                  title="The portal theme's accent color"
+                  title="The portal theme's signal (accent) color"
                 >
-                  Accent
+                  Signal
                 </button>
                 <Input
                   value={draft.button_color}
