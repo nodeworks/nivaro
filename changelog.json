@@ -1,10 +1,76 @@
 {
-  "generated_at": "2026-09-01T00:34:15.572Z",
+  "generated_at": "2026-09-01T18:29:20.938Z",
   "releases": [
+    {
+      "version": "0.1.184",
+      "tag": "v0.1.184",
+      "date": "2026-09-01T14:29:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "revisions",
+              "text": "layout fields separate from behind-the-scenes writes",
+              "hash": "f9f6e0ca"
+            },
+            {
+              "section": "Added",
+              "scope": "revisions",
+              "text": "friendly values everywhere in the history views",
+              "hash": "9132f683"
+            },
+            {
+              "section": "Added",
+              "scope": "replays",
+              "text": "session recordings flag masquerade sessions",
+              "hash": "210ea22a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "phantom unsaved-changes flag, plus an inspector to prove it",
+              "hash": "036e25a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "panels",
+              "text": "more vertical breathing room in the expanded body",
+              "hash": "e8ae407a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "panels",
+              "text": "Referenced by and Related records match the Notes/Tasks header style",
+              "hash": "8207a0c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "provenance",
+              "text": "read-logging rows no longer masquerade as the origin",
+              "hash": "b870137e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "revisions",
+              "text": "flush sticky day headers; no status chips on create snapshots",
+              "hash": "859c00a3"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.1.183",
       "tag": "v0.1.183",
-      "date": "2026-08-31T20:34:09-04:00",
+      "date": "2026-08-31T20:34:15-04:00",
       "sections": [
         {
           "label": "Added",
