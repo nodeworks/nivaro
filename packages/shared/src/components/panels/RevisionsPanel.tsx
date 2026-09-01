@@ -19,6 +19,7 @@ import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
+import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
 
 export interface O2MFieldInfo {
@@ -53,6 +54,8 @@ interface Revision {
 interface FieldMeta {
   label: string
   system: boolean
+  /** M2O target — FK values render as the related record's display label. */
+  relatedCollection?: string | null
 }
 
 const AUDIT_FIELDS = new Set([
@@ -72,29 +75,58 @@ type FieldMetaMap = Map<string, FieldMeta>
 
 function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
   const client = useNivaroClient()
-  const { data } = useQuery<Array<{ field: string; label: string | null; hidden?: boolean }>>({
+  const { data } = useQuery<{
+    fields: Array<{ field: string; label: string | null; hidden?: boolean }>
+    relations: Array<{
+      many_collection: string | null
+      many_field: string | null
+      one_collection: string | null
+      junction_field: string | null
+    }>
+  }>({
     queryKey: ['revisions-field-meta', collection],
     enabled,
     staleTime: 300_000,
-    queryFn: () =>
-      client
-        .request<{ data: Array<{ field: string; label: string | null; hidden?: boolean }> }>(
-          get(`/field-config/${collection}`)
-        )
-        .then((r) => r.data ?? [])
-        .catch(() => [])
+    queryFn: async () => {
+      const [fields, col] = await Promise.all([
+        client
+          .request<{ data: Array<{ field: string; label: string | null; hidden?: boolean }> }>(
+            get(`/field-config/${collection}`)
+          )
+          .then((r) => r.data ?? [])
+          .catch(() => []),
+        client
+          .request<{ data: { relations?: Array<Record<string, unknown>> } }>(
+            get(`/collections/${collection}`)
+          )
+          .then((r) => (r.data?.relations ?? []) as never[])
+          .catch(() => [])
+      ])
+      return { fields, relations: col }
+    }
   })
   return useMemo(() => {
     const map: FieldMetaMap = new Map()
-    for (const f of data ?? []) {
+    const m2oTarget = (field: string): string | null => {
+      const rel = (data?.relations ?? []).find(
+        (r) =>
+          r.many_collection === collection && r.many_field === field && r.junction_field == null
+      )
+      if (!rel?.one_collection) return null
+      // Legacy relations still point FK columns at directus_users — same uuid
+      // space, resolved through the live users collection.
+      return rel.one_collection === 'directus_users' ? 'nivaro_users' : rel.one_collection
+    }
+    for (const f of data?.fields ?? []) {
       if (f.field.startsWith('__')) continue
       map.set(f.field, {
         label: f.label || titleCase(f.field.replace(/_/g, ' ')),
-        system: AUDIT_FIELDS.has(f.field)
+        system: AUDIT_FIELDS.has(f.field),
+        relatedCollection: m2oTarget(f.field)
       })
     }
     return map
-  }, [data])
+  }, [data, collection])
 }
 
 function metaFor(map: FieldMetaMap, field: string): FieldMeta {
@@ -139,6 +171,34 @@ function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+/** FK value → the related record's display-template label (raw id on hover). */
+function RelationValue({ collection, id }: { collection: string; id: unknown }) {
+  const client = useNivaroClient()
+  const { data: colMeta } = useQuery({
+    queryKey: ['col-meta', collection],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string } }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
+    staleTime: 300_000,
+    retry: false
+  })
+  return (
+    <span title={`${collection} #${String(id)}`}>
+      <RelatedItemLabel
+        collection={collection}
+        id={id}
+        displayTemplate={colMeta?.display_template}
+      />
+    </span>
+  )
+}
+
+/** Plain readable text for a rich-text value — never raw HTML markup. */
+function richTextToText(v: unknown): string {
+  return stripToWords(v).join(' ')
 }
 
 const TRUNCATE_AT = 160
@@ -384,24 +444,29 @@ function computeFieldRows(
   meta: FieldMetaMap
 ): FieldRowData[] {
   const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
-  const rows = fields.map((field) => {
-    const inBefore = field in before && before[field] !== undefined
-    const inAfter = field in after && after[field] !== undefined
-    const status: FieldStatus = !inBefore
-      ? 'added'
-      : !inAfter
-        ? 'removed'
-        : stringifyValue(before[field]) !== stringifyValue(after[field])
-          ? 'changed'
-          : 'unchanged'
-    return {
-      field,
-      status,
-      before: before[field],
-      after: after[field],
-      system: metaFor(meta, field).system
-    }
-  })
+  const isEmpty = (v: unknown) => v === null || v === undefined || v === ''
+  const rows = fields
+    .map((field) => {
+      const bEmpty = !(field in before) || isEmpty(before[field])
+      const aEmpty = !(field in after) || isEmpty(after[field])
+      // Empty before AND empty after says nothing — never show it.
+      if (bEmpty && aEmpty) return null
+      const status: FieldStatus = bEmpty
+        ? 'added'
+        : aEmpty
+          ? 'removed'
+          : stringifyValue(before[field]) !== stringifyValue(after[field])
+            ? 'changed'
+            : 'unchanged'
+      return {
+        field,
+        status,
+        before: before[field],
+        after: after[field],
+        system: metaFor(meta, field).system
+      }
+    })
+    .filter(Boolean) as FieldRowData[]
   // Real fields first (config order is lost here, alpha by label is stable),
   // system fields after, unchanged last within each band.
   const rank = (r: FieldRowData) =>
@@ -410,6 +475,29 @@ function computeFieldRows(
     (a, b) =>
       rank(a) - rank(b) || metaFor(meta, a.field).label.localeCompare(metaFor(meta, b.field).label)
   )
+}
+
+/** One value, rendered friendly: FK -> related label, rich text -> plain
+ *  words, dates/booleans formatted. */
+function RevValue({
+  value,
+  meta,
+  tone
+}: {
+  value: unknown
+  meta: FieldMeta
+  tone: 'before' | 'after'
+}) {
+  if (value === null || value === undefined || value === '')
+    return <span className='text-[11.5px] italic text-slate-300 dark:text-slate-600'>empty</span>
+  if (meta.relatedCollection && (typeof value === 'string' || typeof value === 'number'))
+    return (
+      <span className='break-words text-[12px] leading-relaxed text-slate-700 dark:text-slate-300'>
+        <RelationValue collection={meta.relatedCollection} id={value} />
+      </span>
+    )
+  if (isRichText(value)) return <ValueCell value={richTextToText(value)} tone={tone} />
+  return <ValueCell value={value} tone={tone} />
 }
 
 function FieldChangeRow({
@@ -468,13 +556,13 @@ function FieldChangeRow({
         ) : row.status === 'changed' || row.status === 'removed' ? (
           <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
             <span className='max-w-full break-words text-[12px] text-rose-600 line-through decoration-rose-300 dark:text-rose-400'>
-              {displayValue(row.before) || <span className='italic'>empty</span>}
+              <RevValue value={row.before} meta={metaFor(meta, row.field)} tone='before' />
             </span>
             <ArrowRight className='h-3 w-3 shrink-0 self-center text-slate-300 dark:text-slate-600' />
-            <ValueCell value={row.after} tone='after' />
+            <RevValue value={row.after} meta={metaFor(meta, row.field)} tone='after' />
           </div>
         ) : (
-          <ValueCell value={row.after ?? row.before} tone='after' />
+          <RevValue value={row.after ?? row.before} meta={metaFor(meta, row.field)} tone='after' />
         )}
       </div>
     </div>
@@ -977,7 +1065,7 @@ function TimeTravelTools({
                         {metaFor(meta, k).label}
                       </span>
                       <span className='break-words text-[11.5px] text-slate-700 dark:text-slate-300'>
-                        {displayValue(v).slice(0, 200)}
+                        <RevValue value={v} meta={metaFor(meta, k)} tone='after' />
                       </span>
                     </div>
                   ))}
@@ -1062,14 +1150,12 @@ function TimeTravelTools({
                           </span>
                         )}
                       </div>
-                      <p className='mt-0.5 break-words text-[11.5px]'>
+                      <p className='mt-0.5 flex flex-wrap items-baseline gap-x-2 break-words text-[11.5px]'>
                         <span className='text-red-500 line-through dark:text-red-400'>
-                          {f.from == null || f.from === ''
-                            ? 'empty'
-                            : displayValue(f.from).slice(0, 120)}
-                        </span>{' '}
+                          <RevValue value={f.from} meta={metaFor(meta, f.field)} tone='before' />
+                        </span>
                         <span className='text-emerald-600 dark:text-emerald-400'>
-                          {f.to == null || f.to === '' ? 'empty' : displayValue(f.to).slice(0, 120)}
+                          <RevValue value={f.to} meta={metaFor(meta, f.field)} tone='after' />
                         </span>
                       </p>
                     </div>
