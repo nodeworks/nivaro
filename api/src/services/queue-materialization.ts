@@ -7,6 +7,7 @@ import {
 } from '../routes/at-risk.js'
 import { computeStatusBatch } from '../routes/sla.js'
 import type { CMSRelation } from '../types.js'
+import { resolveRecordZones } from './sla-zones.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   applyQueueConditions,
@@ -129,6 +130,7 @@ async function buildMaterializedRow(
   let slaDurationHours: number | null = null
   let slaWarningPct: number | null = null
   let slaBusinessHoursOnly = false
+  let slaTimezone: string | null = null
   let ownerIds: string[] = []
 
   if (binding) {
@@ -176,6 +178,9 @@ async function buildMaterializedRow(
           slaDurationHours = rule.duration_hours
           slaWarningPct = rule.warning_threshold_pct
           slaBusinessHoursOnly = !!rule.business_hours_only
+          if (slaBusinessHoursOnly) {
+            slaTimezone = (await resolveRecordZones(collection, [itemId])).get(itemId) ?? null
+          }
         }
 
         const ownersByItem = await resolveStateOwnersBatch([
@@ -265,6 +270,7 @@ async function buildMaterializedRow(
       sla_duration_hours: slaDurationHours,
       sla_warning_pct: slaWarningPct,
       sla_business_hours_only: slaBusinessHoursOnly,
+      sla_timezone: slaTimezone,
       at_risk: atRisk,
       at_risk_color: atRiskColor,
       owner_names: ownerNames,

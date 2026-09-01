@@ -45,7 +45,27 @@ function formatRule(row: SlaRule): SlaRule & { escalation_ladder?: unknown } {
 // Schedule-aware business hours — settings-driven (days/hours/holidays).
 // Re-exported for queue-materialization-read's sync per-row math.
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+import { resolveRecordZones } from '../services/sla-zones.js'
 export { businessHoursElapsed }
+
+/** Batched per-record zone lookup for instance rows spanning collections
+ * (template previews aren't collection-scoped). Keyed `collection::item`. */
+async function zonesForInstances(
+  instances: Array<{ collection: string; item: string }>
+): Promise<Map<string, string>> {
+  const byColl = new Map<string, string[]>()
+  for (const inst of instances) {
+    const arr = byColl.get(inst.collection) ?? []
+    arr.push(String(inst.item))
+    byColl.set(inst.collection, arr)
+  }
+  const out = new Map<string, string>()
+  for (const [coll, items] of byColl) {
+    const zones = await resolveRecordZones(coll, items)
+    for (const [id, tz] of zones) out.set(`${coll}::${id}`, tz)
+  }
+  return out
+}
 
 async function computeStatus(collection: string, item: string) {
   // Find the current workflow instance for this collection+item
@@ -94,9 +114,18 @@ async function computeStatus(collection: string, item: string) {
   const enteredAt = new Date(historyEntry.timestamp)
   const now = new Date()
 
-  const elapsedHours = rule.business_hours_only
-    ? businessHoursElapsed(enteredAt, now, await getSlaSchedule())
-    : (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
+  // Per-region clock: a mapped zone on the record's own region overrides the
+  // instance-wide schedule zone for the business-hours walk.
+  let recordZone: string | null = null
+  let elapsedHours: number
+  if (rule.business_hours_only) {
+    const base = await getSlaSchedule()
+    recordZone = (await resolveRecordZones(collection, [String(item)])).get(String(item)) ?? null
+    const schedule = recordZone ? { ...base, timeZone: recordZone } : base
+    elapsedHours = businessHoursElapsed(enteredAt, now, schedule)
+  } else {
+    elapsedHours = (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
+  }
 
   const pctUsed = (elapsedHours / rule.duration_hours) * 100
   const status =
@@ -110,6 +139,7 @@ async function computeStatus(collection: string, item: string) {
     elapsed_hours: elapsedHours,
     total_hours: rule.duration_hours,
     pct_used: pctUsed,
+    timezone: recordZone,
     collection,
     item
   }
@@ -129,6 +159,10 @@ export interface SlaBatchEntry {
   status: 'ok' | 'warning' | 'breached' | null
   remaining_hours: number | null
   entered_at: Date
+  /** Per-record zone OVERRIDE from the sla_zone_map (regional clock). Null =
+   * the record follows the instance-wide sla_timezone; only set when the
+   * matched rule counts business hours (a calendar SLA has no clock zone). */
+  timezone: string | null
 }
 
 function round1(n: number): number {
@@ -224,14 +258,27 @@ export async function computeStatusBatch(
 
   const now = new Date()
   const schedule = await getSlaSchedule()
+  // Per-region clocks: one batched resolve, only when some matched rule
+  // actually counts business hours (calendar SLAs are zone-independent).
+  const zoneMap = rules.some((r) => r.business_hours_only)
+    ? await resolveRecordZones(
+        collection,
+        candidates.map((i) => String(i.item))
+      )
+    : new Map<string, string>()
   for (const inst of candidates) {
     const stateKey = keyOf(inst.current_state)
     const rule = ruleFor(inst.template, stateKey)
     const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
     if (!entered) continue
 
+    const recordZone = zoneMap.get(String(inst.item)) ?? null
     const elapsedHours = rule?.business_hours_only
-      ? businessHoursElapsed(entered, now, schedule)
+      ? businessHoursElapsed(
+          entered,
+          now,
+          recordZone ? { ...schedule, timeZone: recordZone } : schedule
+        )
       : (now.getTime() - entered.getTime()) / (1000 * 60 * 60)
 
     const pctUsed = rule ? (elapsedHours / rule.duration_hours) * 100 : null
@@ -252,7 +299,8 @@ export async function computeStatusBatch(
       business_hours_only: !!rule?.business_hours_only,
       status,
       remaining_hours: rule ? round1(rule.duration_hours - elapsedHours) : null,
-      entered_at: entered
+      entered_at: entered,
+      timezone: rule?.business_hours_only ? recordZone : null
     }
   }
 
@@ -423,6 +471,7 @@ export async function slaRoutes(app: FastifyInstance) {
       | { duration_hours: number; warning_threshold_pct: number; business_hours_only: boolean }
       | undefined
     const schedule = await getSlaSchedule()
+    const zoneByKey = await zonesForInstances(instances)
     const now = new Date()
     const statusOf = (
       elapsed: number,
@@ -439,7 +488,12 @@ export async function slaRoutes(app: FastifyInstance) {
       const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
       if (!entered) continue
       const calElapsed = (now.getTime() - entered.getTime()) / 3_600_000
-      const bizElapsed = businessHoursElapsed(entered, now, schedule)
+      const tz = zoneByKey.get(`${inst.collection}::${inst.item}`)
+      const bizElapsed = businessHoursElapsed(
+        entered,
+        now,
+        tz ? { ...schedule, timeZone: tz } : schedule
+      )
       const proposedElapsed = businessOnly ? bizElapsed : calElapsed
       const proposed = statusOf(proposedElapsed, duration, warnPct)
       proposedCounts[proposed]++
@@ -506,6 +560,9 @@ export async function slaRoutes(app: FastifyInstance) {
         if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
       }
       const schedule = await getSlaSchedule()
+      const zoneByKey = rule.business_hours_only
+        ? await zonesForInstances(instances)
+        : new Map<string, string>()
       const now = new Date()
       const warn = rule.warning_threshold_pct ?? 80
       const rows: Array<{
@@ -515,12 +572,14 @@ export async function slaRoutes(app: FastifyInstance) {
         elapsed_hours: number
         remaining_hours: number
         entered_at: string
+        timezone: string | null
       }> = []
       for (const inst of instances) {
         const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
         if (!entered) continue
+        const tz = zoneByKey.get(`${inst.collection}::${inst.item}`)
         const elapsed = rule.business_hours_only
-          ? businessHoursElapsed(entered, now, schedule)
+          ? businessHoursElapsed(entered, now, tz ? { ...schedule, timeZone: tz } : schedule)
           : (now.getTime() - entered.getTime()) / 3_600_000
         const pct = (elapsed / rule.duration_hours) * 100
         rows.push({
@@ -529,7 +588,8 @@ export async function slaRoutes(app: FastifyInstance) {
           status: pct >= 100 ? 'breached' : pct >= warn ? 'warning' : 'ok',
           elapsed_hours: Math.round(elapsed * 10) / 10,
           remaining_hours: Math.round((rule.duration_hours - elapsed) * 10) / 10,
-          entered_at: entered.toISOString()
+          entered_at: entered.toISOString(),
+          timezone: rule.business_hours_only ? (tz ?? null) : null
         })
       }
       // Worst first: breached by most-over, then warnings, then ok — capped so

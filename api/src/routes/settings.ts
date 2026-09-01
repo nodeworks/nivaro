@@ -46,6 +46,7 @@ const allowedSettingsKeys = [
   'sla_business_day_end',
   'sla_business_days',
   'sla_holidays',
+  'sla_zone_map',
   'file_max_size_mb',
   'collection_page_size',
   'activity_retention_days',
@@ -121,6 +122,13 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
     if ('available_locales' in patch && patch.available_locales !== null) {
       patch.available_locales = JSON.stringify(patch.available_locales)
+    }
+    if ('sla_zone_map' in patch) {
+      if (patch.sla_zone_map !== null && typeof patch.sla_zone_map === 'object') {
+        patch.sla_zone_map = JSON.stringify(patch.sla_zone_map)
+      }
+      const { clearSlaZoneCache } = await import('../services/sla-zones.js')
+      reply.raw.once('finish', () => clearSlaZoneCache())
     }
 
     // Preserve secrets if masked value re-submitted

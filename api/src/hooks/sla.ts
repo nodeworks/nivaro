@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+import { resolveRecordZones } from '../services/sla-zones.js'
 import { hooks } from './registry.js'
 
 let _app: FastifyInstance | null = null
@@ -51,9 +52,14 @@ export async function checkSlaForInstance(
     const enteredAt = new Date(historyEntry.timestamp)
     const now = new Date()
 
-    const elapsedHours = rule.business_hours_only
-      ? businessHoursElapsed(enteredAt, now, await getSlaSchedule())
-      : (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
+    let elapsedHours: number
+    if (rule.business_hours_only) {
+      const base = await getSlaSchedule()
+      const tz = (await resolveRecordZones(collection, [String(item)])).get(String(item))
+      elapsedHours = businessHoursElapsed(enteredAt, now, tz ? { ...base, timeZone: tz } : base)
+    } else {
+      elapsedHours = (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
+    }
 
     const pctUsed = (elapsedHours / rule.duration_hours) * 100
     const status =

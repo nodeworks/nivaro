@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { businessHoursElapsed } from '../routes/sla.js'
+import { getSlaScheduleSync } from './business-hours.js'
 import type { User } from '../types.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
@@ -157,6 +158,8 @@ function computeSla(row: {
   sla_duration_hours: number | null
   sla_warning_pct: number | null
   sla_business_hours_only: boolean
+  /** Cached per-record zone override (regional clock); null = instance default. */
+  sla_timezone?: string | null
 }): { status: 'ok' | 'warning' | 'breached' | null; aging_hours: number | null } {
   // Aging (time in current state) is rule-independent — any row with an
   // entered_state_at gets it. Only the status thresholds need rule params.
@@ -165,7 +168,13 @@ function computeSla(row: {
   }
   const now = new Date()
   const elapsed = row.sla_business_hours_only
-    ? businessHoursElapsed(new Date(row.entered_state_at), now)
+    ? businessHoursElapsed(
+        new Date(row.entered_state_at),
+        now,
+        row.sla_timezone
+          ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone }
+          : undefined
+      )
     : (now.getTime() - new Date(row.entered_state_at).getTime()) / (1000 * 60 * 60)
   const aging_hours = Math.round(elapsed * 10) / 10
   if (row.sla_duration_hours == null || row.sla_warning_pct == null) {
@@ -191,13 +200,15 @@ export async function breachedCountsByQueue(queueIds: string[]): Promise<Record<
       'entered_state_at',
       'sla_duration_hours',
       'sla_warning_pct',
-      'sla_business_hours_only'
+      'sla_business_hours_only',
+      'sla_timezone'
     )) as Array<{
     queue_id: string
     entered_state_at: Date | null
     sla_duration_hours: number | null
     sla_warning_pct: number | null
     sla_business_hours_only: boolean | number | null
+    sla_timezone: string | null
   }>
   const out: Record<string, number> = {}
   for (const r of rows) {
@@ -205,7 +216,8 @@ export async function breachedCountsByQueue(queueIds: string[]): Promise<Record<
       entered_state_at: r.entered_state_at,
       sla_duration_hours: r.sla_duration_hours,
       sla_warning_pct: r.sla_warning_pct,
-      sla_business_hours_only: !!r.sla_business_hours_only
+      sla_business_hours_only: !!r.sla_business_hours_only,
+      sla_timezone: r.sla_timezone ?? null
     })
     if (status === 'breached') out[r.queue_id] = (out[r.queue_id] ?? 0) + 1
   }
@@ -275,7 +287,9 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
       'qi.entered_state_at',
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
-      'qi.sla_business_hours_only'
+      'qi.sla_business_hours_only',
+    'qi.sla_timezone',
+      'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
     sla_duration_hours: number | null
@@ -351,7 +365,9 @@ export async function fetchMaterializedStats(
       'qi.entered_state_at',
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
-      'qi.sla_business_hours_only'
+      'qi.sla_business_hours_only',
+    'qi.sla_timezone',
+      'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
     sla_duration_hours: number | null
@@ -515,6 +531,7 @@ export async function fetchMaterializedQueueItems(
     'qi.sla_duration_hours',
     'qi.sla_warning_pct',
     'qi.sla_business_hours_only',
+    'qi.sla_timezone',
     'qi.at_risk',
     'qi.at_risk_color',
     'qi.claimed_by',
@@ -565,6 +582,8 @@ export async function fetchMaterializedQueueItems(
         'qi.sla_duration_hours',
         'qi.sla_warning_pct',
         'qi.sla_business_hours_only',
+        'qi.sla_timezone',
+    'qi.sla_timezone',
         'qi.at_risk',
         db.raw(
           'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'

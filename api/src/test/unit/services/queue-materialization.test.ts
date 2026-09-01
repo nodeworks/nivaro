@@ -115,6 +115,7 @@ describe('queueItemMatchesSource', () => {
         warning_threshold_pct: 80,
         business_hours_only: false,
         status: 'breached',
+        timezone: null,
         remaining_hours: -2,
         entered_at: new Date('2024-01-01T00:00:00Z')
       }

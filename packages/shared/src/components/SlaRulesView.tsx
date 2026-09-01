@@ -129,6 +129,12 @@ function userLabel(u: CmsUser): string {
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
 }
 
+/** 'America/Los_Angeles' → 'Los Angeles clock' — readable regional-clock chip. */
+function shortZone(tz: string): string {
+  const city = tz.split('/').pop()?.replace(/_/g, ' ') ?? tz
+  return `${city} clock`
+}
+
 function fmtHours(h: number): string {
   if (!Number.isFinite(h)) return '—'
   const rounded = Math.round(h * 10) / 10
@@ -765,6 +771,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
       elapsed_hours: number
       remaining_hours: number
       entered_at: string
+      timezone?: string | null
     }>
   }>({
     queryKey: ['sla-rule-records', rule.id],
@@ -782,6 +789,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
             elapsed_hours: number
             remaining_hours: number
             entered_at: string
+            timezone?: string | null
           }>
         }
       }).data
@@ -985,6 +993,14 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
                       >
                         {r.status === 'ok' ? 'On track' : r.status}
                       </span>
+                      {r.timezone && (
+                        <span
+                          className='ml-1.5 rounded-full bg-slate-500/10 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:text-slate-400'
+                          data-tip={`Regional clock: business hours count in ${r.timezone}`}
+                        >
+                          {shortZone(r.timezone)}
+                        </span>
+                      )}
                     </td>
                     <td className='px-3 py-1.5 text-right'>{fmtHours(r.elapsed_hours)}</td>
                     <td

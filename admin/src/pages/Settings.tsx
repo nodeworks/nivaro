@@ -1243,6 +1243,8 @@ export function SettingsPage() {
   const [aiMaxSummarize, setAiMaxSummarize] = useState(200)
   const [slaStart, setSlaStart] = useState(9)
   const [slaTimezone, setSlaTimezone] = useState('')
+  const [zoneSource, setZoneSource] = useState('')
+  const [zoneMap, setZoneMap] = useState<Record<string, string>>({})
   const [slaEnd, setSlaEnd] = useState(17)
   const [slaBusinessDays, setSlaBusinessDays] = useState<number[]>([1, 2, 3, 4, 5])
   const [slaHolidays, setSlaHolidays] = useState<string[]>([])
@@ -1310,6 +1312,20 @@ export function SettingsPage() {
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
     setSlaTimezone(String((settings as Record<string, unknown>).sla_timezone ?? ''))
+    try {
+      const zm = (settings as Record<string, unknown>).sla_zone_map
+      const parsed = zm ? JSON.parse(String(zm)) : null
+      if (parsed && typeof parsed === 'object') {
+        setZoneSource(String(parsed.source_collection ?? ''))
+        setZoneMap(
+          parsed.zones && typeof parsed.zones === 'object'
+            ? (parsed.zones as Record<string, string>)
+            : {}
+        )
+      }
+    } catch {
+      /* malformed — start empty */
+    }
     setSlaEnd(settings.sla_business_day_end ?? 17)
     try {
       const h = settings.sla_holidays ? JSON.parse(String(settings.sla_holidays)) : []
@@ -1508,12 +1524,19 @@ export function SettingsPage() {
   }
 
   function saveSla() {
+    const zones = Object.fromEntries(
+      Object.entries(zoneMap).filter(([, tz]) => String(tz ?? '').trim() !== '')
+    )
     mutation.mutate({
       sla_business_day_start: slaStart,
       sla_timezone: slaTimezone.trim() || null,
       sla_business_day_end: slaEnd,
       sla_business_days: slaBusinessDays.join(','),
-      sla_holidays: JSON.stringify(slaHolidays)
+      sla_holidays: JSON.stringify(slaHolidays),
+      sla_zone_map:
+        zoneSource.trim() && Object.keys(zones).length > 0
+          ? JSON.stringify({ source_collection: zoneSource.trim(), zones })
+          : null
     })
   }
 
@@ -2221,6 +2244,13 @@ export function SettingsPage() {
                         }
                       })()}
                   </Field>
+                  <RegionalClocksBlock
+                    source={zoneSource}
+                    onSourceChange={setZoneSource}
+                    zoneMap={zoneMap}
+                    onZoneMapChange={setZoneMap}
+                    fallbackZone={slaTimezone.trim() || 'server local time'}
+                  />
                   <Field label='Business day start (hour)' hint='24-hour format. Default: 9 (9am).'>
                     <Input
                       type='number'
@@ -2806,6 +2836,152 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Regional SLA clocks ────────────────────────────────────────────────────
+// Per-record timezone overrides: pick a geography collection (regions), map
+// each of its records to an IANA zone. Records linked to a mapped region
+// count business hours on that region's clock; everything else follows the
+// instance timezone above. Saved with the SLA section's Save button.
+
+const ZONE_CHOICES: Array<{ value: string; label: string }> = [
+  { value: 'America/New_York', label: 'Eastern — America/New_York' },
+  { value: 'America/Chicago', label: 'Central — America/Chicago' },
+  { value: 'America/Denver', label: 'Mountain — America/Denver' },
+  { value: 'America/Phoenix', label: 'Arizona (no DST) — America/Phoenix' },
+  { value: 'America/Los_Angeles', label: 'Pacific — America/Los_Angeles' },
+  { value: 'America/Anchorage', label: 'Alaska — America/Anchorage' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii — Pacific/Honolulu' },
+  { value: 'UTC', label: 'UTC' }
+]
+
+function zoneRecordLabel(r: Record<string, unknown>): string {
+  for (const k of ['name', 'short_name', 'label', 'title']) {
+    const v = r[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return `#${String(r.id ?? '')}`
+}
+
+function RegionalClocksBlock({
+  source,
+  onSourceChange,
+  zoneMap,
+  onZoneMapChange,
+  fallbackZone
+}: {
+  source: string
+  onSourceChange: (v: string) => void
+  zoneMap: Record<string, string>
+  onZoneMapChange: (v: Record<string, string>) => void
+  fallbackZone: string
+}) {
+  const trimmed = source.trim()
+  const sourceValid = /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && !/^nivaro_/i.test(trimmed)
+  const { data: records, isFetching, isError } = useQuery({
+    queryKey: ['sla-zone-source-records', trimmed],
+    enabled: sourceValid,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const res = await api.get(`/items/${trimmed}?limit=200`)
+      return (res.data.data ?? []) as Array<Record<string, unknown>>
+    }
+  })
+
+  const rows = (records ?? [])
+    .map((r) => ({ id: String(r.id), label: zoneRecordLabel(r) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+  const mappedCount = rows.filter((r) => (zoneMap[r.id] ?? '').trim() !== '').length
+  // A stored zone outside the curated list (hand-set via API) must still render.
+  const choicesFor = (tz: string) =>
+    tz && !ZONE_CHOICES.some((c) => c.value === tz)
+      ? [{ value: tz, label: tz }, ...ZONE_CHOICES]
+      : ZONE_CHOICES
+
+  return (
+    <div className='space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3.5 dark:border-border dark:bg-muted/30'>
+      <div>
+        <Label className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+          Regional clocks
+        </Label>
+        <p className='mt-0.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
+          Records linked to a mapped region count business hours on that region's clock. Unmapped
+          regions — and records with no region — follow the timezone above ({fallbackZone}).
+        </p>
+      </div>
+      <div className='flex items-center gap-2'>
+        <Label className='shrink-0 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+          Region collection
+        </Label>
+        <Input
+          value={source}
+          onChange={(e) => onSourceChange(e.target.value)}
+          placeholder='regions'
+          className='h-7 w-44 text-[12px]'
+        />
+        {rows.length > 0 && (
+          <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            {mappedCount} of {rows.length} mapped
+          </span>
+        )}
+      </div>
+      {!trimmed && (
+        <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+          Enter the collection that holds your regions (e.g. <code>regions</code>) to map clocks.
+        </p>
+      )}
+      {sourceValid && isError && (
+        <p className='text-[11px] text-red-500'>
+          Couldn't load records from “{trimmed}” — check the collection name.
+        </p>
+      )}
+      {sourceValid && isFetching && rows.length === 0 && (
+        <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>Loading records…</p>
+      )}
+      {rows.length > 0 && (
+        <div className='max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-md border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+          {rows.map((r) => {
+            const tz = (zoneMap[r.id] ?? '').trim()
+            return (
+              <div key={r.id} className='flex items-center justify-between gap-3 px-3 py-1.5'>
+                <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                  {r.label}
+                </span>
+                <Select
+                  value={tz || '__default__'}
+                  onValueChange={(v) => {
+                    const next = { ...zoneMap }
+                    if (v === '__default__') delete next[r.id]
+                    else next[r.id] = v
+                    onZoneMapChange(next)
+                  }}
+                >
+                  <SelectTrigger
+                    className={cn(
+                      'h-7 w-64 shrink-0 text-[12px]',
+                      !tz && 'text-slate-400 dark:text-muted-foreground'
+                    )}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='__default__' className='text-[12px]'>
+                      Instance default
+                    </SelectItem>
+                    {choicesFor(tz).map((c) => (
+                      <SelectItem key={c.value} value={c.value} className='text-[12px]'>
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

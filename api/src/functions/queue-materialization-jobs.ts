@@ -70,6 +70,7 @@ export interface MaterializedRowInput {
   sla_duration_hours: number | null
   sla_warning_pct: number | null
   sla_business_hours_only: boolean
+  sla_timezone?: string | null
   at_risk: boolean
   at_risk_color: string | null
   owner_names: string | null
@@ -97,6 +98,7 @@ function rowFromQueueItem(item: QueueItem): MaterializedRowInput {
     sla_duration_hours: null,
     sla_warning_pct: null,
     sla_business_hours_only: false,
+    sla_timezone: null,
     at_risk: item.at_risk,
     at_risk_color: null,
     owner_names: item.owners.map((o) => o.name).join(' ') || null,
@@ -159,6 +161,7 @@ async function buildCollectionSourceRows(
       sla_duration_hours: sla?.duration_hours ?? null,
       sla_warning_pct: sla?.warning_threshold_pct ?? null,
       sla_business_hours_only: sla?.business_hours_only ?? false,
+      sla_timezone: sla?.timezone ?? null,
       at_risk: item.at_risk,
       at_risk_color: item.at_risk ? (colorByItemId.get(item.item_id) ?? null) : null,
       owner_names: item.owners.map((o) => o.name).join(' ') || null,
@@ -213,6 +216,7 @@ export async function writeMaterializedRowChunk(
       sla_duration_hours: r.sla_duration_hours,
       sla_warning_pct: r.sla_warning_pct,
       sla_business_hours_only: r.sla_business_hours_only,
+      sla_timezone: r.sla_timezone ?? null,
       at_risk: r.at_risk,
       at_risk_color: r.at_risk_color,
       owner_names: r.owner_names,
@@ -227,7 +231,7 @@ export async function writeMaterializedRowChunk(
       updated_at: new Date()
     }))
     // MSSQL caps bound parameters at ~2100 per statement (see docs/claude/gotchas.md /
-    // db-tables.md) — this row has 17 columns, so 100 rows/batch = 1700 params, comfortably
+    // db-tables.md) — this row has 18 columns, so 100 rows/batch = 1800 params, comfortably
     // under the cap. A single bulk insert of up to WRITE_CHUNK_SIZE (1000) rows would blow
     // past it (17,000 params) and throw immediately.
     for (const batch of chunkArray(insertRows, 100)) {
