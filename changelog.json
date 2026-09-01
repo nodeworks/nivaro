@@ -1,10 +1,75 @@
 {
-  "generated_at": "2026-09-01T21:33:31.675Z",
+  "generated_at": "2026-09-01T22:41:42.267Z",
   "releases": [
+    {
+      "version": "0.1.189",
+      "tag": "v0.1.189",
+      "date": "2026-09-01T18:41:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "sign-in provider logos accept raw SVG markup",
+              "hash": "4efb3cdb"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "SVG paste and color presets for sign-in provider branding",
+              "hash": "ff05efdd"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "optional default OIDC with no-lockout disable, provider branding, static-token login",
+              "hash": "cb7dec42"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "'accent' button color matches the primary sign-in button",
+              "hash": "adbb4e12"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "'accent' button color follows the instance accent",
+              "hash": "cb925713"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "theme-accent chip stores 'signal'",
+              "hash": "35a2ce5e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "register seed:sla-zones script command",
+              "hash": "5ad82605"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.1.188",
       "tag": "v0.1.188",
-      "date": "2026-09-01T17:33:26-04:00",
+      "date": "2026-09-01T17:33:31-04:00",
       "sections": [
         {
           "label": "Fixed",
