@@ -133,7 +133,7 @@ const announcementsClient = createNivaro(window.location.origin)
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'
 
-export type NavItem = { icon: React.ElementType; label: string; to: string }
+export type NavItem = { icon: React.ElementType; label: string; to: string; section?: string }
 export type NavCategory = { id: string; icon: React.ElementType; label: string; items: NavItem[] }
 
 export const navCategories: NavCategory[] = [
@@ -155,15 +155,15 @@ export const navCategories: NavCategory[] = [
     icon: Database,
     label: 'Content',
     items: [
-      { icon: Database, label: 'Collections', to: '/collections' },
-      { icon: DatabaseZap, label: 'Data Model', to: '/data-model' },
-      { icon: CheckSquare, label: 'Tasks', to: '/tasks' },
-      { icon: FileImage, label: 'Files', to: '/files' },
-      { icon: Network, label: 'Hierarchies', to: '/hierarchies' },
-      { icon: FileText, label: 'Record Templates', to: '/record-templates' },
-      { icon: Package, label: 'Collection Presets', to: '/collection-presets' },
-      { icon: LayoutGrid, label: 'Pages', to: '/pages-admin' },
-      { icon: FileText, label: 'PDF Templates', to: '/pdf-templates' }
+      { icon: Database, label: 'Collections', to: '/collections', section: 'Data' },
+      { icon: DatabaseZap, label: 'Data Model', to: '/data-model', section: 'Data' },
+      { icon: Network, label: 'Hierarchies', to: '/hierarchies', section: 'Data' },
+      { icon: CheckSquare, label: 'Tasks', to: '/tasks', section: 'Work' },
+      { icon: FileImage, label: 'Files', to: '/files', section: 'Work' },
+      { icon: FileText, label: 'Record Templates', to: '/record-templates', section: 'Authoring' },
+      { icon: Package, label: 'Collection Presets', to: '/collection-presets', section: 'Authoring' },
+      { icon: LayoutGrid, label: 'Pages', to: '/pages-admin', section: 'Authoring' },
+      { icon: FileText, label: 'PDF Templates', to: '/pdf-templates', section: 'Authoring' }
     ]
   },
   {
@@ -183,16 +183,16 @@ export const navCategories: NavCategory[] = [
     icon: GitBranch,
     label: 'Automation',
     items: [
-      { icon: GitBranch, label: 'Pipelines', to: '/pipelines' },
-      { icon: SlidersHorizontal, label: 'Flows', to: '/flows' },
-      { icon: ThumbsUp, label: 'Approvals', to: '/approvals' },
-      { icon: Inbox, label: 'Queues', to: '/queues' },
-      { icon: Webhook, label: 'Webhooks', to: '/webhooks' },
-      { icon: ListFilter, label: 'Rules', to: '/rules' },
-      { icon: CalendarOff, label: 'Blackout Dates', to: '/blackout-dates' },
-      { icon: CalendarClock, label: 'Scheduled Changes', to: '/scheduled-changes' },
-      { icon: RefreshCw, label: 'Sync Jobs', to: '/sync-jobs' },
-      { icon: Upload, label: 'ERP Submissions', to: '/erp-submissions' }
+      { icon: GitBranch, label: 'Pipelines', to: '/pipelines', section: 'Workflow' },
+      { icon: SlidersHorizontal, label: 'Flows', to: '/flows', section: 'Workflow' },
+      { icon: ThumbsUp, label: 'Approvals', to: '/approvals', section: 'Workflow' },
+      { icon: Inbox, label: 'Queues', to: '/queues', section: 'Workflow' },
+      { icon: ListFilter, label: 'Rules', to: '/rules', section: 'Workflow' },
+      { icon: Webhook, label: 'Webhooks', to: '/webhooks', section: 'Integrations' },
+      { icon: RefreshCw, label: 'Sync Jobs', to: '/sync-jobs', section: 'Integrations' },
+      { icon: Upload, label: 'ERP Submissions', to: '/erp-submissions', section: 'Integrations' },
+      { icon: CalendarOff, label: 'Blackout Dates', to: '/blackout-dates', section: 'Scheduling' },
+      { icon: CalendarClock, label: 'Scheduled Changes', to: '/scheduled-changes', section: 'Scheduling' }
     ]
   },
   {
@@ -200,52 +200,52 @@ export const navCategories: NavCategory[] = [
     icon: Activity,
     label: 'Monitoring',
     items: [
-      { icon: Activity, label: 'Activity', to: '/activity' },
-      { icon: Radio, label: 'Pulse', to: '/pulse' },
-      { icon: FileBarChart, label: 'Reports', to: '/reports' },
-      { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports' },
-      { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput' },
-      { icon: BellDot, label: 'Alerts', to: '/alerts' },
-      { icon: Siren, label: 'Alert Manager', to: '/alert-manager' },
-      { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk' },
-      { icon: Clock, label: 'SLA Rules', to: '/sla-rules' },
-      { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit' },
-      { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps' },
-      { icon: Link2, label: 'Integrations', to: '/integration-health' },
-      { icon: Activity, label: 'Background Jobs', to: '/background-jobs' },
-      { icon: Radio, label: 'Realtime', to: '/realtime' },
-      { icon: Radar, label: 'Monitors', to: '/monitors' },
-      { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar' },
-      { icon: Sparkles, label: 'Config Health', to: '/config-health' },
-      { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests' },
-      { icon: ShieldAlert, label: 'Security Center', to: '/security-center' },
-      { icon: Scale, label: 'Legal Holds', to: '/legal-holds' },
-      { icon: Replace, label: 'Find & Replace', to: '/find-replace' },
-      { icon: Grid3x3, label: 'M2M Matrix', to: '/m2m-matrix' },
-      { icon: Mail, label: 'Mail Templates', to: '/mail-templates' },
-      { icon: SearchCode, label: 'Config Search', to: '/config-search' },
-      { icon: ListOrdered, label: 'ID Sequences', to: '/sequences' },
-      { icon: TerminalSquare, label: 'SQL Scratchpad', to: '/sql-scratchpad' },
-      { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog' },
-      { icon: FileSearch, label: 'History Search', to: '/revision-search' },
-      { icon: KeyRound, label: 'Access Requests', to: '/access-requests' },
-      { icon: MailCheck, label: 'Mail Log', to: '/mail-log' },
-      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist' },
-      { icon: Eye, label: 'Field Watches', to: '/field-watches' },
-      { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions' },
-      { icon: Upload, label: 'Imports', to: '/imports' },
-      { icon: Globe, label: 'Submission Forms', to: '/submission-forms' },
-      { icon: BarChart2, label: 'API Analytics', to: '/api-analytics' },
-      { icon: HeartPulse, label: 'Health', to: '/health' },
-      { icon: Database, label: 'DB & Runtime', to: '/db-health' },
-      { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console' },
-      { icon: Database, label: 'Redis Keys', to: '/ops-redis' },
-      { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline' },
-      { icon: GitBranch, label: 'Value Provenance', to: '/provenance' },
-      { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity' },
-      { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention' },
-      { icon: AlertOctagon, label: 'Issues', to: '/issues' },
-      { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters' }
+      { icon: Activity, label: 'Activity', to: '/activity', section: 'Activity & Insight' },
+      { icon: Radio, label: 'Pulse', to: '/pulse', section: 'Activity & Insight' },
+      { icon: FileBarChart, label: 'Reports', to: '/reports', section: 'Activity & Insight' },
+      { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports', section: 'Activity & Insight' },
+      { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput', section: 'Activity & Insight' },
+      { icon: BarChart2, label: 'API Analytics', to: '/api-analytics', section: 'Activity & Insight' },
+      { icon: FileSearch, label: 'History Search', to: '/revision-search', section: 'Activity & Insight' },
+      { icon: GitBranch, label: 'Value Provenance', to: '/provenance', section: 'Activity & Insight' },
+      { icon: SearchCode, label: 'Config Search', to: '/config-search', section: 'Activity & Insight' },
+      { icon: BellDot, label: 'Alerts', to: '/alerts', section: 'Alerts & Watching' },
+      { icon: Siren, label: 'Alert Manager', to: '/alert-manager', section: 'Alerts & Watching' },
+      { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk', section: 'Alerts & Watching' },
+      { icon: Clock, label: 'SLA Rules', to: '/sla-rules', section: 'Alerts & Watching' },
+      { icon: Radar, label: 'Monitors', to: '/monitors', section: 'Alerts & Watching' },
+      { icon: Eye, label: 'Field Watches', to: '/field-watches', section: 'Alerts & Watching' },
+      { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions', section: 'Alerts & Watching' },
+      { icon: AlertOctagon, label: 'Issues', to: '/issues', section: 'Alerts & Watching' },
+      { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit', section: 'Access & Compliance' },
+      { icon: KeyRound, label: 'Access Requests', to: '/access-requests', section: 'Access & Compliance' },
+      { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps', section: 'Access & Compliance' },
+      { icon: ShieldAlert, label: 'Security Center', to: '/security-center', section: 'Access & Compliance' },
+      { icon: Scale, label: 'Legal Holds', to: '/legal-holds', section: 'Access & Compliance' },
+      { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention', section: 'Access & Compliance' },
+      { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity', section: 'Access & Compliance' },
+      { icon: Sparkles, label: 'Config Health', to: '/config-health', section: 'Access & Compliance' },
+      { icon: Activity, label: 'Background Jobs', to: '/background-jobs', section: 'Operations' },
+      { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Operations' },
+      { icon: Link2, label: 'Integrations', to: '/integration-health', section: 'Operations' },
+      { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar', section: 'Operations' },
+      { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline', section: 'Operations' },
+      { icon: HeartPulse, label: 'Health', to: '/health', section: 'Operations' },
+      { icon: Database, label: 'DB & Runtime', to: '/db-health', section: 'Operations' },
+      { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console', section: 'Operations' },
+      { icon: Database, label: 'Redis Keys', to: '/ops-redis', section: 'Operations' },
+      { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters', section: 'Operations' },
+      { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests', section: 'Operations' },
+      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist', section: 'Operations' },
+      { icon: Upload, label: 'Imports', to: '/imports', section: 'Data Tools' },
+      { icon: Globe, label: 'Submission Forms', to: '/submission-forms', section: 'Data Tools' },
+      { icon: Replace, label: 'Find & Replace', to: '/find-replace', section: 'Data Tools' },
+      { icon: Grid3x3, label: 'M2M Matrix', to: '/m2m-matrix', section: 'Data Tools' },
+      { icon: TerminalSquare, label: 'SQL Scratchpad', to: '/sql-scratchpad', section: 'Data Tools' },
+      { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Data Tools' },
+      { icon: ListOrdered, label: 'ID Sequences', to: '/sequences', section: 'Data Tools' },
+      { icon: Mail, label: 'Mail Templates', to: '/mail-templates', section: 'Data Tools' },
+      { icon: MailCheck, label: 'Mail Log', to: '/mail-log', section: 'Data Tools' }
     ]
   },
   {
@@ -253,31 +253,31 @@ export const navCategories: NavCategory[] = [
     icon: Settings,
     label: 'System',
     items: [
-      { icon: Database, label: 'Virtual Collections', to: '/virtual-collections' },
-      { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion' },
-      { icon: GitCompare, label: 'Environment Config', to: '/config-diff' },
-      { icon: ServerCog, label: 'Environments', to: '/environments' },
-      { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness' },
-      { icon: Megaphone, label: 'Broadcasts', to: '/announcements' },
-      { icon: Package, label: 'Blueprints', to: '/blueprints' },
-      { icon: ClipboardList, label: 'Change Sets', to: '/change-sets' },
-      { icon: Trash2, label: 'Trash', to: '/trash' },
-      { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags' },
-      { icon: Link2, label: 'External APIs', to: '/external-apis' },
-      { icon: Braces, label: 'GraphQL', to: '/graphql' },
-      { icon: Code2, label: 'Custom Queries', to: '/custom-queries' },
-      { icon: PuzzleIcon, label: 'Extensions', to: '/extensions' },
-      { icon: BarChart2, label: 'Analytics', to: '/analytics' },
-      { icon: BarChart3, label: 'Report Studio', to: '/report-studio' },
-      { icon: Wifi, label: 'Presence', to: '/presence' },
-      { icon: Clapperboard, label: 'Session Replays', to: '/session-replays' },
-      { icon: KeyRound, label: 'API Keys', to: '/api-keys' },
-      { icon: Terminal, label: 'Playground', to: '/playground' },
-      { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries' },
-      { icon: LayoutGrid, label: 'Widgets', to: '/widgets' },
-      { icon: BookOpen, label: 'Docs', to: '/docs' },
-      { icon: ScrollText, label: 'API Docs', to: '/api-docs' },
-      { icon: Settings, label: 'Settings', to: '/settings' }
+      { icon: Settings, label: 'Settings', to: '/settings', section: 'Configuration' },
+      { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags', section: 'Configuration' },
+      { icon: ServerCog, label: 'Environments', to: '/environments', section: 'Configuration' },
+      { icon: GitCompare, label: 'Environment Config', to: '/config-diff', section: 'Configuration' },
+      { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness', section: 'Configuration' },
+      { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion', section: 'Content Ops' },
+      { icon: Package, label: 'Blueprints', to: '/blueprints', section: 'Content Ops' },
+      { icon: ClipboardList, label: 'Change Sets', to: '/change-sets', section: 'Content Ops' },
+      { icon: Database, label: 'Virtual Collections', to: '/virtual-collections', section: 'Content Ops' },
+      { icon: Megaphone, label: 'Broadcasts', to: '/announcements', section: 'Content Ops' },
+      { icon: Trash2, label: 'Trash', to: '/trash', section: 'Content Ops' },
+      { icon: Link2, label: 'External APIs', to: '/external-apis', section: 'Developer' },
+      { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'Developer' },
+      { icon: Code2, label: 'Custom Queries', to: '/custom-queries', section: 'Developer' },
+      { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'Developer' },
+      { icon: KeyRound, label: 'API Keys', to: '/api-keys', section: 'Developer' },
+      { icon: Terminal, label: 'Playground', to: '/playground', section: 'Developer' },
+      { icon: PuzzleIcon, label: 'Extensions', to: '/extensions', section: 'Developer' },
+      { icon: LayoutGrid, label: 'Widgets', to: '/widgets', section: 'Developer' },
+      { icon: BarChart2, label: 'Analytics', to: '/analytics', section: 'Insight & Docs' },
+      { icon: BarChart3, label: 'Report Studio', to: '/report-studio', section: 'Insight & Docs' },
+      { icon: Wifi, label: 'Presence', to: '/presence', section: 'Insight & Docs' },
+      { icon: Clapperboard, label: 'Session Replays', to: '/session-replays', section: 'Insight & Docs' },
+      { icon: BookOpen, label: 'Docs', to: '/docs', section: 'Insight & Docs' },
+      { icon: ScrollText, label: 'API Docs', to: '/api-docs', section: 'Insight & Docs' }
     ]
   }
 ]
@@ -995,8 +995,19 @@ export function AppLayout() {
                   </p>
                 )}
                 <div className='space-y-0.5'>
-                  {panelItems.map((item) =>
-                    activeCategory === 'favorites' ? (
+                  {panelItems.map((item, idx) => (
+                    <div key={item.to}>
+                      {item.section && item.section !== panelItems[idx - 1]?.section && (
+                        <p
+                          className={cn(
+                            'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500',
+                            idx > 0 ? 'mt-3' : 'mt-1'
+                          )}
+                        >
+                          {item.section}
+                        </p>
+                      )}
+                      {activeCategory === 'favorites' ? (
                       // Favorites are removable HERE — the star toggle lives on
                       // the page itself, which may no longer exist (a deleted
                       // page-builder page left an unremovable favorite).
@@ -1016,10 +1027,11 @@ export function AppLayout() {
                           ✕
                         </button>
                       </div>
-                    ) : (
-                      <PanelNavItem key={item.to} {...item} />
-                    )
-                  )}
+                      ) : (
+                        <PanelNavItem {...item} />
+                      )}
+                    </div>
+                  ))}
                 </div>
               </nav>
             </div>
