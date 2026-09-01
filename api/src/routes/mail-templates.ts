@@ -42,6 +42,10 @@ const SAMPLE_DATA: Record<string, unknown> = {
 export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
+  /** The preview's baseline data — the editor seeds its test-data panel from
+   *  this so what you see is exactly what an empty panel renders with. */
+  app.get('/sample-data', async () => ({ data: SAMPLE_DATA }))
+
   app.get('/', async () => {
     const names = await listFileTemplates()
     const overrides = (await db('nivaro_mail_templates')
@@ -148,14 +152,26 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
   )
 
   /** Test send to the caller (mail test mode still applies on top). */
-  app.post<{ Params: { name: string } }>('/:name/test-send', async (req, reply) => {
+  app.post<{
+    Params: { name: string }
+    Body: { data?: Record<string, unknown>; to?: string; body?: string }
+  }>('/:name/test-send', async (req, reply) => {
     if (!NAME_RE.test(req.params.name)) return reply.code(400).send({ error: 'Invalid name' })
     const me = await db('nivaro_users').where({ id: req.user!.id }).first('email')
-    if (!me?.email) return reply.code(400).send({ error: 'Your account has no email address' })
+    // Recipient defaults to the tester; an explicit address is allowed (admin
+    // route, and mail test mode still redirects non-allowlisted addresses).
+    const to = String(req.body?.to ?? '').trim() || String(me?.email ?? '')
+    if (!to) return reply.code(400).send({ error: 'Your account has no email address' })
+    const data = { ...SAMPLE_DATA, ...(req.body?.data ?? {}) }
     try {
-      const html = await renderMailTemplate(req.params.name, SAMPLE_DATA)
+      // An unsaved editor draft tests through the same engine as preview —
+      // saving first must not be a precondition for seeing the real email.
+      const html =
+        typeof req.body?.body === 'string' && req.body.body.trim()
+          ? await (await import('../services/mail.js')).previewMailBody(req.body.body, data)
+          : await renderMailTemplate(req.params.name, data)
       await sendRawMail({
-        to: String(me.email),
+        to,
         subject: `[Template test] ${req.params.name}`,
         html,
         wrap: false,
@@ -163,7 +179,7 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
         // daily digest reads as "send failed".
         skipDigest: true
       })
-      return { data: { sent: true, to: me.email } }
+      return { data: { sent: true, to } }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(502).send({ error: `Send failed: ${msg.slice(0, 400)}` })
