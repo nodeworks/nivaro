@@ -14,7 +14,8 @@ import { Clipboard,
   Loader2,
   Save,
   Trash2,
-  Wrench
+  Wrench,
+  X
 } from 'lucide-react'
 import {
   type ReactNode,
@@ -501,6 +502,112 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
     }
   }
   return String(value)
+}
+
+// ─── Unsaved-changes inspector ─────────────────────────────────────────────────
+// The amber dirty dot answers "you have unsaved changes"; this popover answers
+// "WHICH ones" — draft fields that differ from the loaded record (old → new),
+// plus staged relation links and queued grid rows. Also the debugging tool for
+// phantom-dirty reports: whatever appears here is what flipped the flag.
+
+function UnsavedInspector({
+  open,
+  onClose,
+  fieldConfig,
+  draft,
+  initial,
+  m2mLinks,
+  m2mUnlinks,
+  pendingRowCount,
+  pendingDeleteCount
+}: {
+  open: boolean
+  onClose: () => void
+  fieldConfig: CMSField[] | undefined
+  draft: Record<string, unknown>
+  initial: Record<string, unknown>
+  m2mLinks: Map<string, unknown[]>
+  m2mUnlinks: Map<string, Set<unknown>>
+  pendingRowCount: number
+  pendingDeleteCount: number
+}) {
+  if (!open) return null
+  const fmt = (v: unknown): string => {
+    if (v === null || v === undefined || v === '') return 'empty'
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+    const str = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    return str.length > 60 ? `${str.slice(0, 60)}…` : str
+  }
+  const rows: Array<{ label: string; from: string; to: string }> = []
+  const known = new Set<string>()
+  for (const f of fieldConfig ?? []) {
+    known.add(f.field)
+    if (valuesEqual(draft[f.field], initial[f.field])) continue
+    if (draft[f.field] === undefined) continue
+    rows.push({
+      label: f.label || titleCase(f.field.replace(/_/g, ' ')),
+      from: fmt(initial[f.field]),
+      to: fmt(draft[f.field])
+    })
+  }
+  // Draft keys the field config doesn't know (machine columns) still count.
+  for (const k of Object.keys(draft)) {
+    if (known.has(k) || k.startsWith('__')) continue
+    if (valuesEqual(draft[k], initial[k])) continue
+    rows.push({ label: k, from: fmt(initial[k]), to: fmt(draft[k]) })
+  }
+  const linkCount = [...m2mLinks.values()].reduce((n, ids) => n + ids.length, 0)
+  const unlinkCount = [...m2mUnlinks.values()].reduce((n, ids) => n + ids.size, 0)
+  return (
+    <div
+      className='absolute right-0 top-full z-[110] mt-1.5 w-[360px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-border dark:bg-card'
+      data-unsaved-inspector
+    >
+      <div className='mb-1.5 flex items-center justify-between'>
+        <p className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+          Unsaved changes
+        </p>
+        <button
+          type='button'
+          onClick={onClose}
+          className='text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+          aria-label='Close'
+        >
+          <X className='h-3.5 w-3.5' />
+        </button>
+      </div>
+      {rows.length === 0 && linkCount === 0 && unlinkCount === 0 && pendingRowCount === 0 && pendingDeleteCount === 0 ? (
+        <p className='text-[11.5px] text-slate-400'>
+          Nothing differs from the saved record — this flag may be stale. Saving is a no-op;
+          reloading clears it.
+        </p>
+      ) : (
+        <div className='max-h-[300px] space-y-1.5 overflow-y-auto'>
+          {rows.map((r) => (
+            <div key={r.label} className='text-[11.5px]'>
+              <span className='font-medium text-slate-700 dark:text-slate-200'>{r.label}</span>
+              <p className='break-words text-slate-500 dark:text-slate-400'>
+                <span className='text-rose-500 line-through'>{r.from}</span>{' '}
+                <span className='text-emerald-600 dark:text-emerald-400'>{r.to}</span>
+              </p>
+            </div>
+          ))}
+          {linkCount > 0 && (
+            <p className='text-[11.5px] text-slate-500'>{linkCount} relation link(s) staged</p>
+          )}
+          {unlinkCount > 0 && (
+            <p className='text-[11.5px] text-slate-500'>{unlinkCount} relation removal(s) staged</p>
+          )}
+          {pendingRowCount > 0 && (
+            <p className='text-[11.5px] text-slate-500'>{pendingRowCount} grid row(s) queued</p>
+          )}
+          {pendingDeleteCount > 0 && (
+            <p className='text-[11.5px] text-slate-500'>{pendingDeleteCount} grid row deletion(s) queued</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ─── Field diff helper ─────────────────────────────────────────────────────────
@@ -995,6 +1102,7 @@ export function ItemEditForm({
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   useEffect(() => {
     onDirtyChange?.(isDirty)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callback identity is the host's concern
@@ -2629,6 +2737,11 @@ export function ItemEditForm({
 
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
+      // No-op guard: editors can emit a change with an IDENTICAL value (rich
+      // text normalizing on mount is the classic) — that must not dirty the
+      // form, or a freshly loaded record claims unsaved changes with nothing
+      // actually different (the phantom-dirty report).
+      if (valuesEqual(draftRef.current[field], value)) return
       userTouchedRef.current.add(field)
       const next = { ...draftRef.current, [field]: value }
       for (const fc of fieldConfig ?? []) {
@@ -7513,8 +7626,27 @@ export function ItemEditForm({
                                     {!isStepsMode && (
                                       <div className='relative'>
                                         {isDirty && !saveMut.isPending && (
-                                          <span className='absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                                          <button
+                                            type='button'
+                                            onClick={() => setInspectorOpen((v) => !v)}
+                                            title='Unsaved changes — click to see what changed'
+                                            className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
+                                            data-unsaved-dot
+                                          >
+                                            <span className='absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                                          </button>
                                         )}
+                                        <UnsavedInspector
+                                          open={inspectorOpen && isDirty}
+                                          onClose={() => setInspectorOpen(false)}
+                                          fieldConfig={fieldConfig}
+                                          draft={draft}
+                                          initial={initialDataRef.current}
+                                          m2mLinks={m2mLinks}
+                                          m2mUnlinks={m2mUnlinks}
+                                          pendingRowCount={[...pendingO2MRows.values()].reduce((n, r) => n + r.length, 0)}
+                                          pendingDeleteCount={[...pendingO2MDeletes.values()].reduce((n, r) => n + r.size, 0)}
+                                        />
                                         <Button
                                           type='button'
                                           size='sm'
