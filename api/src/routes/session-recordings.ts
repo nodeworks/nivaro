@@ -166,6 +166,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         user: req.user!.id,
         app: appLabel,
         origin,
+        // Masquerade context: this recording shows the ADMIN driving, not the
+        // account it's attributed to — the list must say so.
+        masquerade_admin: req.masqueradeAdminId ?? null,
         started_at: new Date(),
         last_event_at: new Date()
       })
@@ -284,12 +287,14 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const limit = 50
       const q = db('nivaro_session_recordings as r')
         .leftJoin('nivaro_users as u', 'r.user', 'u.id')
+        .leftJoin('nivaro_users as ma', 'r.masquerade_admin', 'ma.id')
         .orderBy('r.started_at', 'desc')
         .select(
           'r.id',
           'r.user',
           'r.app',
           'r.origin',
+          'r.masquerade_admin',
           'r.started_at',
           'r.ended_at',
           'r.last_event_at',
@@ -298,6 +303,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.truncated',
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
+          ),
+          db.raw(
+            "LTRIM(RTRIM(CONCAT(COALESCE(ma.first_name, ''), ' ', COALESCE(ma.last_name, '')))) as masquerade_admin_name"
           )
         )
       if (req.query.user) q.where('r.user', req.query.user)
@@ -326,12 +334,14 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const rec = (await db('nivaro_session_recordings as r')
       .leftJoin('nivaro_users as u', 'r.user', 'u.id')
+      .leftJoin('nivaro_users as ma', 'r.masquerade_admin', 'ma.id')
       .where('r.id', req.params.id)
       .first(
         'r.id',
         'r.user',
         'r.app',
         'r.origin',
+        'r.masquerade_admin',
         'r.started_at',
         'r.ended_at',
         'r.last_event_at',
@@ -340,6 +350,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         'r.truncated',
         db.raw(
           "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
+        ),
+        db.raw(
+          "LTRIM(RTRIM(CONCAT(COALESCE(ma.first_name, ''), ' ', COALESCE(ma.last_name, '')))) as masquerade_admin_name"
         )
       )) as Record<string, unknown> | undefined
     if (!rec) return reply.code(404).send({ error: 'Not found' })

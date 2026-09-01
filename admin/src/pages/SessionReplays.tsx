@@ -24,6 +24,8 @@ interface Recording {
   origin: string | null
   user_name: string | null
   scopes?: string[]
+  masquerade_admin?: string | null
+  masquerade_admin_name?: string | null
   started_at: string
   ended_at: string | null
   last_event_at: string | null
@@ -1005,6 +1007,14 @@ export function SessionReplaysPage() {
                           {rec.app ?? 'admin'}
                         </span>
                         <EnvironmentBadge origin={rec.origin} />
+                        {rec.masquerade_admin && (
+                          <span
+                            className='shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
+                            title={`Recorded while ${rec.masquerade_admin_name || 'an admin'} was masquerading as this user — the admin was driving`}
+                          >
+                            Masquerade{rec.masquerade_admin_name ? ` · ${rec.masquerade_admin_name}` : ''}
+                          </span>
+                        )}
                         {rec.truncated && (
                           <span className='shrink-0 text-[10.5px] text-amber-600'>truncated</span>
                         )}
@@ -1069,6 +1079,14 @@ export function SessionReplaysPage() {
               {playing?.app && (
                 <span className='rounded border border-slate-200 px-1.5 py-px text-[10.5px] font-normal text-slate-500 dark:border-border'>
                   {playing.app}
+                </span>
+              )}
+              {playing?.masquerade_admin && (
+                <span
+                  className='rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
+                  title={`Recorded while ${playing.masquerade_admin_name || 'an admin'} was masquerading as this user`}
+                >
+                  Masquerade{playing.masquerade_admin_name ? ` · ${playing.masquerade_admin_name}` : ''}
                 </span>
               )}
               {(playing?.scopes ?? []).map((sc) => (
