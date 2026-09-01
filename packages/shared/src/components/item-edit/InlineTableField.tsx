@@ -1427,6 +1427,12 @@ export function InlineTableField({
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
       if (!t) return
+      // A DETACHED target means React re-rendered between the click and this
+      // listener (a cell swapping display→input on focus does exactly that) —
+      // its closest() walks the orphaned subtree and can never find the
+      // editor, so an in-editor click read as "outside" and closed the row.
+      // Whatever re-rendered under the pointer was part of the interaction.
+      if (!t.isConnected) return
       if (
         t.closest('[data-o2m-editing]') ||
         t.closest('[data-radix-popper-content-wrapper]') ||
