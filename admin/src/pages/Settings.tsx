@@ -619,6 +619,27 @@ interface SsoProvider {
   sort: number
 }
 
+/** Raw <svg> markup pasted into the logo field becomes a data URI the login
+ *  page's <img> can render; anything else passes through untouched. */
+function normalizeLogoInput(v: string): string {
+  const t = v.trim()
+  if (!t.toLowerCase().startsWith('<svg')) return v
+  try {
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(t)))}`
+  } catch {
+    return v
+  }
+}
+
+const BUTTON_COLOR_PRESETS: Array<{ value: string; swatch: string; label: string }> = [
+  { value: '#0a66c2', swatch: '#0a66c2', label: 'Blue' },
+  { value: '#6264a7', swatch: '#6264a7', label: 'Purple' },
+  { value: '#d93025', swatch: '#d93025', label: 'Red' },
+  { value: '#059669', swatch: '#059669', label: 'Green' },
+  { value: '#f59e0b', swatch: '#f59e0b', label: 'Amber' },
+  { value: '#24292f', swatch: '#24292f', label: 'Black' }
+]
+
 const EMPTY_SSO_DRAFT = {
   key: '',
   label: '',
@@ -946,34 +967,63 @@ function SsoProvidersSection() {
             </Field>
             <Field
               label='Logo'
-              hint='Optional icon on the login button — an https image URL or a data:image URI.'
+              hint='Optional icon on the login button — paste raw <svg> markup, an https image URL, or a data:image URI.'
             >
-              <div className='flex items-center gap-2'>
-                <Input
+              <div className='flex items-start gap-2'>
+                <textarea
                   value={draft.logo_url}
-                  onChange={(e) => setDraft((d) => ({ ...d, logo_url: e.target.value }))}
-                  placeholder='https://… or data:image/png;base64,…'
-                  className='h-8 text-[13px]'
+                  onChange={(e) => setDraft((d) => ({ ...d, logo_url: normalizeLogoInput(e.target.value) }))}
+                  placeholder='<svg …>, https://… or data:image/png;base64,…'
+                  rows={2}
+                  className='min-h-[32px] w-full rounded-md border border-slate-200 bg-transparent px-2.5 py-1.5 font-mono text-[12px] outline-none transition-colors focus:border-slate-400 dark:border-border'
                 />
                 {draft.logo_url.trim() !== '' && (
                   <img
                     src={draft.logo_url.trim()}
                     alt=''
-                    className='h-6 w-6 shrink-0 rounded object-contain'
+                    className='mt-1 h-6 w-6 shrink-0 rounded object-contain'
                   />
                 )}
               </div>
             </Field>
             <Field
               label='Button color'
-              hint='Optional — hex (#0a66c2) or a CSS color name. Empty = the default button style.'
+              hint="Pick a preset, the theme's accent, or any hex / CSS color. Empty = the default button style."
             >
-              <div className='flex items-center gap-2'>
+              <div className='flex flex-wrap items-center gap-2'>
+                {/* Sensible defaults + the theme accent */}
+                {BUTTON_COLOR_PRESETS.map((c) => (
+                  <button
+                    key={c.value}
+                    type='button'
+                    title={c.label}
+                    aria-label={`Use ${c.label}`}
+                    onClick={() => setDraft((d) => ({ ...d, button_color: c.value }))}
+                    className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${
+                      draft.button_color.trim() === c.value
+                        ? 'border-slate-900 dark:border-white'
+                        : 'border-transparent'
+                    }`}
+                    style={{ backgroundColor: c.swatch }}
+                  />
+                ))}
+                <button
+                  type='button'
+                  onClick={() => setDraft((d) => ({ ...d, button_color: 'accent' }))}
+                  className={`h-7 rounded-full border-2 bg-[#00ceff] px-2.5 text-[11px] font-semibold text-slate-900 transition-transform hover:scale-105 ${
+                    draft.button_color.trim() === 'accent'
+                      ? 'border-slate-900 dark:border-white'
+                      : 'border-transparent'
+                  }`}
+                  title="The portal theme's accent color"
+                >
+                  Accent
+                </button>
                 <Input
                   value={draft.button_color}
                   onChange={(e) => setDraft((d) => ({ ...d, button_color: e.target.value }))}
                   placeholder='#0a66c2'
-                  className='h-8 w-40 font-mono text-[13px]'
+                  className='h-8 w-32 font-mono text-[13px]'
                 />
                 <input
                   type='color'
