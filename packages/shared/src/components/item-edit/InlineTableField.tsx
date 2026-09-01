@@ -1418,50 +1418,12 @@ export function InlineTableField({
   const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   const editStateRef = useRef<{ rowId: string; draft: Record<string, unknown> } | null>(null)
   useEffect(() => { editStateRef.current = editState }, [editState])
-  // Clicking anywhere outside the row editor commits it — same as Save.
-  // Portaled layers (combobox panels, Radix poppers, dialogs, overlays) are
-  // part of the interaction even though they live outside the table's DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-registers per editState change, so saveEdit's closure is always current
-  useEffect(() => {
-    if (!editState || readOnly) return
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null
-      if (!t) return
-      // A DETACHED target means React re-rendered between the click and this
-      // listener (a cell swapping display→input on focus does exactly that) —
-      // its closest() walks the orphaned subtree and can never find the
-      // editor, so an in-editor click read as "outside" and closed the row.
-      // Whatever re-rendered under the pointer was part of the interaction.
-      if (!t.isConnected) {
-        lastDownInsideRef.current = true
-        return
-      }
-      if (
-        t.closest('[data-o2m-editing]') ||
-        t.closest('[data-radix-popper-content-wrapper]') ||
-        t.closest('[data-nvr-combobox-panel]') ||
-        t.closest('[role="dialog"]') ||
-        t.closest('[data-omx-overlay]')
-      ) {
-        lastDownInsideRef.current = true
-        return
-      }
-      lastDownInsideRef.current = false
-      if (blurTimerRef.current) {
-        clearTimeout(blurTimerRef.current)
-        blurTimerRef.current = null
-      }
-      void saveEdit()
-    }
-    // CAPTURE phase, not bubble: an inner widget calling stopPropagation() on
-    // mousedown (pickers, drag handles) swallows a bubble listener entirely —
-    // lastDownInsideRef then held a stale `false` and the Windows blur timer
-    // (null relatedTarget on non-focusable clicks) closed the row anyway.
-    // Capture also runs before React's discrete-event state flush, so the
-    // target is still attached when we classify it.
-    document.addEventListener('mousedown', onDown, true)
-    return () => document.removeEventListener('mousedown', onDown, true)
-  }, [editState, readOnly])
+  // Deliberately NO outside-click or blur auto-close: the row editor closes
+  // only via its explicit controls (Save / Cancel / Delete). Every focus/
+  // pointer heuristic tried here mis-fired somewhere (Windows null-
+  // relatedTarget blurs, stopPropagation swallowing document listeners,
+  // React re-render detaching the click target) and read as the editor
+  // randomly closing mid-edit.
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
   const [crChallenge, setCrChallenge] = useState<{ challenge: ChangeReasonChallenge; retry: (reason: string) => Promise<void> } | null>(null)
@@ -1476,24 +1438,6 @@ export function InlineTableField({
   })
   function selectPreset(name: string) {
     setActivePreset(name)
-  }
-  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Whether the most recent pointer-down landed inside the editing
-  // interaction (row, portaled picker panels, dialogs). The blur timer
-  // consults this: on Windows, clicking a NON-FOCUSABLE part of the row blurs
-  // the input with relatedTarget null, which read as leaving the editor.
-  const lastDownInsideRef = useRef(false)
-  const isEditorNode = (n: Node | null): boolean => {
-    const el = n as HTMLElement | null
-    if (!el || !(el instanceof HTMLElement)) return false
-    if (!el.isConnected) return true
-    return !!(
-      el.closest('[data-o2m-editing]') ||
-      el.closest('[data-radix-popper-content-wrapper]') ||
-      el.closest('[data-nvr-combobox-panel]') ||
-      el.closest('[role="dialog"]') ||
-      el.closest('[data-omx-overlay]')
-    )
   }
 
   // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
@@ -3936,24 +3880,6 @@ export function InlineTableField({
                 onDrop={handleDrop}
                 onDragEnd={handleDragEnd}
                 onClick={() => !isEditing && !isPendingDelete && startEdit(displayRow)}
-                onBlur={(e) => {
-                  if (!isEditing || saving || isPendingDelete) return
-                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  // Focus moving into a PORTALED editor layer (picker panel,
-                  // dialog) is still the same interaction; and a null
-                  // relatedTarget (clicking non-focusable row chrome — the
-                  // Windows report) defers to the pointer handler, which
-                  // already knows whether the press was inside.
-                  if (isEditorNode(e.relatedTarget as Node | null)) return
-                  blurTimerRef.current = setTimeout(() => {
-                    if (lastDownInsideRef.current) return
-                    if (isEditorNode(document.activeElement)) return
-                    void saveEdit()
-                  }, 150)
-                }}
-                onFocus={() => {
-                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
-                }}
                 className={cn('border-b border-slate-100 transition-colors',
                   isDragging ? 'opacity-40' : '',
                   isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
@@ -4369,19 +4295,6 @@ export function InlineTableField({
                 }}
                 onDragEnd={handleDragEnd}
                 onClick={() => !isEditing && startPendingEdit(row, ri)}
-                onBlur={(e) => {
-                  if (!isEditing || saving) return
-                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  if (isEditorNode(e.relatedTarget as Node | null)) return
-                  blurTimerRef.current = setTimeout(() => {
-                    if (lastDownInsideRef.current) return
-                    if (isEditorNode(document.activeElement)) return
-                    void saveEdit()
-                  }, 150)
-                }}
-                onFocus={() => {
-                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
-                }}
                 className={cn('border-b border-slate-100 transition-colors',
                   isPDragging ? 'opacity-40' : '',
                   isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
