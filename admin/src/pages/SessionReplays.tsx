@@ -22,6 +22,7 @@ interface Recording {
   user: string
   app: string | null
   origin: string | null
+  meta?: string | null
   user_name: string | null
   scopes?: string[]
   masquerade_admin?: string | null
@@ -91,6 +92,80 @@ async function downloadReplayScript(recordingId: string) {
  * The host is shown on hover: "production" is an inference from the name, and
  * the reader should be able to check it.
  */
+interface RecMeta {
+  user_agent?: string
+  platform?: string
+  screen?: string
+  viewport?: string
+  dpr?: string | number
+  language?: string
+  timezone?: string
+}
+
+function parseRecMeta(raw: string | null | undefined): RecMeta | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    return v && typeof v === 'object' ? (v as RecMeta) : null
+  } catch {
+    return null
+  }
+}
+
+/** Human OS + browser from a user agent — display only, so a rough match is fine. */
+function uaSummary(meta: RecMeta | null): { os: string | null; browser: string | null } {
+  const ua = meta?.user_agent ?? ''
+  const platform = (meta?.platform ?? '').toLowerCase()
+  let os: string | null = null
+  if (/windows/i.test(ua) || platform.includes('win')) os = 'Windows'
+  else if (/iphone|ipad|ios/i.test(ua)) os = 'iOS'
+  else if (/android/i.test(ua)) os = 'Android'
+  else if (/mac os x|macintosh/i.test(ua) || platform.includes('mac')) os = 'macOS'
+  else if (/cros/i.test(ua)) os = 'ChromeOS'
+  else if (/linux/i.test(ua) || platform.includes('linux')) os = 'Linux'
+  let browser: string | null = null
+  const pick = (re: RegExp, name: string) => {
+    const m = ua.match(re)
+    if (m) browser = m[1] ? `${name} ${m[1].split('.')[0]}` : name
+  }
+  if (/edg\//i.test(ua)) pick(/Edg\/([\d.]+)/i, 'Edge')
+  else if (/firefox\//i.test(ua)) pick(/Firefox\/([\d.]+)/i, 'Firefox')
+  else if (/chrome\//i.test(ua)) pick(/Chrome\/([\d.]+)/i, 'Chrome')
+  else if (/safari\//i.test(ua) && /version\//i.test(ua)) pick(/Version\/([\d.]+)/i, 'Safari')
+  return { os, browser }
+}
+
+/** OS · browser · screen chips for a recording row / the player header. */
+function ClientMetaChips({ meta: raw, compact }: { meta?: string | null; compact?: boolean }) {
+  const meta = parseRecMeta(raw)
+  if (!meta) return null
+  const { os, browser } = uaSummary(meta)
+  const bits: string[] = []
+  if (os) bits.push(os)
+  if (browser) bits.push(browser)
+  if (meta.screen && meta.screen !== '0x0') {
+    const dpr = Number(meta.dpr ?? 1)
+    bits.push(`${meta.screen}${dpr > 1 ? ` @${dpr}x` : ''}`)
+  }
+  if (bits.length === 0) return null
+  const tip = [
+    meta.viewport ? `Viewport ${meta.viewport}` : null,
+    meta.language || null,
+    meta.timezone || null,
+    meta.user_agent ? meta.user_agent.slice(0, 160) : null
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <span
+      className={`shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-500 dark:border-border ${compact ? '' : 'font-normal'}`}
+      data-tip={tip || undefined}
+    >
+      {bits.join(' · ')}
+    </span>
+  )
+}
+
 function EnvironmentBadge({ origin }: { origin: string | null }) {
   if (!origin) {
     return (
@@ -1007,6 +1082,7 @@ export function SessionReplaysPage() {
                           {rec.app ?? 'admin'}
                         </span>
                         <EnvironmentBadge origin={rec.origin} />
+                        <ClientMetaChips meta={rec.meta} />
                         {rec.masquerade_admin && (
                           <span
                             className='shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
@@ -1081,6 +1157,7 @@ export function SessionReplaysPage() {
                   {playing.app}
                 </span>
               )}
+              <ClientMetaChips meta={playing?.meta} compact />
               {playing?.masquerade_admin && (
                 <span
                   className='rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'

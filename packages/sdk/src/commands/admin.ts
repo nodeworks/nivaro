@@ -627,10 +627,30 @@ export function startSessionRecording(
   origin?: string,
   clip?: boolean
 ): Command<{ data: { id: UUID } }> {
-  const body: Record<string, string | boolean> = {}
+  const body: Record<string, string | boolean | Record<string, string | number>> = {}
   if (app) body.app = app
   const resolved = origin ?? (typeof window !== 'undefined' ? window.location.origin : undefined)
   if (resolved) body.origin = resolved
+  // Client environment for the replay list (OS/browser via UA, screen size…)
+  // — gathered here so every recorder host sends it without call-site changes.
+  if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+    try {
+      body.meta = {
+        user_agent: navigator.userAgent,
+        platform:
+          (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+          navigator.platform ??
+          '',
+        screen: `${window.screen?.width ?? 0}x${window.screen?.height ?? 0}`,
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+        dpr: window.devicePixelRatio ?? 1,
+        language: navigator.language ?? '',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? ''
+      }
+    } catch {
+      /* metadata is best-effort */
+    }
+  }
   // Error clips are gated server-side by the error_replay setting, not the
   // full-recording bit — see the error-clip mode on useSessionRecorder.
   if (clip) body.clip = true

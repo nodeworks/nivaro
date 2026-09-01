@@ -3,6 +3,26 @@ import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
+function clientMeta(): Record<string, string | number> {
+  try {
+    return {
+      user_agent: navigator.userAgent,
+      platform:
+        (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+        navigator.platform ??
+        '',
+      screen: `${window.screen?.width ?? 0}x${window.screen?.height ?? 0}`,
+      viewport: `${window.innerWidth}x${window.innerHeight}`,
+      dpr: window.devicePixelRatio ?? 1,
+      language: navigator.language ?? '',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? ''
+    }
+  } catch {
+    return {}
+  }
+}
+
+
 /**
  * rrweb session recorder — two modes, one hook.
  *
@@ -203,7 +223,8 @@ export function useSessionRecorder() {
     async function start() {
       try {
         const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
-          origin: window.location.origin
+          origin: window.location.origin,
+            meta: clientMeta()
         })
         if (cancelled) return
         state.recordingId = r.data.data.id
@@ -311,7 +332,8 @@ export function useSessionRecorder() {
           if (events.length === 0) return null
           const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
             clip: true,
-            origin: window.location.origin
+            origin: window.location.origin,
+            meta: clientMeta()
           })
           const id = r.data.data.id
           await api.post(`/session-recordings/${id}/events`, { seq: 0, events })

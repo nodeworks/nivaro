@@ -124,7 +124,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     })
   })
 
-  app.post<{ Body: { app?: string; origin?: string; clip?: boolean } }>(
+  app.post<{ Body: { app?: string; origin?: string; clip?: boolean; meta?: Record<string, unknown> } }>(
     '/start',
     { preHandler: requireAuth },
     async (req, reply) => {
@@ -161,11 +161,26 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           }
         })() ||
         null
+      // Client environment (OS/browser via UA, screen, viewport, dpr, locale,
+      // timezone) — allowlisted keys, each value capped; junk shapes drop.
+      const META_KEYS = ['user_agent', 'platform', 'screen', 'viewport', 'dpr', 'language', 'timezone'] as const
+      let meta: string | null = null
+      if (req.body?.meta && typeof req.body.meta === 'object') {
+        const clean: Record<string, string> = {}
+        for (const k of META_KEYS) {
+          const v = (req.body.meta as Record<string, unknown>)[k]
+          if (v != null && (typeof v === 'string' || typeof v === 'number')) {
+            clean[k] = String(v).slice(0, k === 'user_agent' ? 400 : 80)
+          }
+        }
+        if (Object.keys(clean).length > 0) meta = JSON.stringify(clean)
+      }
       await db('nivaro_session_recordings').insert({
         id,
         user: req.user!.id,
         app: appLabel,
         origin,
+        meta,
         // Masquerade context: this recording shows the ADMIN driving, not the
         // account it's attributed to — the list must say so.
         masquerade_admin: req.masqueradeAdminId ?? null,
@@ -294,6 +309,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.user',
           'r.app',
           'r.origin',
+          'r.meta',
           'r.masquerade_admin',
           'r.started_at',
           'r.ended_at',
