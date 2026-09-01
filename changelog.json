@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-01T21:18:03.506Z",
+  "generated_at": "2026-09-01T21:33:31.675Z",
   "releases": [
+    {
+      "version": "0.1.188",
+      "tag": "v0.1.188",
+      "date": "2026-09-01T17:33:26-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cascade",
+              "text": "project -> project-type narrowing; bare-alias filters; readOne alias selects",
+              "hash": "b0bc445a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.187",
       "tag": "v0.1.187",
-      "date": "2026-09-01T17:17:57-04:00",
+      "date": "2026-09-01T17:18:03-04:00",
       "sections": [
         {
           "label": "Fixed",
