@@ -72,9 +72,14 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      // Provenance judges the record's ORIGIN — bookkeeping rows must not
+      // outrank it. Per-collection read logging can write a 'read' row
+      // milliseconds before the create lands (the reported false 'likely
+      // imported' on a form-created record), and lock heartbeats are noise.
       const first = (await db('nivaro_activity as a')
         .leftJoin('nivaro_users as u', 'a.user', 'u.id')
         .where({ 'a.collection': collection, 'a.item': String(id) })
+        .whereNotIn('a.action', ['read', 'lock-acquire', 'lock-release'])
         .orderBy('a.id', 'asc')
         .first(
           'a.id',
