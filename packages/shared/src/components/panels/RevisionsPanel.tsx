@@ -1,14 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Clock, RotateCcw } from 'lucide-react'
+import {
+  ArrowRight,
+  CalendarClock,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  GitCompareArrows,
+  MessageSquare,
+  RotateCcw,
+  Search,
+  X
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn, formatRelative } from '../../lib/utils'
-import { Badge } from '../ui/badge'
+import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
+import { UserAvatar } from '../UserAvatar'
 
 export interface O2MFieldInfo {
   field: string
@@ -32,16 +43,96 @@ interface Revision {
   last_name: string | null
 }
 
-const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
-  create: 'success',
-  update: 'default',
-  delete: 'destructive'
+// ─── Field metadata: friendly labels + system-field classification ──────────
+// The panel fetches the collection's field config ONCE and every view renders
+// human labels ("Requisition Amount") with the raw code available on hover.
+// Fields the config doesn't know (machine columns from integrations, audit
+// stamps) are "system" — folded away by default so a 23-field save reads as
+// the 5 fields a person actually changed.
+
+interface FieldMeta {
+  label: string
+  system: boolean
 }
 
-function revisionUserName(rev: Revision): string {
-  if (rev.first_name || rev.last_name)
-    return [rev.first_name, rev.last_name].filter(Boolean).join(' ')
-  return rev.user_email ?? rev.user_id?.slice(0, 8) ?? 'System'
+const AUDIT_FIELDS = new Set([
+  'id',
+  'created',
+  'changed',
+  'date_created',
+  'date_updated',
+  'user_created',
+  'user_updated',
+  'created_at',
+  'updated_at',
+  'sort'
+])
+
+type FieldMetaMap = Map<string, FieldMeta>
+
+function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
+  const client = useNivaroClient()
+  const { data } = useQuery<Array<{ field: string; label: string | null; hidden?: boolean }>>({
+    queryKey: ['revisions-field-meta', collection],
+    enabled,
+    staleTime: 300_000,
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ field: string; label: string | null; hidden?: boolean }> }>(
+          get(`/field-config/${collection}`)
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => [])
+  })
+  return useMemo(() => {
+    const map: FieldMetaMap = new Map()
+    for (const f of data ?? []) {
+      if (f.field.startsWith('__')) continue
+      map.set(f.field, {
+        label: f.label || titleCase(f.field.replace(/_/g, ' ')),
+        system: AUDIT_FIELDS.has(f.field)
+      })
+    }
+    return map
+  }, [data])
+}
+
+function metaFor(map: FieldMetaMap, field: string): FieldMeta {
+  return (
+    map.get(field) ?? {
+      // Unknown to the form = machine column. Still labeled, still reachable.
+      label: titleCase(field.replace(/[_-]/g, ' ')),
+      system: true
+    }
+  )
+}
+
+function FieldLabel({ map, field }: { map: FieldMetaMap; field: string }) {
+  const meta = metaFor(map, field)
+  return (
+    <span
+      className='text-[12px] font-medium text-slate-700 dark:text-slate-200'
+      data-tip={field}
+      title={field}
+    >
+      {meta.label}
+    </span>
+  )
+}
+
+// ─── Value formatting ───────────────────────────────────────────────────────
+
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return ''
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'string' && ISO_RE.test(value)) {
+    const d = new Date(value)
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString()
+  }
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
 }
 
 function stringifyValue(value: unknown): string {
@@ -50,24 +141,24 @@ function stringifyValue(value: unknown): string {
   return String(value)
 }
 
-const TRUNCATE_AT = 120
+const TRUNCATE_AT = 160
 
 function ValueCell({ value, tone }: { value: unknown; tone: 'before' | 'after' }) {
   const [expanded, setExpanded] = useState(false)
-  const str = stringifyValue(value)
-  if (value === null || value === undefined || str === '')
-    return <span className='text-slate-300 dark:text-slate-600 italic text-[11px]'>—</span>
+  const str = displayValue(value)
+  if (str === '')
+    return <span className='text-[11.5px] italic text-slate-300 dark:text-slate-600'>empty</span>
   const isLong = str.length > TRUNCATE_AT
   const shown = expanded || !isLong ? str : `${str.slice(0, TRUNCATE_AT)}…`
   return (
-    <span className='break-all text-[11px] text-slate-700 dark:text-slate-300'>
-      {typeof value === 'object' ? <span className='font-mono text-[10.5px]'>{shown}</span> : shown}
+    <span className='break-words text-[12px] leading-relaxed text-slate-700 dark:text-slate-300'>
+      {typeof value === 'object' ? <span className='font-mono text-[11px]'>{shown}</span> : shown}
       {isLong && (
         <button
           type='button'
           onClick={() => setExpanded((e) => !e)}
           className={cn(
-            'ml-1 text-[10px] font-medium hover:underline',
+            'ml-1 text-[10.5px] font-medium hover:underline',
             tone === 'before' ? 'text-rose-500' : 'text-emerald-600'
           )}
         >
@@ -78,10 +169,7 @@ function ValueCell({ value, tone }: { value: unknown; tone: 'before' | 'after' }
   )
 }
 
-// ─── Structured JSON diffs (#73) ─────────────────────────────────────────────
-// A changed JSON column (filters, config blobs) renders as a per-key diff
-// instead of two unreadable blobs. Only plain objects qualify — arrays and
-// scalars keep the raw cells.
+// ─── Structured JSON diffs (#73) ────────────────────────────────────────────
 function parseJsonObject(v: unknown): Record<string, unknown> | null {
   if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
   if (typeof v === 'string' && v.trim().startsWith('{')) {
@@ -115,11 +203,11 @@ function JsonKeyDiff({
     .filter(Boolean) as Array<{ k: string; b?: string; a?: string }>
   if (rows.length === 0)
     return <span className='text-[11px] italic text-slate-400'>keys reordered only</span>
-  const clip = (x?: string) => (x == null ? undefined : x.length > 60 ? `${x.slice(0, 60)}…` : x)
+  const clip = (x?: string) => (x == null ? undefined : x.length > 80 ? `${x.slice(0, 80)}…` : x)
   return (
     <div className='space-y-0.5' data-json-diff>
       {rows.map(({ k, b, a }) => (
-        <p key={k} className='text-[11px]'>
+        <p key={k} className='text-[11.5px]'>
           <span className='font-mono text-[10.5px] text-slate-500'>{k}</span>:{' '}
           {b !== undefined && (
             <span className='text-rose-600 line-through dark:text-rose-400'>{clip(b)}</span>
@@ -136,10 +224,7 @@ function JsonKeyDiff({
   )
 }
 
-// ─── Single-field revert (#667) ──────────────────────────────────────────────
-// A changed field row can restore JUST that field's value from this revision's
-// snapshot — server-side POST /revisions/:id/revert-field goes through the
-// items service, so the whole-snapshot Rollback below stays the blunt tool.
+// ─── Single-field revert (#667) ─────────────────────────────────────────────
 type FieldRevertCtl = {
   confirmField: string | null
   setConfirmField: (f: string | null) => void
@@ -151,19 +236,19 @@ function RevertFieldButton({ field, ctl }: { field: string; ctl: FieldRevertCtl 
   if (ctl.confirmField === field) {
     return (
       <span className='inline-flex items-center gap-1' data-revert-field-confirm={field}>
-        <span className='text-[10px] text-slate-500'>Revert?</span>
+        <span className='text-[10.5px] text-slate-500'>Revert?</span>
         <button
           type='button'
           disabled={ctl.pending}
           onClick={() => ctl.revert(field)}
-          className='rounded bg-nvr-cyan px-1.5 py-px text-[10px] font-semibold text-white disabled:opacity-50'
+          className='rounded bg-nvr-cyan px-1.5 py-px text-[10.5px] font-semibold text-white disabled:opacity-50'
         >
           Yes
         </button>
         <button
           type='button'
           onClick={() => ctl.setConfirmField(null)}
-          className='rounded border border-slate-200 px-1.5 py-px text-[10px] text-slate-500 dark:border-border'
+          className='rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-500 dark:border-border'
         >
           Cancel
         </button>
@@ -174,133 +259,17 @@ function RevertFieldButton({ field, ctl }: { field: string; ctl: FieldRevertCtl 
     <button
       type='button'
       onClick={() => ctl.setConfirmField(field)}
-      className='inline-flex items-center gap-0.5 rounded px-1 py-px text-[10px] font-medium text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+      className='inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-slate-400 opacity-0 transition-opacity hover:bg-nvr-cyan/10 hover:text-nvr-navy group-hover/frow:opacity-100 dark:hover:text-nvr-cyan'
       title='Set the field back to this revision’s value'
       data-revert-field={field}
     >
-      <RotateCcw className='h-2.5 w-2.5' />
-      Revert this field
+      <RotateCcw className='h-3 w-3' />
+      Revert
     </button>
   )
 }
 
-type FieldStatus = 'added' | 'removed' | 'changed' | 'unchanged'
-const STATUS_ROW_CLS: Record<FieldStatus, string> = {
-  added: 'bg-emerald-50/70 dark:bg-emerald-950/20',
-  removed: 'bg-red-50/70 dark:bg-red-950/20',
-  changed: 'bg-amber-50/70 dark:bg-amber-950/20',
-  unchanged: ''
-}
-
-function SideBySideView({
-  before,
-  after,
-  fieldRevert
-}: {
-  before: Record<string, unknown>
-  after: Record<string, unknown>
-  fieldRevert?: FieldRevertCtl
-}) {
-  const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort()
-  if (fields.length === 0)
-    return <p className='text-[12px] text-slate-400'>No snapshot data available.</p>
-  return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
-      <div className='grid grid-cols-[1fr_1fr] border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/40'>
-        <div className='px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-          Before
-        </div>
-        <div className='border-l border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:border-border'>
-          After
-        </div>
-      </div>
-      {fields.map((field) => {
-        const inBefore = field in before && before[field] !== undefined
-        const inAfter = field in after && after[field] !== undefined
-        const status: FieldStatus = !inBefore
-          ? 'added'
-          : !inAfter
-            ? 'removed'
-            : stringifyValue(before[field]) !== stringifyValue(after[field])
-              ? 'changed'
-              : 'unchanged'
-        return (
-          <div
-            key={field}
-            className={cn(
-              'border-b border-slate-100 last:border-0 dark:border-border/60',
-              STATUS_ROW_CLS[status]
-            )}
-          >
-            <div className='flex items-center gap-1.5 px-2.5 pt-1.5'>
-              <span className='font-mono text-[10.5px] text-slate-500'>{field}</span>
-              {status !== 'unchanged' && (
-                <span
-                  className={cn(
-                    'rounded px-1 py-px text-[9px] font-semibold uppercase',
-                    status === 'added' &&
-                      'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400',
-                    status === 'removed' &&
-                      'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
-                    status === 'changed' &&
-                      'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
-                  )}
-                >
-                  {status}
-                </span>
-              )}
-              {status === 'changed' && fieldRevert && field !== 'id' && (
-                <span className='ml-auto shrink-0'>
-                  <RevertFieldButton field={field} ctl={fieldRevert} />
-                </span>
-              )}
-            </div>
-            {status === 'changed' && (isRichText(before[field]) || isRichText(after[field])) ? (
-              <div className='px-2.5 py-1.5' data-richtext-diff>
-                <WordDiff before={before[field]} after={after[field]} />
-              </div>
-            ) : status === 'changed' &&
-              parseJsonObject(before[field]) &&
-              parseJsonObject(after[field]) ? (
-              <div className='px-2.5 py-1.5'>
-                <JsonKeyDiff
-                  before={parseJsonObject(before[field]) as Record<string, unknown>}
-                  after={parseJsonObject(after[field]) as Record<string, unknown>}
-                />
-              </div>
-            ) : (
-              <div className='grid grid-cols-[1fr_1fr]'>
-                <div className='px-2.5 py-1.5'>
-                  {inBefore ? (
-                    <ValueCell value={before[field]} tone='before' />
-                  ) : (
-                    <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
-                      not set
-                    </span>
-                  )}
-                </div>
-                <div className='border-l border-slate-100 px-2.5 py-1.5 dark:border-border/60'>
-                  {inAfter ? (
-                    <ValueCell value={after[field]} tone='after' />
-                  ) : (
-                    <span className='text-[11px] italic text-slate-300 dark:text-slate-600'>
-                      removed
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ─── Rich-text word diff (#45) ───────────────────────────────────────────────
-// A changed rich-text field renders as ONE word-level inline diff (green/red)
-// instead of two HTML blobs nobody can compare by eye.
-
+// ─── Rich-text word diff (#45) ──────────────────────────────────────────────
 function isRichText(v: unknown): boolean {
   return typeof v === 'string' && /<[a-z][^>]*>/i.test(v)
 }
@@ -361,19 +330,25 @@ function diffWords(aRaw: unknown, bRaw: unknown): DiffSeg[] {
 function WordDiff({ before, after }: { before: unknown; after: unknown }) {
   const segs = diffWords(before, after)
   return (
-    <p className='whitespace-pre-wrap break-words text-[11.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+    <p className='whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700 dark:text-slate-300'>
       {segs.map((seg, i) =>
         seg.type === 'same' ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
           <span key={i}>{seg.text} </span>
         ) : seg.type === 'del' ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
-          <del key={i} className='rounded bg-red-100 px-0.5 text-red-700 no-underline line-through dark:bg-red-900/40 dark:text-red-400'>
+          <del
+            key={i}
+            className='rounded bg-red-100 px-0.5 text-red-700 no-underline line-through dark:bg-red-900/40 dark:text-red-400'
+          >
             {seg.text}{' '}
           </del>
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: static segment list
-          <ins key={i} className='rounded bg-emerald-100 px-0.5 text-emerald-700 no-underline dark:bg-emerald-900/40 dark:text-emerald-400'>
+          <ins
+            key={i}
+            className='rounded bg-emerald-100 px-0.5 text-emerald-700 no-underline dark:bg-emerald-900/40 dark:text-emerald-400'
+          >
             {seg.text}{' '}
           </ins>
         )
@@ -382,79 +357,225 @@ function WordDiff({ before, after }: { before: unknown; after: unknown }) {
   )
 }
 
-function DeltaView({
-  delta,
-  fieldRevert
-}: {
-  delta: Record<string, unknown>
-  fieldRevert?: FieldRevertCtl
-}) {
-  const entries = Object.entries(delta)
-  if (entries.length === 0) return <p className='text-[12px] text-slate-400'>No changes recorded</p>
-  return (
-    <table className='w-full text-[12px]'>
-      <thead>
-        <tr className='text-left text-slate-400'>
-          <th className='pr-4 pb-1 font-medium w-2/5'>Field</th>
-          <th className='pb-1 font-medium'>New value</th>
-        </tr>
-      </thead>
-      <tbody>
-        {entries.map(([field, value]) => (
-          <tr key={field} className='border-t border-slate-100'>
-            <td className='pr-4 py-1.5 font-mono text-slate-500 align-top'>
-              {field}
-              {fieldRevert && field !== 'id' && (
-                <span className='mt-0.5 block'>
-                  <RevertFieldButton field={field} ctl={fieldRevert} />
-                </span>
-              )}
-            </td>
-            <td className='py-1.5 text-slate-700 break-all align-top'>
-              {value === null || value === undefined ? (
-                <span className='text-slate-400 italic'>null</span>
-              ) : typeof value === 'object' ? (
-                <span className='font-mono text-[11px] text-slate-500'>
-                  {JSON.stringify(value)}
-                </span>
-              ) : isRichText(value) ? (
-                <span className='whitespace-pre-wrap'>
-                  {stripToWords(value).join(' ').slice(0, 600)}
-                </span>
-              ) : (
-                String(value)
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+// ─── Field-change rows: the ONE renderer both views share ───────────────────
+// "Changes" = only what moved, old → new. "All fields" (before/after) = the
+// full snapshot pair. Both render the same row anatomy so nothing has to be
+// re-learned when the toggle flips.
+
+type FieldStatus = 'added' | 'removed' | 'changed' | 'unchanged'
+
+const STATUS_CHIP: Record<Exclude<FieldStatus, 'unchanged'>, string> = {
+  added: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400',
+  removed: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
+  changed: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+}
+
+interface FieldRowData {
+  field: string
+  status: FieldStatus
+  before: unknown
+  after: unknown
+  system: boolean
+}
+
+function computeFieldRows(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  meta: FieldMetaMap
+): FieldRowData[] {
+  const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+  const rows = fields.map((field) => {
+    const inBefore = field in before && before[field] !== undefined
+    const inAfter = field in after && after[field] !== undefined
+    const status: FieldStatus = !inBefore
+      ? 'added'
+      : !inAfter
+        ? 'removed'
+        : stringifyValue(before[field]) !== stringifyValue(after[field])
+          ? 'changed'
+          : 'unchanged'
+    return {
+      field,
+      status,
+      before: before[field],
+      after: after[field],
+      system: metaFor(meta, field).system
+    }
+  })
+  // Real fields first (config order is lost here, alpha by label is stable),
+  // system fields after, unchanged last within each band.
+  const rank = (r: FieldRowData) =>
+    (r.system ? 4 : 0) + (r.status === 'unchanged' ? 2 : 0)
+  return rows.sort(
+    (a, b) =>
+      rank(a) - rank(b) || metaFor(meta, a.field).label.localeCompare(metaFor(meta, b.field).label)
   )
 }
 
-function SnapshotDataView({ data }: { data: Record<string, unknown> }) {
+function FieldChangeRow({
+  row,
+  meta,
+  fieldRevert,
+  mode
+}: {
+  row: FieldRowData
+  meta: FieldMetaMap
+  fieldRevert?: FieldRevertCtl
+  mode: 'changes' | 'all'
+}) {
+  const richPair =
+    row.status === 'changed' && (isRichText(row.before) || isRichText(row.after))
+  const jsonPair =
+    row.status === 'changed' && parseJsonObject(row.before) && parseJsonObject(row.after)
   return (
-    <pre className='text-[11px] font-mono text-slate-600 bg-slate-50 rounded p-3 overflow-x-auto whitespace-pre-wrap break-all max-h-64'>
-      {JSON.stringify(data, null, 2)}
-    </pre>
+    <div
+      className={cn(
+        'group/frow border-b border-slate-100 px-3 py-2 last:border-0 dark:border-border/60',
+        row.system && 'bg-slate-50/60 dark:bg-muted/20'
+      )}
+      data-field-row={row.field}
+    >
+      <div className='flex items-center gap-2'>
+        <FieldLabel map={meta} field={row.field} />
+        {row.status !== 'unchanged' && (
+          <span
+            className={cn(
+              'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+              STATUS_CHIP[row.status]
+            )}
+          >
+            {row.status === 'added' ? 'set' : row.status}
+          </span>
+        )}
+        {(row.status === 'changed' || (mode === 'changes' && row.status === 'added')) &&
+          fieldRevert &&
+          row.field !== 'id' && (
+            <span className='ml-auto shrink-0'>
+              <RevertFieldButton field={row.field} ctl={fieldRevert} />
+            </span>
+          )}
+      </div>
+      <div className='mt-1'>
+        {richPair ? (
+          <div data-richtext-diff>
+            <WordDiff before={row.before} after={row.after} />
+          </div>
+        ) : jsonPair ? (
+          <JsonKeyDiff
+            before={parseJsonObject(row.before) as Record<string, unknown>}
+            after={parseJsonObject(row.after) as Record<string, unknown>}
+          />
+        ) : row.status === 'changed' || row.status === 'removed' ? (
+          <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+            <span className='max-w-full break-words text-[12px] text-rose-600 line-through decoration-rose-300 dark:text-rose-400'>
+              {displayValue(row.before) || <span className='italic'>empty</span>}
+            </span>
+            <ArrowRight className='h-3 w-3 shrink-0 self-center text-slate-300 dark:text-slate-600' />
+            <ValueCell value={row.after} tone='after' />
+          </div>
+        ) : (
+          <ValueCell value={row.after ?? row.before} tone='after' />
+        )}
+      </div>
+    </div>
   )
+}
+
+function FieldChangeList({
+  before,
+  after,
+  meta,
+  fieldRevert,
+  mode
+}: {
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  meta: FieldMetaMap
+  fieldRevert?: FieldRevertCtl
+  mode: 'changes' | 'all'
+}) {
+  const [showSystem, setShowSystem] = useState(false)
+  const allRows = useMemo(() => computeFieldRows(before, after, meta), [before, after, meta])
+  const scoped = mode === 'changes' ? allRows.filter((r) => r.status !== 'unchanged') : allRows
+  const visible = showSystem ? scoped : scoped.filter((r) => !r.system)
+  const hiddenSystem = scoped.length - visible.length
+  if (scoped.length === 0)
+    return (
+      <p className='px-3 py-3 text-[12px] text-slate-400'>
+        {mode === 'changes' ? 'No field changes recorded.' : 'No snapshot data available.'}
+      </p>
+    )
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      {visible.map((row) => (
+        <FieldChangeRow key={row.field} row={row} meta={meta} fieldRevert={fieldRevert} mode={mode} />
+      ))}
+      {hiddenSystem > 0 && (
+        <button
+          type='button'
+          onClick={() => setShowSystem(true)}
+          className='w-full border-t border-slate-100 px-3 py-2 text-left text-[11.5px] text-slate-400 hover:text-slate-600 dark:border-border/60 dark:hover:text-slate-300'
+          data-show-system
+        >
+          Show {hiddenSystem} system field{hiddenSystem === 1 ? '' : 's'} (ids, timestamps,
+          machine columns)
+        </button>
+      )}
+      {hiddenSystem === 0 && showSystem && scoped.some((r) => r.system) && (
+        <button
+          type='button'
+          onClick={() => setShowSystem(false)}
+          className='w-full border-t border-slate-100 px-3 py-2 text-left text-[11.5px] text-slate-400 hover:text-slate-600 dark:border-border/60'
+        >
+          Hide system fields
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ─── Revision row ───────────────────────────────────────────────────────────
+
+const ACTION_DOT: Record<string, string> = {
+  create: 'bg-emerald-500',
+  update: 'bg-nvr-cyan',
+  delete: 'bg-red-500'
+}
+
+function revisionUserName(rev: Revision): string {
+  if (rev.first_name || rev.last_name)
+    return [rev.first_name, rev.last_name].filter(Boolean).join(' ')
+  return rev.user_email ?? rev.user_id?.slice(0, 8) ?? 'System'
+}
+
+function revisionSentence(rev: Revision, humanCount: number, systemCount: number): string {
+  if (rev.action === 'create') return 'created this record'
+  if (rev.action === 'delete') return 'deleted this record'
+  if (humanCount > 0) return `changed ${humanCount} field${humanCount === 1 ? '' : 's'}`
+  if (systemCount > 0) return 'updated system fields'
+  return 'saved this record'
 }
 
 function RevisionRow({
   revision,
   previousData,
+  meta,
   onRollback,
-  inlineTableFields
+  inlineTableFields,
+  isLast
 }: {
   revision: Revision
   previousData: Record<string, unknown> | null
+  meta: FieldMetaMap
   onRollback?: () => void
   inlineTableFields?: O2MFieldInfo[]
+  isLast: boolean
 }) {
   const client = useNivaroClient()
   const [expanded, setExpanded] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
-  const [view, setView] = useState<'delta' | 'side'>('side')
+  const [view, setView] = useState<'changes' | 'all'>('changes')
+  const [showNotes, setShowNotes] = useState(false)
   const [o2mRestoring, setO2MRestoring] = useState<string | null>(null)
   const isUpdate = revision.action === 'update'
   const isCreate = revision.action === 'create'
@@ -465,9 +586,22 @@ function RevisionRow({
       ? {}
       : (previousData ?? {})
   const sideAfter: Record<string, unknown> = isDelete ? {} : (revision.data ?? {})
-  const deltaCount = revision.delta ? Object.keys(revision.delta).length : 0
+  // Count ACTUAL value differences vs the previous snapshot — delta keys
+  // overcount badly (integrations re-send every field on each save).
+  const { humanDelta, systemDelta } = useMemo(() => {
+    const src = revision.delta ?? {}
+    let human = 0
+    let system = 0
+    for (const f of Object.keys(src)) {
+      const prev = previousData?.[f]
+      const next = (revision.data ?? {})[f]
+      if (isUpdate && previousData && stringifyValue(prev) === stringifyValue(next)) continue
+      if (metaFor(meta, f).system) system++
+      else human++
+    }
+    return { humanDelta: human, systemDelta: system }
+  }, [revision, previousData, meta, isUpdate])
   const canRollback = isUpdate || isCreate
-
   const [rolledBackAt, setRolledBackAt] = useState<string | null>(null)
 
   const qc = useQueryClient()
@@ -477,7 +611,7 @@ function RevisionRow({
       client.request(post(`/revisions/${revision.id}/revert-field`, { field })),
     onSuccess: (_r, field) => {
       setConfirmRevertField(null)
-      toast.success(`Reverted ${field} to this revision's value`)
+      toast.success(`Reverted ${metaFor(meta, field).label} to this revision's value`)
       void qc.invalidateQueries({ queryKey: ['revisions', revision.collection, revision.item] })
       onRollback?.()
     },
@@ -508,12 +642,14 @@ function RevisionRow({
     if (!rolledBackAt) return
     setO2MRestoring(f.field)
     try {
-      await client.request(post('/revisions/o2m-restore', {
-        collection: f.relatedCollection,
-        many_field: f.manyField,
-        parent_id: f.parentId,
-        target_timestamp: rolledBackAt
-      }))
+      await client.request(
+        post('/revisions/o2m-restore', {
+          collection: f.relatedCollection,
+          many_field: f.manyField,
+          parent_id: f.parentId,
+          target_timestamp: rolledBackAt
+        })
+      )
       toast.success(`Restored ${f.label}`)
     } catch {
       toast.error(`Failed to restore ${f.label}`)
@@ -522,121 +658,166 @@ function RevisionRow({
     }
   }
 
+  const exactTime = revision.timestamp
+    ? new Date(revision.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : '—'
+
   return (
-    <div className='border-b last:border-0 border-slate-100'>
+    <div className='relative pl-9' data-revision-row={revision.id}>
+      {/* Timeline rail: dot per revision, line to the next one down. */}
+      <span
+        className={cn(
+          'absolute left-[11px] top-[18px] h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-card',
+          ACTION_DOT[revision.action ?? ''] ?? 'bg-slate-300'
+        )}
+        aria-hidden
+      />
+      {!isLast && (
+        <span
+          className='absolute bottom-0 left-[15.5px] top-[30px] w-px bg-slate-200 dark:bg-border'
+          aria-hidden
+        />
+      )}
+
       <button
         type='button'
         onClick={() => setExpanded((e) => !e)}
-        className='w-full flex items-center gap-2.5 py-3 text-left hover:bg-slate-50 transition-colors px-1 rounded'
+        className='flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/40'
       >
-        {expanded ? (
-          <ChevronDown className='h-3.5 w-3.5 text-slate-400 shrink-0' />
-        ) : (
-          <ChevronRight className='h-3.5 w-3.5 text-slate-400 shrink-0' />
-        )}
-        <Badge
-          variant={ACTION_VARIANTS[revision.action ?? ''] ?? 'secondary'}
-          className='text-[10px] capitalize w-14 justify-center shrink-0'
-        >
-          {revision.action ?? '—'}
-        </Badge>
-        <span className='text-[12px] text-slate-700 flex-1 truncate'>
-          {revisionUserName(revision)}
-        </span>
-        <div className='flex flex-col items-end gap-0.5 shrink-0'>
-          {isUpdate && deltaCount > 0 && (
-            <span className='text-[10px] text-slate-400'>
-              {deltaCount} field{deltaCount !== 1 ? 's' : ''}
+        <UserAvatar
+          userId={revision.user_id}
+          className='h-6 w-6'
+          fallback={
+            <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+              {revisionUserName(revision)
+                .split(' ')
+                .map((p) => p[0])
+                .filter(Boolean)
+                .slice(0, 2)
+                .join('')
+                .toUpperCase()}
             </span>
-          )}
-          <span className='text-[11px] text-slate-400'>
-            {revision.timestamp ? formatRelative(revision.timestamp) : '—'}
+          }
+        />
+        <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
+          <span className='font-medium'>{revisionUserName(revision)}</span>{' '}
+          <span className='text-slate-500 dark:text-slate-400'>
+            {revisionSentence(revision, humanDelta, systemDelta)}
           </span>
-        </div>
+        </span>
+        <span
+          className='shrink-0 text-[11px] tabular-nums text-slate-400'
+          title={revision.timestamp ? new Date(revision.timestamp).toLocaleString() : undefined}
+        >
+          {exactTime}
+        </span>
+        {expanded ? (
+          <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        ) : (
+          <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        )}
       </button>
+
       {expanded && (
-        <div className='px-6 pb-3 space-y-2'>
-          <RevisionAnnotations revisionId={revision.id} />
-          <div className='flex items-center justify-between'>
-            <p className='text-[10px] font-medium text-slate-500'>
-              {view === 'side'
-                ? 'Before / After'
-                : isUpdate && revision.delta
-                  ? 'Changes'
-                  : 'Snapshot'}
-            </p>
-            <div className='flex items-center overflow-hidden rounded border border-slate-200 dark:border-border'>
-              {(['delta', 'side'] as const).map((v) => (
+        <div className='space-y-2.5 px-2 pb-4 pt-1'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <div className='flex items-center overflow-hidden rounded-md border border-slate-200 dark:border-border'>
+              {(
+                [
+                  ['changes', 'What changed'],
+                  ['all', 'Full record']
+                ] as const
+              ).map(([v, label]) => (
                 <button
                   key={v}
                   type='button'
                   onClick={() => setView(v)}
-                  className={
+                  className={cn(
+                    'px-2.5 py-1 text-[11.5px] transition-colors',
                     view === v
-                      ? 'bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                      : 'px-2 py-0.5 text-[10px] text-slate-400 transition-colors hover:text-slate-600'
-                  }
+                      ? 'bg-nvr-cyan/10 font-medium text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  )}
                 >
-                  {v === 'delta' ? 'Delta' : 'Side-by-side'}
+                  {label}
                 </button>
               ))}
             </div>
-          </div>
-          {view === 'side' ? (
-            <SideBySideView before={sideBefore} after={sideAfter} fieldRevert={fieldRevert} />
-          ) : isUpdate && revision.delta ? (
-            <DeltaView delta={revision.delta} fieldRevert={fieldRevert} />
-          ) : (
-            <SnapshotDataView data={revision.data} />
-          )}
-          {canRollback && (
-            <div className='flex items-center justify-end gap-2 pt-1'>
-              {confirmRollback ? (
-                <>
-                  <span className='text-[11px] text-slate-500'>Restore this revision?</span>
-                  <Button
-                    size='sm'
-                    variant='destructive'
-                    className='h-6 text-[11px]'
-                    disabled={rollbackMut.isPending}
-                    onClick={() => rollbackMut.mutate()}
-                  >
-                    Yes, restore
-                  </Button>
+            <div className='flex items-center gap-1.5'>
+              <button
+                type='button'
+                onClick={() => setShowNotes((v) => !v)}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11.5px] transition-colors',
+                  showNotes
+                    ? 'border-nvr-cyan/40 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border dark:hover:text-slate-300'
+                )}
+              >
+                <MessageSquare className='h-3 w-3' />
+                Notes
+              </button>
+              {canRollback &&
+                (confirmRollback ? (
+                  <span className='inline-flex items-center gap-1.5'>
+                    <span className='text-[11px] text-slate-500'>Restore this version?</span>
+                    <Button
+                      size='sm'
+                      variant='destructive'
+                      className='h-6 text-[11px]'
+                      disabled={rollbackMut.isPending}
+                      onClick={() => rollbackMut.mutate()}
+                    >
+                      Yes, restore
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-6 text-[11px]'
+                      onClick={() => setConfirmRollback(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                ) : (
                   <Button
                     size='sm'
                     variant='outline'
-                    className='h-6 text-[11px]'
-                    onClick={() => setConfirmRollback(false)}
+                    className='h-6 gap-1 text-[11px]'
+                    disabled={rollbackMut.isPending}
+                    onClick={() => setConfirmRollback(true)}
+                    title='Set the whole record back to how it looked after this save'
                   >
-                    Cancel
+                    <RotateCcw className='h-3 w-3' />
+                    Restore this version
                   </Button>
-                </>
-              ) : (
-                <Button
-                  size='sm'
-                  variant='outline'
-                  className='h-6 text-[11px]'
-                  disabled={rollbackMut.isPending}
-                  onClick={() => setConfirmRollback(true)}
-                >
-                  <RotateCcw className='mr-1 h-3 w-3' />
-                  Rollback
-                </Button>
-              )}
+                ))}
             </div>
-          )}
+          </div>
+
+          {showNotes && <RevisionAnnotations revisionId={revision.id} />}
+
+          <FieldChangeList
+            before={sideBefore}
+            after={sideAfter}
+            meta={meta}
+            fieldRevert={fieldRevert}
+            mode={view}
+          />
+
           {rolledBackAt && inlineTableFields && inlineTableFields.length > 0 && (
-            <div className='mt-2 rounded border border-slate-100 bg-slate-50 p-2 space-y-1.5'>
-              <p className='text-[10px] font-medium text-slate-500'>Also restore related rows?</p>
-              {inlineTableFields.map(f => (
+            <div className='space-y-1.5 rounded-md border border-slate-100 bg-slate-50 p-2 dark:border-border dark:bg-muted/30'>
+              <p className='text-[10.5px] font-medium text-slate-500'>
+                Also restore related rows?
+              </p>
+              {inlineTableFields.map((f) => (
                 <div key={f.field} className='flex items-center justify-between gap-2'>
-                  <span className='text-[11px] text-slate-600'>{f.label}</span>
+                  <span className='text-[11.5px] text-slate-600 dark:text-slate-300'>{f.label}</span>
                   <button
                     type='button'
                     disabled={o2mRestoring === f.field}
                     onClick={() => restoreO2MField(f)}
-                    className='rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
+                    className='rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10.5px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
                   >
                     {o2mRestoring === f.field ? 'Restoring…' : 'Restore'}
                   </button>
@@ -650,37 +831,26 @@ function RevisionRow({
   )
 }
 
-function RevisionsList({
-  collection,
-  item,
-  onRollback,
-  inlineTableFields
+// ─── Time-travel tools (as-of + between-dates), one collapsible strip ───────
+
+function TimeTravelTools({
+  data,
+  meta
 }: {
-  collection: string
-  item: string
-  onRollback?: () => void
-  inlineTableFields?: O2MFieldInfo[]
+  data: Revision[]
+  meta: FieldMetaMap
 }) {
-  const client = useNivaroClient()
-  const { data, isLoading } = useQuery({
-    queryKey: ['revisions', collection, item],
-    queryFn: () =>
-      client
-        .request<{ data: Revision[] }>(get('/revisions', { collection, item }))
-        .then((r) => r.data ?? []),
-    staleTime: 30_000
-  })
-  const count = data?.length ?? 0
-  // Time travel: pick a date, see the record as it was then — the latest
-  // snapshot at or before that moment. Every revision already carries the
-  // FULL post-change snapshot, so this is a lookup, not a reconstruction.
+  const [openTool, setOpenTool] = useState<'asof' | 'compare' | null>(null)
   const [asOf, setAsOf] = useState('')
-  // Between-dates diff (#60): two dates → field-level diff of what changed in
-  // the window, each field attributed to whoever changed it LAST inside the
-  // window (walked from the revision deltas — attribution is exact, not
-  // inferred from the endpoint snapshots).
   const [diffFrom, setDiffFrom] = useState('')
   const [diffTo, setDiffTo] = useState('')
+
+  const asOfRevision = useMemo(() => {
+    if (!asOf || !data) return null
+    const cutoff = new Date(`${asOf}T23:59:59`).getTime()
+    return data.find((r) => r.timestamp && new Date(r.timestamp).getTime() <= cutoff) ?? null
+  }, [asOf, data])
+
   const betweenDiff = useMemo<
     | { error: string; fields?: undefined }
     | {
@@ -705,7 +875,6 @@ function RevisionsList({
     if (!end) return { error: 'No snapshot exists at or before the second date' }
     const baseData = base?.data ?? {}
     const endData = end.data ?? {}
-    // Who touched each field in the window — newest revision wins per field.
     const who = new Map<string, { name: string; when: string | null }>()
     for (const r of [...data].reverse()) {
       const t = r.timestamp ? new Date(r.timestamp).getTime() : 0
@@ -716,185 +885,306 @@ function RevisionsList({
     }
     const fields = [...new Set([...Object.keys(baseData), ...Object.keys(endData)])]
       .filter((f) => String(baseData[f] ?? '') !== String(endData[f] ?? ''))
-      .map((f) => ({
-        field: f,
-        from: baseData[f],
-        to: endData[f],
-        by: who.get(f) ?? null
-      }))
+      .map((f) => ({ field: f, from: baseData[f], to: endData[f], by: who.get(f) ?? null }))
     return { fields }
   }, [diffFrom, diffTo, data])
-  const asOfRevision = useMemo(() => {
-    if (!asOf || !data) return null
-    const cutoff = new Date(`${asOf}T23:59:59`).getTime()
-    // data is newest-first — first row at/before the cutoff wins.
-    return (
-      data.find((r) => r.timestamp && new Date(r.timestamp).getTime() <= cutoff) ?? null
-    )
-  }, [asOf, data])
-  if (isLoading)
-    return (
-      <div className='space-y-2 pt-2'>
-        {[1, 2, 3, 4].map((i) => (
-          <Skeleton key={i} className='h-10 rounded' />
-        ))}
-      </div>
-    )
-  if (count === 0)
-    return <p className='text-[13px] text-slate-400 pt-4'>No revisions recorded yet.</p>
+
+  const dateInputCls =
+    'h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+
   return (
-    <div className='pt-2'>
-      <div className='mb-2 flex items-center gap-2'>
-        <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
-          View record as of
-        </span>
-        <input
-          type='date'
-          value={asOf}
-          onChange={(e) => setAsOf(e.target.value)}
-          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
-          aria-label='View record as of date'
-          data-as-of
-        />
-        {asOf && (
-          <button
-            type='button'
-            onClick={() => setAsOf('')}
-            className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
-          >
-            Clear
-          </button>
-        )}
+    <div className='space-y-2'>
+      <div className='flex items-center gap-1.5'>
+        <button
+          type='button'
+          onClick={() => setOpenTool(openTool === 'asof' ? null : 'asof')}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] transition-colors',
+            openTool === 'asof' || asOf
+              ? 'border-nvr-cyan/40 bg-nvr-cyan/5 font-medium text-nvr-navy dark:text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:text-slate-200'
+          )}
+        >
+          <CalendarClock className='h-3.5 w-3.5' />
+          View as of a date
+        </button>
+        <button
+          type='button'
+          onClick={() => setOpenTool(openTool === 'compare' ? null : 'compare')}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] transition-colors',
+            openTool === 'compare' || (diffFrom && diffTo)
+              ? 'border-nvr-cyan/40 bg-nvr-cyan/5 font-medium text-nvr-navy dark:text-nvr-cyan'
+              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:text-slate-200'
+          )}
+        >
+          <GitCompareArrows className='h-3.5 w-3.5' />
+          Compare two dates
+        </button>
       </div>
-      {asOf && !asOfRevision && (
-        <p className='mb-2 text-[12px] text-slate-400'>
-          No snapshot exists at or before that date — the record is newer.
-        </p>
-      )}
-      {asOfRevision && (
-        <div className='mb-3 overflow-hidden rounded-lg border border-nvr-cyan/40'>
-          <div className='flex items-center gap-2 border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
-            <span className='text-[11px] font-semibold text-slate-700 dark:text-slate-200'>
-              Record as of{' '}
-              {asOfRevision.timestamp ? new Date(asOfRevision.timestamp).toLocaleString() : asOf}
+
+      {openTool === 'asof' && (
+        <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
+          <div className='flex items-center gap-2'>
+            <span className='text-[11.5px] text-slate-500 dark:text-slate-400'>
+              Show the record exactly as it was on
             </span>
+            <input
+              type='date'
+              value={asOf}
+              onChange={(e) => setAsOf(e.target.value)}
+              className={dateInputCls}
+              aria-label='View record as of date'
+              data-as-of
+            />
+            {asOf && (
+              <button
+                type='button'
+                onClick={() => setAsOf('')}
+                className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+              >
+                Clear
+              </button>
+            )}
           </div>
-          <div className='max-h-80 overflow-y-auto'>
-            {Object.entries(asOfRevision.data ?? {})
-              .filter(([, v]) => v !== null && v !== undefined && v !== '')
-              .map(([k, v]) => (
-                <div
-                  key={k}
-                  className='flex items-start gap-2 border-b border-slate-100 px-2.5 py-1 last:border-0 dark:border-border/60'
-                >
-                  <span className='w-[38%] shrink-0 break-all font-mono text-[10.5px] text-slate-500'>
-                    {k}
-                  </span>
-                  <span className='break-all text-[11px] text-slate-700 dark:text-slate-300'>
-                    {typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : String(v).slice(0, 200)}
-                  </span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-      <div className='mb-2 flex flex-wrap items-center gap-2'>
-        <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
-          Compare between
-        </span>
-        <input
-          type='date'
-          value={diffFrom}
-          onChange={(e) => setDiffFrom(e.target.value)}
-          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
-          aria-label='Compare from date'
-          data-diff-from
-        />
-        <span className='text-[11px] text-slate-400'>and</span>
-        <input
-          type='date'
-          value={diffTo}
-          onChange={(e) => setDiffTo(e.target.value)}
-          className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
-          aria-label='Compare to date'
-          data-diff-to
-        />
-        {(diffFrom || diffTo) && (
-          <button
-            type='button'
-            onClick={() => {
-              setDiffFrom('')
-              setDiffTo('')
-            }}
-            className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
-          >
-            Clear
-          </button>
-        )}
-      </div>
-      {betweenDiff?.error != null && (
-        <p className='mb-2 text-[12px] text-amber-600 dark:text-amber-400'>{betweenDiff?.error}</p>
-      )}
-      {betweenDiff?.fields != null && (
-        <div className='mb-3 overflow-hidden rounded-lg border border-nvr-cyan/40' data-between-diff>
-          <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
-            <span className='text-[11px] font-semibold text-slate-700 dark:text-slate-200'>
-              {betweenDiff.fields.length} field{betweenDiff.fields.length === 1 ? '' : 's'} changed
-              between {diffFrom} and {diffTo}
-            </span>
-          </div>
-          {betweenDiff.fields.length === 0 ? (
-            <p className='px-2.5 py-3 text-[12px] text-slate-400'>
-              Nothing changed in that window.
+          {asOf && !asOfRevision && (
+            <p className='mt-2 text-[12px] text-slate-400'>
+              No snapshot exists at or before that date — the record is newer.
             </p>
-          ) : (
-            <div className='max-h-80 overflow-y-auto'>
-              {betweenDiff.fields.map((f) => (
-                <div
-                  key={f.field}
-                  className='border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
-                >
-                  <div className='flex items-baseline justify-between gap-2'>
-                    <span className='break-all font-mono text-[10.5px] text-slate-500'>
-                      {f.field}
-                    </span>
-                    {f.by && (
-                      <span className='shrink-0 text-[10px] text-slate-400'>
-                        {f.by.name}
-                        {f.by.when ? ` · ${new Date(f.by.when).toLocaleDateString()}` : ''}
+          )}
+          {asOfRevision && (
+            <div className='mt-2 overflow-hidden rounded-lg border border-nvr-cyan/40 bg-white dark:bg-card'>
+              <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
+                <span className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
+                  Record as of{' '}
+                  {asOfRevision.timestamp
+                    ? new Date(asOfRevision.timestamp).toLocaleString()
+                    : asOf}
+                </span>
+              </div>
+              <div className='max-h-80 overflow-y-auto'>
+                {Object.entries(asOfRevision.data ?? {})
+                  .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                  .sort(([a], [b]) =>
+                    metaFor(meta, a).label.localeCompare(metaFor(meta, b).label)
+                  )
+                  .map(([k, v]) => (
+                    <div
+                      key={k}
+                      className='flex items-start gap-3 border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
+                    >
+                      <span className='w-[200px] shrink-0 text-[11.5px] font-medium text-slate-600 dark:text-slate-300' title={k}>
+                        {metaFor(meta, k).label}
                       </span>
-                    )}
-                  </div>
-                  <p className='mt-0.5 break-all text-[11px]'>
-                    <span className='text-red-500 line-through dark:text-red-400'>
-                      {f.from == null || f.from === '' ? '—' : String(f.from).slice(0, 120)}
-                    </span>{' '}
-                    <span className='text-emerald-600 dark:text-emerald-400'>
-                      {f.to == null || f.to === '' ? '—' : String(f.to).slice(0, 120)}
-                    </span>
-                  </p>
-                </div>
-              ))}
+                      <span className='break-words text-[11.5px] text-slate-700 dark:text-slate-300'>
+                        {displayValue(v).slice(0, 200)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
             </div>
           )}
         </div>
       )}
-      {/* Record time-lapse (#373): play through the history, deltas as captions. */}
-      {(data?.length ?? 0) >= 3 && (
-        <TimeLapseBar revisions={data ?? []} />
+
+      {openTool === 'compare' && (
+        <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/20'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='text-[11.5px] text-slate-500 dark:text-slate-400'>
+              What changed between
+            </span>
+            <input
+              type='date'
+              value={diffFrom}
+              onChange={(e) => setDiffFrom(e.target.value)}
+              className={dateInputCls}
+              aria-label='Compare from date'
+              data-diff-from
+            />
+            <span className='text-[11.5px] text-slate-400'>and</span>
+            <input
+              type='date'
+              value={diffTo}
+              onChange={(e) => setDiffTo(e.target.value)}
+              className={dateInputCls}
+              aria-label='Compare to date'
+              data-diff-to
+            />
+            {(diffFrom || diffTo) && (
+              <button
+                type='button'
+                onClick={() => {
+                  setDiffFrom('')
+                  setDiffTo('')
+                }}
+                className='text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {betweenDiff?.error != null && (
+            <p className='mt-2 text-[12px] text-amber-600 dark:text-amber-400'>
+              {betweenDiff?.error}
+            </p>
+          )}
+          {betweenDiff?.fields != null && (
+            <div
+              className='mt-2 overflow-hidden rounded-lg border border-nvr-cyan/40 bg-white dark:bg-card'
+              data-between-diff
+            >
+              <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
+                <span className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
+                  {betweenDiff.fields.length} field
+                  {betweenDiff.fields.length === 1 ? '' : 's'} changed between {diffFrom} and{' '}
+                  {diffTo}
+                </span>
+              </div>
+              {betweenDiff.fields.length === 0 ? (
+                <p className='px-2.5 py-3 text-[12px] text-slate-400'>
+                  Nothing changed in that window.
+                </p>
+              ) : (
+                <div className='max-h-80 overflow-y-auto'>
+                  {betweenDiff.fields.map((f) => (
+                    <div
+                      key={f.field}
+                      className='border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
+                    >
+                      <div className='flex items-baseline justify-between gap-2'>
+                        <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300' title={f.field}>
+                          {metaFor(meta, f.field).label}
+                        </span>
+                        {f.by && (
+                          <span className='shrink-0 text-[10.5px] text-slate-400'>
+                            {f.by.name}
+                            {f.by.when ? ` · ${new Date(f.by.when).toLocaleDateString()}` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <p className='mt-0.5 break-words text-[11.5px]'>
+                        <span className='text-red-500 line-through dark:text-red-400'>
+                          {f.from == null || f.from === ''
+                            ? 'empty'
+                            : displayValue(f.from).slice(0, 120)}
+                        </span>{' '}
+                        <span className='text-emerald-600 dark:text-emerald-400'>
+                          {f.to == null || f.to === '' ? 'empty' : displayValue(f.to).slice(0, 120)}
+                        </span>
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
-      {(data ?? []).map((rev, i) => (
-        <RevisionRow
-          key={rev.id}
-          revision={rev}
-          previousData={data?.[i + 1]?.data ?? null}
-          onRollback={onRollback}
-          inlineTableFields={inlineTableFields}
-        />
-      ))}
     </div>
   )
 }
+
+// ─── The list, grouped by day ───────────────────────────────────────────────
+
+function dayKey(ts: string | null): string {
+  if (!ts) return 'Unknown date'
+  return new Date(ts).toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })
+}
+
+function RevisionsList({
+  collection,
+  item,
+  onRollback,
+  inlineTableFields
+}: {
+  collection: string
+  item: string
+  onRollback?: () => void
+  inlineTableFields?: O2MFieldInfo[]
+}) {
+  const client = useNivaroClient()
+  const meta = useFieldMeta(collection, true)
+  const { data, isLoading } = useQuery({
+    queryKey: ['revisions', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Revision[] }>(get('/revisions', { collection, item }))
+        .then((r) => r.data ?? []),
+    staleTime: 30_000
+  })
+  const count = data?.length ?? 0
+
+  const groups = useMemo(() => {
+    const out: Array<{ day: string; revisions: Revision[] }> = []
+    for (const rev of data ?? []) {
+      const day = dayKey(rev.timestamp)
+      const last = out[out.length - 1]
+      if (last && last.day === day) last.revisions.push(rev)
+      else out.push({ day, revisions: [rev] })
+    }
+    return out
+  }, [data])
+
+  if (isLoading)
+    return (
+      <div className='space-y-2 pt-3'>
+        {[1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} className='h-11 rounded-md' />
+        ))}
+      </div>
+    )
+  if (count === 0)
+    return (
+      <div className='flex flex-col items-center py-16 text-center'>
+        <Clock className='mb-2 h-8 w-8 text-slate-300 dark:text-slate-600' />
+        <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>
+          No history yet
+        </p>
+        <p className='mt-1 max-w-[38ch] text-[12px] text-slate-400'>
+          Every save records who changed what — the trail will appear here.
+        </p>
+      </div>
+    )
+
+  return (
+    <div className='space-y-3 pt-3'>
+      <TimeTravelTools data={data ?? []} meta={meta} />
+      {(data?.length ?? 0) >= 3 && <TimeLapseBar revisions={data ?? []} meta={meta} />}
+      <div>
+        {groups.map((g) => (
+          <div key={g.day}>
+            <div className='sticky top-0 z-10 -mx-1 bg-white/95 px-1 py-1.5 backdrop-blur dark:bg-card/95'>
+              <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                {g.day}
+              </span>
+            </div>
+            {g.revisions.map((rev) => {
+              const globalIdx = (data ?? []).indexOf(rev)
+              return (
+                <RevisionRow
+                  key={rev.id}
+                  revision={rev}
+                  previousData={data?.[globalIdx + 1]?.data ?? null}
+                  meta={meta}
+                  onRollback={onRollback}
+                  inlineTableFields={inlineTableFields}
+                  isLast={globalIdx === (data?.length ?? 1) - 1}
+                />
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Panel shell ────────────────────────────────────────────────────────────
 
 export function RevisionsPanel({
   collection,
@@ -926,25 +1216,34 @@ export function RevisionsPanel({
           </Button>
         </SheetTrigger>
       )}
-      <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
+      <SheetContent className='w-[720px] overflow-y-auto sm:max-w-[92vw]'>
         <SheetHeader>
           <SheetTitle className='flex items-center gap-2 text-base'>
             <Clock className='h-4 w-4 text-slate-400' />
-            Revision History
+            Revision history
           </SheetTitle>
+          <p className='text-[12px] text-slate-400'>
+            Who changed what, when — expand any entry to see the exact values, revert a single
+            field, or restore the whole version.
+          </p>
         </SheetHeader>
         <RevisionValueSearch collection={collection} item={item} />
-        <RevisionsList collection={collection} item={item} onRollback={onRollback} inlineTableFields={inlineTableFields} />
+        <RevisionsList
+          collection={collection}
+          item={item}
+          onRollback={onRollback}
+          inlineTableFields={inlineTableFields}
+        />
       </SheetContent>
     </Sheet>
   )
 }
 
-
 /** Revision value search (#98), record-scoped: "when did 42000 first appear on
  *  this record, and who wrote it". Server-side over the record's deltas. */
 function RevisionValueSearch({ collection, item }: { collection: string; item: string }) {
   const client = useNivaroClient()
+  const meta = useFieldMeta(collection, true)
   const [q, setQ] = useState('')
   const [applied, setApplied] = useState('')
   const { data, isFetching } = useQuery<{
@@ -960,35 +1259,39 @@ function RevisionValueSearch({ collection, item }: { collection: string; item: s
     queryKey: ['rev-value-search', collection, item, applied],
     queryFn: () =>
       client
-        .request<{ data: never }>(
-          get('/revisions/value-search', { collection, item, q: applied })
-        )
+        .request<{ data: never }>(get('/revisions/value-search', { collection, item, q: applied }))
         .then((r) => r.data),
     enabled: applied.length >= 2
   })
   return (
-    <div className='mt-3 rounded-lg border border-slate-200 p-2.5 dark:border-border'>
-      <div className='flex items-center gap-1.5'>
+    <div className='mt-3'>
+      <div className='relative'>
+        <Search className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') setApplied(q.trim())
           }}
-          placeholder='Search this record’s history for a value…'
-          className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+          placeholder='Search this record’s history for a value — who wrote it, and when'
+          className='h-8 w-full rounded-md border border-slate-200 bg-background pl-8 pr-8 text-[12.5px] outline-none focus:border-nvr-cyan dark:border-border'
         />
-        <button
-          type='button'
-          disabled={q.trim().length < 2}
-          onClick={() => setApplied(q.trim())}
-          className='h-7 shrink-0 rounded-md border border-slate-200 px-2 text-[11.5px] text-slate-500 hover:text-slate-700 disabled:opacity-40 dark:border-border'
-        >
-          Find
-        </button>
+        {applied && (
+          <button
+            type='button'
+            onClick={() => {
+              setQ('')
+              setApplied('')
+            }}
+            className='absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600'
+            aria-label='Clear search'
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        )}
       </div>
       {applied && (
-        <div className='mt-2 space-y-1.5'>
+        <div className='mt-2 space-y-1.5 rounded-lg border border-slate-200 p-2.5 dark:border-border'>
           {isFetching ? (
             <p className='text-[11.5px] text-slate-400'>Searching…</p>
           ) : (data?.matches ?? []).length === 0 ? (
@@ -1002,8 +1305,10 @@ function RevisionValueSearch({ collection, item }: { collection: string; item: s
                   <p className='text-slate-600 dark:text-slate-300'>
                     {m.fields.map((f) => (
                       <span key={f.field}>
-                        <span className='font-mono text-[10.5px]'>{f.field}</span> → “
-                        {f.value.length > 60 ? `${f.value.slice(0, 60)}…` : f.value}”{' '}
+                        <span className='font-medium' title={f.field}>
+                          {metaFor(meta, f.field).label}
+                        </span>{' '}
+                        → “{f.value.length > 60 ? `${f.value.slice(0, 60)}…` : f.value}”{' '}
                       </span>
                     ))}
                   </p>
@@ -1024,8 +1329,7 @@ function RevisionValueSearch({ collection, item }: { collection: string; item: s
   )
 }
 
-
-// ─── History annotations (#372): comment on a specific revision ──────────────
+// ─── History annotations (#372): comment on a specific revision ─────────────
 function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -1036,9 +1340,9 @@ function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
     queryKey: ['revision-notes', String(revisionId)],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: string; text: string; created_at: string; user_name?: string | null }> }>(
-          get('/comments', { collection: 'nivaro_revisions', item: String(revisionId) })
-        )
+        .request<{
+          data: Array<{ id: string; text: string; created_at: string; user_name?: string | null }>
+        }>(get('/comments', { collection: 'nivaro_revisions', item: String(revisionId) }))
         .then((r) => r.data ?? [])
         .catch(() => []),
     staleTime: 30_000
@@ -1091,10 +1395,10 @@ function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
   )
 }
 
-
-// ─── Record time-lapse (#373) ────────────────────────────────────────────────
+// ─── Record time-lapse (#373) ───────────────────────────────────────────────
 function TimeLapseBar({
-  revisions
+  revisions,
+  meta
 }: {
   revisions: Array<{
     id: number | string
@@ -1103,6 +1407,7 @@ function TimeLapseBar({
     user_name?: string | null
     delta?: Record<string, unknown> | null
   }>
+  meta: FieldMetaMap
 }) {
   const ordered = [...revisions].reverse() // oldest → newest
   const [playing, setPlaying] = useState(false)
@@ -1117,9 +1422,13 @@ function TimeLapseBar({
     return () => clearTimeout(t)
   }, [playing, idx, ordered.length])
   const cur = ordered[idx]
-  const deltaKeys = cur?.delta ? Object.keys(cur.delta).slice(0, 6) : []
+  const deltaLabels = cur?.delta
+    ? Object.keys(cur.delta)
+        .slice(0, 5)
+        .map((f) => metaFor(meta, f).label)
+    : []
   return (
-    <div className='mb-2 rounded-md border border-slate-200 bg-slate-50/70 p-2 dark:border-border dark:bg-muted/30'>
+    <div className='rounded-md border border-slate-200 bg-slate-50/70 p-2 dark:border-border dark:bg-muted/30'>
       <div className='flex items-center gap-2'>
         <button
           type='button'
@@ -1152,9 +1461,9 @@ function TimeLapseBar({
           <span className='font-medium capitalize'>{cur.action ?? 'change'}</span>
           {cur.timestamp ? ` · ${new Date(cur.timestamp).toLocaleString()}` : ''}
           {cur.user_name ? ` · ${cur.user_name}` : ''}
-          {deltaKeys.length > 0 && (
-            <span className='ml-1 font-mono text-[10.5px] text-slate-400'>
-              changed: {deltaKeys.join(', ')}
+          {deltaLabels.length > 0 && (
+            <span className='ml-1 text-[10.5px] text-slate-400'>
+              changed: {deltaLabels.join(', ')}
             </span>
           )}
         </p>
