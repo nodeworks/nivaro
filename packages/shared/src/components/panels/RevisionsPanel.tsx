@@ -504,12 +504,15 @@ function FieldChangeRow({
   row,
   meta,
   fieldRevert,
-  mode
+  mode,
+  hideStatusChips
 }: {
   row: FieldRowData
   meta: FieldMetaMap
   fieldRevert?: FieldRevertCtl
   mode: 'changes' | 'all'
+  /** On a CREATE revision every field is 'set' — the chips say nothing. */
+  hideStatusChips?: boolean
 }) {
   const richPair =
     row.status === 'changed' && (isRichText(row.before) || isRichText(row.after))
@@ -525,7 +528,7 @@ function FieldChangeRow({
     >
       <div className='flex items-center gap-2'>
         <FieldLabel map={meta} field={row.field} />
-        {row.status !== 'unchanged' && (
+        {row.status !== 'unchanged' && !hideStatusChips && (
           <span
             className={cn(
               'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
@@ -574,13 +577,15 @@ function FieldChangeList({
   after,
   meta,
   fieldRevert,
-  mode
+  mode,
+  hideStatusChips
 }: {
   before: Record<string, unknown>
   after: Record<string, unknown>
   meta: FieldMetaMap
   fieldRevert?: FieldRevertCtl
   mode: 'changes' | 'all'
+  hideStatusChips?: boolean
 }) {
   const [showSystem, setShowSystem] = useState(false)
   const allRows = useMemo(() => computeFieldRows(before, after, meta), [before, after, meta])
@@ -596,7 +601,14 @@ function FieldChangeList({
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       {visible.map((row) => (
-        <FieldChangeRow key={row.field} row={row} meta={meta} fieldRevert={fieldRevert} mode={mode} />
+        <FieldChangeRow
+          key={row.field}
+          row={row}
+          meta={meta}
+          fieldRevert={fieldRevert}
+          mode={mode}
+          hideStatusChips={hideStatusChips}
+        />
       ))}
       {hiddenSystem > 0 && (
         <button
@@ -891,6 +903,7 @@ function RevisionRow({
             meta={meta}
             fieldRevert={fieldRevert}
             mode={view}
+            hideStatusChips={isCreate}
           />
 
           {rolledBackAt && inlineTableFields && inlineTableFields.length > 0 && (
@@ -1244,7 +1257,7 @@ function RevisionsList({
       <div>
         {groups.map((g) => (
           <div key={g.day}>
-            <div className='sticky top-0 z-10 -mx-1 bg-white/95 px-1 py-1.5 backdrop-blur dark:bg-card/95'>
+            <div className='sticky top-0 z-10 -mx-6 border-b border-slate-100 bg-white px-6 py-1.5 dark:border-border/60 dark:bg-card'>
               <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
                 {g.day}
               </span>
@@ -1302,24 +1315,29 @@ export function RevisionsPanel({
           </Button>
         </SheetTrigger>
       )}
-      <SheetContent className='w-[720px] overflow-y-auto sm:max-w-[92vw]'>
-        <SheetHeader>
-          <SheetTitle className='flex items-center gap-2 text-base'>
-            <Clock className='h-4 w-4 text-slate-400' />
-            Revision history
-          </SheetTitle>
-          <p className='text-[12px] text-slate-400'>
-            Who changed what, when — expand any entry to see the exact values, revert a single
-            field, or restore the whole version.
-          </p>
-        </SheetHeader>
-        <RevisionValueSearch collection={collection} item={item} />
-        <RevisionsList
-          collection={collection}
-          item={item}
-          onRollback={onRollback}
-          inlineTableFields={inlineTableFields}
-        />
+      <SheetContent className='w-[720px] overflow-y-auto p-0 sm:max-w-[92vw]'>
+        {/* Padding lives on this wrapper, NOT the scroll container — sticky
+            day headers pin at the scroller's padding edge, so padding on the
+            scroller left a see-through band above the pinned header. */}
+        <div className='p-6'>
+          <SheetHeader>
+            <SheetTitle className='flex items-center gap-2 text-base'>
+              <Clock className='h-4 w-4 text-slate-400' />
+              Revision history
+            </SheetTitle>
+            <p className='text-[12px] text-slate-400'>
+              Who changed what, when — expand any entry to see the exact values, revert a single
+              field, or restore the whole version.
+            </p>
+          </SheetHeader>
+          <RevisionValueSearch collection={collection} item={item} />
+          <RevisionsList
+            collection={collection}
+            item={item}
+            onRollback={onRollback}
+            inlineTableFields={inlineTableFields}
+          />
+        </div>
       </SheetContent>
     </Sheet>
   )
