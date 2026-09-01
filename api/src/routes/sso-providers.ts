@@ -65,6 +65,11 @@ function sanitizeLogoUrl(v: unknown): string | null {
   const raw = String(v ?? '').trim()
   if (!raw) return null
   if (/^data:image\//i.test(raw)) return raw
+  // Raw <svg> markup is accepted and stored as a data URI — rendered via
+  // <img src>, where embedded script/event handlers never execute.
+  if (/^<svg[\s>]/i.test(raw) && raw.length <= 20_000) {
+    return `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`
+  }
   try {
     const u = new URL(raw)
     return u.protocol === 'https:' || u.protocol === 'http:' ? raw : null
