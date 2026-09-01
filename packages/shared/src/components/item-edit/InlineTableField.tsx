@@ -1432,15 +1432,21 @@ export function InlineTableField({
       // its closest() walks the orphaned subtree and can never find the
       // editor, so an in-editor click read as "outside" and closed the row.
       // Whatever re-rendered under the pointer was part of the interaction.
-      if (!t.isConnected) return
+      if (!t.isConnected) {
+        lastDownInsideRef.current = true
+        return
+      }
       if (
         t.closest('[data-o2m-editing]') ||
         t.closest('[data-radix-popper-content-wrapper]') ||
         t.closest('[data-nvr-combobox-panel]') ||
         t.closest('[role="dialog"]') ||
         t.closest('[data-omx-overlay]')
-      )
+      ) {
+        lastDownInsideRef.current = true
         return
+      }
+      lastDownInsideRef.current = false
       if (blurTimerRef.current) {
         clearTimeout(blurTimerRef.current)
         blurTimerRef.current = null
@@ -1466,6 +1472,23 @@ export function InlineTableField({
     setActivePreset(name)
   }
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Whether the most recent pointer-down landed inside the editing
+  // interaction (row, portaled picker panels, dialogs). The blur timer
+  // consults this: on Windows, clicking a NON-FOCUSABLE part of the row blurs
+  // the input with relatedTarget null, which read as leaving the editor.
+  const lastDownInsideRef = useRef(false)
+  const isEditorNode = (n: Node | null): boolean => {
+    const el = n as HTMLElement | null
+    if (!el || !(el instanceof HTMLElement)) return false
+    if (!el.isConnected) return true
+    return !!(
+      el.closest('[data-o2m-editing]') ||
+      el.closest('[data-radix-popper-content-wrapper]') ||
+      el.closest('[data-nvr-combobox-panel]') ||
+      el.closest('[role="dialog"]') ||
+      el.closest('[data-omx-overlay]')
+    )
+  }
 
   // Auto-detect table-type layout for the related collection when no explicit layoutId is given.
   // This lets Apply Values / Create-with-Defaults zones work without manually linking a layout_id
@@ -3910,7 +3933,17 @@ export function InlineTableField({
                 onBlur={(e) => {
                   if (!isEditing || saving || isPendingDelete) return
                   if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
+                  // Focus moving into a PORTALED editor layer (picker panel,
+                  // dialog) is still the same interaction; and a null
+                  // relatedTarget (clicking non-focusable row chrome — the
+                  // Windows report) defers to the pointer handler, which
+                  // already knows whether the press was inside.
+                  if (isEditorNode(e.relatedTarget as Node | null)) return
+                  blurTimerRef.current = setTimeout(() => {
+                    if (lastDownInsideRef.current) return
+                    if (isEditorNode(document.activeElement)) return
+                    void saveEdit()
+                  }, 150)
                 }}
                 onFocus={() => {
                   if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
@@ -4333,7 +4366,12 @@ export function InlineTableField({
                 onBlur={(e) => {
                   if (!isEditing || saving) return
                   if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  blurTimerRef.current = setTimeout(() => void saveEdit(), 150)
+                  if (isEditorNode(e.relatedTarget as Node | null)) return
+                  blurTimerRef.current = setTimeout(() => {
+                    if (lastDownInsideRef.current) return
+                    if (isEditorNode(document.activeElement)) return
+                    void saveEdit()
+                  }, 150)
                 }}
                 onFocus={() => {
                   if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
