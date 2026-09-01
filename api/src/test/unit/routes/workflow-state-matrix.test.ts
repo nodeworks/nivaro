@@ -354,7 +354,10 @@ describe('EFP approval chain — terminal states', () => {
     const step = CHAIN[0]
     const instanceUpdate = vi.fn((_row: unknown) => Promise.resolve(1))
     installDb({
-      currentState: step.from,
+      // NOT step.from: a transition leaving the CURRENT terminal state is the
+      // uncancel escape hatch (2026-08-28) and executes; the completed guard
+      // only refuses transitions that start elsewhere.
+      currentState: CHAIN[1].from,
       transition: transitionRow(step),
       completed: true,
       instanceUpdate

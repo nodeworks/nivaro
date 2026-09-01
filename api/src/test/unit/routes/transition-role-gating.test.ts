@@ -355,9 +355,13 @@ describe('POST /pipelines/instance/:collection/:item/transition — guard orderi
     expect(JSON.parse(res.body)).toEqual({ error: 'No pipeline instance for this item' })
   })
 
-  it('400s an already-completed pipeline even for an authorised approver', async () => {
+  it('400s an already-completed pipeline when the transition does not leave the current terminal state', async () => {
     asApprover()
-    installDb({ instance: { ...baseInstance, completed_at: new Date() } })
+    // The uncancel escape hatch (2026-08-28) lets a transition whose
+    // from_state IS the current terminal state execute — so the completed
+    // guard only fires when the transition starts somewhere else. Park the
+    // instance in a state tx-approve does NOT leave from.
+    installDb({ instance: { ...baseInstance, current_state: 'st-done', completed_at: new Date() } })
 
     const app = buildPipelinesApp()
     await app.ready()

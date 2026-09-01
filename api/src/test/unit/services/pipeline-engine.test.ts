@@ -218,6 +218,17 @@ function makeOwnerBatchFakeDb(fixtures: {
         })
       }
     }
+    // Teams-as-owners (migration 283): linked-team rosters union into group
+    // membership via a two-join chain. These fixtures model no teams.
+    if (table === 'nivaro_pipeline_owner_group_teams as ogt') {
+      return {
+        join: () => ({
+          join: () => ({
+            whereIn: () => ({ select: async () => [] })
+          })
+        })
+      }
+    }
     if (table === 'nivaro_pipeline_instance_owners as io') {
       return {
         join: () => ({

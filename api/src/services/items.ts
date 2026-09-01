@@ -1124,6 +1124,35 @@ function applyFilters(
       const hasSome = '_some' in nestedFilter
       const hasNone = '_none' in nestedFilter
 
+      // Bare operator object on the alias ({projects: {_eq: 7581}}) compares
+      // against CHILD row ids — the same semantics the conditions param's
+      // bare-alias leaf already has. This shape used to be silently DROPPED
+      // (the project → project-type cascade "list never narrows" bug).
+      const o2mKeys = Object.keys(nestedFilter)
+      if (!hasSome && !hasNone && o2mKeys.length > 0 && o2mKeys.every((k) => k.startsWith('_'))) {
+        for (const [op, val] of Object.entries(nestedFilter)) {
+          const childMatch = (idOp: string | null, idVal: unknown) =>
+            function (this: QB) {
+              this.select(db.raw('1'))
+                .from(manyCollection)
+                .whereRaw('??.?? = ??.??', [manyCollection, manyField, collection, 'id'])
+              if (idOp) applyOneFilterOp(this, `${manyCollection}.id`, idOp, idVal)
+            }
+          if (op === '_null') {
+            if (val) q.whereNotExists(childMatch(null, null))
+            else q.whereExists(childMatch(null, null))
+          } else if (op === '_nnull') {
+            if (val) q.whereExists(childMatch(null, null))
+            else q.whereNotExists(childMatch(null, null))
+          } else if (op === '_neq' || op === '_nin') {
+            q.whereNotExists(childMatch(op === '_neq' ? '_eq' : '_in', val))
+          } else {
+            q.whereExists(childMatch(op, val))
+          }
+        }
+        continue
+      }
+
       if (hasSome || hasNone) {
         const innerFilter = (nestedFilter['_some'] ?? nestedFilter['_none']) as Record<
           string,
@@ -1155,6 +1184,33 @@ function applyFilters(
 
       const hasSome = '_some' in nestedFilter
       const hasNone = '_none' in nestedFilter
+
+      // Bare operator object on an M2M alias ({regions: {_eq: 9}}) compares
+      // the junction's related-id column — same rationale as the O2M branch.
+      const m2mKeys = Object.keys(nestedFilter)
+      if (!hasSome && !hasNone && m2mKeys.length > 0 && m2mKeys.every((k) => k.startsWith('_'))) {
+        for (const [op, val] of Object.entries(nestedFilter)) {
+          const linkMatch = (idOp: string | null, idVal: unknown) =>
+            function (this: QB) {
+              this.select(db.raw('1'))
+                .from(junction)
+                .whereRaw('??.?? = ??.??', [junction, fkToParent, collection, 'id'])
+              if (idOp) applyOneFilterOp(this, `${junction}.${fkToOther}`, idOp, idVal)
+            }
+          if (op === '_null') {
+            if (val) q.whereNotExists(linkMatch(null, null))
+            else q.whereExists(linkMatch(null, null))
+          } else if (op === '_nnull') {
+            if (val) q.whereExists(linkMatch(null, null))
+            else q.whereNotExists(linkMatch(null, null))
+          } else if (op === '_neq' || op === '_nin') {
+            q.whereNotExists(linkMatch(op === '_neq' ? '_eq' : '_in', val))
+          } else {
+            q.whereExists(linkMatch(op, val))
+          }
+        }
+        continue
+      }
 
       if (hasSome || hasNone) {
         const innerFilter = (nestedFilter['_some'] ?? nestedFilter['_none']) as Record<
@@ -2000,12 +2056,27 @@ export async function readOne(
   const baseFields = allowedFields ?? ['*']
   const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields ?? baseFields)
 
-  const selectCols =
+  let selectCols =
     allowedFields === null
       ? directFields[0] === '*'
         ? ['*']
         : directFields
       : directFields.filter((f) => f === '*' || allowedFields.includes(f))
+
+  // Strip O2M/M2M alias names from explicit selects — readItems has done this
+  // for years, readOne didn't, so `?fields=id,<alias>` 500'd with "Invalid
+  // column name" here while working on the list route.
+  if (selectCols[0] !== '*') {
+    const rels = await getRelsForCollection(collection)
+    const aliasNames = new Set(
+      rels
+        .filter((r) => r.one_collection === collection && r.one_field != null)
+        .map((r) => r.one_field as string)
+    )
+    aliasNames.delete('id')
+    if (aliasNames.size > 0) selectCols = selectCols.filter((f) => !aliasNames.has(f))
+    if (selectCols.length === 0) selectCols = ['*']
+  }
 
   // An alias segment ("CM26-79826") is not a key. Resolve it first, and never
   // pass it to the id column: an int primary key raises a conversion error

@@ -2293,6 +2293,18 @@ export function ItemEditForm({
         let pickedRels: CMSRelation[] | null = null
         for (const rule of rules) {
           try {
+            // Skip resolution when the parent can't accept a fill anyway —
+            // both fill branches below are fill-only-when-empty, so a set
+            // parent makes the fetch pointless (and on circular pairs like
+            // project ⇄ project_type it was 500ing on alias field selects).
+            const parentField = rule.parent_field
+            if (m2mAliasFieldsForRules.has(parentField)) {
+              if ((m2mAliasFieldStatesRef.current[parentField]?.ids ?? []).length > 0) continue
+            } else {
+              const existingParent = draftRef.current[parentField]
+              if (existingParent !== null && existingParent !== undefined && existingParent !== '')
+                continue
+            }
             const col = String(rule.filter_column)
             let values: string[] = []
             if (col.includes('.')) {
@@ -2333,7 +2345,30 @@ export function ItemEditForm({
               const bareAlias = pickedRels.find(
                 (r) => r.one_collection === pickedCollection && r.one_field === col && r.junction_field
               )
-              if (bareAlias?.many_collection && bareAlias.many_field) {
+              const o2mAlias = !bareAlias
+                ? pickedRels.find(
+                    (r) =>
+                      r.one_collection === pickedCollection &&
+                      r.one_field === col &&
+                      !r.junction_field
+                  )
+                : null
+              if (o2mAlias?.many_collection && o2mAlias.many_field) {
+                // O2M alias: the values are the CHILD row ids (projects of a
+                // project type). Only a single unambiguous child ever fills a
+                // scalar parent, so a small page is plenty.
+                const rows = await client
+                  .request<{ data: Record<string, unknown>[] }>(
+                    get(`/items/${o2mAlias.many_collection}`, {
+                      filter: JSON.stringify({ [o2mAlias.many_field]: { _eq: pickedId } }),
+                      limit: 50,
+                      fields: 'id'
+                    })
+                  )
+                  .then((r) => r.data ?? [])
+                  .catch(() => [])
+                values = rows.map((row) => String(row.id)).filter((v) => v !== 'null')
+              } else if (bareAlias?.many_collection && bareAlias.many_field) {
                 const rows = await client
                   .request<{ data: Record<string, unknown>[] }>(
                     get(`/items/${bareAlias.many_collection}`, {
