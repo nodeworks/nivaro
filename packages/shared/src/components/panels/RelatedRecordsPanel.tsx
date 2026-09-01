@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Link2, Plus, X } from 'lucide-react'
+import { ChevronDown, Link2, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useItemNavigation } from '../../context'
@@ -106,16 +106,16 @@ export function RelatedRecordsPanel({
 
   return (
     <div
-      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'
       data-related-records
     >
       <button
         type='button'
         onClick={() => setExpanded((e) => !e)}
-        className='flex w-full items-center gap-2 px-3.5 py-2.5 text-left'
+        className='flex w-full items-center gap-2.5 px-5 py-3.5 text-left transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
-        <Link2 className='h-3.5 w-3.5 text-slate-400' />
-        <span className='text-[12.5px] font-semibold text-slate-700 dark:text-slate-200'>
+        <Link2 className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
           {title ?? 'Related records'}
         </span>
         {links.length > 0 && (
@@ -123,14 +123,12 @@ export function RelatedRecordsPanel({
             {links.length}
           </span>
         )}
-        {expanded ? (
-          <ChevronDown className='ml-auto h-3.5 w-3.5 text-slate-400' />
-        ) : (
-          <ChevronRight className='ml-auto h-3.5 w-3.5 text-slate-400' />
-        )}
+        <ChevronDown
+          className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
+        />
       </button>
       {expanded && (
-        <div className='border-t border-slate-100 px-3.5 py-2.5 dark:border-border/60'>
+        <div className='border-t border-slate-100 px-5 pb-3.5 pt-2 dark:border-border/60'>
           {links.length === 0 && !adding && (
             <p className='pb-1 text-[11.5px] text-slate-400'>
               Nothing linked yet — connect this record to the ones it relates to.

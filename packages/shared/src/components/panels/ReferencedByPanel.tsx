@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Network } from 'lucide-react'
+import { ChevronDown, Network } from 'lucide-react'
 import { useState } from 'react'
 import { useDrilldown, useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -58,29 +58,27 @@ export function ReferencedByPanel({
 
   return (
     <div
-      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border'
       data-referenced-by-panel
     >
       <button
         type='button'
         onClick={() => setExpanded((e) => !e)}
-        className='flex w-full items-center gap-2 px-3 py-2 text-left'
+        className='flex w-full items-center gap-2.5 px-5 py-3.5 text-left transition-colors hover:bg-slate-50/50 dark:hover:bg-white/[0.02]'
       >
-        {expanded ? (
-          <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        ) : (
-          <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        )}
         <Network className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        <span className='text-[12.5px] font-semibold text-slate-700 dark:text-slate-200'>
+        <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
           {title ?? 'Referenced by'}
         </span>
-        <span className='ml-auto rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-semibold text-nvr-navy tabular-nums dark:text-nvr-cyan'>
+        <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
           {totalRefs}
         </span>
+        <ChevronDown
+          className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
+        />
       </button>
       {expanded && (
-        <div className='border-t border-slate-100 px-3 pb-2.5 pt-1.5 dark:border-border/60'>
+        <div className='border-t border-slate-100 px-5 pb-3.5 pt-2 dark:border-border/60'>
           {refs.map((r) => (
             <div
               key={`${r.collection}.${r.field}`}
