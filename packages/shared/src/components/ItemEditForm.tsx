@@ -4082,6 +4082,18 @@ export function ItemEditForm({
 
   // ── Sentinel slot positioning ──────────────────────────────────────────────
   const pipelineSlot = assignments.find((a) => a.field === '__pipeline__')
+  // Slot-level options ride the assignment's overrides JSON (same as __pdf__):
+  // hide_actions_collapsed / hide_actions_expanded suppress the transition
+  // buttons inside the slot when the header already shows them.
+  const pipelineSlotOpts = useMemo<Record<string, unknown>>(() => {
+    try {
+      const ov = (pipelineSlot as unknown as { overrides?: unknown } | undefined)?.overrides
+      const parsed = typeof ov === 'string' ? JSON.parse(ov) : ov
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+    } catch {
+      return {}
+    }
+  }, [pipelineSlot])
   const commentsSlot = assignments.find((a) => a.field === '__comments__')
   const tasksSlot = assignments.find((a) => a.field === '__tasks__')
   const addendumSlot = assignments.find((a) => a.field === '__addendums__')
@@ -5458,6 +5470,8 @@ export function ItemEditForm({
           showApprovalChain={
             !!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain
           }
+          hideActionsCollapsed={!!pipelineSlotOpts.hide_actions_collapsed}
+          hideActionsExpanded={!!pipelineSlotOpts.hide_actions_expanded}
           onBeforeTransition={validateAll}
           addendumPending={
             !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
@@ -6874,7 +6888,11 @@ export function ItemEditForm({
                                       <ArrowLeft aria-hidden className='h-4 w-4' />
                                     </button>
                                   )}
-                                  <div className='flex min-w-0 flex-col'>
+                                  {/* min-width floor: without it flex crushes this block to
+                                      zero width before the row ever overflows, so HeaderTools'
+                                      scrollWidth check never fires and the toolbar squishes the
+                                      title instead of collapsing (the 1700-2050px squish bug). */}
+                                  <div className='flex min-w-[180px] flex-col md:min-w-[260px]'>
                                     <div className='group/title flex items-center gap-1.5'>
                                       <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
                                         {isNew ? `New ${singularTitle}` : itemTitle}
@@ -6907,7 +6925,7 @@ export function ItemEditForm({
                                     </div>
                                     {lastTouchText && (
                                       <p
-                                        className='mt-0.5 flex items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
+                                        className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
                                         data-tip={
                                           lastTouch
                                             ? new Date(lastTouch.timestamp).toLocaleString()
@@ -7045,7 +7063,7 @@ export function ItemEditForm({
                                       </div>
                                     )}
                                   </div>
-                                  <div className='ml-auto flex items-center gap-1.5'>
+                                  <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
                                     {headerExtra}
                                     <HeaderTools>
                                     {isNew && (

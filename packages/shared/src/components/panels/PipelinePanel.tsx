@@ -1089,6 +1089,8 @@ export function PipelinePanel({
   defaultExpanded,
   title,
   showApprovalChain,
+  hideActionsCollapsed,
+  hideActionsExpanded,
   onBeforeTransition,
   addendumPending,
   addendumView
@@ -1098,6 +1100,11 @@ export function PipelinePanel({
   defaultExpanded?: boolean
   title?: string
   showApprovalChain?: boolean
+  /** Layout-configurable: suppress the transition buttons inside the slot
+   * (collapsed header row / expanded body) — redundant when the record header
+   * already renders PipelineTransitionButtons. */
+  hideActionsCollapsed?: boolean
+  hideActionsExpanded?: boolean
   onBeforeTransition?: () => boolean | Promise<boolean>
   addendumPending?: boolean
   addendumView?: boolean
@@ -1111,6 +1118,8 @@ export function PipelinePanel({
       defaultExpanded={defaultExpanded}
       title={title}
       showApprovalChain={showApprovalChain}
+      hideActionsCollapsed={hideActionsCollapsed}
+      hideActionsExpanded={hideActionsExpanded}
       onBeforeTransition={onBeforeTransition}
       addendumPending={addendumPending}
       addendumView={addendumView}
@@ -1219,6 +1228,8 @@ function PipelinePanelInner({
   defaultExpanded,
   title,
   showApprovalChain,
+  hideActionsCollapsed,
+  hideActionsExpanded,
   onBeforeTransition,
   addendumPending,
   addendumView
@@ -1228,6 +1239,8 @@ function PipelinePanelInner({
   defaultExpanded?: boolean
   title?: string
   showApprovalChain?: boolean
+  hideActionsCollapsed?: boolean
+  hideActionsExpanded?: boolean
   onBeforeTransition?: () => boolean | Promise<boolean>
   addendumPending?: boolean
   addendumView?: boolean
@@ -1598,7 +1611,7 @@ function PipelinePanelInner({
             )}
           </div>
           <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
-            {!expanded && hasTransitions && (
+            {!expanded && hasTransitions && !hideActionsCollapsed && (
               <div className='flex flex-wrap items-center gap-1.5'>
                 {renderTransitionButtons(visibleTransitions, true)}
               </div>
@@ -1716,7 +1729,7 @@ function PipelinePanelInner({
                     currentStateId={data?.instance?.current_state ?? null}
                   />
                 </div>
-                {hasTransitions && (
+                {hasTransitions && !hideActionsExpanded && (
                   <div className='space-y-3 px-5 py-4'>
                     <div className='flex flex-wrap justify-end gap-2'>
                       {renderTransitionButtons(visibleTransitions)}

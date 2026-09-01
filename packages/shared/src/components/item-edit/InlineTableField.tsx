@@ -1453,8 +1453,14 @@ export function InlineTableField({
       }
       void saveEdit()
     }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    // CAPTURE phase, not bubble: an inner widget calling stopPropagation() on
+    // mousedown (pickers, drag handles) swallows a bubble listener entirely —
+    // lastDownInsideRef then held a stale `false` and the Windows blur timer
+    // (null relatedTarget on non-focusable clicks) closed the row anyway.
+    // Capture also runs before React's discrete-event state flush, so the
+    // target is still attached when we classify it.
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
   }, [editState, readOnly])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)

@@ -36,6 +36,7 @@ import {
   Plus,
   Search,
   Settings2,
+  SlidersHorizontal,
   Trash2,
   Users,
   X
@@ -7749,6 +7750,9 @@ interface SlotState {
   is_visible: boolean
   default_expanded: boolean
   show_approval_chain: boolean
+  /** Slot-level options JSON (assignment overrides) — pipeline slot uses
+   * hide_actions_collapsed / hide_actions_expanded. */
+  overrides?: Record<string, unknown> | null
 }
 const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__referenced_by__', '__related_records__']
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
@@ -17497,6 +17501,56 @@ function SortableSlotCard({
           )}
         </button>
         {slotKey === '__pipeline__' && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type='button'
+                title='Action button visibility'
+                className={cn(
+                  'shrink-0 rounded p-1 transition-colors',
+                  s.overrides?.hide_actions_collapsed || s.overrides?.hide_actions_expanded
+                    ? 'text-nvr-cyan'
+                    : 'text-slate-400 hover:text-nvr-cyan'
+                )}
+              >
+                <SlidersHorizontal className='h-3.5 w-3.5' />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align='end' className='w-72 p-3'>
+              <p className='mb-2 text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                Action buttons in this slot
+              </p>
+              <p className='mb-2.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
+                The record header can already show the transition buttons — hide them here to
+                avoid showing them twice.
+              </p>
+              {(
+                [
+                  ['hide_actions_collapsed', 'Hide when collapsed'],
+                  ['hide_actions_expanded', 'Hide when expanded']
+                ] as const
+              ).map(([key, label]) => (
+                <label
+                  key={key}
+                  className='flex cursor-pointer items-center justify-between py-1 text-[12px] text-slate-600 dark:text-slate-300'
+                >
+                  {label}
+                  <input
+                    type='checkbox'
+                    checked={!!s.overrides?.[key]}
+                    onChange={(e) =>
+                      updateSlot(slotKey, {
+                        overrides: { ...(s.overrides ?? {}), [key]: e.target.checked }
+                      })
+                    }
+                    className='h-3.5 w-3.5 accent-[#00ceff]'
+                  />
+                </label>
+              ))}
+            </PopoverContent>
+          </Popover>
+        )}
+        {slotKey === '__pipeline__' && (
           <button
             type='button'
             title={
@@ -18317,7 +18371,18 @@ function FieldGroupsTab({
           row.default_expanded === undefined || row.default_expanded === null
             ? true
             : !!row.default_expanded,
-        show_approval_chain: !!row.show_approval_chain
+        show_approval_chain: !!row.show_approval_chain,
+        overrides: (() => {
+          try {
+            const ov = row._overrides
+            const parsed = typeof ov === 'string' ? JSON.parse(ov) : ov
+            return parsed && typeof parsed === 'object'
+              ? (parsed as Record<string, unknown>)
+              : null
+          } catch {
+            return null
+          }
+        })()
       }
     }
     setSlots(nextSlots)
@@ -18495,7 +18560,8 @@ function FieldGroupsTab({
           label_override: slots[key].label_override,
           is_visible: slots[key].is_visible,
           default_expanded: slots[key].default_expanded,
-          show_approval_chain: slots[key].show_approval_chain
+          show_approval_chain: slots[key].show_approval_chain,
+          overrides: slots[key].overrides ?? null
         })),
         // Subtitle sentinel
         ...(subtitleConfig

@@ -1379,7 +1379,7 @@ export function SlaRulesView() {
       )}
 
       <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-5xl'>
+        <DialogContent className='max-h-[92vh] overflow-y-auto' style={{ maxWidth: 'min(1100px, 96vw)' }}>
           <DialogHeader>
             <DialogTitle>New SLA rule</DialogTitle>
           </DialogHeader>
@@ -1398,7 +1398,7 @@ export function SlaRulesView() {
       </Dialog>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto sm:max-w-5xl'>
+        <DialogContent className='max-h-[92vh] overflow-y-auto' style={{ maxWidth: 'min(1100px, 96vw)' }}>
           <DialogHeader>
             <DialogTitle>Edit SLA rule</DialogTitle>
           </DialogHeader>
