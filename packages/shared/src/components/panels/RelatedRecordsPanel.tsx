@@ -128,7 +128,7 @@ export function RelatedRecordsPanel({
         />
       </button>
       {expanded && (
-        <div className='border-t border-slate-100 px-5 pb-3.5 pt-2 dark:border-border/60'>
+        <div className='border-t border-slate-100 px-5 py-4 dark:border-border/60'>
           {links.length === 0 && !adding && (
             <p className='pb-1 text-[11.5px] text-slate-400'>
               Nothing linked yet — connect this record to the ones it relates to.

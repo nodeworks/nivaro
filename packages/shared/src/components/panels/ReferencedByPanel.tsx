@@ -78,7 +78,7 @@ export function ReferencedByPanel({
         />
       </button>
       {expanded && (
-        <div className='border-t border-slate-100 px-5 pb-3.5 pt-2 dark:border-border/60'>
+        <div className='border-t border-slate-100 px-5 py-4 dark:border-border/60'>
           {refs.map((r) => (
             <div
               key={`${r.collection}.${r.field}`}
