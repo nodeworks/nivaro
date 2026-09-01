@@ -54,6 +54,9 @@ interface Revision {
 interface FieldMeta {
   label: string
   system: boolean
+  /** On the collection's active layout — i.e. visible on the form a person
+   *  edits. False = written behind the scenes (rules, computed, integrations). */
+  onLayout: boolean
   /** M2O target — FK values render as the related record's display label. */
   relatedCollection?: string | null
 }
@@ -76,7 +79,12 @@ type FieldMetaMap = Map<string, FieldMeta>
 function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
   const client = useNivaroClient()
   const { data } = useQuery<{
-    fields: Array<{ field: string; label: string | null; hidden?: boolean }>
+    fields: Array<{
+      field: string
+      label: string | null
+      hidden?: boolean
+      layout_assigned?: boolean
+    }>
     relations: Array<{
       many_collection: string | null
       many_field: string | null
@@ -90,9 +98,14 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
     queryFn: async () => {
       const [fields, col] = await Promise.all([
         client
-          .request<{ data: Array<{ field: string; label: string | null; hidden?: boolean }> }>(
-            get(`/field-config/${collection}`)
-          )
+          .request<{
+            data: Array<{
+              field: string
+              label: string | null
+              hidden?: boolean
+              layout_assigned?: boolean
+            }>
+          }>(get(`/field-config/${collection}`))
           .then((r) => r.data ?? [])
           .catch(() => []),
         client
@@ -122,6 +135,9 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       map.set(f.field, {
         label: f.label || titleCase(f.field.replace(/_/g, ' ')),
         system: AUDIT_FIELDS.has(f.field),
+        // layout_assigned is only stamped when the collection HAS an active
+        // layout — absent means there's no layout to be off of.
+        onLayout: f.layout_assigned !== false,
         relatedCollection: m2oTarget(f.field)
       })
     }
@@ -134,7 +150,8 @@ function metaFor(map: FieldMetaMap, field: string): FieldMeta {
     map.get(field) ?? {
       // Unknown to the form = machine column. Still labeled, still reachable.
       label: titleCase(field.replace(/[_-]/g, ' ')),
-      system: true
+      system: true,
+      onLayout: false
     }
   )
 }
@@ -467,10 +484,13 @@ function computeFieldRows(
       }
     })
     .filter(Boolean) as FieldRowData[]
-  // Real fields first (config order is lost here, alpha by label is stable),
-  // system fields after, unchanged last within each band.
-  const rank = (r: FieldRowData) =>
-    (r.system ? 4 : 0) + (r.status === 'unchanged' ? 2 : 0)
+  // Layout fields first, behind-the-scenes fields next, system fields last —
+  // unchanged rows sink within each band. Alpha by label inside a band.
+  const rank = (r: FieldRowData) => {
+    const m = metaFor(meta, r.field)
+    const band = m.system ? 8 : m.onLayout ? 0 : 4
+    return band + (r.status === 'unchanged' ? 2 : 0)
+  }
   return rows.sort(
     (a, b) =>
       rank(a) - rank(b) || metaFor(meta, a.field).label.localeCompare(metaFor(meta, b.field).label)
@@ -598,17 +618,34 @@ function FieldChangeList({
         {mode === 'changes' ? 'No field changes recorded.' : 'No snapshot data available.'}
       </p>
     )
+  const firstBehindIdx = visible.findIndex(
+    (r) => !metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
+  )
+  const hasLayoutRows = visible.some(
+    (r) => metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
+  )
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      {visible.map((row) => (
-        <FieldChangeRow
-          key={row.field}
-          row={row}
-          meta={meta}
-          fieldRevert={fieldRevert}
-          mode={mode}
-          hideStatusChips={hideStatusChips}
-        />
+      {visible.map((row, idx) => (
+        <div key={row.field}>
+          {idx === firstBehindIdx && hasLayoutRows && (
+            <div className='border-b border-t border-slate-100 bg-slate-50/70 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
+              <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                Behind the scenes
+              </p>
+              <p className='text-[10.5px] text-slate-400'>
+                Not on the form — written automatically by rules, computed fields or integrations.
+              </p>
+            </div>
+          )}
+          <FieldChangeRow
+            row={row}
+            meta={meta}
+            fieldRevert={fieldRevert}
+            mode={mode}
+            hideStatusChips={hideStatusChips}
+          />
+        </div>
       ))}
       {hiddenSystem > 0 && (
         <button
