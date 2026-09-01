@@ -185,6 +185,7 @@ export type CMSSettings = {
   ai_max_tokens_generate: number | null
   ai_max_tokens_summarize: number | null
   sla_business_day_start: number | null
+  sla_timezone?: string | null
   sla_business_day_end: number | null
   sla_business_days: string | null
   sla_holidays?: string | null

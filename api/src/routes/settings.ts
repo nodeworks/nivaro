@@ -42,6 +42,7 @@ const allowedSettingsKeys = [
   'ai_max_tokens_generate',
   'ai_max_tokens_summarize',
   'sla_business_day_start',
+  'sla_timezone',
   'sla_business_day_end',
   'sla_business_days',
   'sla_holidays',

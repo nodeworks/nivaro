@@ -1242,6 +1242,7 @@ export function SettingsPage() {
   const [aiMaxGenerate, setAiMaxGenerate] = useState(500)
   const [aiMaxSummarize, setAiMaxSummarize] = useState(200)
   const [slaStart, setSlaStart] = useState(9)
+  const [slaTimezone, setSlaTimezone] = useState('')
   const [slaEnd, setSlaEnd] = useState(17)
   const [slaBusinessDays, setSlaBusinessDays] = useState<number[]>([1, 2, 3, 4, 5])
   const [slaHolidays, setSlaHolidays] = useState<string[]>([])
@@ -1308,6 +1309,7 @@ export function SettingsPage() {
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
+    setSlaTimezone(String((settings as Record<string, unknown>).sla_timezone ?? ''))
     setSlaEnd(settings.sla_business_day_end ?? 17)
     try {
       const h = settings.sla_holidays ? JSON.parse(String(settings.sla_holidays)) : []
@@ -1508,6 +1510,7 @@ export function SettingsPage() {
   function saveSla() {
     mutation.mutate({
       sla_business_day_start: slaStart,
+      sla_timezone: slaTimezone.trim() || null,
       sla_business_day_end: slaEnd,
       sla_business_days: slaBusinessDays.join(','),
       sla_holidays: JSON.stringify(slaHolidays)
@@ -2193,6 +2196,31 @@ export function SettingsPage() {
                   onSave={saveSla}
                   saving={mutation.isPending}
                 >
+                  <Field
+                    label='Timezone'
+                    hint="IANA zone the business hours are expressed in (e.g. America/New_York). Empty = the API server's own zone — deployed containers run UTC, so set this."
+                  >
+                    <Input
+                      value={slaTimezone}
+                      onChange={(e) => setSlaTimezone(e.target.value)}
+                      placeholder='America/New_York'
+                      list='sla-tz-options'
+                      className='h-8 text-[13px]'
+                    />
+                    {slaTimezone.trim() !== '' &&
+                      (() => {
+                        try {
+                          new Intl.DateTimeFormat('en-US', { timeZone: slaTimezone.trim() })
+                          return null
+                        } catch {
+                          return (
+                            <p className='mt-1 text-[11px] text-red-500'>
+                              Not a valid IANA timezone — it will be ignored.
+                            </p>
+                          )
+                        }
+                      })()}
+                  </Field>
                   <Field label='Business day start (hour)' hint='24-hour format. Default: 9 (9am).'>
                     <Input
                       type='number'
