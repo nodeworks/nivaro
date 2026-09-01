@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-08-31T21:24:01.446Z",
+  "generated_at": "2026-09-01T00:08:36.452Z",
   "releases": [
+    {
+      "version": "0.1.182",
+      "tag": "v0.1.182",
+      "date": "2026-08-31T20:08:28-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "raw-edit",
+              "text": "M2M and M2A fields are editable in the raw sheet",
+              "hash": "3aa889dd"
+            },
+            {
+              "section": "Added",
+              "scope": "db-health",
+              "text": "readable estimated-plan viewer",
+              "hash": "973e74f2"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "degradation map probes Inngest and SMTP live",
+              "hash": "8a56cc0b"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "card-based record read view and per-collection drill-down overrides",
+              "hash": "a60a6806"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "db-health",
+              "text": "Explain works on expensive-SQL statements",
+              "hash": "34c4f6e2"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.181",
       "tag": "v0.1.181",
-      "date": "2026-08-31T17:23:55-04:00",
+      "date": "2026-08-31T17:24:01-04:00",
       "sections": [
         {
           "label": "Added",
