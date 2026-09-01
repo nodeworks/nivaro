@@ -3,7 +3,19 @@ import { config } from '../config.js'
 
 let _oidcConfig: Awaited<ReturnType<typeof oidc.discovery>> | null = null
 
+/** Whether the primary provider has usable env config (blank = no provider).
+ * NOTE: this is config PRESENCE only — whether the provider is offered is
+ * decided by primaryOidcEnabled() in routes/auth.ts, which also honors the
+ * OIDC_ENABLED=false override (and only when a custom provider can take
+ * over, so an instance can never disable its way into a lockout). */
+export function oidcConfigured(): boolean {
+  return !!config.OIDC_ISSUER && !!config.OIDC_CLIENT_ID
+}
+
 export async function getOIDCConfig() {
+  if (!oidcConfigured()) {
+    throw new Error('OIDC is not configured (blank OIDC_ISSUER / OIDC_CLIENT_ID)')
+  }
   if (!_oidcConfig) {
     _oidcConfig = await oidc.discovery(
       new URL(config.OIDC_ISSUER),

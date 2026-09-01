@@ -71,10 +71,17 @@ const schema = z.object({
     .transform((v) => v === 'true')
     .default('false'),
 
-  OIDC_ISSUER: requiredUrl(),
-  OIDC_CLIENT_ID: requiredStr(),
-  OIDC_CLIENT_SECRET: requiredStr(),
-  OIDC_REDIRECT_URI: requiredUrl(),
+  // OIDC is optional: leave these blank (or set OIDC_ENABLED=false) to run
+  // without an identity provider — sign-in falls back to email/password and
+  // static-token login. Blank issuer/client = disabled.
+  OIDC_ISSUER: z.string().default(''),
+  OIDC_CLIENT_ID: z.string().default(''),
+  OIDC_CLIENT_SECRET: z.string().default(''),
+  OIDC_REDIRECT_URI: z.string().default(''),
+  OIDC_ENABLED: z
+    .string()
+    .transform((v) => v !== 'false')
+    .default('true'),
 
   ADMIN_URL: z.string().default('http://localhost:3056'),
   // Comma-separated list of trusted app origins allowed as returnTo targets

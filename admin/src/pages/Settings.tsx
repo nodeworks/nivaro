@@ -613,6 +613,8 @@ interface SsoProvider {
   client_id: string
   client_secret: string | null
   scopes: string | null
+  logo_url: string | null
+  button_color: string | null
   is_active: boolean
   sort: number
 }
@@ -624,14 +626,46 @@ const EMPTY_SSO_DRAFT = {
   client_id: '',
   client_secret: '',
   scopes: 'openid profile email',
+  logo_url: '',
+  button_color: '',
   is_active: true
 }
 
 function SsoProvidersSection() {
   const queryClient = useQueryClient()
-  const { data: providers = [], isLoading } = useQuery<SsoProvider[]>({
+  interface DefaultProvider {
+    label: string
+    issuer: string
+    client_id: string
+    effective_enabled: boolean
+    disabled_by_env: boolean
+    disabled_in_settings: boolean
+    can_disable: boolean
+  }
+  const { data: ssoPayload, isLoading } = useQuery<{
+    data: SsoProvider[]
+    default_provider: DefaultProvider | null
+  }>({
     queryKey: ['sso-providers'],
-    queryFn: () => api.get<{ data: SsoProvider[] }>('/sso-providers').then((r) => r.data.data)
+    queryFn: () =>
+      api
+        .get<{ data: SsoProvider[]; default_provider: DefaultProvider | null }>('/sso-providers')
+        .then((r) => r.data)
+  })
+  const providers = ssoPayload?.data ?? []
+  const defaultProvider = ssoPayload?.default_provider ?? null
+  const toggleDefault = useMutation({
+    mutationFn: (is_active: boolean) => api.patch('/sso-providers/default', { is_active }),
+    onSuccess: () => {
+      invalidate()
+      toast.success('Default provider updated')
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'Could not update the default provider'
+      toast.error(msg)
+    }
   })
   const [editingId, setEditingId] = useState<number | 'new' | null>(null)
   const [draft, setDraft] = useState(EMPTY_SSO_DRAFT)
@@ -648,6 +682,8 @@ function SsoProvidersSection() {
         client_id: draft.client_id.trim(),
         client_secret: draft.client_secret || null,
         scopes: draft.scopes.trim() || null,
+        logo_url: draft.logo_url.trim() || null,
+        button_color: draft.button_color.trim() || null,
         is_active: draft.is_active
       }
       if (editingId === 'new') await api.post('/sso-providers', body)
@@ -689,6 +725,8 @@ function SsoProvidersSection() {
       client_id: p.client_id,
       client_secret: p.client_secret ?? '',
       scopes: p.scopes ?? '',
+      logo_url: p.logo_url ?? '',
+      button_color: p.button_color ?? '',
       is_active: p.is_active
     })
   }
@@ -709,6 +747,51 @@ function SsoProvidersSection() {
 
         <div className='space-y-2'>
           {isLoading && <Skeleton className='h-12 w-full rounded-lg' />}
+          {!isLoading && defaultProvider && (
+            <div className='rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/30'>
+              <div className='flex items-center gap-2'>
+                <div className='min-w-0 flex-1'>
+                  <p className='truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                    {defaultProvider.label}
+                    <span className='ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+                      Default · from .env
+                    </span>
+                  </p>
+                  <p className='mt-0.5 truncate font-mono text-[10.5px] text-slate-400'>
+                    {defaultProvider.issuer}
+                  </p>
+                </div>
+                <Switch
+                  checked={defaultProvider.effective_enabled}
+                  disabled={
+                    toggleDefault.isPending ||
+                    defaultProvider.disabled_by_env ||
+                    (defaultProvider.effective_enabled && !defaultProvider.can_disable)
+                  }
+                  onCheckedChange={(v) => toggleDefault.mutate(v)}
+                />
+              </div>
+              {defaultProvider.disabled_by_env && (
+                <p className='mt-1.5 text-[11px] text-amber-600 dark:text-amber-400'>
+                  Disabled by OIDC_ENABLED=false in the deployment environment — the toggle here
+                  can't override it.
+                </p>
+              )}
+              {!defaultProvider.disabled_by_env &&
+                defaultProvider.effective_enabled &&
+                !defaultProvider.can_disable && (
+                  <p className='mt-1.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
+                    Add and enable a custom provider below before disabling the default — with no
+                    alternative it would lock everyone out.
+                  </p>
+                )}
+              {defaultProvider.disabled_in_settings && !defaultProvider.effective_enabled && (
+                <p className='mt-1.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
+                  Hidden from the login page — custom providers below carry sign-in.
+                </p>
+              )}
+            </div>
+          )}
           {!isLoading && providers.length === 0 && editingId === null && (
             <p className='rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-[12px] text-slate-400 dark:border-border'>
               No additional providers configured. The primary sign-in button is unaffected.
@@ -860,6 +943,46 @@ function SsoProvidersSection() {
                 placeholder='openid profile email'
                 className='h-8 font-mono text-[13px]'
               />
+            </Field>
+            <Field
+              label='Logo'
+              hint='Optional icon on the login button — an https image URL or a data:image URI.'
+            >
+              <div className='flex items-center gap-2'>
+                <Input
+                  value={draft.logo_url}
+                  onChange={(e) => setDraft((d) => ({ ...d, logo_url: e.target.value }))}
+                  placeholder='https://… or data:image/png;base64,…'
+                  className='h-8 text-[13px]'
+                />
+                {draft.logo_url.trim() !== '' && (
+                  <img
+                    src={draft.logo_url.trim()}
+                    alt=''
+                    className='h-6 w-6 shrink-0 rounded object-contain'
+                  />
+                )}
+              </div>
+            </Field>
+            <Field
+              label='Button color'
+              hint='Optional — hex (#0a66c2) or a CSS color name. Empty = the default button style.'
+            >
+              <div className='flex items-center gap-2'>
+                <Input
+                  value={draft.button_color}
+                  onChange={(e) => setDraft((d) => ({ ...d, button_color: e.target.value }))}
+                  placeholder='#0a66c2'
+                  className='h-8 w-40 font-mono text-[13px]'
+                />
+                <input
+                  type='color'
+                  aria-label='Pick button color'
+                  value={/^#[0-9a-fA-F]{6}$/.test(draft.button_color.trim()) ? draft.button_color.trim() : '#00ceff'}
+                  onChange={(e) => setDraft((d) => ({ ...d, button_color: e.target.value }))}
+                  className='h-8 w-10 cursor-pointer rounded border border-slate-200 bg-transparent dark:border-border'
+                />
+              </div>
             </Field>
             <div className='flex items-center justify-between'>
               <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>

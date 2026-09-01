@@ -8,7 +8,8 @@ import {
   generateCodeVerifier,
   generateState,
   handleCallback,
-  handleDynamicCallback
+  handleDynamicCallback,
+  oidcConfigured
 } from '../auth/oidc.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { config } from '../config.js'
@@ -222,27 +223,63 @@ export async function authRoutes(app: FastifyInstance) {
     }
   })
 
+  /** Is the primary env-configured provider offered on the login page?
+   *  - Blank OIDC_ISSUER / OIDC_CLIENT_ID → no (nothing configured).
+   *  - OIDC_ENABLED=false → honored ONLY when at least one ACTIVE custom
+   *    provider (nivaro_sso_providers) exists to take over interactive
+   *    sign-in; with none, the flag is ignored so an instance cannot
+   *    disable its way into a lockout. */
+  async function primaryOidcEnabled(): Promise<boolean> {
+    if (!oidcConfigured()) return false
+    // Disable comes from EITHER the OIDC_ENABLED=false env flag or the
+    // Settings → Sign-in providers toggle (nivaro_settings.oidc_primary_disabled).
+    let disabled = !config.OIDC_ENABLED
+    if (!disabled) {
+      const row = (await db('nivaro_settings')
+        .orderBy('id', 'asc')
+        .first('oidc_primary_disabled')
+        .catch(() => null)) as { oidc_primary_disabled?: boolean | number } | null
+      disabled = row?.oidc_primary_disabled === true || row?.oidc_primary_disabled === 1
+    }
+    if (!disabled) return true
+    const custom = await db('nivaro_sso_providers')
+      .where({ is_active: true })
+      .first('id')
+      .catch(() => null)
+    // No custom provider to take over → the disable is IGNORED (no lockout).
+    return !custom
+  }
+
   app.get('/providers', async (_req, reply) => {
     // Additional OIDC providers (#538) — public list is display data only
     // (id/key/label), never issuer or client config.
     const sso = await db('nivaro_sso_providers')
       .where({ is_active: true })
       .orderBy('sort', 'asc')
-      .select('id', 'key', 'label')
+      .select('id', 'key', 'label', 'logo_url', 'button_color')
       .then((rows) =>
-        (rows as Array<{ id: number; key: string; label: string }>).map((r) => ({
+        (rows as Array<{
+          id: number
+          key: string
+          label: string
+          logo_url: string | null
+          button_color: string | null
+        }>).map((r) => ({
           id: r.id,
           key: r.key,
-          label: r.label
+          label: r.label,
+          logo_url: r.logo_url ?? null,
+          button_color: r.button_color ?? null
         }))
       )
       .catch(() => [] as Array<{ id: number; key: string; label: string }>)
     return reply.send({
       data: {
         oidc: {
-          enabled: true,
+          enabled: await primaryOidcEnabled(),
           label: process.env.OIDC_PROVIDER_LABEL ?? 'Microsoft'
         },
+        static_token: { enabled: true },
         saml: {
           enabled: samlEnabled(),
           label: process.env.SAML_PROVIDER_LABEL ?? 'SSO'
@@ -293,6 +330,12 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
 
+    // Primary provider disabled (blank OIDC_* config, or OIDC_ENABLED=false
+    // with a custom provider covering sign-in): bounce back to the login
+    // page, which offers the remaining providers / password / static token.
+    if (!(await primaryOidcEnabled())) {
+      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=oidc_disabled'))
+    }
     req.session.oidcProviderId = undefined
     const url = await buildLoginUrl(state, codeVerifier, redirectUri)
     return reply.redirect(url.href)
@@ -522,6 +565,30 @@ export async function authRoutes(app: FastifyInstance) {
 
     req.session.userId = user.id
     void recordLogin(app, user.id, 'password', req)
+    await logActivity({ action: 'login', user: user.id, req })
+    return reply.send({ ok: true })
+  })
+
+  // Static-token login: exchange a user's static_token for a normal session
+  // cookie — the sign-in fallback when no identity provider is configured.
+  // The token is already a full credential (Bearer auth accepts it), so this
+  // grants nothing new; it just lets the SPA run on session semantics. TOTP
+  // is deliberately not challenged: Bearer requests never are.
+  app.post('/login/token', async (req, reply) => {
+    const { token } = req.body as { token?: string }
+    if (!token || typeof token !== 'string' || token.trim().length < 8) {
+      return reply.code(400).send({ error: 'token required' })
+    }
+    const user = (await db<User>('nivaro_users')
+      .where({ static_token: token.trim(), status: 'active' })
+      .first()) as User | undefined
+    if (!user) {
+      // Constant-time-ish rejection — mirrors the password route.
+      await new Promise((r) => setTimeout(r, 200))
+      return reply.code(401).send({ error: 'Invalid token' })
+    }
+    req.session.userId = user.id
+    void recordLogin(app, user.id, 'static_token', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })

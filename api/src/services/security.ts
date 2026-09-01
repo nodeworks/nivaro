@@ -11,7 +11,7 @@ import { notifyUser } from './notification-channels.js'
 export async function recordLogin(
   app: FastifyInstance | null,
   userId: string,
-  method: 'oidc' | 'password' | 'saml' | 'masquerade',
+  method: 'oidc' | 'password' | 'saml' | 'masquerade' | 'static_token',
   req: FastifyRequest
 ): Promise<void> {
   try {

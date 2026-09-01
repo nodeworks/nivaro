@@ -198,6 +198,83 @@ function TotpForm() {
   )
 }
 
+/** Static-token sign-in — the fallback when no identity provider covers a
+ * user. Exchanges nivaro_users.static_token for a normal session cookie
+ * (POST /auth/login/token); collapsed behind a text button so the password
+ * form stays the obvious path. */
+function TokenLoginFallback() {
+  const [open, setOpen] = useState(false)
+  const [token, setToken] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/auth/login/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: token.trim() })
+      })
+      if (res.ok) {
+        const raw = sessionStorage.getItem('nivaro_post_login_redirect')
+        sessionStorage.removeItem('nivaro_post_login_redirect')
+        window.location.href = raw ?? '/'
+        return
+      }
+      const body = await res.json().catch(() => null)
+      setError(body?.error ?? 'Invalid token.')
+    } catch {
+      setError('Could not reach the server.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+  if (!open) {
+    return (
+      <button
+        type='button'
+        onClick={() => setOpen(true)}
+        className='mt-4 w-full text-center text-[12px] font-medium text-slate-400 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-slate-600'
+      >
+        Sign in with an access token instead
+      </button>
+    )
+  }
+  return (
+    <form onSubmit={submit} className='mt-5 border-t border-slate-200 pt-4'>
+      <label
+        htmlFor='login-token'
+        className='mb-1.5 block text-[12px] font-medium text-slate-600'
+      >
+        Access token
+      </label>
+      <input
+        id='login-token'
+        type='password'
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        autoComplete='off'
+        placeholder='Paste your static token'
+        className='w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-mono text-[13px] text-slate-900 shadow-sm outline-none transition-colors placeholder:font-sans focus:border-slate-400'
+      />
+      {error && <p className='mt-2 text-[12px] text-red-600'>{error}</p>}
+      <button
+        type='submit'
+        disabled={!token.trim() || submitting}
+        className='mt-3 w-full rounded-xl bg-slate-900 px-5 py-3 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985] disabled:opacity-50'
+      >
+        {submitting ? 'Signing in…' : 'Sign in with token'}
+      </button>
+      <p className='mt-2 text-center text-[11px] leading-relaxed text-slate-400'>
+        Your static token is on your user record — an administrator can issue one.
+      </p>
+    </form>
+  )
+}
+
 export function LoginPage() {
   const params = new URLSearchParams(window.location.search)
   const error = params.get('error')
@@ -208,7 +285,7 @@ export function LoginPage() {
     oidc: { enabled: boolean; label: string }
     saml: { enabled: boolean; label: string }
     /** Additional admin-configured OIDC providers (#538). */
-    sso?: Array<{ id: number; key: string; label: string }>
+    sso?: Array<{ id: number; key: string; label: string; logo_url?: string | null; button_color?: string | null }>
   } | null>(null)
   useEffect(() => {
     fetch('/api/auth/providers')
@@ -234,6 +311,14 @@ export function LoginPage() {
   }, [])
   const oidcLabel = providers?.oidc.label ?? 'Microsoft'
   const isMicrosoft = oidcLabel.toLowerCase() === 'microsoft'
+  // Primary provider can be disabled (OIDC_ENABLED=false — only honored
+  // server-side when a custom provider exists). The first tab then carries
+  // just the custom/SAML buttons, or disappears entirely.
+  const oidcOn = providers ? providers.oidc.enabled !== false : true
+  const anySsoButtons = oidcOn || providers?.saml.enabled || (providers?.sso ?? []).length > 0
+  useEffect(() => {
+    if (providers && !anySsoButtons && tab === 'microsoft') setTab('password')
+  }, [providers, anySsoButtons, tab, setTab])
 
   useEffect(() => {
     if (redirectTo) sessionStorage.setItem('nivaro_post_login_redirect', redirectTo)
@@ -462,22 +547,24 @@ export function LoginPage() {
 
               {/* Tab switcher */}
               <div className='mb-6 flex rounded-xl border border-slate-200 bg-slate-100 p-1'>
-                <button
-                  type='button'
-                  onClick={() => setTab('microsoft')}
-                  className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
-                  style={
-                    tab === 'microsoft'
-                      ? {
-                          background: 'white',
-                          color: '#0f172a',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
-                        }
-                      : { color: '#64748b' }
-                  }
-                >
-                  {oidcLabel}
-                </button>
+                {anySsoButtons && (
+                  <button
+                    type='button'
+                    onClick={() => setTab('microsoft')}
+                    className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
+                    style={
+                      tab === 'microsoft'
+                        ? {
+                            background: 'white',
+                            color: '#0f172a',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+                          }
+                        : { color: '#64748b' }
+                    }
+                  >
+                    SSO
+                  </button>
+                )}
                 <button
                   type='button'
                   onClick={() => setTab('password')}
@@ -504,14 +591,16 @@ export function LoginPage() {
 
               {tab === 'microsoft' ? (
                 <>
-                  <a
-                    href={`/api/auth/login?returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
-                    className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
-                    style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
-                  >
-                    {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
-                    Continue with {oidcLabel}
-                  </a>
+                  {oidcOn && (
+                    <a
+                      href={`/api/auth/login?returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
+                      className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                      style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
+                    >
+                      {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
+                      Continue with {oidcLabel}
+                    </a>
+                  )}
                   {providers?.saml.enabled && (
                     <a
                       href='/api/auth/saml/login'
@@ -527,9 +616,18 @@ export function LoginPage() {
                     <a
                       key={p.id}
                       href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
-                      className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                      className={
+                        p.button_color
+                          ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                          : 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
+                      }
+                      style={p.button_color ? { background: p.button_color } : undefined}
                     >
-                      <KeyIcon dark />
+                      {p.logo_url ? (
+                        <img src={p.logo_url} alt='' className='h-5 w-5 rounded object-contain' />
+                      ) : (
+                        <KeyIcon dark={!p.button_color} />
+                      )}
                       Continue with {p.label}
                     </a>
                   ))}
@@ -539,7 +637,10 @@ export function LoginPage() {
                   </p>
                 </>
               ) : (
-                <PasswordLoginForm />
+                <>
+                  <PasswordLoginForm />
+                  <TokenLoginFallback />
+                </>
               )}
             </>
           )}
