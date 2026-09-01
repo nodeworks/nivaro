@@ -313,11 +313,12 @@ export function LoginPage() {
   const oidcLabel = providers?.oidc.label ?? 'Microsoft'
   const isMicrosoft = oidcLabel.toLowerCase() === 'microsoft'
   // 'accent' (and the efp token name 'signal') on a provider's button_color
-  // means "follow the instance accent" — resolved to the branded project
-  // color here, since a bare keyword is not a CSS color.
+  // means "match the primary sign-in button" — the same color the default
+  // provider's button renders with, so branded buttons read as one family.
+  const primaryButtonColor = isMicrosoft ? '#0078d4' : '#0f172a'
   const resolveButtonColor = (c?: string | null): string | null => {
     if (!c) return null
-    if (c === 'accent' || c === 'signal') return branding?.color || '#00ceff'
+    if (c === 'accent' || c === 'signal') return primaryButtonColor
     return c
   }
   // Primary provider can be disabled (OIDC_ENABLED=false — only honored
