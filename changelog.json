@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-01T00:08:36.452Z",
+  "generated_at": "2026-09-01T00:34:15.572Z",
   "releases": [
+    {
+      "version": "0.1.183",
+      "tag": "v0.1.183",
+      "date": "2026-08-31T20:34:09-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "revisions",
+              "text": "redesigned history panel — timeline, friendly labels, honest diffs",
+              "hash": "02451499"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.182",
       "tag": "v0.1.182",
-      "date": "2026-08-31T20:08:28-04:00",
+      "date": "2026-08-31T20:08:36-04:00",
       "sections": [
         {
           "label": "Added",
