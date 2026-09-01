@@ -297,6 +297,7 @@ export function LoginPage() {
   // when nothing is configured.
   const [branding, setBranding] = useState<{
     name: string | null
+    color?: string | null
     logo_url: string | null
     login_title: string | null
     login_message: string | null
@@ -311,6 +312,14 @@ export function LoginPage() {
   }, [])
   const oidcLabel = providers?.oidc.label ?? 'Microsoft'
   const isMicrosoft = oidcLabel.toLowerCase() === 'microsoft'
+  // 'accent' (and the efp token name 'signal') on a provider's button_color
+  // means "follow the instance accent" — resolved to the branded project
+  // color here, since a bare keyword is not a CSS color.
+  const resolveButtonColor = (c?: string | null): string | null => {
+    if (!c) return null
+    if (c === 'accent' || c === 'signal') return branding?.color || '#00ceff'
+    return c
+  }
   // Primary provider can be disabled (OIDC_ENABLED=false — only honored
   // server-side when a custom provider exists). The first tab then carries
   // just the custom/SAML buttons, or disappears entirely.
@@ -617,11 +626,15 @@ export function LoginPage() {
                       key={p.id}
                       href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
                       className={
-                        p.button_color
+                        resolveButtonColor(p.button_color)
                           ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                           : 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
                       }
-                      style={p.button_color ? { background: p.button_color } : undefined}
+                      style={
+                        resolveButtonColor(p.button_color)
+                          ? { background: resolveButtonColor(p.button_color) as string }
+                          : undefined
+                      }
                     >
                       {p.logo_url ? (
                         <img src={p.logo_url} alt='' className='h-5 w-5 rounded object-contain' />
