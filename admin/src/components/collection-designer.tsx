@@ -5,7 +5,7 @@
  * the AI proposes a plan, and NOTHING is created until the reviewed/edited
  * summary is explicitly applied. Backed by /data-model/designer/*.
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -102,8 +102,10 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
     for (const c of existingCollections ?? []) {
       if (!c.collection.startsWith('nivaro_')) names.add(c.collection)
     }
-    for (const c of plan?.collections ?? []) names.add(c.collection)
-    return [...names].sort()
+    for (const c of plan?.collections ?? []) {
+      if (c.collection) names.add(c.collection)
+    }
+    return [...names].filter(Boolean).sort()
   }, [existingCollections, plan])
 
   const parse = useMutation({
@@ -452,20 +454,17 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                     </div>
                   )}
                   <div className='flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-border'>
-                    <Input
-                      className='h-8 w-[220px] font-mono text-[12.5px]'
+                    <DebouncedInput
+                      className={`h-8 w-[220px] font-mono text-[12.5px] ${c.collection ? '' : 'border-red-400'}`}
                       value={c.collection}
-                      onChange={(e) =>
-                        updateCollection(ci, {
-                          collection: e.target.value.replace(/[^A-Za-z0-9_]/g, '_')
-                        })
-                      }
+                      sanitize={(v) => v.replace(/[^A-Za-z0-9_]/g, '_')}
+                      onCommit={(v) => updateCollection(ci, { collection: v })}
                     />
-                    <Input
+                    <DebouncedInput
                       className='h-8 w-[200px] text-[12.5px]'
                       value={c.display_name}
                       placeholder='Display name'
-                      onChange={(e) => updateCollection(ci, { display_name: e.target.value })}
+                      onCommit={(v) => updateCollection(ci, { display_name: v })}
                     />
                     <span className='ml-auto text-[11px] text-slate-400'>
                       {c.fields.filter((f) => !f._exclude).length} fields
@@ -538,14 +537,11 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                             />
                           </td>
                           <td className='py-1 pr-2'>
-                            <Input
-                              className='h-7 font-mono text-[11.5px]'
+                            <DebouncedInput
+                              className={`h-7 font-mono text-[11.5px] ${f.field ? '' : 'border-red-400'}`}
                               value={f.field}
-                              onChange={(e) =>
-                                updateField(ci, fi, {
-                                  field: e.target.value.replace(/[^A-Za-z0-9_]/g, '_')
-                                })
-                              }
+                              sanitize={(v) => v.replace(/[^A-Za-z0-9_]/g, '_')}
+                              onCommit={(v) => updateField(ci, fi, { field: v })}
                             />
                           </td>
                           <td className='py-1 pr-2'>
@@ -683,7 +679,24 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                 </label>
               </div>
             )}
-            <Button size='sm' className='ml-auto' disabled={busy} onClick={() => apply.mutate()}>
+            <Button
+              size='sm'
+              className='ml-auto'
+              disabled={
+                busy ||
+                plan.collections.some(
+                  (c) => !c.collection || c.fields.some((f) => !f._exclude && !f.field)
+                )
+              }
+              data-tip={
+                plan.collections.some(
+                  (c) => !c.collection || c.fields.some((f) => !f._exclude && !f.field)
+                )
+                  ? 'A collection or field name is empty — fill it in (or exclude the field) first'
+                  : undefined
+              }
+              onClick={() => apply.mutate()}
+            >
               {apply.isPending && <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />}
               {apply.isPending
                 ? 'Creating…'
@@ -725,9 +738,11 @@ function RelationCell({
     enabled: !!target && !planTarget,
     staleTime: 300_000
   })
-  const matchOptions = planTarget
-    ? planTarget.fields.filter((tf) => tf.type !== 'm2m').map((tf) => tf.field)
-    : (existingFields?.fields ?? []).map((tf) => tf.field).filter((n) => n !== 'id')
+  const matchOptions = (
+    planTarget
+      ? planTarget.fields.filter((tf) => tf.type !== 'm2m').map((tf) => tf.field)
+      : (existingFields?.fields ?? []).map((tf) => tf.field).filter((n) => n !== 'id')
+  ).filter(Boolean)
 
   return (
     <div className='flex w-[190px] flex-col gap-1'>
@@ -757,7 +772,7 @@ function RelationCell({
           <SelectItem value='__new__' className='text-[12px] font-medium text-[#009abe]'>
             ＋ New collection…
           </SelectItem>
-          {relationTargets.map((t) => (
+          {relationTargets.filter(Boolean).map((t) => (
             <SelectItem key={t} value={t} className='text-[12px]'>
               {t}
             </SelectItem>
@@ -792,22 +807,67 @@ function RelationCell({
         </div>
       )}
       {f.relation && f.type === 'm2m' && (
-        <Input
+        <DebouncedInput
           className='h-6 font-mono text-[10.5px]'
           placeholder={`${collection.collection}_${f.relation.related_collection}`}
           value={f.relation.junction ?? ''}
-          data-tip='Junction table name — leave blank for the default'
-          onChange={(e) =>
-            onChange({
-              relation: {
-                ...f.relation!,
-                junction: e.target.value.replace(/[^A-Za-z0-9_]/g, '_') || null
-              }
-            })
-          }
+          sanitize={(v) => v.replace(/[^A-Za-z0-9_]/g, '_')}
+          onCommit={(v) => onChange({ relation: { ...f.relation!, junction: v || null } })}
         />
       )}
     </div>
+  )
+}
+
+
+/**
+ * Local-state input that commits after a typing pause — every commit
+ * re-renders the whole plan tree (dozens of Radix Selects), so per-keystroke
+ * controlled inputs made typing unusably laggy. Flushes on blur.
+ */
+function DebouncedInput({
+  value,
+  onCommit,
+  sanitize,
+  className,
+  placeholder
+}: {
+  value: string
+  onCommit: (v: string) => void
+  sanitize?: (v: string) => string
+  className?: string
+  placeholder?: string
+}) {
+  const [local, setLocal] = useState(value)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const committed = useRef(value)
+  useEffect(() => {
+    // external change (AI refine, create-new-lookup) wins over stale local
+    if (value !== committed.current) {
+      committed.current = value
+      setLocal(value)
+    }
+  }, [value])
+  const commit = (v: string) => {
+    committed.current = v
+    onCommit(v)
+  }
+  return (
+    <Input
+      className={className}
+      placeholder={placeholder}
+      value={local}
+      onChange={(e) => {
+        const v = sanitize ? sanitize(e.target.value) : e.target.value
+        setLocal(v)
+        if (timer.current) clearTimeout(timer.current)
+        timer.current = setTimeout(() => commit(v), 350)
+      }}
+      onBlur={() => {
+        if (timer.current) clearTimeout(timer.current)
+        if (local !== committed.current) commit(local)
+      }}
+    />
   )
 }
 
