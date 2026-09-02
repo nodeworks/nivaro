@@ -49,6 +49,7 @@ interface DesignCollection {
   note?: string | null
   display_template?: string | null
   fields: DesignField[]
+  import_key?: string[]
 }
 interface DesignPlan {
   collections: DesignCollection[]
@@ -87,6 +88,7 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
   const [plan, setPlan] = useState<DesignPlan | null>(null)
   const [refine, setRefine] = useState('')
   const [importRows, setImportRows] = useState(true)
+  const [createImport, setCreateImport] = useState(true)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const { data: existingCollections } = useQuery<{ collection: string }[]>({
@@ -147,11 +149,17 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
       }
       return api
         .post<{
-          data: { created: string[]; imported: { inserted: number; skipped: number } | null; errors: string[] }
+          data: {
+            created: string[]
+            imported: { inserted: number; skipped: number } | null
+            import_pipeline: { collection: string; procedure: string; staging_table: string }[]
+            errors: string[]
+          }
         }>('/data-model/designer/apply', {
           plan: cleaned,
           import:
-            mode === 'file' && importRows && fileToken ? { file_token: fileToken, sheet } : null
+            mode === 'file' && importRows && fileToken ? { file_token: fileToken, sheet } : null,
+          create_import: mode === 'file' && createImport
         })
         .then((r) => r.data.data)
     },
@@ -163,7 +171,12 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
         return
       }
       toast.success(
-        `Created ${d.created.join(', ')}${d.imported ? ` — imported ${d.imported.inserted} rows` : ''}`
+        `Created ${d.created.join(', ')}${d.imported ? ` — imported ${d.imported.inserted} rows` : ''}${
+          d.import_pipeline?.length
+            ? ` — ${d.import_pipeline.map((p) => p.procedure).join(', ')} ready in the Import Console`
+            : ''
+        }`,
+        { duration: 9000 }
       )
       for (const e of d.errors) toast.warning(e, { duration: 10000 })
       onClose()
@@ -417,6 +430,46 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                       {c.display_template ? ` · ${c.display_template}` : ''}
                     </span>
                   </div>
+                  {c.fields.some((f) => f.source_column && f.type !== 'm2m') && (
+                    <div className='flex flex-wrap items-center gap-1.5 border-b border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border dark:bg-muted/30'>
+                      <span
+                        className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'
+                        data-tip='Re-imports of the same file shape match existing rows on these fields — matched rows update, everything else inserts. No key = every import appends.'
+                      >
+                        Re-import key
+                      </span>
+                      {c.fields
+                        .filter((f) => f.source_column && f.type !== 'm2m' && !f._exclude)
+                        .map((f) => {
+                          const on = (c.import_key ?? []).includes(f.field)
+                          return (
+                            <button
+                              key={f.field}
+                              type='button'
+                              onClick={() =>
+                                updateCollection(ci, {
+                                  import_key: on
+                                    ? (c.import_key ?? []).filter((k) => k !== f.field)
+                                    : [...(c.import_key ?? []), f.field]
+                                })
+                              }
+                              className={`rounded-full border px-2 py-0.5 font-mono text-[10.5px] transition-colors ${
+                                on
+                                  ? 'border-[#00ceff]/50 bg-[#00ceff]/10 font-semibold text-[#009abe] dark:text-nvr-cyan'
+                                  : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                              }`}
+                            >
+                              {f.field}
+                            </button>
+                          )
+                        })}
+                      <span className='ml-auto text-[10.5px] text-slate-400'>
+                        {(c.import_key ?? []).length
+                          ? `upserts on ${(c.import_key ?? []).join(' + ')}`
+                          : 'append-only'}
+                      </span>
+                    </div>
+                  )}
                   <table className='w-full text-[12px]'>
                     <thead>
                       <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
@@ -594,14 +647,27 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
         {plan && (
           <div className='flex shrink-0 items-center gap-3 border-t border-slate-200 px-5 py-3 dark:border-border'>
             {mode === 'file' && fileToken && (
-              <label className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
-                <input
-                  type='checkbox'
-                  checked={importRows}
-                  onChange={(e) => setImportRows(e.target.checked)}
-                />
-                Import the {activeSheet?.row_count.toLocaleString() ?? ''} parsed rows after creating
-              </label>
+              <div className='flex flex-col gap-1'>
+                <label className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
+                  <input
+                    type='checkbox'
+                    checked={importRows}
+                    onChange={(e) => setImportRows(e.target.checked)}
+                  />
+                  Import the {activeSheet?.row_count.toLocaleString() ?? ''} parsed rows after creating
+                </label>
+                <label
+                  className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+                  data-tip='Creates a staging table + an import_{name} stored procedure keyed on the re-import key, registered in the Import Console for repeat uploads of this file shape'
+                >
+                  <input
+                    type='checkbox'
+                    checked={createImport}
+                    onChange={(e) => setCreateImport(e.target.checked)}
+                  />
+                  Create a repeatable import (staging table + import procedure)
+                </label>
+              </div>
             )}
             <Button size='sm' className='ml-auto' disabled={busy} onClick={() => apply.mutate()}>
               {apply.isPending && <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />}
