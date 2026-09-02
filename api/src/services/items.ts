@@ -1822,8 +1822,48 @@ export async function readItems(
     hooks.trigger('before', { collection, action: 'read', user, database: db, req })
   )
 
-  const [rawData, countRows] = await span('query+count', () => Promise.all([q, countQ]))
+  // Optional footer aggregates (?agg=field1,field2): SUMs computed on a clone
+  // of the fully-gated count query — identical filters/RLS/scopes/search, so
+  // the totals always describe exactly the rows the listing matches. Columns
+  // are validated against the table's real numeric columns; invalid names are
+  // dropped rather than failing the read.
+  let sumQ: Promise<unknown[]> | null = null
+  let sumFields: string[] = []
+  const aggRaw = (req?.query as Record<string, string> | undefined)?.agg
+  if (aggRaw) {
+    const wanted = String(aggRaw)
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(f))
+      .slice(0, 12)
+    if (wanted.length) {
+      const numericCols = new Set(
+        (
+          (await db.raw(
+            `SELECT COLUMN_NAME AS c FROM information_schema.columns
+             WHERE table_name = ? AND DATA_TYPE IN ('int','bigint','smallint','tinyint','decimal','numeric','float','real','money')`,
+            [collection]
+          )) as Array<{ c: string }>
+        ).map((r) => r.c.toLowerCase())
+      )
+      sumFields = wanted.filter((f) => numericCols.has(f.toLowerCase()))
+      if (sumFields.length) {
+        const sq = countQ.clone().clearSelect()
+        for (const f of sumFields) sq.sum(`${f} as ${f}`)
+        sumQ = sq as unknown as Promise<unknown[]>
+      }
+    }
+  }
+
+  const [rawData, countRows, sumRows] = await span('query+count', () =>
+    Promise.all([q, countQ, sumQ ?? Promise.resolve(null)])
+  )
   const total = Number((countRows[0] as { count: string | number }).count)
+  const aggregates: Record<string, number> | undefined = sumRows
+    ? Object.fromEntries(
+        sumFields.map((f) => [f, Number((sumRows as Array<Record<string, unknown>>)[0]?.[f] ?? 0)])
+      )
+    : undefined
 
   // Decrypt configured encrypted fields before computed fields run
   let data = await span('decrypt', () =>
@@ -1860,7 +1900,7 @@ export async function readItems(
     )
   }
 
-  const result = { data, total, limit, offset: effectiveOffset }
+  const result = { data, total, limit, offset: effectiveOffset, ...(aggregates ? { aggregates } : {}) }
 
   await span('hooks:after-read', () =>
     hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })

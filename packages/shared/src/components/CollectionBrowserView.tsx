@@ -151,6 +151,8 @@ type SavedViewColumn =
       pin?: 'left' | 'right'
       tint?: TintRule[]
       width?: number
+      /** Footer aggregate — server-computed SUM over the whole filtered set. */
+      agg?: 'sum'
     }
 
 interface SavedView {
@@ -3174,6 +3176,7 @@ export function CollectionBrowserView({
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
+  const [columnAggs, setColumnAggs] = useState<Record<string, 'sum'>>({})
   // Column widths (#131): drag the header's right edge; persisted per view.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnTints, setColumnTints] = useState<Record<string, TintRule[]>>({})
@@ -3348,6 +3351,7 @@ export function CollectionBrowserView({
     setDisplayColumns(initialColumns ?? null)
     setColumnLabels({})
     setColumnFormats({})
+    setColumnAggs({})
     setSelectedIds([])
     setActiveViewId(null)
     setQuickSel({})
@@ -3720,6 +3724,11 @@ export function CollectionBrowserView({
     }
   }, [conditionsParam])
 
+  // Plain physical columns only — dotted/synthetic keys can't be SUMmed
+  const aggParam = Object.keys(columnAggs)
+    .filter((k) => !k.includes('.') && !k.startsWith('__'))
+    .sort()
+    .join(',')
   const {
     data: itemsRes,
     isLoading,
@@ -3727,15 +3736,20 @@ export function CollectionBrowserView({
     refetch,
     error
   } = useQuery({
-    queryKey: ['cbv-items', collection, appliedSearch, sort, groupBy ? 'grouped' : page, groupBy ? 500 : effPageSize, conditionsParam],
+    queryKey: ['cbv-items', collection, appliedSearch, sort, groupBy ? 'grouped' : page, groupBy ? 500 : effPageSize, conditionsParam, aggParam],
     queryFn: () =>
-      client.request<{ data: Array<Record<string, unknown>>; total: number }>(
+      client.request<{
+        data: Array<Record<string, unknown>>
+        total: number
+        aggregates?: Record<string, number>
+      }>(
         get(`/items/${collection}`, {
           limit: groupBy ? 500 : effPageSize,
           page: groupBy ? 1 : page,
           ...(appliedSearch ? { search: appliedSearch } : {}),
           ...(sort ? { sort } : {}),
-          ...(conditionsParam ? { conditions: conditionsParam } : {})
+          ...(conditionsParam ? { conditions: conditionsParam } : {}),
+          ...(aggParam ? { agg: aggParam } : {})
         })
       ),
     enabled: !!collection && scopeGateOpen,
@@ -3744,6 +3758,7 @@ export function CollectionBrowserView({
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
+  const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
   // ── Surgical live row patches (#267) ──────────────────────────────────────
@@ -4193,13 +4208,16 @@ export function CollectionBrowserView({
       const pins: Record<string, 'left' | 'right'> = {}
       const tints: Record<string, TintRule[]> = {}
       const widths: Record<string, number> = {}
+      const aggs: Record<string, 'sum'> = {}
       for (const c of v.columns) {
         if (typeof c !== 'string' && c.label) labels[c.key] = c.label
         if (typeof c !== 'string' && c.format) formats[c.key] = c.format
         if (typeof c !== 'string' && c.pin) pins[c.key] = c.pin
         if (typeof c !== 'string' && c.tint?.length) tints[c.key] = c.tint
         if (typeof c !== 'string' && c.width) widths[c.key] = c.width
+        if (typeof c !== 'string' && c.agg) aggs[c.key] = c.agg
       }
+      setColumnAggs(aggs)
       setColumnLabels(labels)
       setColumnFormats(formats)
       setColumnTints(tints)
@@ -4224,6 +4242,7 @@ export function CollectionBrowserView({
     setDisplayColumns(initialColumns ?? null)
     setColumnLabels({})
     setColumnFormats({})
+    setColumnAggs({})
     setColumnPins(null)
     setPage(1)
   }
@@ -4237,14 +4256,16 @@ export function CollectionBrowserView({
         const pin = effectivePins[k]
         const tint = columnTints[k]
         const width = columnWidths[k]
-        if (!label && !format && !pin && !tint?.length && !width) return k
+        const agg = columnAggs[k]
+        if (!label && !format && !pin && !tint?.length && !width && !agg) return k
         return {
           key: k,
           ...(label ? { label } : {}),
           ...(format ? { format } : {}),
           ...(pin ? { pin } : {}),
           ...(tint?.length ? { tint } : {}),
-          ...(width ? { width } : {})
+          ...(width ? { width } : {}),
+          ...(agg ? { agg } : {})
         }
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
@@ -5259,6 +5280,28 @@ export function CollectionBrowserView({
                     >
                       $
                     </button>
+                    {!k.includes('.') && !k.startsWith('__') && (
+                      <button
+                        type='button'
+                        onClick={() =>
+                          setColumnAggs((a) => {
+                            const next = { ...a }
+                            if (next[k]) delete next[k]
+                            else next[k] = 'sum'
+                            return next
+                          })
+                        }
+                        title='Sum this column in a footer row (across all matching records)'
+                        aria-label={`Toggle sum for ${k}`}
+                        className={
+                          columnAggs[k]
+                            ? 'text-[11px] font-bold text-[#00a5cc]'
+                            : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                        }
+                      >
+                        Σ
+                      </button>
+                    )}
                     <button
                       type='button'
                       onClick={() => setDisplayColumns(effectiveColumns.filter((x) => x !== k))}
@@ -6396,6 +6439,43 @@ export function CollectionBrowserView({
                   })
                 )}
               </tbody>
+              {aggregates && Object.keys(aggregates).length > 0 && !groupBy && (
+                <tfoot className='text-[12px] tabular-nums'>
+                  <tr className='sticky bottom-0 z-[2] border-t-2 border-slate-200 bg-slate-50 font-medium dark:border-slate-700 dark:bg-slate-800'>
+                    {enableCheckboxes && (
+                      <td className='sticky left-0 z-[3] w-9 bg-slate-50 px-3 py-1.5 dark:bg-slate-800' />
+                    )}
+                    {orderedCols.map((col, ci) => {
+                      const key = col.key
+                      const v = aggregates[key]
+                      return (
+                        <td
+                          key={key}
+                          className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[3]', 'bg-slate-50 dark:bg-slate-800')}`}
+                          style={pinStyle(key)}
+                          data-tip={
+                            v != null
+                              ? `Sum of ${columnLabel(key)} across all ${fmtNum(total)} matching records`
+                              : undefined
+                          }
+                        >
+                          {v != null ? (
+                            <span className='text-slate-700 dark:text-slate-200'>
+                              {columnFormats[key]
+                                ? formatValue(String(v), columnFormats[key])
+                                : fmtNum(Math.round(v * 100) / 100)}
+                            </span>
+                          ) : ci === 0 ? (
+                            <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                              Σ totals
+                            </span>
+                          ) : null}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                </tfoot>
+              )}
             </table>
             )}
           </div>
