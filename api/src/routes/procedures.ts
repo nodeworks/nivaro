@@ -185,6 +185,161 @@ export async function procedureRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  // ── AI review ────────────────────────────────────────────────────────────
+  // Gathers ENGINE-ACCURATE context (sys.dm_sql_referenced_entities for the
+  // tables the proc actually touches, live columns/indexes/row counts for
+  // each) plus where the app uses the proc, and asks the model for a summary,
+  // improvements, and index suggestions. The model only ever SUGGESTS —
+  // nothing here executes its output.
+  app.post<{ Params: { name: string } }>('/:name/ai-review', async (req, reply) => {
+    const { name } = req.params
+    if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
+    const row = (await db.raw(
+      `SELECT m.definition FROM sys.procedures p
+       JOIN sys.sql_modules m ON m.object_id = p.object_id
+       WHERE p.name = ? AND p.is_ms_shipped = 0`,
+      [name]
+    )) as Array<{ definition: string }>
+    if (!row.length) return reply.code(404).send({ error: 'Procedure not found' })
+    const definition = row[0].definition
+
+    const { getAiClient } = await import('../services/ai-client.js')
+    const client = await getAiClient()
+    if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
+
+    // Referenced tables from the engine's own dependency tracker; falls back
+    // to nothing (the model still gets the definition) if resolution fails —
+    // dm_sql_referenced_entities throws on procs referencing dropped objects.
+    let tables: string[] = []
+    try {
+      const refs = (await db.raw(
+        `SELECT DISTINCT referenced_entity_name AS t
+         FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
+         WHERE referenced_minor_id = 0 AND referenced_entity_name IS NOT NULL`,
+        [`dbo.${name}`]
+      )) as Array<{ t: string }>
+      tables = refs
+        .map((r) => r.t)
+        .filter((t) => NAME_RE.test(t))
+        .slice(0, 12)
+    } catch {
+      /* unresolved refs — proceed without table context */
+    }
+    // Keep only real tables (the dependency list includes procs/functions).
+    if (tables.length) {
+      const real = (await db('information_schema.tables')
+        .whereIn('table_name', tables)
+        .where('table_type', 'BASE TABLE')
+        .pluck('table_name')) as string[]
+      tables = real
+    }
+
+    const schemaCtx: string[] = []
+    for (const t of tables) {
+      const cols = (await db('information_schema.columns')
+        .where({ table_name: t })
+        .orderBy('ordinal_position')
+        .select('column_name', 'data_type', 'is_nullable')) as Array<{
+        column_name: string
+        data_type: string
+        is_nullable: string
+      }>
+      const idx = (await db.raw(
+        `SELECT i.name, i.type_desc, i.is_unique,
+                STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS cols
+         FROM sys.indexes i
+         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
+         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+         WHERE i.object_id = OBJECT_ID(?) AND i.type > 0
+         GROUP BY i.name, i.type_desc, i.is_unique`,
+        [`dbo.${t}`]
+      )) as Array<{ name: string; type_desc: string; is_unique: boolean; cols: string }>
+      const cnt = (await db.raw(
+        `SELECT SUM(ps.row_count) AS n FROM sys.dm_db_partition_stats ps
+         WHERE ps.object_id = OBJECT_ID(?) AND ps.index_id IN (0, 1)`,
+        [`dbo.${t}`]
+      ).catch(() => [{ n: null }])) as Array<{ n: number | null }>
+      schemaCtx.push(
+        `TABLE ${t} (~${cnt[0]?.n ?? '?'} rows)\n  columns: ${cols
+          .map((c) => `${c.column_name} ${c.data_type}${c.is_nullable === 'YES' ? '?' : ''}`)
+          .join(', ')}\n  indexes: ${
+          idx.length ? idx.map((i) => `${i.name}(${i.cols})${i.is_unique ? ' UNIQUE' : ''}`).join('; ') : 'NONE beyond heap'
+        }`
+      )
+    }
+
+    // Where the app uses this proc.
+    const usage: string[] = []
+    try {
+      const cq = (await db('nivaro_custom_queries')
+        .where('sql_text', 'like', `%${name}%`)
+        .pluck('slug')) as string[]
+      if (cq.length) usage.push(`custom queries: ${cq.slice(0, 10).join(', ')}`)
+      const defs = (await db('nivaro_import_definitions')
+        .where({ procedure: name })
+        .pluck('key')
+        .catch(() => [])) as string[]
+      if (defs.length) usage.push(`staged-import definitions: ${defs.join(', ')}`)
+      const rules = (await db('nivaro_rules')
+        .where('actions', 'like', `%${name}%`)
+        .pluck('name')
+        .catch(() => [])) as string[]
+      if (rules.length) usage.push(`automation rules: ${rules.slice(0, 6).join(', ')}`)
+    } catch {
+      /* usage context is best-effort */
+    }
+
+    const { model } = await (await import('../services/ai-client.js')).getAiModelSettings()
+    const prompt = `You are reviewing a SQL Server stored procedure for a production system.
+
+PROCEDURE DEFINITION:
+${definition.slice(0, 24000)}
+
+LIVE SCHEMA OF REFERENCED TABLES (columns, existing indexes, approx row counts):
+${schemaCtx.join('\n\n') || '(dependency resolution unavailable)'}
+
+WHERE THE APP USES IT:
+${usage.join('\n') || '(no registered app usage found — may be invoked externally or by cron)'}
+
+Respond with ONLY a JSON object, no fences:
+{
+  "summary": "2-4 sentences: what this procedure does and when it runs",
+  "improvements": ["specific, actionable improvement", ...],
+  "index_suggestions": [{"table": "...", "columns": "col1, col2", "reason": "which predicate/join this serves", "create_sql": "CREATE INDEX ... ON ..."}],
+  "risks": ["correctness or operational risk worth knowing", ...]
+}
+Rules: suggest an index ONLY when the definition's predicates/joins hit columns the listed indexes do not cover AND the table is large enough to matter; empty arrays are fine; never invent tables or columns not shown above.`
+
+    try {
+      const message = await client.messages.create({
+        model,
+        max_tokens: 1800,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      const text = message.content
+        .map((b) => ('text' in b ? b.text : ''))
+        .join('')
+        .trim()
+      const jsonText = text.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '')
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(jsonText)
+      } catch {
+        parsed = { summary: text, improvements: [], index_suggestions: [], risks: [] }
+      }
+      await logActivity({
+        action: 'procedure-ai-review',
+        user: req.user?.id,
+        collection: 'sys.procedures',
+        item: name,
+        req
+      })
+      return reply.send({ data: { ...parsed, tables_analyzed: tables } })
+    } catch (e) {
+      return reply.code(502).send({ error: `AI review failed: ${(e as Error).message}` })
+    }
+  })
+
   // ── Execute with typed params ────────────────────────────────────────────
   // Param names are validated against sys.parameters (the catalog, not the
   // request), values always BIND — nothing from the body is interpolated.

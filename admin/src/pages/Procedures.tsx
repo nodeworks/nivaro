@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Database, Loader2, Play, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { Check, Copy, Database, Loader2, Play, Plus, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -368,6 +368,24 @@ function ProcedureDetail({
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Drop failed'
       )
   })
+  interface AiReview {
+    summary?: string
+    improvements?: string[]
+    index_suggestions?: Array<{ table: string; columns: string; reason: string; create_sql: string }>
+    risks?: string[]
+    tables_analyzed?: string[]
+  }
+  const [aiReview, setAiReview] = useState<AiReview | null>(null)
+  const review = useMutation({
+    mutationFn: () =>
+      api.post<{ data: AiReview }>(`/procedures/${name}/ai-review`).then((r) => r.data.data),
+    onSuccess: (data) => setAiReview(data),
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'AI review failed',
+        { duration: 10000 }
+      )
+  })
   const run = useMutation({
     mutationFn: () => {
       const params: Record<string, unknown> = {}
@@ -412,6 +430,21 @@ function ProcedureDetail({
           {detail.params.length === 1 ? '' : 's'}
         </span>
         <div className='ml-auto flex items-center gap-2'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 gap-1.5 text-[11.5px]'
+            disabled={review.isPending}
+            onClick={() => review.mutate()}
+            data-tip='Parse the procedure, compare it against the live schema and indexes of every table it touches, and suggest improvements'
+          >
+            {review.isPending ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              <Sparkles className='h-3 w-3 text-nvr-cyan' />
+            )}
+            AI review
+          </Button>
           {confirmDrop ? (
             <>
               <span className='text-[11.5px] text-red-500'>Drop {name} permanently?</span>
@@ -435,6 +468,99 @@ function ProcedureDetail({
           This procedure's body is owned by an import definition — edits belong on the Imports
           Definitions page, or they'll be overwritten on the next definition deploy.
         </p>
+      )}
+
+      {review.isPending && (
+        <p className='rounded-xl border border-slate-200 bg-white px-4 py-3 text-[12px] text-slate-400 dark:border-border dark:bg-card'>
+          Analyzing — reading the definition, plus columns, indexes and row counts of every table it
+          references…
+        </p>
+      )}
+      {aiReview && !review.isPending && (
+        <section className='rounded-xl border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+          <div className='mb-2 flex items-center gap-2'>
+            <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
+            <h3 className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>AI review</h3>
+            {(aiReview.tables_analyzed ?? []).length > 0 && (
+              <span className='text-[11px] text-slate-400'>
+                analyzed {aiReview.tables_analyzed!.length} referenced table
+                {aiReview.tables_analyzed!.length === 1 ? '' : 's'}:{' '}
+                {aiReview.tables_analyzed!.join(', ')}
+              </span>
+            )}
+          </div>
+          {aiReview.summary && (
+            <p className='max-w-[80ch] text-[12.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
+              {aiReview.summary}
+            </p>
+          )}
+          {(aiReview.improvements ?? []).length > 0 && (
+            <div className='mt-3'>
+              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                Improvements
+              </h4>
+              <ul className='max-w-[80ch] list-disc space-y-1 pl-5 text-[12px] text-slate-600 dark:text-slate-300'>
+                {aiReview.improvements!.map((imp, i) => (
+                  <li key={i}>{imp}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(aiReview.index_suggestions ?? []).length > 0 && (
+            <div className='mt-3'>
+              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                Index suggestions
+              </h4>
+              <div className='space-y-2'>
+                {aiReview.index_suggestions!.map((ix, i) => (
+                  <div
+                    key={i}
+                    className='rounded-lg border border-slate-100 bg-slate-50/60 p-2.5 dark:border-border dark:bg-muted/30'
+                  >
+                    <p className='text-[12px] text-slate-600 dark:text-slate-300'>
+                      <span className='font-mono text-[11.5px] text-slate-800 dark:text-slate-200'>
+                        {ix.table}({ix.columns})
+                      </span>{' '}
+                      — {ix.reason}
+                    </p>
+                    <div className='mt-1.5 flex items-start gap-2'>
+                      <code className='min-w-0 flex-1 overflow-x-auto whitespace-pre rounded bg-white px-2 py-1 font-mono text-[11px] text-slate-700 dark:bg-background dark:text-slate-300'>
+                        {ix.create_sql}
+                      </code>
+                      <button
+                        type='button'
+                        className='shrink-0 rounded p-1 text-slate-400 hover:text-nvr-cyan'
+                        data-tip='Copy CREATE INDEX'
+                        onClick={() => {
+                          navigator.clipboard.writeText(ix.create_sql).catch(() => {})
+                          toast.success('Copied')
+                        }}
+                      >
+                        <Copy className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className='mt-1.5 text-[11px] text-slate-400'>
+                Suggestions only — nothing is created automatically. Validate against real query
+                plans (DB Health → Explain) before adding indexes to hot tables.
+              </p>
+            </div>
+          )}
+          {(aiReview.risks ?? []).length > 0 && (
+            <div className='mt-3'>
+              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                Risks
+              </h4>
+              <ul className='max-w-[80ch] list-disc space-y-1 pl-5 text-[12px] text-amber-700 dark:text-amber-400'>
+                {aiReview.risks!.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
       )}
 
       {/* ── Run ── */}
