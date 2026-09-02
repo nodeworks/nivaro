@@ -31,9 +31,10 @@ export interface ServiceColumnConfig {
   /** Resolve the file value to a related row's id. Duplicate match values
    *  collapse to the LOWEST id (the procs' MIN(id) convention for cifa).
    *  on_missing 'create' inserts a stub row ({match_field: value}) through
-   *  the items service for every unmatched value instead of dropping the
-   *  file row. */
-  lookup?: { collection: string; match_field: string; on_missing?: 'create' }
+   *  the items service for every unmatched value; 'null' keeps the file row
+   *  with an empty link (the procs' LEFT JOIN semantics). Default (absent)
+   *  drops the row — the original warehouse-import behavior. */
+  lookup?: { collection: string; match_field: string; on_missing?: 'create' | 'null' }
 }
 
 export interface ServiceImportConfig {
@@ -229,12 +230,24 @@ export async function runServiceImport({
     for (const [col, cc] of Object.entries(config.columns)) {
       const raw = (r[col] ?? '').trim()
       if (cc.lookup) {
+        const om = cc.lookup.on_missing
         if (!raw) {
+          if (om) {
+            out[cc.field] = null
+            continue
+          }
           drop = `empty ${col}`
           break
         }
         const id = lookupMaps.get(col)?.get(raw.toLowerCase())
         if (id == null) {
+          // 'create' mode already tried to stub the value — reaching here
+          // means the create itself failed; both modes degrade to null.
+          if (om) {
+            out[cc.field] = null
+            skip(`no ${cc.lookup.collection} match for ${col} (left empty)`)
+            continue
+          }
           drop = `no ${cc.lookup.collection} match for ${col}`
           break
         }

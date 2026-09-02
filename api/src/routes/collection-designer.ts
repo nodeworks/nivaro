@@ -1146,7 +1146,10 @@ export function generateServiceConfig(c: DesignCollection): {
         lookup: {
           collection: f.relation.related_collection,
           match_field: f.relation.match_field,
-          ...(f.relation.on_missing === 'create' ? { on_missing: 'create' } : {})
+          // Designer semantics: a miss never drops the row — it either
+          // stub-creates or leaves the link empty, mirroring the one-time
+          // import and the generated proc's LEFT JOIN.
+          on_missing: f.relation.on_missing === 'create' ? 'create' : 'null'
         }
       }
     } else {
