@@ -407,6 +407,9 @@ function ProcedureDetail({
     onSuccess: () => {
       toast.success(`${name} deployed`)
       setDraft(null)
+      setFixedIssues(new Set())
+      setLastFix(null)
+      setDefView('edit')
       setConfirmDeploy(false)
       void qc.invalidateQueries({ queryKey: ['procedure', name] })
       void qc.invalidateQueries({ queryKey: ['procedures'] })
@@ -442,7 +445,10 @@ function ProcedureDetail({
   const review = useMutation({
     mutationFn: () =>
       api.post<{ data: AiReview }>(`/procedures/${name}/ai-review`).then((r) => r.data.data),
-    onSuccess: (data) => setAiReview(data),
+    onSuccess: (data) => {
+      setAiReview(data)
+      setFixedIssues(new Set())
+    },
     onError: (err: unknown) =>
       toast.error(
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'AI review failed',
@@ -450,19 +456,29 @@ function ProcedureDetail({
       )
   })
   const [lastFix, setLastFix] = useState<{ issue: string; explanation: string } | null>(null)
+  // Which findings already have a fix in the pending draft, and which one is
+  // being fixed right now — drives per-button state (Fix / spinner / drafted).
+  const [fixedIssues, setFixedIssues] = useState<Set<string>>(new Set())
+  const [fixingIssue, setFixingIssue] = useState<string | null>(null)
+  const [defView, setDefView] = useState<'edit' | 'diff'>('edit')
   const fix = useMutation({
-    mutationFn: (issue: string) =>
-      api
+    mutationFn: (issue: string) => {
+      setFixingIssue(issue)
+      return api
         .post<{ data: { definition: string; explanation: string } }>(`/procedures/${name}/ai-fix`, {
           issue,
           // Fix on top of the editor's current draft so fixes stack.
           definition: draft ?? undefined
         })
-        .then((r) => ({ issue, ...r.data.data })),
+        .then((r) => ({ issue, ...r.data.data }))
+    },
+    onSettled: () => setFixingIssue(null),
     onSuccess: ({ issue, definition: fixed, explanation }) => {
       setDraft(fixed)
       setLastFix({ issue, explanation })
-      toast.success('Fix drafted into the editor — review and Deploy to apply')
+      setFixedIssues((prev) => new Set(prev).add(issue))
+      setDefView('diff')
+      toast.success('Fix drafted — highlighted changes below; Deploy to apply')
     },
     onError: (err: unknown) =>
       toast.error(
@@ -588,7 +604,10 @@ function ProcedureDetail({
                   <li key={i} className='flex items-start gap-2'>
                     <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300 dark:bg-slate-600' />
                     <span className='min-w-0 flex-1'>{imp}</span>
-                    <FixButton onFix={() => fix.mutate(imp)} busy={fix.isPending} />
+                    <FixButton
+                      state={fixedIssues.has(imp) ? 'drafted' : fixingIssue === imp ? 'fixing' : fix.isPending ? 'blocked' : 'idle'}
+                      onFix={() => fix.mutate(imp)}
+                    />
                   </li>
                 ))}
               </ul>
@@ -646,7 +665,10 @@ function ProcedureDetail({
                   <li key={i} className='flex items-start gap-2'>
                     <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-amber-400' />
                     <span className='min-w-0 flex-1'>{r}</span>
-                    <FixButton onFix={() => fix.mutate(r)} busy={fix.isPending} />
+                    <FixButton
+                      state={fixedIssues.has(r) ? 'drafted' : fixingIssue === r ? 'fixing' : fix.isPending ? 'blocked' : 'idle'}
+                      onFix={() => fix.mutate(r)}
+                    />
                   </li>
                 ))}
               </ul>
@@ -756,7 +778,17 @@ function ProcedureDetail({
           )}
           <div className='ml-auto flex items-center gap-2'>
             {dirty && (
-              <Button size='sm' variant='ghost' className='h-7 text-[11.5px]' onClick={() => setDraft(null)}>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-7 text-[11.5px]'
+                onClick={() => {
+                  setDraft(null)
+                  setFixedIssues(new Set())
+                  setLastFix(null)
+                  setDefView('edit')
+                }}
+              >
                 Discard
               </Button>
             )}
@@ -780,12 +812,40 @@ function ProcedureDetail({
             )}
           </div>
         </div>
-        <textarea
-          value={definition}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          className='h-[480px] w-full resize-y rounded-lg border border-slate-200 bg-slate-50/50 p-3 font-mono text-[12px] leading-relaxed text-slate-800 outline-none focus:border-nvr-cyan/50 dark:border-border dark:bg-background dark:text-slate-200'
-        />
+        {dirty && (
+          <div className='mb-2 inline-flex rounded-lg border border-slate-200 p-0.5 dark:border-border'>
+            {(
+              [
+                ['edit', 'Edit'],
+                ['diff', 'Highlighted changes']
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type='button'
+                onClick={() => setDefView(mode)}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+                  defView === mode
+                    ? 'bg-[#00ceff]/10 text-[#009abe] dark:text-nvr-cyan'
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {dirty && defView === 'diff' ? (
+          <DiffView base={detail.definition} draft={definition} />
+        ) : (
+          <textarea
+            value={definition}
+            onChange={(e) => setDraft(e.target.value)}
+            spellCheck={false}
+            className='h-[480px] w-full resize-y rounded-lg border border-slate-200 bg-slate-50/50 p-3 font-mono text-[12px] leading-relaxed text-slate-800 outline-none focus:border-nvr-cyan/50 dark:border-border dark:bg-background dark:text-slate-200'
+          />
+        )}
         <p className='mt-1.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
           Deploys as CREATE OR ALTER on this database. Vendored deployments: re-run{' '}
           <span className='font-mono text-[10.5px]'>proc:dump</span> after editing here so the repo
@@ -796,16 +856,137 @@ function ProcedureDetail({
   )
 }
 
-function FixButton({ onFix, busy }: { onFix: () => void; busy: boolean }) {
+function FixButton({
+  state,
+  onFix
+}: {
+  state: 'idle' | 'fixing' | 'blocked' | 'drafted'
+  onFix: () => void
+}) {
+  if (state === 'drafted') {
+    return (
+      <span
+        className='shrink-0 rounded-full bg-[#00ceff]/10 px-1.5 py-px text-[10px] font-medium text-[#009abe] dark:text-nvr-cyan'
+        data-tip='A fix for this finding is in the pending draft below — Deploy to apply it'
+      >
+        ✓ drafted
+      </span>
+    )
+  }
+  if (state === 'fixing') {
+    return (
+      <span className='inline-flex shrink-0 items-center gap-1 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-400 dark:border-border'>
+        <Loader2 className='h-3 w-3 animate-spin' /> fixing…
+      </span>
+    )
+  }
   return (
     <button
       type='button'
-      disabled={busy}
+      disabled={state === 'blocked'}
       onClick={onFix}
       className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan/50 hover:text-[#009abe] disabled:opacity-40 dark:border-border dark:text-slate-400'
       data-tip='Draft an AI fix for this finding into the definition editor — you review and deploy'
     >
       Fix
     </button>
+  )
+}
+
+// ── Pending-changes diff ─────────────────────────────────────────────────────
+// Line-level LCS between the deployed definition and the draft — enough to
+// make an AI fix reviewable at a glance without a diff library.
+type DiffLine = { kind: 'same' | 'add' | 'del'; text: string }
+
+function lineDiff(a: string, b: string): DiffLine[] {
+  const A = a.replace(/\r/g, '').split('\n')
+  const B = b.replace(/\r/g, '').split('\n')
+  // Cap the quadratic table for pathological sizes; beyond it, show all-changed.
+  if (A.length * B.length > 4_000_000) {
+    return [...A.map((t) => ({ kind: 'del' as const, text: t })), ...B.map((t) => ({ kind: 'add' as const, text: t }))]
+  }
+  const m = A.length
+  const n = B.length
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const out: DiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (A[i] === B[j]) {
+      out.push({ kind: 'same', text: A[i] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ kind: 'del', text: A[i] })
+      i++
+    } else {
+      out.push({ kind: 'add', text: B[j] })
+      j++
+    }
+  }
+  while (i < m) out.push({ kind: 'del', text: A[i++] })
+  while (j < n) out.push({ kind: 'add', text: B[j++] })
+  return out
+}
+
+/** Collapse long unchanged runs so the changes carry the view. */
+function DiffView({ base, draft }: { base: string; draft: string }) {
+  const lines = useMemo(() => lineDiff(base, draft), [base, draft])
+  const rendered: Array<DiffLine | { kind: 'fold'; count: number }> = []
+  let run: DiffLine[] = []
+  const flushRun = () => {
+    if (run.length > 8) {
+      rendered.push(...run.slice(0, 3))
+      rendered.push({ kind: 'fold', count: run.length - 6 })
+      rendered.push(...run.slice(-3))
+    } else {
+      rendered.push(...run)
+    }
+    run = []
+  }
+  for (const l of lines) {
+    if (l.kind === 'same') run.push(l)
+    else {
+      flushRun()
+      rendered.push(l)
+    }
+  }
+  flushRun()
+  const changes = lines.filter((l) => l.kind !== 'same').length
+  return (
+    <div className='h-[480px] overflow-auto rounded-lg border border-slate-200 bg-slate-50/50 dark:border-border dark:bg-background'>
+      <div className='sticky top-0 border-b border-slate-100 bg-white px-3 py-1 text-[10.5px] text-slate-400 dark:border-border dark:bg-card'>
+        {changes} changed line{changes === 1 ? '' : 's'} vs the deployed definition —{' '}
+        <span className='text-emerald-600 dark:text-emerald-400'>green added</span>,{' '}
+        <span className='text-red-500 dark:text-red-400'>red removed</span>
+      </div>
+      <pre className='p-3 font-mono text-[11.5px] leading-[1.5]'>
+        {rendered.map((l, i) =>
+          l.kind === 'fold' ? (
+            <div key={i} className='select-none py-0.5 text-center text-[10px] text-slate-300 dark:text-slate-600'>
+              ⋯ {l.count} unchanged lines ⋯
+            </div>
+          ) : (
+            <div
+              key={i}
+              className={
+                l.kind === 'add'
+                  ? 'whitespace-pre-wrap bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+                  : l.kind === 'del'
+                    ? 'whitespace-pre-wrap bg-red-500/10 text-red-700 line-through decoration-red-300/60 dark:text-red-400'
+                    : 'whitespace-pre-wrap text-slate-600 dark:text-slate-400'
+              }
+            >
+              {l.text || ' '}
+            </div>
+          )
+        )}
+      </pre>
+    </div>
   )
 }
