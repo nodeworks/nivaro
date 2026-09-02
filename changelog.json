@@ -1,10 +1,129 @@
 {
-  "generated_at": "2026-09-02T01:06:56.146Z",
+  "generated_at": "2026-09-02T22:46:09.345Z",
   "releases": [
+    {
+      "version": "0.1.191",
+      "tag": "v0.1.191",
+      "date": "2026-09-02T18:46:03-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "cbv",
+              "text": "column sum footer — server-computed totals over the whole filtered set",
+              "hash": "d68c2af4"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "service-mode lookups support on_missing 'null' (keep row, empty link)",
+              "hash": "935606ca"
+            },
+            {
+              "section": "Added",
+              "scope": "data-model",
+              "text": "repeatable imports default to the items-service processor with an auto-generated mapping",
+              "hash": "e702b962"
+            },
+            {
+              "section": "Added",
+              "scope": "data-model",
+              "text": "designer relations can auto-create missing lookup values (per field)",
+              "hash": "4ad36c46"
+            },
+            {
+              "section": "Added",
+              "scope": "data-model",
+              "text": "designer relation controls — match field, junction name, create-new-table",
+              "hash": "fb6935a5"
+            },
+            {
+              "section": "Added",
+              "scope": "data-model",
+              "text": "designer generates a repeatable import pipeline keyed on a configurable pivot",
+              "hash": "5a5c5823"
+            },
+            {
+              "section": "Added",
+              "scope": "data-model",
+              "text": "AI collection designer — describe or upload a file, review, then create",
+              "hash": "212b0572"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "Fix all button per AI-review section",
+              "hash": "eba0abaa"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "per-finding fix states + highlighted pending changes",
+              "hash": "7bf9d176"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "AI fix per finding + AI-generated new procedures",
+              "hash": "53f212e2"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "AI review — grounded analysis against live schema",
+              "hash": "48829f4c"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Procedures page — manage stored procedures in-app",
+              "hash": "b41f681a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "DB outage probe no longer trips on a single slow round trip",
+              "hash": "43b48169"
+            },
+            {
+              "section": "Fixed",
+              "scope": "data-model",
+              "text": "designer survives cleared names and types smoothly",
+              "hash": "36758c70"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "register proc:dump / proc:deploy script commands",
+              "hash": "ae69ec4f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "drop stray demo screenshot",
+              "hash": "a21c8b78"
+            }
+          ]
+        }
+      ],
+      "count": 16
+    },
     {
       "version": "0.1.190",
       "tag": "v0.1.190",
-      "date": "2026-09-01T21:06:46-04:00",
+      "date": "2026-09-01T21:06:56-04:00",
       "sections": [
         {
           "label": "Added",
