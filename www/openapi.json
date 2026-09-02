@@ -6048,6 +6048,238 @@
         }
       }
     },
+    "/items/inventory_po_line_items": {
+      "get": {
+        "tags": [
+          "Inventory PO Line Items"
+        ],
+        "operationId": "listPOLineItem",
+        "summary": "List inventory_po_line_items",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/POLineItem"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Inventory PO Line Items"
+        ],
+        "operationId": "createPOLineItem",
+        "summary": "Create PO Line Item",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/POLineItem"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/POLineItem"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/inventory_po_line_items/{id}": {
+      "get": {
+        "tags": [
+          "Inventory PO Line Items"
+        ],
+        "operationId": "getPOLineItem",
+        "summary": "Get PO Line Item by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/POLineItem"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Inventory PO Line Items"
+        ],
+        "operationId": "updatePOLineItem",
+        "summary": "Update PO Line Item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/POLineItem"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/POLineItem"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Inventory PO Line Items"
+        ],
+        "operationId": "deletePOLineItem",
+        "summary": "Delete PO Line Item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/items/inventory_request_additional_contacts": {
       "get": {
         "tags": [
@@ -9508,6 +9740,238 @@
         ],
         "operationId": "deleteNotesDirectusUsers",
         "summary": "Delete notes_directus_users",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/items/po_requestors": {
+      "get": {
+        "tags": [
+          "PO Requestors"
+        ],
+        "operationId": "listPORequestor",
+        "summary": "List po_requestors",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated fields; prefix - for descending"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON filter DSL"
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated field list"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PORequestor"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "PO Requestors"
+        ],
+        "operationId": "createPORequestor",
+        "summary": "Create PO Requestor",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PORequestor"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PORequestor"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/po_requestors/{id}": {
+      "get": {
+        "tags": [
+          "PO Requestors"
+        ],
+        "operationId": "getPORequestor",
+        "summary": "Get PO Requestor by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PORequestor"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "PO Requestors"
+        ],
+        "operationId": "updatePORequestor",
+        "summary": "Update PO Requestor",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PORequestor"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PORequestor"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "PO Requestors"
+        ],
+        "operationId": "deletePORequestor",
+        "summary": "Delete PO Requestor",
         "parameters": [
           {
             "name": "id",
@@ -54186,6 +54650,71 @@
         },
         "required": []
       },
+      "POLineItem": {
+        "type": "object",
+        "description": "Purchase order line details with quantities, pricing, and fulfillment tracking.",
+        "properties": {
+          "warehouse": {
+            "type": "integer"
+          },
+          "po_number": {
+            "type": "string"
+          },
+          "po_header_creation_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "po_header_status": {
+            "type": "string"
+          },
+          "line_number": {
+            "type": "integer"
+          },
+          "requestor": {
+            "type": "string"
+          },
+          "supplier_name": {
+            "type": "string"
+          },
+          "item_number": {
+            "type": "integer"
+          },
+          "line_unit_price": {
+            "type": "number"
+          },
+          "promised_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "qty_ordered": {
+            "type": "number"
+          },
+          "qty_cancelled": {
+            "type": "number"
+          },
+          "qty_billed": {
+            "type": "number"
+          },
+          "qty_not_billed": {
+            "type": "number"
+          },
+          "qty_open_received": {
+            "type": "number"
+          },
+          "qty_received": {
+            "type": "number"
+          },
+          "transactional_order_value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "warehouse",
+          "po_number",
+          "line_number",
+          "item_number"
+        ]
+      },
       "InventoryRequestAdditionalContacts": {
         "type": "object",
         "properties": {
@@ -54492,6 +55021,18 @@
           }
         },
         "required": []
+      },
+      "PORequestor": {
+        "type": "object",
+        "description": "Lookup of requestor names extracted from import.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name"
+        ]
       },
       "Product": {
         "type": "object",
