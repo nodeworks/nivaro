@@ -51,7 +51,7 @@ export interface DesignField {
   interface?: string
   required?: boolean
   options?: Record<string, unknown> | null
-  relation?: { related_collection: string; match_field?: string | null } | null
+  relation?: { related_collection: string; match_field?: string | null; junction?: string | null } | null
   source_column?: string | null
 }
 
@@ -254,7 +254,9 @@ async function sanitizePlan(raw: unknown): Promise<DesignPlan> {
       if (!COLUMN_TYPES.has(String(ff.type))) continue
       seenFields.add(fname.toLowerCase())
       let relation: DesignField['relation'] = null
-      const relTarget = String(ff.relation?.related_collection ?? '').trim()
+      let relTarget = String(ff.relation?.related_collection ?? '').trim()
+      // Legacy shape from imported schemas — users live in nivaro_users now.
+      if (relTarget.toLowerCase() === 'directus_users') relTarget = 'nivaro_users'
       if (relTarget) {
         // Relation targets: existing business collections, in-plan siblings,
         // or nivaro_users — the one allowed system parent (documented rule).
@@ -268,9 +270,14 @@ async function sanitizePlan(raw: unknown): Promise<DesignPlan> {
           const mf = String(
             (ff.relation as { match_field?: unknown } | undefined)?.match_field ?? ''
           ).trim()
+          const jn = String(
+            (ff.relation as { junction?: unknown } | undefined)?.junction ?? ''
+          ).trim()
           relation = {
             related_collection: relTarget,
-            match_field: IDENT.test(mf) ? mf : null
+            match_field: IDENT.test(mf) ? mf : null,
+            junction:
+              IDENT.test(jn) && !/^(nivaro|directus)_/i.test(jn) && jn.length <= 120 ? jn : null
           }
         }
       }
@@ -706,12 +713,17 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
         if (f.type === 'm2m') {
           // Junction table + the MUTUAL relation pair (each side's
           // junction_field names the other's many_field — documented shape).
-          let junction = `${c.collection}_${target}`.slice(0, 120)
+          let junction = f.relation.junction ?? `${c.collection}_${target}`.slice(0, 120)
           const jExists = await db.raw(
             `SELECT 1 FROM information_schema.tables WHERE table_name = ?`,
             [junction]
           )
           if ((jExists as unknown[]).length) {
+            if (f.relation.junction) {
+              errors.push(
+                `Junction "${f.relation.junction}" already exists — used ${c.collection}_${f.field}_junction instead`
+              )
+            }
             junction = `${c.collection}_${f.field}_junction`.slice(0, 120)
           }
           const parentFk = `${c.collection}_id`

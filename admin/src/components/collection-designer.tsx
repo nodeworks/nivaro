@@ -38,7 +38,7 @@ interface DesignField {
   interface?: string
   required?: boolean
   options?: { choices?: { value: string; text: string }[] } | null
-  relation?: { related_collection: string; match_field?: string | null } | null
+  relation?: { related_collection: string; match_field?: string | null; junction?: string | null } | null
   source_column?: string | null
   _exclude?: boolean
 }
@@ -197,6 +197,48 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
           }
         : p
     )
+  const createLookupCollection = (ci: number, fi: number) =>
+    setPlan((p) => {
+      if (!p) return p
+      const f = p.collections[ci]?.fields[fi]
+      if (!f) return p
+      const base = f.field.replace(/_?(id|name|code|number)$/, '') || f.field
+      let name = base.endsWith('s') ? base : `${base}s`
+      const taken = new Set(p.collections.map((c) => c.collection))
+      if (taken.has(name)) name = `${name}_lookup`
+      const lookup: DesignCollection = {
+        collection: name,
+        display_name: name
+          .split('_')
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' '),
+        display_template: '{{name}}',
+        fields: [{ field: 'name', type: 'string', interface: 'input', required: true }],
+        import_key: []
+      }
+      return {
+        ...p,
+        collections: [
+          ...p.collections.map((c, i) =>
+            i === ci
+              ? {
+                  ...c,
+                  fields: c.fields.map((ff, j) =>
+                    j === fi
+                      ? {
+                          ...ff,
+                          type: ff.type === 'm2m' ? 'm2m' : 'integer',
+                          relation: { related_collection: name, match_field: 'name' }
+                        }
+                      : ff
+                  )
+                }
+              : c
+          ),
+          lookup
+        ]
+      }
+    })
   const updateField = (ci: number, fi: number, patch: Partial<DesignField>) =>
     setPlan((p) =>
       p
@@ -566,42 +608,14 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                             />
                           </td>
                           <td className='py-1 pr-2'>
-                            {f.relation?.match_field && (
-                              <span className='mb-0.5 block text-[10px] text-slate-400'>
-                                matched via {f.relation.match_field}
-                              </span>
-                            )}
-                            <Select
-                              value={f.relation?.related_collection ?? '__none__'}
-                              onValueChange={(v) =>
-                                updateField(ci, fi, {
-                                  relation:
-                                    v === '__none__'
-                                      ? null
-                                      : {
-                                          related_collection: v,
-                                          match_field:
-                                            v === f.relation?.related_collection
-                                              ? f.relation?.match_field
-                                              : undefined
-                                        }
-                                })
-                              }
-                            >
-                              <SelectTrigger className='h-7 w-[160px] text-[11.5px]'>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className='max-h-[280px]'>
-                                <SelectItem value='__none__' className='text-[12px] text-slate-400'>
-                                  — none —
-                                </SelectItem>
-                                {relationTargets.map((t) => (
-                                  <SelectItem key={t} value={t} className='text-[12px]'>
-                                    {t}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <RelationCell
+                              collection={c}
+                              field={f}
+                              relationTargets={relationTargets}
+                              planCollections={plan.collections}
+                              onChange={(patch) => updateField(ci, fi, patch)}
+                              onCreateNew={() => createLookupCollection(ci, fi)}
+                            />
                           </td>
                           <td className='max-w-[130px] truncate py-1 pr-3 font-mono text-[10.5px] text-slate-400' data-tip={f.source_column ?? undefined}>
                             {f.source_column ?? '—'}
@@ -679,6 +693,121 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+
+/**
+ * Relation editor for one field: target collection (with a "create new
+ * lookup table" option), the match field on that target, and — for m2m —
+ * the junction table name.
+ */
+function RelationCell({
+  collection,
+  field: f,
+  relationTargets,
+  planCollections,
+  onChange,
+  onCreateNew
+}: {
+  collection: DesignCollection
+  field: DesignField
+  relationTargets: string[]
+  planCollections: DesignCollection[]
+  onChange: (patch: Partial<DesignField>) => void
+  onCreateNew: () => void
+}) {
+  const target = f.relation?.related_collection ?? null
+  const planTarget = planCollections.find((c) => c.collection === target)
+  const { data: existingFields } = useQuery<{ fields?: { field: string }[] }>({
+    queryKey: ['collection-fields', target],
+    queryFn: () => api.get(`/collections/${target}`).then((r) => r.data.data),
+    enabled: !!target && !planTarget,
+    staleTime: 300_000
+  })
+  const matchOptions = planTarget
+    ? planTarget.fields.filter((tf) => tf.type !== 'm2m').map((tf) => tf.field)
+    : (existingFields?.fields ?? []).map((tf) => tf.field).filter((n) => n !== 'id')
+
+  return (
+    <div className='flex w-[190px] flex-col gap-1'>
+      <Select
+        value={target ?? '__none__'}
+        onValueChange={(v) => {
+          if (v === '__new__') return onCreateNew()
+          onChange({
+            relation:
+              v === '__none__'
+                ? null
+                : {
+                    related_collection: v,
+                    match_field: v === target ? f.relation?.match_field : undefined,
+                    junction: v === target ? f.relation?.junction : undefined
+                  }
+          })
+        }}
+      >
+        <SelectTrigger className='h-7 text-[11.5px]'>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className='max-h-[280px]'>
+          <SelectItem value='__none__' className='text-[12px] text-slate-400'>
+            — none —
+          </SelectItem>
+          <SelectItem value='__new__' className='text-[12px] font-medium text-[#009abe]'>
+            ＋ New collection…
+          </SelectItem>
+          {relationTargets.map((t) => (
+            <SelectItem key={t} value={t} className='text-[12px]'>
+              {t}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {f.relation && (
+        <div className='flex items-center gap-1'>
+          <span className='shrink-0 text-[10px] text-slate-400'>via</span>
+          <Select
+            value={f.relation.match_field ?? '__id__'}
+            onValueChange={(v) =>
+              onChange({
+                relation: { ...f.relation!, match_field: v === '__id__' ? null : v }
+              })
+            }
+          >
+            <SelectTrigger className='h-6 flex-1 text-[10.5px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className='max-h-[240px]'>
+              <SelectItem value='__id__' className='text-[11.5px] text-slate-400'>
+                id (numeric)
+              </SelectItem>
+              {matchOptions.map((m) => (
+                <SelectItem key={m} value={m} className='text-[11.5px]'>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {f.relation && f.type === 'm2m' && (
+        <Input
+          className='h-6 font-mono text-[10.5px]'
+          placeholder={`${collection.collection}_${f.relation.related_collection}`}
+          value={f.relation.junction ?? ''}
+          data-tip='Junction table name — leave blank for the default'
+          onChange={(e) =>
+            onChange({
+              relation: {
+                ...f.relation!,
+                junction: e.target.value.replace(/[^A-Za-z0-9_]/g, '_') || null
+              }
+            })
+          }
+        />
+      )}
+    </div>
   )
 }
 
