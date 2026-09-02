@@ -30,10 +30,13 @@ interface ColumnRow {
   /** Staging column name (the file column after header mapping). */
   col: string
   field: string
-  type: '' | 'number' | 'int'
+  type: '' | 'number' | 'int' | 'date' | 'datetime' | 'boolean'
   lookupOn: boolean
   lookupCollection: string
   lookupField: string
+  /** What a lookup miss does: '' = skip the file row (historic default),
+   *  'null' = keep the row with an empty link, 'create' = stub the record. */
+  lookupOnMissing: '' | 'null' | 'create'
 }
 
 interface BuilderState {
@@ -74,7 +77,11 @@ function parseState(raw: string, stagingCols: string[]): BuilderState | null {
   }
   const columns = (cfg.columns ?? {}) as Record<
     string,
-    { field?: string; type?: string; lookup?: { collection?: string; match_field?: string } }
+    {
+      field?: string
+      type?: string
+      lookup?: { collection?: string; match_field?: string; on_missing?: string }
+    }
   >
   if (cfg.columns && (typeof cfg.columns !== 'object' || Array.isArray(cfg.columns))) return null
 
@@ -85,10 +92,16 @@ function parseState(raw: string, stagingCols: string[]): BuilderState | null {
     return {
       col,
       field: c?.field ?? '',
-      type: c?.type === 'number' || c?.type === 'int' ? c.type : '',
+      type: ['number', 'int', 'date', 'datetime', 'boolean'].includes(c?.type ?? '')
+        ? (c!.type as ColumnRow['type'])
+        : '',
       lookupOn: !!c?.lookup,
       lookupCollection: c?.lookup?.collection ?? '',
-      lookupField: c?.lookup?.match_field ?? ''
+      lookupField: c?.lookup?.match_field ?? '',
+      lookupOnMissing:
+        c?.lookup?.on_missing === 'create' || c?.lookup?.on_missing === 'null'
+          ? c.lookup.on_missing
+          : ''
     }
   }
   // Declared staging columns lead (file order); config-only keys follow so a
@@ -130,7 +143,11 @@ function serialize(s: BuilderState): string {
     if (!r.field) continue
     const entry: Record<string, unknown> = { field: r.field }
     if (r.lookupOn && r.lookupCollection && r.lookupField) {
-      entry.lookup = { collection: r.lookupCollection, match_field: r.lookupField }
+      entry.lookup = {
+        collection: r.lookupCollection,
+        match_field: r.lookupField,
+        ...(r.lookupOnMissing ? { on_missing: r.lookupOnMissing } : {})
+      }
     } else if (r.type) {
       entry.type = r.type
     }
@@ -460,7 +477,10 @@ export function ServiceConfigBuilder({
                             options={[
                               { value: '', label: 'Text' },
                               { value: 'number', label: 'Number' },
-                              { value: 'int', label: 'Whole number' }
+                              { value: 'int', label: 'Whole number' },
+                              { value: 'date', label: 'Date' },
+                              { value: 'datetime', label: 'Date & time' },
+                              { value: 'boolean', label: 'Yes/No' }
                             ]}
                             className='h-7 w-[130px] text-[12px]'
                           />
@@ -501,6 +521,19 @@ export function ServiceConfigBuilder({
                               onChange={(v) => update({ lookupField: v })}
                             />
                             <span>equals the file value, and store its id.</span>
+                            <span className='ml-1'>If no match:</span>
+                            <SimpleSelect
+                              value={r.lookupOnMissing}
+                              onChange={(v) =>
+                                update({ lookupOnMissing: v as ColumnRow['lookupOnMissing'] })
+                              }
+                              options={[
+                                { value: '', label: 'skip the file row' },
+                                { value: 'null', label: 'leave the link empty' },
+                                { value: 'create', label: 'create a new record' }
+                              ]}
+                              className='h-6 w-[180px] text-[11.5px]'
+                            />
                           </div>
                         </td>
                       </tr>
@@ -527,7 +560,7 @@ export function ServiceConfigBuilder({
                   ...state,
                   rows: [
                     ...state.rows,
-                    { col: newCol.trim(), field: '', type: '', lookupOn: false, lookupCollection: '', lookupField: '' }
+                    { col: newCol.trim(), field: '', type: '', lookupOn: false, lookupCollection: '', lookupField: '', lookupOnMissing: '' }
                   ]
                 })
                 setNewCol('')
