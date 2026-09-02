@@ -346,11 +346,23 @@ Rules: suggest an index ONLY when the definition's predicates/joins hit columns 
   // Produce a corrected FULL definition addressing ONE named finding. The
   // result is returned as a DRAFT for the editor — it is never deployed here;
   // the human reviews and hits Deploy like any hand edit.
-  app.post<{ Params: { name: string }; Body: { issue?: string; definition?: string } }>(
+  app.post<{
+    Params: { name: string }
+    Body: { issue?: string; issues?: string[]; definition?: string }
+  }>(
     '/:name/ai-fix',
     async (req, reply) => {
       const { name } = req.params
-      const issue = String(req.body?.issue ?? '').trim()
+      // Single finding or a whole section's worth — a batch goes to the model
+      // as ONE request so the fixes come out coherent instead of N sequential
+      // rewrites stepping on each other.
+      const issues = (
+        Array.isArray(req.body?.issues) ? req.body.issues.map((i) => String(i)) : [String(req.body?.issue ?? '')]
+      )
+        .map((i) => i.trim())
+        .filter(Boolean)
+        .slice(0, 12)
+      const issue = issues.map((it, i) => (issues.length > 1 ? `${i + 1}. ${it}` : it)).join('\n')
       if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
       if (!issue) return reply.code(400).send({ error: 'issue is required' })
       // Fix against the editor's CURRENT draft when supplied, so sequential
@@ -371,7 +383,7 @@ Rules: suggest an index ONLY when the definition's predicates/joins hit columns 
       if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
       const { schemaCtx, usage } = await gatherProcContext(name)
       const { model } = await getAiModelSettings()
-      const prompt = `You are fixing ONE specific issue in a SQL Server stored procedure for a production system.
+      const prompt = `You are fixing ${issues.length > 1 ? `${issues.length} specific issues` : 'ONE specific issue'} in a SQL Server stored procedure for a production system.
 
 CURRENT DEFINITION:
 ${definition.slice(0, 24000)}
@@ -382,19 +394,19 @@ ${schemaCtx.join('\n\n') || '(dependency resolution unavailable)'}
 WHERE THE APP USES IT:
 ${usage.join('\n') || '(no registered app usage found)'}
 
-THE ISSUE TO FIX:
-${issue.slice(0, 2000)}
+THE ISSUE${issues.length > 1 ? 'S' : ''} TO FIX (address every one):
+${issue.slice(0, 4000)}
 
 Respond with ONLY a JSON object, no fences:
 {
   "definition": "the COMPLETE corrected procedure as CREATE OR ALTER PROCEDURE ${name} ... — full body, not a diff",
-  "explanation": "2-3 sentences: exactly what changed and why it fixes the issue"
+  "explanation": "2-4 sentences: exactly what changed and why it fixes the issue(s)"
 }
 Rules: change the MINIMUM needed to address the stated issue; preserve every other behavior, parameter, and output shape exactly; never reference tables or columns not shown above; the procedure name must remain ${name}.`
       try {
         const message = await client.messages.create({
           model,
-          max_tokens: 8000,
+          max_tokens: issues.length > 1 ? 12000 : 8000,
           messages: [{ role: 'user', content: prompt }]
         })
         const text = message.content

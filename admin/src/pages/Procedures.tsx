@@ -486,6 +486,35 @@ function ProcedureDetail({
         { duration: 10000 }
       )
   })
+  const [fixAllSection, setFixAllSection] = useState<string | null>(null)
+  const fixAll = useMutation({
+    mutationFn: ({ section, issues }: { section: string; issues: string[] }) => {
+      setFixAllSection(section)
+      return api
+        .post<{ data: { definition: string; explanation: string } }>(`/procedures/${name}/ai-fix`, {
+          issues,
+          definition: draft ?? undefined
+        })
+        .then((r) => ({ issues, ...r.data.data }))
+    },
+    onSettled: () => setFixAllSection(null),
+    onSuccess: ({ issues, definition: fixed, explanation }) => {
+      setDraft(fixed)
+      setLastFix({ issue: `${issues.length} findings (batch)`, explanation })
+      setFixedIssues((prev) => {
+        const next = new Set(prev)
+        for (const i of issues) next.add(i)
+        return next
+      })
+      setDefView('diff')
+      toast.success(`Batch fix drafted for ${issues.length} findings — review the highlighted changes`)
+    },
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Batch fix failed',
+        { duration: 10000 }
+      )
+  })
   const run = useMutation({
     mutationFn: () => {
       const params: Record<string, unknown> = {}
@@ -596,16 +625,26 @@ function ProcedureDetail({
           )}
           {(aiReview.improvements ?? []).length > 0 && (
             <div className='mt-3'>
-              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
-                Improvements
-              </h4>
+              <div className='mb-1 flex items-center gap-2'>
+                <h4 className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                  Improvements
+                </h4>
+                <FixAllButton
+                  section='improvements'
+                  issues={aiReview.improvements!}
+                  fixedIssues={fixedIssues}
+                  busySection={fixAllSection}
+                  anyBusy={fix.isPending || fixAll.isPending}
+                  onFixAll={(section, issues) => fixAll.mutate({ section, issues })}
+                />
+              </div>
               <ul className='max-w-[86ch] space-y-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
                 {aiReview.improvements!.map((imp, i) => (
                   <li key={i} className='flex items-start gap-2'>
                     <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300 dark:bg-slate-600' />
                     <span className='min-w-0 flex-1'>{imp}</span>
                     <FixButton
-                      state={fixedIssues.has(imp) ? 'drafted' : fixingIssue === imp ? 'fixing' : fix.isPending ? 'blocked' : 'idle'}
+                      state={fixedIssues.has(imp) ? 'drafted' : fixingIssue === imp ? 'fixing' : fix.isPending || fixAll.isPending ? 'blocked' : 'idle'}
                       onFix={() => fix.mutate(imp)}
                     />
                   </li>
@@ -657,16 +696,26 @@ function ProcedureDetail({
           )}
           {(aiReview.risks ?? []).length > 0 && (
             <div className='mt-3'>
-              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
-                Risks
-              </h4>
+              <div className='mb-1 flex items-center gap-2'>
+                <h4 className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                  Risks
+                </h4>
+                <FixAllButton
+                  section='risks'
+                  issues={aiReview.risks!}
+                  fixedIssues={fixedIssues}
+                  busySection={fixAllSection}
+                  anyBusy={fix.isPending || fixAll.isPending}
+                  onFixAll={(section, issues) => fixAll.mutate({ section, issues })}
+                />
+              </div>
               <ul className='max-w-[86ch] space-y-1.5 text-[12px] text-amber-700 dark:text-amber-400'>
                 {aiReview.risks!.map((r, i) => (
                   <li key={i} className='flex items-start gap-2'>
                     <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-amber-400' />
                     <span className='min-w-0 flex-1'>{r}</span>
                     <FixButton
-                      state={fixedIssues.has(r) ? 'drafted' : fixingIssue === r ? 'fixing' : fix.isPending ? 'blocked' : 'idle'}
+                      state={fixedIssues.has(r) ? 'drafted' : fixingIssue === r ? 'fixing' : fix.isPending || fixAll.isPending ? 'blocked' : 'idle'}
                       onFix={() => fix.mutate(r)}
                     />
                   </li>
@@ -988,5 +1037,42 @@ function DiffView({ base, draft }: { base: string; draft: string }) {
         )}
       </pre>
     </div>
+  )
+}
+
+function FixAllButton({
+  section,
+  issues,
+  fixedIssues,
+  busySection,
+  anyBusy,
+  onFixAll
+}: {
+  section: string
+  issues: string[]
+  fixedIssues: Set<string>
+  busySection: string | null
+  anyBusy: boolean
+  onFixAll: (section: string, issues: string[]) => void
+}) {
+  const pending = issues.filter((i) => !fixedIssues.has(i))
+  if (pending.length < 2) return null
+  if (busySection === section) {
+    return (
+      <span className='inline-flex items-center gap-1 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-400 dark:border-border'>
+        <Loader2 className='h-3 w-3 animate-spin' /> fixing {pending.length}…
+      </span>
+    )
+  }
+  return (
+    <button
+      type='button'
+      disabled={anyBusy}
+      onClick={() => onFixAll(section, pending)}
+      className='rounded border border-slate-200 px-1.5 py-px text-[10.5px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan/50 hover:text-[#009abe] disabled:opacity-40 dark:border-border dark:text-slate-400'
+      data-tip={`One combined AI fix for the ${pending.length} remaining findings in this section — drafts into the editor for review`}
+    >
+      Fix all ({pending.length})
+    </button>
   )
 }
