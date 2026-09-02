@@ -94,6 +94,7 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
   const [refine, setRefine] = useState('')
   const [importRows, setImportRows] = useState(true)
   const [createImport, setCreateImport] = useState(true)
+  const [importProcessor, setImportProcessor] = useState<'service' | 'procedure'>('service')
   const fileInput = useRef<HTMLInputElement>(null)
 
   const { data: existingCollections } = useQuery<{ collection: string }[]>({
@@ -166,7 +167,8 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
           plan: cleaned,
           import:
             mode === 'file' && importRows && fileToken ? { file_token: fileToken, sheet } : null,
-          create_import: mode === 'file' && createImport
+          create_import: mode === 'file' && createImport,
+          import_processor: importProcessor
         })
         .then((r) => r.data.data)
     },
@@ -675,17 +677,42 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                   />
                   Import the {activeSheet?.row_count.toLocaleString() ?? ''} parsed rows after creating
                 </label>
-                <label
-                  className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
-                  data-tip='Creates a staging table + an import_{name} stored procedure keyed on the re-import key, registered in the Import Console for repeat uploads of this file shape'
-                >
-                  <input
-                    type='checkbox'
-                    checked={createImport}
-                    onChange={(e) => setCreateImport(e.target.checked)}
-                  />
-                  Create a repeatable import (staging table + import procedure)
-                </label>
+                <div className='flex items-center gap-2'>
+                  <label
+                    className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+                    data-tip='Registers this file shape in the Import Console so the same sheet can be re-uploaded any time'
+                  >
+                    <input
+                      type='checkbox'
+                      checked={createImport}
+                      onChange={(e) => setCreateImport(e.target.checked)}
+                    />
+                    Create a repeatable import via
+                  </label>
+                  <div className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+                    {(
+                      [
+                        ['service', 'Items service', 'Writes go through the items service — revisions, activity, rules and hooks apply, and unchanged re-imports write nothing. Recommended.'],
+                        ['procedure', 'Stored procedure', 'Generates an import_{name} T-SQL MERGE — fastest for very large files, but raw writes: no revisions, no hooks.']
+                      ] as const
+                    ).map(([v, label, tip]) => (
+                      <button
+                        key={v}
+                        type='button'
+                        disabled={!createImport}
+                        data-tip={tip}
+                        onClick={() => setImportProcessor(v)}
+                        className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+                          importProcessor === v
+                            ? 'bg-[#00ceff]/10 text-[#009abe] dark:text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
             <Button

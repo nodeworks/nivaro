@@ -27,10 +27,13 @@ export interface ServiceColumnConfig {
   /** Target collection field this staging column maps to. */
   field: string
   /** Coercion applied before diff/write; default 'string'. Empty string → null. */
-  type?: 'string' | 'number' | 'int'
+  type?: 'string' | 'number' | 'int' | 'date' | 'datetime' | 'boolean'
   /** Resolve the file value to a related row's id. Duplicate match values
-   *  collapse to the LOWEST id (the procs' MIN(id) convention for cifa). */
-  lookup?: { collection: string; match_field: string }
+   *  collapse to the LOWEST id (the procs' MIN(id) convention for cifa).
+   *  on_missing 'create' inserts a stub row ({match_field: value}) through
+   *  the items service for every unmatched value instead of dropping the
+   *  file row. */
+  lookup?: { collection: string; match_field: string; on_missing?: 'create' }
 }
 
 export interface ServiceImportConfig {
@@ -70,7 +73,8 @@ export function parseServiceConfig(raw: unknown): ServiceImportConfig | null {
     if (!cfg || typeof cfg !== 'object') return null
     const c = cfg as ServiceImportConfig
     if (!c.collection || !IDENT.test(c.collection) || /^nivaro_/i.test(c.collection)) return null
-    if (!Array.isArray(c.match_by) || c.match_by.length === 0) return null
+    // match_by [] is valid — append-only: every file row creates.
+    if (!Array.isArray(c.match_by)) return null
     if (!c.columns || typeof c.columns !== 'object') return null
     return c
   } catch {
@@ -95,8 +99,21 @@ function coerce(value: string, type: ServiceColumnConfig['type']): unknown {
     return Number.isFinite(n) ? n : null
   }
   if (type === 'number') {
-    const n = Number(v.replace(/,/g, ''))
+    const n = Number(v.replace(/[,$%]/g, ''))
     return Number.isFinite(n) ? n : null
+  }
+  if (type === 'boolean') {
+    const low = v.toLowerCase()
+    if (['true', 'yes', 'y', '1'].includes(low)) return true
+    if (['false', 'no', 'n', '0'].includes(low)) return false
+    return null
+  }
+  if (type === 'date' || type === 'datetime') {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return null
+    return type === 'date'
+      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      : d
   }
   return v
 }
@@ -165,6 +182,7 @@ export async function runServiceImport({
   }
 
   // ── lookups, one batched resolve per configured lookup column ─────────────
+  const lookupCreated: string[] = []
   const lookupMaps = new Map<string, Map<string, unknown>>()
   for (const [col, cc] of Object.entries(config.columns)) {
     if (!cc.lookup) continue
@@ -173,7 +191,34 @@ export async function runServiceImport({
       const v = (r[col] ?? '').trim()
       if (v) values.add(v)
     }
-    lookupMaps.set(col, await resolveLookup(cc.lookup, values))
+    const map = await resolveLookup(cc.lookup, values)
+    if (cc.lookup.on_missing === 'create') {
+      // Stub-create unmatched values through the items service so the rows
+      // are revisioned/attributed like any other write.
+      let stubbed = 0
+      for (const v of values) {
+        if (map.has(v.toLowerCase())) continue
+        try {
+          const created = await createOne(
+            user,
+            cc.lookup.collection,
+            { [cc.lookup.match_field]: v },
+            undefined,
+            undefined,
+            { skipRollupRecalc: true }
+          )
+          const id = (created as { id?: unknown })?.id
+          if (id != null) {
+            map.set(v.toLowerCase(), id)
+            stubbed++
+          }
+        } catch {
+          skip(`could not create ${cc.lookup.collection} for ${col}`)
+        }
+      }
+      if (stubbed) lookupCreated.push(`${stubbed} new ${cc.lookup.collection} row(s) from ${col}`)
+    }
+    lookupMaps.set(col, map)
   }
 
   // ── transform file rows → target payloads ─────────────────────────────────
@@ -220,13 +265,20 @@ export async function runServiceImport({
   }
 
   // ── dedupe: last file row per natural key wins (the procs' ROW_NUMBER) ────
+  // Empty match_by = append-only: every payload is its own row, nothing
+  // matches existing data, everything creates.
+  const appendOnly = config.match_by.length === 0
   const keyOf = (row: Record<string, unknown>) =>
     config.match_by.map((f) => normForDiff(row[f])).join('|')
   const byKey = new Map<string, Record<string, unknown>>()
-  for (const p of payloads) {
-    const k = keyOf(p)
-    if (byKey.has(k)) skip('duplicate key in file')
-    byKey.set(k, p)
+  if (appendOnly) {
+    payloads.forEach((p, i) => byKey.set(`#${i}`, p))
+  } else {
+    for (const p of payloads) {
+      const k = keyOf(p)
+      if (byKey.has(k)) skip('duplicate key in file')
+      byKey.set(k, p)
+    }
   }
 
   // ── existing rows, chunked on the first key column's distinct values ──────
@@ -238,9 +290,9 @@ export async function runServiceImport({
     ...new Set(Object.values(config.columns).map((c) => c.field))
   ]
   if (config.month_from) compareFields.push(config.month_from.field)
-  const firstVals = [...new Set([...byKey.values()].map((p) => p[firstKey]))].filter(
-    (v) => v != null
-  )
+  const firstVals = appendOnly
+    ? []
+    : [...new Set([...byKey.values()].map((p) => p[firstKey]))].filter((v) => v != null)
   const existingByKey = new Map<string, Record<string, unknown>>()
   for (let i = 0; i < firstVals.length; i += CHUNK) {
     const rows2 = await db(config.collection)
