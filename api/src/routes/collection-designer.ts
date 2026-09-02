@@ -51,7 +51,14 @@ export interface DesignField {
   interface?: string
   required?: boolean
   options?: Record<string, unknown> | null
-  relation?: { related_collection: string; match_field?: string | null; junction?: string | null } | null
+  relation?: {
+    related_collection: string
+    match_field?: string | null
+    junction?: string | null
+    /** What an import does with a value the lookup can't match: leave the FK
+     *  null, or create a stub row in the target ({match_field: value}). */
+    on_missing?: 'null' | 'create'
+  } | null
   source_column?: string | null
 }
 
@@ -273,11 +280,20 @@ async function sanitizePlan(raw: unknown): Promise<DesignPlan> {
           const jn = String(
             (ff.relation as { junction?: unknown } | undefined)?.junction ?? ''
           ).trim()
+          const om = (ff.relation as { on_missing?: unknown } | undefined)?.on_missing
           relation = {
             related_collection: relTarget,
             match_field: IDENT.test(mf) ? mf : null,
             junction:
-              IDENT.test(jn) && !/^(nivaro|directus)_/i.test(jn) && jn.length <= 120 ? jn : null
+              IDENT.test(jn) && !/^(nivaro|directus)_/i.test(jn) && jn.length <= 120 ? jn : null,
+            // In-plan lookup targets exist to absorb the file's values — they
+            // default to creating missing rows; existing targets default null.
+            on_missing:
+              om === 'create' || om === 'null'
+                ? om
+                : planNames.has(relTarget.toLowerCase())
+                  ? 'create'
+                  : 'null'
           }
         }
       }
@@ -381,6 +397,7 @@ Rules:
 - Dates = type date (or datetime only when a time of day matters), interface datetime.
 - Propose an m2o relation ONLY when a column clearly holds identifiers/keys of an existing collection, or when normalizing into a new collection defined in this same plan (e.g. repeated supplier names → a suppliers collection with a name field, and the main table gets supplier m2o). A relation field's type is integer (uuid when the target is nivaro_users).
 - When a relation's source column holds DISPLAY values (codes, names) rather than numeric ids, the relation MUST include "match_field": the column on the target collection those values match (for a new in-plan target, the field that will store them — and that field then needs NO source_column of its own; the importer fills it from the distinct values). Omit match_field only when the source values are literal numeric ids.
+- A relation with match_field may set "on_missing": "create" when unmatched source values should be auto-created as new rows in the target collection (sensible for open-ended entity lists like suppliers); default is "null" (leave the link empty and report). New in-plan lookup collections always create.
 - Long free text = type text, interface textarea (rich_text only for authored content).
 - Mark "required": true ONLY for identity-critical fields (the record's key identifier, a mandatory relation) — measurement, quantity, date, and free-text fields default to optional.
 - Skip useless columns (fully empty, duplicate of another) and say so in notes.
@@ -901,15 +918,20 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
               }
             }
             try {
-              if (created.includes(targetCol)) {
+              if (created.includes(targetCol) || f.relation.on_missing === 'create') {
                 const have = new Set(
-                  ((await db(targetCol).pluck(mf)) as unknown[]).map((v) =>
-                    String(v).toLowerCase()
+                  ((await db(targetCol).limit(50000).pluck(mf)) as unknown[]).map((v) =>
+                    String(v).trim().toLowerCase()
                   )
                 )
                 const toInsert = [...distinct].filter((v) => !have.has(v.toLowerCase()))
                 for (let i = 0; i < toInsert.length; i += 300) {
                   await db(targetCol).insert(toInsert.slice(i, i + 300).map((v) => ({ [mf]: v })))
+                }
+                if (toInsert.length && !created.includes(targetCol)) {
+                  errors.push(
+                    `Created ${toInsert.length} new ${targetCol} row(s) for unmatched ${f.field} values`
+                  )
                 }
               }
               const lookup = new Map<string, unknown>()
@@ -1091,8 +1113,21 @@ export function generateImportProc(
 
   const joins: string[] = []
   const selects: string[] = []
+  const stubInserts: string[] = []
   for (const f of mapped) {
     const stagingCol = normalizeHeader(f.source_column!)
+    if (f.relation?.match_field && f.relation.on_missing === 'create') {
+      // Auto-create missing lookup values before the merge, so re-imports
+      // absorb new entities (suppliers etc.) instead of nulling the link.
+      stubInserts.push(`        INSERT INTO [${f.relation.related_collection}] ([${f.relation.match_field}])
+        SELECT DISTINCT LTRIM(RTRIM(st.[${stagingCol}]))
+        FROM [${stagingTable}] st
+        WHERE NULLIF(LTRIM(RTRIM(st.[${stagingCol}])), '') IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM [${f.relation.related_collection}] t
+            WHERE LOWER(LTRIM(RTRIM(t.[${f.relation.match_field}]))) = LOWER(LTRIM(RTRIM(st.[${stagingCol}])))
+          );`)
+    }
     if (f.relation?.match_field) {
       const alias = `lk_${f.field}`.slice(0, 100)
       joins.push(
@@ -1151,7 +1186,7 @@ BEGIN
     }${skipped.length ? `\n    -- NOT handled here (m2m fields need app-side import): ${skipped.join(', ')}` : ''}
     BEGIN TRY
         BEGIN TRAN;
-        ;WITH cte_src AS (
+${stubInserts.length ? `${stubInserts.join('\n')}\n` : ''}        ;WITH cte_src AS (
             SELECT
 ${selects.join(',\n')}${dedupe}
             FROM [${stagingTable}] st

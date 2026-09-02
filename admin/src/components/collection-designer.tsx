@@ -38,7 +38,12 @@ interface DesignField {
   interface?: string
   required?: boolean
   options?: { choices?: { value: string; text: string }[] } | null
-  relation?: { related_collection: string; match_field?: string | null; junction?: string | null } | null
+  relation?: {
+    related_collection: string
+    match_field?: string | null
+    junction?: string | null
+    on_missing?: 'null' | 'create'
+  } | null
   source_column?: string | null
   _exclude?: boolean
 }
@@ -230,7 +235,11 @@ export function CollectionDesigner({ open, onClose }: { open: boolean; onClose: 
                       ? {
                           ...ff,
                           type: ff.type === 'm2m' ? 'm2m' : 'integer',
-                          relation: { related_collection: name, match_field: 'name' }
+                          relation: {
+                            related_collection: name,
+                            match_field: 'name',
+                            on_missing: 'create' as const
+                          }
                         }
                       : ff
                   )
@@ -802,6 +811,36 @@ function RelationCell({
                   {m}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {f.relation && f.relation.match_field && (
+        <div className='flex items-center gap-1'>
+          <span
+            className='shrink-0 text-[10px] text-slate-400'
+            data-tip='What imports do when a value has no match in the related collection'
+          >
+            missing
+          </span>
+          <Select
+            value={f.relation.on_missing ?? 'null'}
+            onValueChange={(v) =>
+              onChange({
+                relation: { ...f.relation!, on_missing: v === 'create' ? 'create' : 'null' }
+              })
+            }
+          >
+            <SelectTrigger className='h-6 flex-1 text-[10.5px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='null' className='text-[11.5px]'>
+                leave empty
+              </SelectItem>
+              <SelectItem value='create' className='text-[11.5px]'>
+                create new record
+              </SelectItem>
             </SelectContent>
           </Select>
         </div>
