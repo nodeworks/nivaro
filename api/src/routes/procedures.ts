@@ -80,6 +80,88 @@ function definitionNameMatches(definition: string, name: string): boolean {
 const toCreateOrAlter = (definition: string) =>
   definition.replace(/create\s+(or\s+alter\s+)?proc(edure)?/i, 'CREATE OR ALTER PROCEDURE')
 
+/** Engine-accurate context for the AI routes: referenced base tables with
+ * live columns/indexes/row counts, plus where the app invokes the proc. */
+async function gatherProcContext(name: string): Promise<{ tables: string[]; schemaCtx: string[]; usage: string[] }> {
+  let tables: string[] = []
+  try {
+    const refs = (await db.raw(
+      `SELECT DISTINCT referenced_entity_name AS t
+       FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
+       WHERE referenced_minor_id = 0 AND referenced_entity_name IS NOT NULL`,
+      [`dbo.${name}`]
+    )) as Array<{ t: string }>
+    tables = refs
+      .map((r) => r.t)
+      .filter((t) => NAME_RE.test(t))
+      .slice(0, 12)
+  } catch {
+    /* unresolved refs — proceed without table context */
+  }
+  if (tables.length) {
+    const real = (await db('information_schema.tables')
+      .whereIn('table_name', tables)
+      .where('table_type', 'BASE TABLE')
+      .pluck('table_name')) as string[]
+    tables = real
+  }
+  const schemaCtx: string[] = []
+  for (const t of tables) {
+    const cols = (await db('information_schema.columns')
+      .where({ table_name: t })
+      .orderBy('ordinal_position')
+      .select('column_name', 'data_type', 'is_nullable')) as Array<{
+      column_name: string
+      data_type: string
+      is_nullable: string
+    }>
+    const idx = (await db.raw(
+      `SELECT i.name, i.type_desc, i.is_unique,
+              STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS cols
+       FROM sys.indexes i
+       JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
+       JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+       WHERE i.object_id = OBJECT_ID(?) AND i.type > 0
+       GROUP BY i.name, i.type_desc, i.is_unique`,
+      [`dbo.${t}`]
+    )) as Array<{ name: string; type_desc: string; is_unique: boolean; cols: string }>
+    const cnt = (await db
+      .raw(
+        `SELECT SUM(ps.row_count) AS n FROM sys.dm_db_partition_stats ps
+         WHERE ps.object_id = OBJECT_ID(?) AND ps.index_id IN (0, 1)`,
+        [`dbo.${t}`]
+      )
+      .catch(() => [{ n: null }])) as Array<{ n: number | null }>
+    schemaCtx.push(
+      `TABLE ${t} (~${cnt[0]?.n ?? '?'} rows)\n  columns: ${cols
+        .map((c) => `${c.column_name} ${c.data_type}${c.is_nullable === 'YES' ? '?' : ''}`)
+        .join(', ')}\n  indexes: ${
+        idx.length ? idx.map((i) => `${i.name}(${i.cols})${i.is_unique ? ' UNIQUE' : ''}`).join('; ') : 'NONE beyond heap'
+      }`
+    )
+  }
+  const usage: string[] = []
+  try {
+    const cq = (await db('nivaro_custom_queries')
+      .where('sql_text', 'like', `%${name}%`)
+      .pluck('slug')) as string[]
+    if (cq.length) usage.push(`custom queries: ${cq.slice(0, 10).join(', ')}`)
+    const defs = (await db('nivaro_import_definitions')
+      .where({ procedure: name })
+      .pluck('key')
+      .catch(() => [])) as string[]
+    if (defs.length) usage.push(`staged-import definitions: ${defs.join(', ')}`)
+    const rules = (await db('nivaro_rules')
+      .where('actions', 'like', `%${name}%`)
+      .pluck('name')
+      .catch(() => [])) as string[]
+    if (rules.length) usage.push(`automation rules: ${rules.slice(0, 6).join(', ')}`)
+  } catch {
+    /* usage context is best-effort */
+  }
+  return { tables, schemaCtx, usage }
+}
+
 export async function procedureRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
@@ -207,87 +289,7 @@ export async function procedureRoutes(app: FastifyInstance) {
     const client = await getAiClient()
     if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
 
-    // Referenced tables from the engine's own dependency tracker; falls back
-    // to nothing (the model still gets the definition) if resolution fails —
-    // dm_sql_referenced_entities throws on procs referencing dropped objects.
-    let tables: string[] = []
-    try {
-      const refs = (await db.raw(
-        `SELECT DISTINCT referenced_entity_name AS t
-         FROM sys.dm_sql_referenced_entities(?, 'OBJECT')
-         WHERE referenced_minor_id = 0 AND referenced_entity_name IS NOT NULL`,
-        [`dbo.${name}`]
-      )) as Array<{ t: string }>
-      tables = refs
-        .map((r) => r.t)
-        .filter((t) => NAME_RE.test(t))
-        .slice(0, 12)
-    } catch {
-      /* unresolved refs — proceed without table context */
-    }
-    // Keep only real tables (the dependency list includes procs/functions).
-    if (tables.length) {
-      const real = (await db('information_schema.tables')
-        .whereIn('table_name', tables)
-        .where('table_type', 'BASE TABLE')
-        .pluck('table_name')) as string[]
-      tables = real
-    }
-
-    const schemaCtx: string[] = []
-    for (const t of tables) {
-      const cols = (await db('information_schema.columns')
-        .where({ table_name: t })
-        .orderBy('ordinal_position')
-        .select('column_name', 'data_type', 'is_nullable')) as Array<{
-        column_name: string
-        data_type: string
-        is_nullable: string
-      }>
-      const idx = (await db.raw(
-        `SELECT i.name, i.type_desc, i.is_unique,
-                STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS cols
-         FROM sys.indexes i
-         JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
-         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-         WHERE i.object_id = OBJECT_ID(?) AND i.type > 0
-         GROUP BY i.name, i.type_desc, i.is_unique`,
-        [`dbo.${t}`]
-      )) as Array<{ name: string; type_desc: string; is_unique: boolean; cols: string }>
-      const cnt = (await db.raw(
-        `SELECT SUM(ps.row_count) AS n FROM sys.dm_db_partition_stats ps
-         WHERE ps.object_id = OBJECT_ID(?) AND ps.index_id IN (0, 1)`,
-        [`dbo.${t}`]
-      ).catch(() => [{ n: null }])) as Array<{ n: number | null }>
-      schemaCtx.push(
-        `TABLE ${t} (~${cnt[0]?.n ?? '?'} rows)\n  columns: ${cols
-          .map((c) => `${c.column_name} ${c.data_type}${c.is_nullable === 'YES' ? '?' : ''}`)
-          .join(', ')}\n  indexes: ${
-          idx.length ? idx.map((i) => `${i.name}(${i.cols})${i.is_unique ? ' UNIQUE' : ''}`).join('; ') : 'NONE beyond heap'
-        }`
-      )
-    }
-
-    // Where the app uses this proc.
-    const usage: string[] = []
-    try {
-      const cq = (await db('nivaro_custom_queries')
-        .where('sql_text', 'like', `%${name}%`)
-        .pluck('slug')) as string[]
-      if (cq.length) usage.push(`custom queries: ${cq.slice(0, 10).join(', ')}`)
-      const defs = (await db('nivaro_import_definitions')
-        .where({ procedure: name })
-        .pluck('key')
-        .catch(() => [])) as string[]
-      if (defs.length) usage.push(`staged-import definitions: ${defs.join(', ')}`)
-      const rules = (await db('nivaro_rules')
-        .where('actions', 'like', `%${name}%`)
-        .pluck('name')
-        .catch(() => [])) as string[]
-      if (rules.length) usage.push(`automation rules: ${rules.slice(0, 6).join(', ')}`)
-    } catch {
-      /* usage context is best-effort */
-    }
+    const { tables, schemaCtx, usage } = await gatherProcContext(name)
 
     const { model } = await (await import('../services/ai-client.js')).getAiModelSettings()
     const prompt = `You are reviewing a SQL Server stored procedure for a production system.
@@ -337,6 +339,189 @@ Rules: suggest an index ONLY when the definition's predicates/joins hit columns 
       return reply.send({ data: { ...parsed, tables_analyzed: tables } })
     } catch (e) {
       return reply.code(502).send({ error: `AI review failed: ${(e as Error).message}` })
+    }
+  })
+
+  // ── AI fix ───────────────────────────────────────────────────────────────
+  // Produce a corrected FULL definition addressing ONE named finding. The
+  // result is returned as a DRAFT for the editor — it is never deployed here;
+  // the human reviews and hits Deploy like any hand edit.
+  app.post<{ Params: { name: string }; Body: { issue?: string; definition?: string } }>(
+    '/:name/ai-fix',
+    async (req, reply) => {
+      const { name } = req.params
+      const issue = String(req.body?.issue ?? '').trim()
+      if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
+      if (!issue) return reply.code(400).send({ error: 'issue is required' })
+      // Fix against the editor's CURRENT draft when supplied, so sequential
+      // fixes stack instead of each starting from the deployed version.
+      let definition = String(req.body?.definition ?? '')
+      if (!definition.trim()) {
+        const row = (await db.raw(
+          `SELECT m.definition FROM sys.procedures p
+           JOIN sys.sql_modules m ON m.object_id = p.object_id
+           WHERE p.name = ? AND p.is_ms_shipped = 0`,
+          [name]
+        )) as Array<{ definition: string }>
+        if (!row.length) return reply.code(404).send({ error: 'Procedure not found' })
+        definition = row[0].definition
+      }
+      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+      const client = await getAiClient()
+      if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
+      const { schemaCtx, usage } = await gatherProcContext(name)
+      const { model } = await getAiModelSettings()
+      const prompt = `You are fixing ONE specific issue in a SQL Server stored procedure for a production system.
+
+CURRENT DEFINITION:
+${definition.slice(0, 24000)}
+
+LIVE SCHEMA OF REFERENCED TABLES (columns, existing indexes, approx row counts):
+${schemaCtx.join('\n\n') || '(dependency resolution unavailable)'}
+
+WHERE THE APP USES IT:
+${usage.join('\n') || '(no registered app usage found)'}
+
+THE ISSUE TO FIX:
+${issue.slice(0, 2000)}
+
+Respond with ONLY a JSON object, no fences:
+{
+  "definition": "the COMPLETE corrected procedure as CREATE OR ALTER PROCEDURE ${name} ... — full body, not a diff",
+  "explanation": "2-3 sentences: exactly what changed and why it fixes the issue"
+}
+Rules: change the MINIMUM needed to address the stated issue; preserve every other behavior, parameter, and output shape exactly; never reference tables or columns not shown above; the procedure name must remain ${name}.`
+      try {
+        const message = await client.messages.create({
+          model,
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+        const text = message.content
+          .map((b) => ('text' in b ? b.text : ''))
+          .join('')
+          .trim()
+        const jsonText = text.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '')
+        let parsed: { definition?: string; explanation?: string }
+        try {
+          parsed = JSON.parse(jsonText)
+        } catch {
+          return reply.code(502).send({ error: 'AI returned an unparseable fix — try again' })
+        }
+        const fixed = String(parsed.definition ?? '')
+        if (!fixed.trim() || !definitionNameMatches(fixed, name)) {
+          return reply.code(502).send({
+            error: 'AI produced a definition that does not match this procedure — nothing applied'
+          })
+        }
+        await logActivity({
+          action: 'procedure-ai-fix',
+          user: req.user?.id,
+          collection: 'sys.procedures',
+          item: name,
+          comment: issue.slice(0, 200),
+          req
+        })
+        return reply.send({
+          data: { definition: fixed, explanation: String(parsed.explanation ?? '') }
+        })
+      } catch (e) {
+        return reply.code(502).send({ error: `AI fix failed: ${(e as Error).message}` })
+      }
+    }
+  )
+
+  // ── AI generate (New procedure) ──────────────────────────────────────────
+  // Describe what you want; the model writes the full CREATE OR ALTER against
+  // the real schema (business table names + column lists for the tables the
+  // prompt mentions — same fuzzy-match context the SQL copilot uses). The
+  // result fills the editor; deploying stays an explicit human action.
+  app.post<{ Body: { name?: string; prompt?: string } }>('/ai-generate', async (req, reply) => {
+    const name = String(req.body?.name ?? '').trim()
+    const prompt = String(req.body?.prompt ?? '').trim()
+    if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
+    if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const client = await getAiClient()
+    if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
+
+    const collections = (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .pluck('collection')) as string[]
+    const referenced = new Set<string>()
+    const haystack = prompt.toLowerCase()
+    for (const n of collections) {
+      if (haystack.includes(n.toLowerCase()) || haystack.includes(n.toLowerCase().replace(/_/g, ' '))) {
+        referenced.add(n)
+      }
+    }
+    for (const word of haystack.split(/[^a-z_]+/)) {
+      if (word.length < 4) continue
+      for (const n of collections) if (n.toLowerCase().includes(word)) referenced.add(n)
+    }
+    const columnBlocks: string[] = []
+    for (const t of [...referenced].slice(0, 12)) {
+      try {
+        const cols = (await db('information_schema.columns')
+          .where({ table_name: t })
+          .orderBy('ordinal_position')
+          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+        columnBlocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
+      } catch {
+        /* skip */
+      }
+    }
+
+    const { model } = await getAiModelSettings()
+    const userPrompt = `Write a Microsoft SQL Server (T-SQL) stored procedure.
+
+NAME: ${name}
+WHAT IT SHOULD DO:
+${prompt.slice(0, 4000)}
+
+AVAILABLE TABLES: ${collections.join(', ')}
+
+DETAILED SCHEMAS (tables the request mentions):
+${columnBlocks.join('\n') || '(none matched — ask only for tables from the available list)'}
+
+Respond with ONLY a JSON object, no fences:
+{
+  "definition": "CREATE OR ALTER PROCEDURE ${name} ... — complete, production-quality T-SQL with SET NOCOUNT ON, sensible parameters with defaults, and TRY/CATCH around any writes",
+  "explanation": "2-3 sentences on what it does and any assumptions made"
+}
+Rules: only reference tables and columns shown above; the procedure name must be exactly ${name}; prefer read-only unless the request clearly asks for writes.`
+    try {
+      const message = await client.messages.create({
+        model,
+        max_tokens: 6000,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+      const text = message.content
+        .map((b) => ('text' in b ? b.text : ''))
+        .join('')
+        .trim()
+      const jsonText = text.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '')
+      let parsed: { definition?: string; explanation?: string }
+      try {
+        parsed = JSON.parse(jsonText)
+      } catch {
+        return reply.code(502).send({ error: 'AI returned an unparseable result — try rephrasing' })
+      }
+      const definition = String(parsed.definition ?? '')
+      if (!definition.trim() || !definitionNameMatches(definition, name)) {
+        return reply.code(502).send({ error: 'AI produced a definition that does not match the requested name' })
+      }
+      await logActivity({
+        action: 'procedure-ai-generate',
+        user: req.user?.id,
+        collection: 'sys.procedures',
+        item: name,
+        comment: prompt.slice(0, 200),
+        req
+      })
+      return reply.send({ data: { definition, explanation: String(parsed.explanation ?? '') } })
+    } catch (e) {
+      return reply.code(502).send({ error: `AI generation failed: ${(e as Error).message}` })
     }
   })
 

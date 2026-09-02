@@ -264,6 +264,27 @@ function NewProcedurePanel({
 }) {
   const valid = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim())
   const [definition, setDefinition] = useState('')
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiNote, setAiNote] = useState<string | null>(null)
+  const generate = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { definition: string; explanation: string } }>('/procedures/ai-generate', {
+          name: name.trim(),
+          prompt: aiPrompt
+        })
+        .then((r) => r.data.data),
+    onSuccess: ({ definition: gen, explanation }) => {
+      setDefinition(gen)
+      setAiNote(explanation || null)
+      toast.success('Draft generated — review, adjust, then Create & deploy')
+    },
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Generation failed',
+        { duration: 10000 }
+      )
+  })
   const body = definition || (valid ? NEW_TEMPLATE(name.trim()) : '')
   const create = useMutation({
     mutationFn: () => api.put(`/procedures/${name.trim()}`, { definition: body }),
@@ -289,6 +310,48 @@ function NewProcedurePanel({
         />
         {name.trim() !== '' && !valid && (
           <p className='mt-1 text-[11px] text-red-500'>Letters, digits and underscores only.</p>
+        )}
+      </div>
+      <div className='mt-3 rounded-lg border border-nvr-cyan/25 bg-[#00ceff]/5 p-3'>
+        <label
+          htmlFor='proc-ai-prompt'
+          className='mb-1 flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-slate-200'
+        >
+          <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' /> Describe it, and AI writes the first draft
+        </label>
+        <textarea
+          id='proc-ai-prompt'
+          value={aiPrompt}
+          onChange={(e) => setAiPrompt(e.target.value)}
+          placeholder='e.g. For a given @FundingYear, sum requisition_amount per project type from workflows joined through workflows_regions, excluding CAR workflows…'
+          className='h-20 w-full resize-y rounded-md border border-slate-200 bg-white p-2 text-[12px] leading-relaxed text-slate-700 outline-none placeholder:text-slate-400 focus:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-300'
+        />
+        <div className='mt-1.5 flex items-center gap-2'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 gap-1.5 text-[11.5px]'
+            disabled={!valid || !aiPrompt.trim() || generate.isPending}
+            onClick={() => generate.mutate()}
+          >
+            {generate.isPending ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              <Sparkles className='h-3 w-3 text-nvr-cyan' />
+            )}
+            Generate draft
+          </Button>
+          {!valid && aiPrompt.trim() !== '' && (
+            <span className='text-[11px] text-slate-400'>Name the procedure first.</span>
+          )}
+          <span className='text-[11px] text-slate-400'>
+            Writes against the real schema — the draft lands below for you to review.
+          </span>
+        </div>
+        {aiNote && (
+          <p className='mt-2 max-w-[86ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            {aiNote}
+          </p>
         )}
       </div>
       <textarea
@@ -383,6 +446,27 @@ function ProcedureDetail({
     onError: (err: unknown) =>
       toast.error(
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'AI review failed',
+        { duration: 10000 }
+      )
+  })
+  const [lastFix, setLastFix] = useState<{ issue: string; explanation: string } | null>(null)
+  const fix = useMutation({
+    mutationFn: (issue: string) =>
+      api
+        .post<{ data: { definition: string; explanation: string } }>(`/procedures/${name}/ai-fix`, {
+          issue,
+          // Fix on top of the editor's current draft so fixes stack.
+          definition: draft ?? undefined
+        })
+        .then((r) => ({ issue, ...r.data.data })),
+    onSuccess: ({ issue, definition: fixed, explanation }) => {
+      setDraft(fixed)
+      setLastFix({ issue, explanation })
+      toast.success('Fix drafted into the editor — review and Deploy to apply')
+    },
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'AI fix failed',
         { duration: 10000 }
       )
   })
@@ -499,9 +583,13 @@ function ProcedureDetail({
               <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
                 Improvements
               </h4>
-              <ul className='max-w-[80ch] list-disc space-y-1 pl-5 text-[12px] text-slate-600 dark:text-slate-300'>
+              <ul className='max-w-[86ch] space-y-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
                 {aiReview.improvements!.map((imp, i) => (
-                  <li key={i}>{imp}</li>
+                  <li key={i} className='flex items-start gap-2'>
+                    <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300 dark:bg-slate-600' />
+                    <span className='min-w-0 flex-1'>{imp}</span>
+                    <FixButton onFix={() => fix.mutate(imp)} busy={fix.isPending} />
+                  </li>
                 ))}
               </ul>
             </div>
@@ -553,9 +641,13 @@ function ProcedureDetail({
               <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
                 Risks
               </h4>
-              <ul className='max-w-[80ch] list-disc space-y-1 pl-5 text-[12px] text-amber-700 dark:text-amber-400'>
+              <ul className='max-w-[86ch] space-y-1.5 text-[12px] text-amber-700 dark:text-amber-400'>
                 {aiReview.risks!.map((r, i) => (
-                  <li key={i}>{r}</li>
+                  <li key={i} className='flex items-start gap-2'>
+                    <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-amber-400' />
+                    <span className='min-w-0 flex-1'>{r}</span>
+                    <FixButton onFix={() => fix.mutate(r)} busy={fix.isPending} />
+                  </li>
                 ))}
               </ul>
             </div>
@@ -638,6 +730,23 @@ function ProcedureDetail({
 
       {/* ── Definition ── */}
       <section className='rounded-xl border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+        {lastFix && dirty && (
+          <div className='mb-3 rounded-lg border border-nvr-cyan/30 bg-[#00ceff]/5 px-3 py-2'>
+            <p className='text-[12px] text-slate-700 dark:text-slate-300'>
+              <span className='font-medium'>AI fix drafted</span> for: “{lastFix.issue.slice(0, 140)}
+              {lastFix.issue.length > 140 ? '…' : ''}”
+            </p>
+            {lastFix.explanation && (
+              <p className='mt-0.5 max-w-[86ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                {lastFix.explanation}
+              </p>
+            )}
+            <p className='mt-0.5 text-[11px] text-slate-400'>
+              Nothing is deployed yet — review the definition below, then Deploy changes (or
+              Discard).
+            </p>
+          </div>
+        )}
         <div className='mb-2 flex items-center gap-2'>
           <h3 className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>Definition</h3>
           {dirty && (
@@ -684,5 +793,19 @@ function ProcedureDetail({
         </p>
       </section>
     </div>
+  )
+}
+
+function FixButton({ onFix, busy }: { onFix: () => void; busy: boolean }) {
+  return (
+    <button
+      type='button'
+      disabled={busy}
+      onClick={onFix}
+      className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] font-medium text-slate-500 transition-colors hover:border-nvr-cyan/50 hover:text-[#009abe] disabled:opacity-40 dark:border-border dark:text-slate-400'
+      data-tip='Draft an AI fix for this finding into the definition editor — you review and deploy'
+    >
+      Fix
+    </button>
   )
 }
