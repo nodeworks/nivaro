@@ -4357,6 +4357,11 @@ export function InlineTableField({
             return (
               <Fragment key={ri}>
               <tr
+                // THE pending-row close bug: without this attribute the
+                // outside-click classifier can't recognize its own editor, so
+                // every click INSIDE an open pending-row form classified as
+                // outside and committed it shut. Saved rows always had it.
+                data-o2m-editing={isEditing ? '' : undefined}
                 draggable={enableReorder && !isEditing}
                 onDragStart={() => handleDragStart(ri)}
                 onDragOver={(e) => handleDragOver(e, ri)}
