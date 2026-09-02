@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-09-01T22:41:42.267Z",
+  "generated_at": "2026-09-02T01:06:56.146Z",
   "releases": [
+    {
+      "version": "0.1.190",
+      "tag": "v0.1.190",
+      "date": "2026-09-01T21:06:46-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "replays",
+              "text": "capture client environment per session recording",
+              "hash": "914a922b"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "pending-row editor closed on any inside click — missing data-o2m-editing",
+              "hash": "7291fbe5"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Revert \"fix(grid): row editor closes only via its explicit controls\"",
+              "hash": "3d5409b8"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.189",
       "tag": "v0.1.189",
-      "date": "2026-09-01T18:41:36-04:00",
+      "date": "2026-09-01T18:41:42-04:00",
       "sections": [
         {
           "label": "Added",
