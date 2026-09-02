@@ -162,6 +162,7 @@ import { geocodeSuggestRoutes } from './geocode-suggest.js'
 import { testDataRoutes } from './test-data.js'
 import { dossierRoutes } from './dossier.js'
 import { changeSetsRoutes } from './change-sets.js'
+import { collectionDesignerRoutes } from './collection-designer.js'
 import { recordPromotionRoutes } from './record-promotion.js'
 import { provenanceTraceRoutes } from './provenance-trace.js'
 import { ssoProviderRoutes } from './sso-providers.js'
@@ -406,6 +407,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(testDataRoutes)
   await app.register(dossierRoutes, { prefix: '/dossier' })
   await app.register(changeSetsRoutes, { prefix: '/change-sets' })
+  await app.register(collectionDesignerRoutes, { prefix: '/data-model/designer' })
   await app.register(recordPromotionRoutes, { prefix: '/record-promotion' })
   await app.register(provenanceTraceRoutes)
   await app.register(ssoProviderRoutes, { prefix: '/sso-providers' })

@@ -27,12 +27,13 @@ import {
   Trash2,
   Waypoints,
   X
-} from 'lucide-react'
+, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { TreePicker } from '@/components/tree-picker'
 import { Button } from '@/components/ui/button'
+import { CollectionDesigner } from '@/components/collection-designer'
 import {
   Command,
   CommandGroup,
@@ -988,6 +989,7 @@ export function DataModelPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [designerOpen, setDesignerOpen] = useState(false)
   const [unregCollapsed, setUnregCollapsed] = useState(true)
   const [sysCollapsed, setSysCollapsed] = useState(true)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -1053,6 +1055,9 @@ export function DataModelPage() {
             <Button size='sm' variant='outline' onClick={() => navigate('/data-model/graph')}>
               <Waypoints className='mr-1.5 h-3.5 w-3.5' /> Graph
             </Button>
+            <Button size='sm' variant='outline' onClick={() => setDesignerOpen(true)}>
+              <Sparkles className='mr-1.5 h-3.5 w-3.5 text-[#00ceff]' /> Design with AI
+            </Button>
             <Button
               size='sm'
               onClick={() => {
@@ -1061,6 +1066,7 @@ export function DataModelPage() {
             >
               <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Table
             </Button>
+            <CollectionDesigner open={designerOpen} onClose={() => setDesignerOpen(false)} />
           </div>
         </div>
       </div>
