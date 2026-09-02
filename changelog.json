@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-02T22:46:09.345Z",
+  "generated_at": "2026-09-02T23:25:35.917Z",
   "releases": [
+    {
+      "version": "0.1.192",
+      "tag": "v0.1.192",
+      "date": "2026-09-02T19:25:30-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "service-config builder exposes lookup miss behavior + full coercion set",
+              "hash": "619ac0e4"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "regenerate openapi.json (release sync picked up new collections)",
+              "hash": "7c49beaf"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.191",
       "tag": "v0.1.191",
-      "date": "2026-09-02T18:46:03-04:00",
+      "date": "2026-09-02T18:46:09-04:00",
       "sections": [
         {
           "label": "Added",
