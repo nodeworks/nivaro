@@ -105,6 +105,9 @@ const WebhookEditPage = lazy(() =>
 const CustomQueriesPage = lazy(() =>
   import('@/pages/CustomQueries').then((m) => ({ default: m.CustomQueriesPage }))
 )
+const ProceduresPage = lazy(() =>
+  import('@/pages/Procedures').then((m) => ({ default: m.ProceduresPage }))
+)
 const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
@@ -489,6 +492,7 @@ export default function App() {
                   <Route path='webhooks' element={<WebhooksPage />} />
                   <Route path='webhooks/:id' element={<WebhookEditPage />} />
                   <Route path='custom-queries' element={<CustomQueriesPage />} />
+                  <Route path='procedures' element={<ProceduresPage />} />
                   <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
                   <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
                   <Route path='content-promotion' element={<ContentPromotionPage />} />

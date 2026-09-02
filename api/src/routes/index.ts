@@ -165,6 +165,7 @@ import { changeSetsRoutes } from './change-sets.js'
 import { recordPromotionRoutes } from './record-promotion.js'
 import { provenanceTraceRoutes } from './provenance-trace.js'
 import { ssoProviderRoutes } from './sso-providers.js'
+import { procedureRoutes } from './procedures.js'
 import { profileFieldsRoutes } from './profile-fields.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
@@ -408,6 +409,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordPromotionRoutes, { prefix: '/record-promotion' })
   await app.register(provenanceTraceRoutes)
   await app.register(ssoProviderRoutes, { prefix: '/sso-providers' })
+  await app.register(procedureRoutes, { prefix: '/procedures' })
   await app.register(profileFieldsRoutes, { prefix: '/profile-fields' })
   await app.register(approvalsRoutes, { prefix: '/approvals' })
   await app.register(queuesRoutes, { prefix: '/queues' })

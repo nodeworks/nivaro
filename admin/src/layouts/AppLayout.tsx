@@ -267,6 +267,7 @@ export const navCategories: NavCategory[] = [
       { icon: Link2, label: 'External APIs', to: '/external-apis', section: 'Developer' },
       { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'Developer' },
       { icon: Code2, label: 'Custom Queries', to: '/custom-queries', section: 'Developer' },
+      { icon: Database, label: 'Procedures', to: '/procedures', section: 'Developer' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'Developer' },
       { icon: KeyRound, label: 'API Keys', to: '/api-keys', section: 'Developer' },
       { icon: Terminal, label: 'Playground', to: '/playground', section: 'Developer' },
