@@ -45,14 +45,39 @@ export interface ImportDefinition {
    *  activity, rules and computed fields apply, and only changed rows write. */
   processor?: string | null
   service_config?: string | null
+  /** JSON array of nivaro_flows ids run in order after a successful run
+   *  (migration 294). null/[] = nothing beyond the generic trigger. */
+  post_run_flows?: string | null
 }
 
-export interface ImportProgress {
-  (
-    stage: 'preparing' | 'importing' | 'row_count' | 'completed',
-    data?: Record<string, unknown>
-  ): Promise<void> | void
+const FLOW_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Normalize a post_run_flows value (JSON string or array) to a de-duplicated
+ *  list of uuid-shaped flow ids; anything else is dropped. */
+export function parsePostRunFlows(raw: unknown): string[] {
+  let arr: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      arr = JSON.parse(raw)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(arr)) return []
+  const out: string[] = []
+  for (const v of arr) {
+    const id = String(v ?? '')
+      .trim()
+      .toUpperCase()
+    if (FLOW_ID_RE.test(id) && !out.includes(id)) out.push(id)
+  }
+  return out
 }
+
+export type ImportProgress = (
+  stage: 'preparing' | 'importing' | 'row_count' | 'completed',
+  data?: Record<string, unknown>
+) => Promise<void> | void
 
 /** MSSQL caps bound parameters at ~2100; batch size accounts for column count. */
 const MAX_BOUND_PARAMS = 2000
@@ -129,11 +154,7 @@ export function parseImportFile(buffer: Buffer): Array<Record<string, string>> {
  * break would split the row, so both are neutralised instead.
  */
 export function toTsv(rows: Array<Record<string, string>>, columns: string[]): string {
-  const cell = (v: string) =>
-    (v ?? '')
-      .replace(/\r?\n/g, ' ')
-      .split('||')
-      .join(' ')
+  const cell = (v: string) => (v ?? '').replace(/\r?\n/g, ' ').split('||').join(' ')
   const lines = [columns.map(cell).join('||')]
   for (const r of rows) lines.push(columns.map((c) => cell(r[c] ?? '')).join('||'))
   return `${lines.join('\n')}\n`
@@ -173,7 +194,10 @@ export function describeSqlError(err: unknown): string {
     : []
   const head = err.message.trim().replace(/ - $/, '')
   if (parts.length === 0) return head || String(err)
-  const extra = Array.isArray(inner) && inner.length > parts.length ? ` (+${inner.length - parts.length} more)` : ''
+  const extra =
+    Array.isArray(inner) && inner.length > parts.length
+      ? ` (+${inner.length - parts.length} more)`
+      : ''
   return `${head}\n${parts.join('\n')}${extra}`
 }
 
@@ -206,7 +230,13 @@ async function withShare<T>(fn: (target: string, authPath: string) => Promise<T>
 async function pushToShare(localPath: string, remoteName: string): Promise<void> {
   await withShare(async (target, authPath) => {
     try {
-      await execFileAsync('smbclient', [target, '-A', authPath, '-c', `put ${localPath} ${remoteName}`])
+      await execFileAsync('smbclient', [
+        target,
+        '-A',
+        authPath,
+        '-c',
+        `put ${localPath} ${remoteName}`
+      ])
     } catch (err) {
       const stderr = (err as { stderr?: string })?.stderr
       throw new Error(
@@ -244,9 +274,11 @@ async function ensureStagingTable(
   if (await db.schema.hasTable(table)) {
     if (declared && declared.length > 0) {
       const existing = new Set(
-        ((await db('information_schema.columns')
-          .where('table_name', table)
-          .pluck('column_name')) as string[]).map((c) => c.toLowerCase())
+        (
+          (await db('information_schema.columns')
+            .where('table_name', table)
+            .pluck('column_name')) as string[]
+        ).map((c) => c.toLowerCase())
       )
       const missing = wanted.filter((c) => c !== 'id' && !existing.has(c.toLowerCase()))
       if (missing.length > 0) {
@@ -444,7 +476,8 @@ async function loadChunked(
   const target = await describeTable(table)
   const byLower = new Map(target.map((c) => [c.name.toLowerCase(), c.name]))
   const byNormalized = new Map(target.map((c) => [normalizeHeader(c.name), c.name]))
-  const colName = (c: string) => byLower.get(c.toLowerCase()) ?? byNormalized.get(normalizeHeader(c)) ?? c
+  const colName = (c: string) =>
+    byLower.get(c.toLowerCase()) ?? byNormalized.get(normalizeHeader(c)) ?? c
   const perBatch = Math.max(1, Math.floor(MAX_BOUND_PARAMS / Math.max(1, columns.length)))
   for (let i = 0; i < rows.length; i += perBatch) {
     const batch = rows.slice(i, i + perBatch).map((r) => {
@@ -513,7 +546,8 @@ export async function runStagedImport({
   // rows go through the items service so every write is revisioned/ruled.
   if (definition.processor === 'service') {
     const cfg = parseServiceConfig(definition.service_config)
-    if (!cfg) throw new Error(`Import "${definition.key}" is service-mode but has no valid service_config`)
+    if (!cfg)
+      throw new Error(`Import "${definition.key}" is service-mode but has no valid service_config`)
     await onProgress?.('importing')
     const summary = await runServiceImport({
       config: cfg,

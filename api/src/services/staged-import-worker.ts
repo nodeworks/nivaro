@@ -2,12 +2,87 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { getFile, readFileBuffer } from './files.js'
 import { notifyUser } from './notification-channels.js'
+import type { ImportDefinition } from './staged-imports.js'
 import {
   describeSqlError,
   getImportDefinition,
+  parsePostRunFlows,
   runStagedImport,
   scrubSecrets
 } from './staged-imports.js'
+
+/**
+ * Post-completion fan-out. A staged import writes through raw SQL (BULK INSERT
+ * + a procedure), so none of the items-service hooks fire for the rows it
+ * changed. Two ways downstream work hangs off a run:
+ *   1. the definition's `post_run_flows` — explicit flow ids, run IN ORDER,
+ *      each awaited (a flow that re-evaluates auto transitions must finish
+ *      before the next one reads the result);
+ *   2. the generic 'staged-import-completed' flow trigger — every active flow
+ *      on that trigger, minus the ones already run in step 1.
+ * Fire-and-forget as a whole: a failure here must never mark a finished run
+ * as failed — it lands in nivaro_flow_runs like any other flow error.
+ */
+function afterImportCompleted(
+  app: FastifyInstance,
+  definition: ImportDefinition,
+  payload: {
+    run_id: string
+    import_key: string
+    definition_label: string | null
+    staging_table: string | null
+    procedure: string | null
+    row_count: number
+    duration_seconds: number
+    created_by: string | null
+  }
+): void {
+  void (async () => {
+    const explicit = parsePostRunFlows(definition.post_run_flows)
+    if (explicit.length > 0) {
+      const { executeFlow } = await import('./flow-executor.js')
+      const rows = (await db('nivaro_flows')
+        .whereIn('id', explicit)
+        .select('id', 'name', 'status')) as Array<{ id: string; name: string; status: string }>
+      const byId = new Map(rows.map((r) => [String(r.id).toUpperCase(), r]))
+      for (const id of explicit) {
+        const flow = byId.get(id)
+        if (!flow) {
+          app.log.warn({ import_key: payload.import_key, flow: id }, 'post-run flow missing')
+          continue
+        }
+        if (flow.status !== 'active') {
+          app.log.info(
+            { import_key: payload.import_key, flow: flow.name },
+            'post-run flow inactive, skipped'
+          )
+          continue
+        }
+        try {
+          await executeFlow({
+            flowId: flow.id,
+            flowName: flow.name,
+            trigger: 'staged-import-completed',
+            payload,
+            log: app.log,
+            userId: payload.created_by ?? undefined
+          })
+        } catch (err) {
+          app.log.error(
+            { err, import_key: payload.import_key, flow: flow.name },
+            'post-run flow failed'
+          )
+        }
+      }
+    }
+    const { emitTrigger } = await import('../flows/registry.js')
+    emitTrigger('staged-import-completed', payload, app.log, payload.created_by ?? undefined, {
+      excludeFlowIds: explicit
+    })
+  })().catch((err) => {
+    app.log.error({ err, import_key: payload.import_key }, 'post-import fan-out failed')
+  })
+}
 
 /**
  * Drains `nivaro_import_queue`, one run at a time.
@@ -148,6 +223,16 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       summary ? summary.split('\n')[0] : `Imported ${rowCount} rows.`
     )
     app.io?.emit('import:progress', { id: next.id, stage: 'completed', row_count: rowCount })
+    afterImportCompleted(app, definition, {
+      run_id: String(next.id),
+      import_key: String(next.import_key),
+      definition_label: definition.label ?? null,
+      staging_table: definition.staging_table ?? null,
+      procedure: definition.procedure ?? null,
+      row_count: rowCount,
+      duration_seconds: durationSeconds,
+      created_by: next.created_by ? String(next.created_by) : null
+    })
   } catch (err) {
     // Defence in depth: the share loader sanitises its own failures, but ANY
     // thrower here reaches a persisted log and a user-facing notification.

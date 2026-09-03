@@ -5,17 +5,18 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
-import {
-  getImportDefinition,
-  listImportDefinitions,
-  parseImportFile
-} from '../services/staged-imports.js'
 import { parseServiceConfig } from '../services/staged-import-service.js'
 import {
   parseStagingColumns,
   parseValidationConfig,
   validateStagedRows
 } from '../services/staged-import-validation.js'
+import {
+  getImportDefinition,
+  listImportDefinitions,
+  parseImportFile,
+  parsePostRunFlows
+} from '../services/staged-imports.js'
 
 /**
  * Staged imports (`/api/staged-imports`) — queue + definition registry for
@@ -51,7 +52,10 @@ async function snapshotDefinition(key: string, note: string, userId: string | nu
       .select('id')
     if (versions.length > 30) {
       await db('nivaro_import_definition_versions')
-        .whereIn('id', versions.slice(30).map((v) => v.id))
+        .whereIn(
+          'id',
+          versions.slice(30).map((v) => v.id)
+        )
         .del()
     }
   } catch {
@@ -107,8 +111,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const body = String(row.procedure_body ?? '').trim()
       const proc = String(row.procedure ?? '')
-      if (!body) return reply.code(400).send({ error: 'This definition has no stored procedure body' })
-      if (!IDENT_RE.test(proc)) return reply.code(400).send({ error: 'Definition has no valid procedure name' })
+      if (!body)
+        return reply.code(400).send({ error: 'This definition has no stored procedure body' })
+      if (!IDENT_RE.test(proc))
+        return reply.code(400).send({ error: 'Definition has no valid procedure name' })
       const targetsOwn = new RegExp(
         `create\\s+or\\s+alter\\s+proc(edure)?\\s+(\\[?dbo\\]?\\.)?\\[?${proc}\\]?\\b`,
         'i'
@@ -172,11 +178,23 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Snapshot is unreadable' })
       }
       // Restores are reversible: capture current state first.
-      await snapshotDefinition(String(row.key), `before restore of v${v.version}`, req.user?.id ?? null)
+      await snapshotDefinition(
+        String(row.key),
+        `before restore of v${v.version}`,
+        req.user?.id ?? null
+      )
       const patch: Record<string, unknown> = {}
       for (const f of [
-        'label', 'description', 'staging_table', 'procedure', 'loader', 'sort',
-        'is_active', 'staging_columns', 'validation', 'procedure_body'
+        'label',
+        'description',
+        'staging_table',
+        'procedure',
+        'loader',
+        'sort',
+        'is_active',
+        'staging_columns',
+        'validation',
+        'procedure_body'
       ]) {
         if (f in snap) patch[f] = snap[f]
       }
@@ -203,13 +221,15 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const proc = String(row.procedure ?? '')
-      if (!IDENT_RE.test(proc)) return reply.code(400).send({ error: 'Definition has no procedure to read' })
+      if (!IDENT_RE.test(proc))
+        return reply.code(400).send({ error: 'Definition has no procedure to read' })
       const mod = (await db.raw(
         `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
         [proc]
       )) as Array<{ definition: string | null }>
       const body = Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
-      if (!body) return reply.code(404).send({ error: `Procedure ${proc} not found in the database` })
+      if (!body)
+        return reply.code(404).send({ error: `Procedure ${proc} not found in the database` })
 
       const stagingTable = String(row.staging_table || `staging_${row.key}`).toLowerCase()
 
@@ -229,10 +249,16 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         if (table.toLowerCase() === stagingTable) continue
         let stagingCol: string | null = null
         let matchField: string | null = null
-        if (stagingAliases.has(leftA.toLowerCase()) && rightA.toLowerCase() === alias.toLowerCase()) {
+        if (
+          stagingAliases.has(leftA.toLowerCase()) &&
+          rightA.toLowerCase() === alias.toLowerCase()
+        ) {
           stagingCol = leftC
           matchField = rightC
-        } else if (stagingAliases.has(rightA.toLowerCase()) && leftA.toLowerCase() === alias.toLowerCase()) {
+        } else if (
+          stagingAliases.has(rightA.toLowerCase()) &&
+          leftA.toLowerCase() === alias.toLowerCase()
+        ) {
           stagingCol = rightC
           matchField = leftC
         }
@@ -270,10 +296,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         ...body.matchAll(/merge[\s\S]{0,2500}?\bon\s+([\s\S]*?)\bwhen\b/gi)
       ]
       for (const on of onClauses) {
-        for (const m of on[1].matchAll(/\[?(\w+)\]?\.\[?(\w+)\]?\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?/gi)) {
+        for (const m of on[1].matchAll(
+          /\[?(\w+)\]?\.\[?(\w+)\]?\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?/gi
+        )) {
           const [, la, lc, ra, rc] = m
-          if (stagingAliases.has(la.toLowerCase()) && !stagingAliases.has(ra.toLowerCase())) keyCols.add(lc)
-          else if (stagingAliases.has(ra.toLowerCase()) && !stagingAliases.has(la.toLowerCase())) keyCols.add(rc)
+          if (stagingAliases.has(la.toLowerCase()) && !stagingAliases.has(ra.toLowerCase()))
+            keyCols.add(lc)
+          else if (stagingAliases.has(ra.toLowerCase()) && !stagingAliases.has(la.toLowerCase()))
+            keyCols.add(rc)
           else if (la.toLowerCase() === 'source') keyCols.add(lc)
           else if (ra.toLowerCase() === 'source') keyCols.add(rc)
         }
@@ -309,6 +339,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       procedure?: string
       loader?: 'bulk' | 'insert'
       sort?: number
+      post_run_flows?: unknown
     }
     const key = String(b.key ?? '').trim()
     if (!key) return reply.code(400).send({ error: 'key is required' })
@@ -323,7 +354,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       procedure: b.procedure ?? null,
       loader: b.loader ?? null,
       sort: Number(b.sort ?? 0),
-      is_active: true
+      is_active: true,
+      post_run_flows:
+        b.post_run_flows === undefined ? null : JSON.stringify(parsePostRunFlows(b.post_run_flows))
     })
     await snapshotDefinition(key, 'created', req.user?.id ?? null)
     await logActivity({
@@ -360,6 +393,20 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         if (!parsed) return reply.code(400).send({ error: `${f} is not valid` })
         patch[f] = JSON.stringify(parsed)
       }
+      // Post-run flows: array (or JSON string) of flow ids; unknown/malformed
+      // ids are dropped, an empty list clears the column.
+      if (b.post_run_flows !== undefined) {
+        const ids = parsePostRunFlows(b.post_run_flows)
+        if (ids.length > 0) {
+          const known = (await db('nivaro_flows').whereIn('id', ids).pluck('id')) as string[]
+          const knownSet = new Set(known.map((k) => String(k).toUpperCase()))
+          const missing = ids.filter((id) => !knownSet.has(id))
+          if (missing.length > 0) {
+            return reply.code(400).send({ error: `Unknown flow id(s): ${missing.join(', ')}` })
+          }
+        }
+        patch.post_run_flows = ids.length > 0 ? JSON.stringify(ids) : null
+      }
       if (b.procedure_body !== undefined) {
         patch.procedure_body =
           b.procedure_body === null || b.procedure_body === '' ? null : String(b.procedure_body)
@@ -368,7 +415,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       // 'service' = items-service writes (requires a valid service_config —
       // either already stored or arriving in the same PATCH).
       if (b.processor !== undefined) {
-        const v = b.processor === null || b.processor === '' || b.processor === 'proc' ? null : String(b.processor)
+        const v =
+          b.processor === null || b.processor === '' || b.processor === 'proc'
+            ? null
+            : String(b.processor)
         if (v !== null && v !== 'service') {
           return reply.code(400).send({ error: `Unknown processor "${v}"` })
         }
@@ -388,7 +438,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         patch.service_config !== undefined ? patch.service_config : row.service_config
       if (effProcessor === 'service' && !parseServiceConfig(effServiceConfig)) {
         return reply.code(400).send({
-          error: 'Processor "service" requires a valid service_config (collection, match_by, columns)'
+          error:
+            'Processor "service" requires a valid service_config (collection, match_by, columns)'
         })
       }
       if (b.is_active !== undefined) patch.is_active = !!b.is_active
@@ -441,13 +492,15 @@ export async function stagedImportRoutes(app: FastifyInstance) {
   ]
 
   function runQuery() {
-    return db('nivaro_import_queue as q')
-      // Join on the denormalised key, never the definition FK: rows carried
-      // over from the legacy queue hold ids from the OLD definitions table's
-      // id space, so the id join labelled runs with the wrong import.
-      .leftJoin('nivaro_import_definitions as d', 'd.key', 'q.import_key')
-      .leftJoin('nivaro_files as f', 'f.id', 'q.file')
-      .leftJoin('nivaro_users as u', 'u.id', 'q.created_by')
+    return (
+      db('nivaro_import_queue as q')
+        // Join on the denormalised key, never the definition FK: rows carried
+        // over from the legacy queue hold ids from the OLD definitions table's
+        // id space, so the id join labelled runs with the wrong import.
+        .leftJoin('nivaro_import_definitions as d', 'd.key', 'q.import_key')
+        .leftJoin('nivaro_files as f', 'f.id', 'q.file')
+        .leftJoin('nivaro_users as u', 'u.id', 'q.created_by')
+    )
   }
 
   /** LIKE wildcards in a user's search string are literal characters, not
@@ -515,14 +568,21 @@ export async function stagedImportRoutes(app: FastifyInstance) {
    * column over a bounded window.
    */
   app.get('/stats', async (req) => {
-    const days = Math.max(0, Math.min(Number((req.query as { days?: string }).days ?? 30) || 0, 3650))
+    const days = Math.max(
+      0,
+      Math.min(Number((req.query as { days?: string }).days ?? 30) || 0, 3650)
+    )
     const since = days > 0 ? new Date(Date.now() - days * 86_400_000) : null
     const inWindow = (qb: Knex.QueryBuilder) => {
       if (since) qb.where('created_at', '>=', since)
     }
 
     const [byStatus, totals, durations, running, startOfToday, allTime, byKey] = await Promise.all([
-      db('nivaro_import_queue').modify(inWindow).select('status').count({ c: '*' }).groupBy('status'),
+      db('nivaro_import_queue')
+        .modify(inWindow)
+        .select('status')
+        .count({ c: '*' })
+        .groupBy('status'),
       db('nivaro_import_queue').modify(inWindow).sum({ rows: 'row_count' }).first(),
       db('nivaro_import_queue')
         .modify(inWindow)
@@ -569,7 +629,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         total: Object.values(counts).reduce((a, b) => a + b, 0),
         all_time_total: Number(allTime?.c ?? 0),
         by_key: Object.fromEntries(
-          (byKey as Array<{ import_key: string; c: number }>).map((r) => [r.import_key, Number(r.c)])
+          (byKey as Array<{ import_key: string; c: number }>).map((r) => [
+            r.import_key,
+            Number(r.c)
+          ])
         ),
         rows_imported: Number(totals?.rows ?? 0),
         median_duration: median,
@@ -601,7 +664,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     const fields = multipart.fields as Record<string, { value?: unknown }> | undefined
     const key = String(fields?.import_key?.value ?? '').trim()
     const definition = key ? await getImportDefinition(key) : null
-    if (key && !definition) return reply.code(400).send({ error: `No import definition for "${key}"` })
+    if (key && !definition)
+      return reply.code(400).send({ error: `No import definition for "${key}"` })
 
     let rows: Array<Record<string, string>>
     try {
@@ -682,12 +746,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       // The validator itself failing must never block the pipeline.
     }
 
-    const stored = await uploadFileBuffer(
-      req.user!,
-      buffer,
-      multipart.filename,
-      multipart.mimetype
-    )
+    const stored = await uploadFileBuffer(req.user!, buffer, multipart.filename, multipart.mimetype)
 
     const [inserted] = await db('nivaro_import_queue')
       .insert({

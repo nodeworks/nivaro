@@ -125,7 +125,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   transform: ArrowLeftRight,
   'run-flow': Zap,
   'external-api': PlugZap,
-  'item-read': Database
+  'item-read': Database,
+  'workflow-auto-sweep': GitBranch
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -178,6 +179,11 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800',
     label: 'Read Item',
     color: '#4f46e5'
+  },
+  'workflow-auto-sweep': {
+    cls: 'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/20 dark:text-cyan-400 dark:border-cyan-800',
+    label: 'Auto Sweep',
+    color: '#0891b2'
   }
 }
 
@@ -1153,6 +1159,60 @@ function EditOperationDialog({
                   </div>
                 </>
               )}
+              {op.type === 'workflow-auto-sweep' && (
+                <>
+                  <div className='rounded-lg border border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 px-3 py-2 text-[11px] text-cyan-700 dark:text-cyan-400'>
+                    <GitBranch className='inline h-3 w-3 mr-1' />
+                    Re-evaluates every automatic (auto_trigger) transition for the open workflow
+                    instances of a collection. Pair with the Staged Import Completed trigger so a
+                    raw-SQL import (which fires no record hooks) still advances records whose
+                    conditions now pass. Result lands under the result key as{' '}
+                    <code className='font-mono'>{'{evaluated, transitioned, items}'}</code>.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Collection <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.collection as string) ?? ''}
+                      onChange={(e) => setOpt('collection', e.target.value)}
+                      placeholder='workflows'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Only instances in these states (comma-separated keys, blank = all open)
+                    </Label>
+                    <Input
+                      value={(optsState.states as string) ?? ''}
+                      onChange={(e) => setOpt('states', e.target.value)}
+                      placeholder='started, waiting_on_po'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <div className='space-y-1.5'>
+                      <Label>Max instances</Label>
+                      <Input
+                        type='number'
+                        value={(optsState.limit as number) ?? 5000}
+                        onChange={(e) => setOpt('limit', Number(e.target.value) || 5000)}
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                    <div className='space-y-1.5'>
+                      <Label>Result key</Label>
+                      <Input
+                        value={(optsState.result_key as string) ?? ''}
+                        onChange={(e) => setOpt('result_key', e.target.value)}
+                        placeholder='auto_sweep'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
               {op.type === 'item-read' && (
                 <>
                   <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
@@ -1868,6 +1928,9 @@ function AddOperationDialog({
                     </SelectItem>
                     <SelectItem value='external-api'>
                       External API — call predefined or custom endpoint
+                    </SelectItem>
+                    <SelectItem value='workflow-auto-sweep'>
+                      Auto Sweep — re-evaluate automatic transitions on a collection
                     </SelectItem>
                     {(registeredOpsForAdd ?? []).length > 0 && (
                       <>

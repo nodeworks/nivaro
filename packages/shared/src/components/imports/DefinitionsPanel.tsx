@@ -12,7 +12,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { StagingColumnsBuilder, ValidationBuilder } from './SchemaValidationBuilders'
 import { ServiceConfigBuilder } from './ServiceConfigBuilder'
-import { type ImportDefinition, definitionTitle } from './types'
+import { definitionTitle, type ImportDefinition } from './types'
 
 const NEW = '__new__'
 
@@ -30,6 +30,17 @@ type Draft = {
   procedure_body: string
   processor: '' | 'service'
   service_config: string
+  post_run_flows: string[]
+}
+
+const parseIdList = (raw: string | null | undefined): string[] => {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map((v) => String(v).toUpperCase()) : []
+  } catch {
+    return []
+  }
 }
 
 const prettyJson = (raw: string | null | undefined): string => {
@@ -55,8 +66,116 @@ function toDraft(d: ImportDefinition | null): Draft {
     validation: prettyJson(d?.validation),
     procedure_body: d?.procedure_body ?? '',
     processor: d?.processor === 'service' ? 'service' : '',
-    service_config: prettyJson(d?.service_config)
+    service_config: prettyJson(d?.service_config),
+    post_run_flows: parseIdList(d?.post_run_flows)
   }
+}
+
+type FlowRow = { id: string; name: string; status: string; trigger: string }
+
+/** Ordered multi-select over the instance's flows — checked flows run in the
+ *  order listed (move up/down), unchecked ones are ignored. Admin-only data:
+ *  GET /flows is admin-gated, and so is this panel. */
+function PostRunFlowsPicker({
+  value,
+  onChange
+}: {
+  value: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const client = useNivaroClient()
+  const flows = useQuery({
+    queryKey: ['flows', 'post-run-picker'],
+    queryFn: () => client.request<{ data: FlowRow[] }>(get('/flows')),
+    staleTime: 60_000
+  })
+  const rows = flows.data?.data ?? []
+  const byId = new Map(rows.map((f) => [String(f.id).toUpperCase(), f]))
+  const selected = value.map(
+    (id) =>
+      byId.get(id) ?? {
+        id,
+        name: `Unknown flow ${id.slice(0, 8)}…`,
+        status: 'missing',
+        trigger: ''
+      }
+  )
+  const available = rows.filter((f) => !value.includes(String(f.id).toUpperCase()))
+  const move = (idx: number, dir: -1 | 1) => {
+    const next = [...value]
+    const j = idx + dir
+    if (j < 0 || j >= next.length) return
+    ;[next[idx], next[j]] = [next[j], next[idx]]
+    onChange(next)
+  }
+  return (
+    <div className='space-y-2'>
+      {selected.length === 0 && (
+        <p className='text-[12px] text-slate-500 dark:text-slate-400'>No post-run flows.</p>
+      )}
+      {selected.map((f, idx) => (
+        <div
+          key={String(f.id)}
+          className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12.5px] dark:border-border dark:bg-card'
+        >
+          <span className='w-5 shrink-0 text-center font-mono text-[11px] text-slate-400'>
+            {idx + 1}
+          </span>
+          <span className='min-w-0 flex-1 truncate'>
+            {f.name}
+            {f.status !== 'active' && (
+              <span className='ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'>
+                {f.status === 'missing' ? 'missing' : 'inactive — skipped'}
+              </span>
+            )}
+          </span>
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='h-6 px-1.5'
+            onClick={() => move(idx, -1)}
+            disabled={idx === 0}
+          >
+            ↑
+          </Button>
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='h-6 px-1.5'
+            onClick={() => move(idx, 1)}
+            disabled={idx === selected.length - 1}
+          >
+            ↓
+          </Button>
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='h-6 px-1.5 text-red-600'
+            onClick={() => onChange(value.filter((id) => id !== String(f.id).toUpperCase()))}
+          >
+            ✕
+          </Button>
+        </div>
+      ))}
+      <SimpleSelect
+        value=''
+        onChange={(v) => {
+          if (v) onChange([...value, String(v).toUpperCase()])
+        }}
+        options={[
+          { value: '', label: flows.isLoading ? 'Loading flows…' : '＋ Add a flow…' },
+          ...available.map((f) => ({
+            value: f.id,
+            label: `${f.name}${f.status !== 'active' ? ' (inactive)' : ''} · ${f.trigger}`
+          }))
+        ]}
+        className='h-8 text-[12.5px]'
+      />
+    </div>
+  )
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -108,9 +227,7 @@ export function DefinitionsPanel({
     if (selectedId == null) return
     setError(null)
     setDraft(
-      toDraft(
-        selectedId === NEW ? null : (definitions.find((d) => d.id === selectedId) ?? null)
-      )
+      toDraft(selectedId === NEW ? null : (definitions.find((d) => d.id === selectedId) ?? null))
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId])
@@ -139,7 +256,8 @@ export function DefinitionsPanel({
         validation: draft.validation.trim() || null,
         procedure_body: draft.procedure_body.trim() || null,
         processor: draft.processor || null,
-        service_config: draft.service_config.trim() || null
+        service_config: draft.service_config.trim() || null,
+        post_run_flows: draft.post_run_flows
       }
       if (selectedId === NEW) {
         return client.request(
@@ -401,10 +519,24 @@ export function DefinitionsPanel({
                 </div>
               )}
 
+              <div className='sm:col-span-2'>
+                <Field
+                  label='After each run'
+                  hint='Flows executed in this order right after a run of this import completes, with the run summary (import_key, run_id, row_count …) as the payload. Use it for work the raw-SQL import cannot trigger itself — e.g. re-evaluating automatic workflow transitions once purchase orders have landed. Flows on the generic "Staged Import Completed" trigger also fire, but never twice.'
+                >
+                  <PostRunFlowsPicker
+                    value={draft.post_run_flows}
+                    onChange={(ids) => setDraft((d) => ({ ...d, post_run_flows: ids }))}
+                  />
+                </Field>
+              </div>
+
               <Field label='Sort' hint='Order in the import picker.'>
                 <Input
                   value={draft.sort}
-                  onChange={(e) => setDraft((d) => ({ ...d, sort: e.target.value.replace(/[^\d-]/g, '') }))}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, sort: e.target.value.replace(/[^\d-]/g, '') }))
+                  }
                   inputMode='numeric'
                   className='h-8 w-24 text-right font-mono text-[12px]'
                 />
@@ -480,7 +612,9 @@ function AdvancedConfigSection({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [open, setOpen] = useState(!!(definition.procedure_body || definition.validation || definition.staging_columns))
+  const [open, setOpen] = useState(
+    !!(definition.procedure_body || definition.validation || definition.staging_columns)
+  )
   const [msg, setMsg] = useState<string | null>(null)
 
   const suggest = useMutation({
@@ -529,9 +663,9 @@ function AdvancedConfigSection({
     queryKey: ['staged-import-def-versions', definition.id],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; version: number; note: string | null; created_at: string }> }>(
-          get(`/staged-imports/definitions/${definition.id}/versions`)
-        )
+        .request<{
+          data: Array<{ id: number; version: number; note: string | null; created_at: string }>
+        }>(get(`/staged-imports/definitions/${definition.id}/versions`))
         .then((r) => r.data ?? []),
     enabled: open,
     staleTime: 15_000
@@ -639,7 +773,10 @@ function AdvancedConfigSection({
           </Field>
 
           {versions.length > 0 && (
-            <Field label='Versions' hint='Every save snapshots the whole definition. Restore is itself versioned.'>
+            <Field
+              label='Versions'
+              hint='Every save snapshots the whole definition. Restore is itself versioned.'
+            >
               <div className='max-h-40 space-y-1 overflow-y-auto'>
                 {versions.map((v) => (
                   <div
@@ -647,8 +784,7 @@ function AdvancedConfigSection({
                     className='flex items-center justify-between rounded border border-slate-100 px-2.5 py-1.5 text-[11.5px] dark:border-border'
                   >
                     <span className='min-w-0 truncate text-slate-600 dark:text-muted-foreground'>
-                      v{v.version} · {v.note ?? '—'} ·{' '}
-                      {new Date(v.created_at).toLocaleString()}
+                      v{v.version} · {v.note ?? '—'} · {new Date(v.created_at).toLocaleString()}
                     </span>
                     <button
                       type='button'

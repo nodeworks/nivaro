@@ -665,6 +665,99 @@ async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionCont
   }
 }
 
+// ─── workflow-auto-sweep ──────────────────────────────────────────────────────
+// Re-evaluates auto_trigger transitions for the OPEN workflow instances of a
+// collection (optionally only those sitting in the listed state keys). Built
+// for "run right after this import" flows: a staged import writes through raw
+// SQL, so no item hook fires for the rows it changed — the flow is what closes
+// the loop (e.g. staged-import-completed → condition import_key eq
+// purchase_orders → this op on workflows). Idempotent: an instance whose
+// conditions do not pass is untouched.
+async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+  const opts = parseOpts(op)
+  const collection = resolveTemplate((opts.collection as string) ?? '', data)
+  const stateKeys = String(resolveTemplate((opts.states as string) ?? '', data))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const limit = Math.min(Math.max(Number(opts.limit) || 5000, 1), 20000)
+  const resultKey = (opts.result_key as string) || 'auto_sweep'
+
+  if (!collection || !COLLECTION_RE.test(collection) || /^nivaro_/i.test(collection)) {
+    ctx.log.warn(
+      { flowId: ctx.flowId, key: op.key, collection },
+      'workflow-auto-sweep: invalid target'
+    )
+    return {
+      status: 'reject' as const,
+      output: { ...data, $error: 'workflow-auto-sweep: invalid target' }
+    }
+  }
+
+  try {
+    const templates = (await db('nivaro_workflow_bindings')
+      .where({ collection })
+      .pluck('template')) as string[]
+    if (templates.length === 0) {
+      return {
+        status: 'reject' as const,
+        output: { ...data, $error: `workflow-auto-sweep: ${collection} has no workflow binding` }
+      }
+    }
+    let q = db('nivaro_workflow_instances as i')
+      .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+      .whereIn('i.template', templates)
+      .where('i.collection', collection)
+      .whereNull('i.completed_at')
+    if (stateKeys.length > 0) q = q.whereIn('s.key', stateKeys)
+    const rows = (await q.select('i.item', 'i.current_state').limit(limit)) as Array<{
+      item: string
+      current_state: string
+    }>
+
+    if (ctx.dryRun) {
+      return {
+        status: 'resolve' as const,
+        output: {
+          ...data,
+          [`$preview_${op.key}`]: {
+            op: 'workflow-auto-sweep',
+            collection,
+            states: stateKeys,
+            would_evaluate: rows.length
+          },
+          [resultKey]: { evaluated: rows.length, transitioned: 0, dry_run: true }
+        }
+      }
+    }
+
+    const { runAutoTransitions } = await import('./workflow-transitions.js')
+    let transitioned = 0
+    const moved: string[] = []
+    for (const row of rows) {
+      await runAutoTransitions(collection, String(row.item))
+      const after = (await db('nivaro_workflow_instances')
+        .where({ collection, item: String(row.item) })
+        .first('current_state')) as { current_state: string } | undefined
+      if (after && after.current_state !== row.current_state) {
+        transitioned++
+        if (moved.length < 200) moved.push(String(row.item))
+      }
+    }
+    ctx.log.info(
+      { flowId: ctx.flowId, key: op.key, collection, evaluated: rows.length, transitioned },
+      'workflow-auto-sweep executed'
+    )
+    return {
+      status: 'resolve' as const,
+      output: { ...data, [resultKey]: { evaluated: rows.length, transitioned, items: moved } }
+    }
+  } catch (err) {
+    ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'workflow-auto-sweep failed')
+    return { status: 'reject' as const, output: { ...data, $error: 'workflow-auto-sweep failed' } }
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 async function runOperation(
@@ -718,6 +811,8 @@ async function runOperationInner(
       return runExternalApi(op, data, ctx)
     case 'item-read':
       return runItemRead(op, data, ctx)
+    case 'workflow-auto-sweep':
+      return runWorkflowAutoSweep(op, data, ctx)
     default: {
       const { getOp } = await import('../flows/registry.js')
       const customOp = getOp(op.type)
@@ -1008,7 +1103,6 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
     throw err
   }
 }
-
 
 // ── Hook firehose / watch-room emits (#283/#287) ────────────────────────────
 // Zero cost unless someone has the room open (same posture as the traffic

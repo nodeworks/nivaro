@@ -197,7 +197,15 @@ export const userFlows: DocSection = {
         ],
         ['schedule', 'Runs on a cron schedule. Specify a cron expression in Trigger Options.'],
         ['event', 'Triggered by an Inngest event name (planned).'],
-        ['webhook', 'Triggered by an incoming HTTP request (planned).']
+        ['webhook', 'Triggered by an incoming HTTP request (planned).'],
+        [
+          'workflow-transition',
+          'Fires after any workflow/pipeline transition lands (manual or automatic). Payload carries collection, item, friendly_id, from/to state, owners and owner_emails.'
+        ],
+        [
+          'staged-import-completed',
+          'Fires after a staged (file → staging table → procedure) import run completes. Payload: run_id, import_key, definition_label, staging_table, procedure, row_count, duration_seconds, created_by. Filter with a Condition on import_key. A flow listed in the import definition\'s "After each run" runs there instead and is not fired twice.'
+        ]
       ]
     },
     { type: 'h2', id: 'flow-operations', text: 'Operations' },
@@ -209,6 +217,11 @@ export const userFlows: DocSection = {
       type: 'table',
       head: ['Type', 'Status', 'Description'],
       rows: [
+        [
+          'workflow-auto-sweep',
+          '✅ Live',
+          'Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.'
+        ],
         [
           'log',
           '✅ Live',

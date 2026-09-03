@@ -53,6 +53,8 @@ export interface ImportDefinition {
   /** null = stored-procedure path; 'service' = items-service diff-writes. */
   processor?: string | null
   service_config?: string | null
+  /** JSON array of flow ids run in order after a successful run (migration 294). */
+  post_run_flows?: string | null
 }
 
 export interface ImportValidationIssue {
@@ -138,7 +140,10 @@ export function runnerName(run: {
   created_by_last_name?: string | null
   created_by_email?: string | null
 }): string | null {
-  const name = [run.created_by_first_name, run.created_by_last_name].filter(Boolean).join(' ').trim()
+  const name = [run.created_by_first_name, run.created_by_last_name]
+    .filter(Boolean)
+    .join(' ')
+    .trim()
   return name || run.created_by_email || null
 }
 

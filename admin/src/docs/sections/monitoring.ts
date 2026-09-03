@@ -126,7 +126,7 @@ export const dataImportGuide: DocSection = {
     { type: 'h1', id: 'data-import-guide', text: 'Imports' },
     {
       type: 'p',
-      text: 'The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV\'s columns onto a collection\'s fields and write each row through the item API. The console is the shared `ImportConsole` component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.'
+      text: "The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV's columns onto a collection's fields and write each row through the item API. The console is the shared `ImportConsole` component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen."
     },
     { type: 'h2', id: 'imports-staged', text: 'Staged imports' },
     {
@@ -145,7 +145,7 @@ export const dataImportGuide: DocSection = {
     },
     {
       type: 'p',
-      text: 'The New import dialog previews the file BEFORE queueing, using the worker\'s own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file\'s columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.'
+      text: "The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits."
     },
     {
       type: 'note',
@@ -160,10 +160,19 @@ export const dataImportGuide: DocSection = {
       type: 'table',
       head: ['Step', 'What it does'],
       rows: [
-        ['1. Source', 'Upload a CSV, paste rows, or have the server fetch a URL (25MB max). Shows a parsed preview.'],
-        ['2. Map columns', 'Pick the target collection and map each CSV column to a field. "Match columns with AI" fills the map and shows a confidence per column; unmapped columns are ignored.'],
+        [
+          '1. Source',
+          'Upload a CSV, paste rows, or have the server fetch a URL (25MB max). Shows a parsed preview.'
+        ],
+        [
+          '2. Map columns',
+          'Pick the target collection and map each CSV column to a field. "Match columns with AI" fills the map and shows a confidence per column; unmapped columns are ignored.'
+        ],
         ['3. Options', 'Duplicate strategy and the field used to match existing records.'],
-        ['4. Confirm', 'Review file, collection, row count, mapping count and duplicate handling before starting.']
+        [
+          '4. Confirm',
+          'Review file, collection, row count, mapping count and duplicate handling before starting.'
+        ]
       ]
     },
     {
@@ -171,14 +180,14 @@ export const dataImportGuide: DocSection = {
       head: ['Duplicate strategy', 'Behavior'],
       rows: [
         ['skip', 'A row whose match field already exists is left alone.'],
-        ['overwrite', 'The existing record\'s mapped fields are all replaced.'],
+        ['overwrite', "The existing record's mapped fields are all replaced."],
         ['merge', 'Only the mapped fields are updated.']
       ]
     },
     { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
     {
       type: 'p',
-      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts) and sort. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.'
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.'
     },
     {
       type: 'warn',

@@ -89,8 +89,10 @@ export function emitTrigger(
   triggerType: string,
   payload: Record<string, unknown>,
   log: FastifyBaseLogger,
-  userId?: string
+  userId?: string,
+  opts?: { excludeFlowIds?: string[] }
 ): void {
+  const exclude = new Set((opts?.excludeFlowIds ?? []).map((id) => String(id).toUpperCase()))
   // Lazy import to avoid circular dep with executor
   import('../services/flow-executor.js')
     .then(async ({ executeFlow }) => {
@@ -99,6 +101,7 @@ export function emitTrigger(
         status: 'active'
       })
       for (const flow of flows) {
+        if (exclude.has(String(flow.id).toUpperCase())) continue
         executeFlow({
           flowId: flow.id,
           flowName: flow.name,

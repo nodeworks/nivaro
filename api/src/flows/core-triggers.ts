@@ -17,4 +17,14 @@ export function registerCoreTriggers(): void {
       'to_state.key eq finance_review).',
     fields: []
   })
+  registerTrigger({
+    type: 'staged-import-completed',
+    label: 'Staged Import Completed',
+    description:
+      'Fires after a staged (file → staging table → procedure) import run completes successfully. ' +
+      'Payload: run_id, import_key, definition_label, staging_table, procedure, row_count, ' +
+      'duration_seconds, created_by. Filter with a Condition operation ' +
+      '(e.g. import_key eq purchase_orders).',
+    fields: []
+  })
 }

@@ -14,12 +14,30 @@ export const userWorkflows: DocSection = {
       type: 'table',
       head: ['Term', 'Definition'],
       rows: [
-        ['Template', 'Blueprint: name, description, icon, states, transitions. Reusable across collections.'],
-        ['State', 'A node: key (machine-readable slug), label, color, is_initial, is_terminal, lock_record.'],
-        ['Transition', 'Edge between states. May require roles. from_state=null means "from any state."'],
-        ['Binding', 'Attaches template to collection. Optional state_field syncs current state key to column.'],
-        ['Instance', 'Per-record runtime: current_state, started_at, completed_at, transitioned_at.'],
-        ['History', 'Immutable log: every transition, who executed it, timestamp, optional comment.']
+        [
+          'Template',
+          'Blueprint: name, description, icon, states, transitions. Reusable across collections.'
+        ],
+        [
+          'State',
+          'A node: key (machine-readable slug), label, color, is_initial, is_terminal, lock_record.'
+        ],
+        [
+          'Transition',
+          'Edge between states. May require roles. from_state=null means "from any state."'
+        ],
+        [
+          'Binding',
+          'Attaches template to collection. Optional state_field syncs current state key to column.'
+        ],
+        [
+          'Instance',
+          'Per-record runtime: current_state, started_at, completed_at, transitioned_at.'
+        ],
+        [
+          'History',
+          'Immutable log: every transition, who executed it, timestamp, optional comment.'
+        ]
       ]
     },
     { type: 'h3', text: 'Item editor integration (WorkflowPanel)' },
@@ -45,7 +63,10 @@ export const userWorkflows: DocSection = {
         ['is_initial', 'This state is the starting point when workflow is started.'],
         ['is_terminal', 'No transitions allowed out of this state (end of workflow).'],
         ['lock_record', 'When active, prevent editing item fields (read-only mode + amber badge).'],
-        ['stage_visibility', 'always | hide_unless_active | hide — controls stage progress track display.'],
+        [
+          'stage_visibility',
+          'always | hide_unless_active | hide — controls stage progress track display.'
+        ],
         ['sort', 'Display order in state picker and available-transitions list.']
       ]
     },
@@ -58,7 +79,8 @@ export const userWorkflows: DocSection = {
         'condition_rules (optional): field conditions that must match to offer the transition.',
         'group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.',
         'requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs or m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.',
-        'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, after manual transitions, and via the hourly sweep).'
+        'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).',
+        'Related-row conditions: field "<childCollection>:<fkField>" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.<field>" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the requisition: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.requisition_amount"}}. An unresolved $record token or unknown hop fails the filter closed.'
       ]
     },
     {
@@ -99,10 +121,22 @@ export const pipelineOverview: DocSection = {
       rows: [
         ['Template', 'States + transitions (same as workflow).'],
         ['Binding', 'Attaches template to collection. Includes auto_start config.'],
-        ['Dimensions', 'Filter axes: field paths (e.g., division.name, project.type). Exactly one is row axis.'],
-        ['Owner Groups', 'Per-state sets of users, scoped to dimension filter combinations. Prioritized.'],
-        ['Owner Matrix', 'UI grid: rows = dimension values, columns = states. Each cell = users for that combo.'],
-        ['Resolution', 'On read, match the item against groups; return most specific group\'s users (filter count DESC, priority ASC).']
+        [
+          'Dimensions',
+          'Filter axes: field paths (e.g., division.name, project.type). Exactly one is row axis.'
+        ],
+        [
+          'Owner Groups',
+          'Per-state sets of users, scoped to dimension filter combinations. Prioritized.'
+        ],
+        [
+          'Owner Matrix',
+          'UI grid: rows = dimension values, columns = states. Each cell = users for that combo.'
+        ],
+        [
+          'Resolution',
+          "On read, match the item against groups; return most specific group's users (filter count DESC, priority ASC)."
+        ]
       ]
     },
     { type: 'h3', text: 'Example matrix' },
@@ -146,11 +180,23 @@ export const pipelineDimensions: DocSection = {
       type: 'table',
       head: ['Property', 'Type', 'Description'],
       rows: [
-        ['field', 'string (dotted)', 'e.g., division.name, project.type.label, categories.category_name (M2O or M2M). Validated on save.'],
+        [
+          'field',
+          'string (dotted)',
+          'e.g., division.name, project.type.label, categories.category_name (M2O or M2M). Validated on save.'
+        ],
         ['label', 'string', 'Display name in filter bar and row/column headers.'],
-        ['is_row_axis', 'boolean', 'Exactly one dimension per binding must be true. Becomes the row header.'],
+        [
+          'is_row_axis',
+          'boolean',
+          'Exactly one dimension per binding must be true. Becomes the row header.'
+        ],
         ['sort', 'number', 'Display order. Drag-to-reorder in admin UI.'],
-        ['required', 'boolean', 'If true, user must select a value before matrix is editable (amber warning if unmet).']
+        [
+          'required',
+          'boolean',
+          'If true, user must select a value before matrix is editable (amber warning if unmet).'
+        ]
       ]
     },
     { type: 'h3', text: 'Field path examples' },
@@ -201,8 +247,16 @@ export const pipelineOwnerMatrix: DocSection = {
       rows: [
         ['Em dash (—)', 'No owners assigned', 'Click to create explicit group'],
         ['Cyan avatars', 'Explicit group for this filter combo', 'Click to add/remove users'],
-        ['Gray faded avatars', 'Inherited from base/less-specific group', 'Click to create override'],
-        ['Amber dot on base cell', 'This cell has context-specific overrides', 'Shows when optional filters have explicit matches']
+        [
+          'Gray faded avatars',
+          'Inherited from base/less-specific group',
+          'Click to create override'
+        ],
+        [
+          'Amber dot on base cell',
+          'This cell has context-specific overrides',
+          'Shows when optional filters have explicit matches'
+        ]
       ]
     },
     { type: 'h3', text: 'Editing a cell' },

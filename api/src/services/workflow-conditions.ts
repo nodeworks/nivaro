@@ -12,6 +12,12 @@ import { selectInChunks } from './db-batch.js'
 //                      count as within, mirroring EFP's differenceInCalendarDays
 //                      <= N semantics)
 //      beyond_days   — date field is > N calendar days from today
+//      related_some / related_none
+//                    — field '<childCollection>:<fkField>', value = optional
+//                      JSON filter on the child rows (plain columns, ONE M2O
+//                      hop as 'm2o.col', '$record.<field>' value tokens,
+//                      _round_eq for rounded-dollar matches); the count of
+//                      matching child rows must be > 0 / === 0
 //      children_in_state / children_not_in_state (#674)
 //                    — field '<childCollection>:<fkField>', value = state key
 //                      or comma list; ALL children in the listed states / NONE
@@ -69,7 +75,7 @@ const RELATED_OPS = new Set([
 export function evalConditionRule(rule: ConditionRule, record: Record<string, unknown>): boolean {
   const recordVal = RELATED_OPS.has(rule.op)
     ? // Fall back to the bare field for records resolved by an older caller.
-      record[relatedCountKey(rule.field, rule.value)] ?? record[rule.field]
+      (record[relatedCountKey(rule.field, rule.value)] ?? record[rule.field])
     : record[rule.field]
   switch (rule.op) {
     case 'null':
@@ -165,42 +171,193 @@ export function evalConditionRule(rule: ConditionRule, record: Record<string, un
 }
 
 // field = '<childCollection>:<fk_field>' for related_some/related_none rules;
-// value (optional) = JSON filter object {col: literal | {_op: v}} applied to the
-// child query. Identifier-checked; nivaro_* child collections rejected.
+// value (optional) = JSON filter object applied to the child query:
+//   { col: literal | { _op: v } }        — plain child column
+//   { 'm2o.col': ... }                   — ONE hop through a child M2O (resolved
+//                                          via nivaro_relations → EXISTS subquery)
+//   values may be '$record.<field>'      — the PARENT record's own column; an
+//                                          unresolved token fails the whole
+//                                          filter CLOSED (count 0), never open
+//   ops: _eq _neq _gt _gte _lt _lte _null _nnull _in
+//        _round_eq — ROUND(col, 0) = ROUND(v, 0)  (legacy EFP PO-match semantics)
+// Identifier-checked; nivaro_* child collections rejected.
 const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+const RELATED_FILTER_OPS = new Set([
+  '_eq',
+  '_neq',
+  '_gt',
+  '_gte',
+  '_lt',
+  '_lte',
+  '_null',
+  '_nnull',
+  '_in',
+  '_round_eq'
+])
 
-function applyRelatedFilter(
-  q: import('knex').Knex.QueryBuilder,
-  raw: string | number | null | undefined
-): void {
-  if (raw == null || raw === '') return
-  let filter: Record<string, unknown>
+export interface RelatedFilterClause {
+  /** M2O column on the child the clause hops through (null = clause on the child itself). */
+  hop: string | null
+  col: string
+  op: string
+  value: unknown
+}
+
+export interface CompiledRelatedFilter {
+  clauses: RelatedFilterClause[]
+  /** A '$record.' token resolved to null/undefined — the filter can never match. */
+  failClosed: boolean
+}
+
+/**
+ * Pure compile step for a related-row filter. Resolves '$record.<field>'
+ * tokens against the parent record and splits dotted keys into hop + column.
+ * Malformed input compiles to zero clauses (the legacy behaviour: filter ignored).
+ */
+export function compileRelatedFilter(
+  raw: string | number | null | undefined,
+  record: Record<string, unknown> = {}
+): CompiledRelatedFilter {
+  const out: CompiledRelatedFilter = { clauses: [], failClosed: false }
+  if (raw == null || raw === '') return out
+  let filter: unknown
   try {
-    filter = JSON.parse(String(raw))
+    filter = typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch {
-    return
+    return out
   }
-  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return
-  for (const [col, spec] of Object.entries(filter)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) continue
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return out
+
+  const resolve = (v: unknown): unknown => {
+    if (typeof v === 'string' && v.startsWith('$record.')) {
+      const field = v.slice('$record.'.length)
+      const val = record[field]
+      if (val === null || val === undefined) out.failClosed = true
+      return val
+    }
+    return v
+  }
+
+  for (const [key, spec] of Object.entries(filter as Record<string, unknown>)) {
+    const segments = key.split('.')
+    if (segments.length > 2 || !segments.every((s) => IDENT_RE.test(s))) continue
+    const hop = segments.length === 2 ? segments[0] : null
+    const col = segments.length === 2 ? segments[1] : segments[0]
     if (spec !== null && typeof spec === 'object' && !Array.isArray(spec)) {
       for (const [op, v] of Object.entries(spec as Record<string, unknown>)) {
-        switch (op) {
-          case '_eq': q.where(col, v as never); break
-          case '_neq': q.whereNot(col, v as never); break
-          case '_gt': q.where(col, '>', v as never); break
-          case '_gte': q.where(col, '>=', v as never); break
-          case '_lt': q.where(col, '<', v as never); break
-          case '_lte': q.where(col, '<=', v as never); break
-          case '_null': q.whereNull(col); break
-          case '_nnull': q.whereNotNull(col); break
-          case '_in': if (Array.isArray(v)) q.whereIn(col, v as never[]); break
-          default: break
-        }
+        if (!RELATED_FILTER_OPS.has(op)) continue
+        const value = op === '_in' && Array.isArray(v) ? v.map(resolve) : resolve(v)
+        out.clauses.push({ hop, col, op, value })
       }
     } else {
-      q.where(col, spec as never)
+      out.clauses.push({ hop, col, op: '_eq', value: resolve(spec) })
     }
+  }
+  return out
+}
+
+function applyClause(
+  q: import('knex').Knex.QueryBuilder,
+  col: string,
+  op: string,
+  v: unknown
+): void {
+  switch (op) {
+    case '_eq':
+      q.where(col, v as never)
+      break
+    case '_neq':
+      q.whereNot(col, v as never)
+      break
+    case '_gt':
+      q.where(col, '>', v as never)
+      break
+    case '_gte':
+      q.where(col, '>=', v as never)
+      break
+    case '_lt':
+      q.where(col, '<', v as never)
+      break
+    case '_lte':
+      q.where(col, '<=', v as never)
+      break
+    case '_null':
+      q.whereNull(col)
+      break
+    case '_nnull':
+      q.whereNotNull(col)
+      break
+    case '_in':
+      if (Array.isArray(v)) q.whereIn(col, v as never[])
+      break
+    case '_round_eq':
+      q.whereRaw('ROUND(??, 0) = ROUND(?, 0)', [col, v as never])
+      break
+    default:
+      break
+  }
+}
+
+// Child M2O hop → target collection, resolved via nivaro_relations. Junction
+// legs carry junction_field as their pairing marker, so it is NOT filtered
+// (the documented computeFormulaRollup / user-scopes trap).
+const hopTargetCache = new Map<string, { target: string | null; at: number }>()
+async function resolveHopTarget(child: string, hop: string): Promise<string | null> {
+  const key = `${child}.${hop}`
+  const hit = hopTargetCache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.target
+  let target: string | null = null
+  try {
+    const rel = (await db('nivaro_relations')
+      .where({ many_collection: child, many_field: hop })
+      .whereNotNull('one_collection')
+      .first('one_collection')) as { one_collection: string } | undefined
+    target = rel?.one_collection && IDENT_RE.test(rel.one_collection) ? rel.one_collection : null
+  } catch {
+    target = null
+  }
+  hopTargetCache.set(key, { target, at: Date.now() })
+  return target
+}
+
+async function applyRelatedFilter(
+  q: import('knex').Knex.QueryBuilder,
+  raw: string | number | null | undefined,
+  child: string,
+  record: Record<string, unknown>
+): Promise<void> {
+  const compiled = compileRelatedFilter(raw, record)
+  if (compiled.failClosed) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  const byHop = new Map<string, RelatedFilterClause[]>()
+  for (const c of compiled.clauses) {
+    if (!c.hop) {
+      applyClause(q, c.col, c.op, c.value)
+      continue
+    }
+    const list = byHop.get(c.hop) ?? []
+    list.push(c)
+    byHop.set(c.hop, list)
+  }
+  for (const [hop, clauses] of byHop) {
+    const target = await resolveHopTarget(child, hop)
+    if (!target) {
+      // Unknown hop = the config references a relation that does not exist.
+      // Fail closed: a mis-typed filter must not silently widen to "any row".
+      q.whereRaw('1 = 0')
+      return
+    }
+    const alias = `r_${hop}`
+    q.whereExists((sub) => {
+      sub
+        .select(db.raw('1'))
+        .from(`${target} as ${alias}`)
+        .whereRaw('?? = ??', [`${alias}.id`, `${child}.${hop}`])
+      for (const c of clauses) applyClause(sub, `${alias}.${c.col}`, c.op, c.value)
+    })
   }
 }
 
@@ -295,9 +452,7 @@ export async function fetchRecordForConditions(
               .whereIn('s.key', stateKeys)
               .select('i.item')
           )
-          matched = new Set(
-            (instRows as Array<{ item: unknown }>).map((r) => String(r.item))
-          ).size
+          matched = new Set((instRows as Array<{ item: unknown }>).map((r) => String(r.item))).size
         }
         record[key] = { total, matched }
       } catch {
@@ -306,8 +461,8 @@ export async function fetchRecordForConditions(
       continue
     }
     try {
-      const q = db(child).where(fk, itemId).count('* as c')
-      applyRelatedFilter(q, rule.value)
+      const q = db(child).where(`${child}.${fk}`, itemId).count('* as c')
+      await applyRelatedFilter(q, rule.value, child, record)
       const row = (await q.first()) as { c?: number | string } | undefined
       record[key] = Number(row?.c ?? 0)
     } catch {
