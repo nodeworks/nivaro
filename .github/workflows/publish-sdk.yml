@@ -44,12 +44,23 @@ jobs:
             echo "@nivaro/sdk@$VERSION already on npm — skipping publish"
           fi
 
+      # The pre-check above is a check-then-act race: this workflow fires in
+      # BOTH the dev repo and the public mirror for the same tag, and both runs
+      # can start before either has published. Treat "already published" as
+      # success at publish time too.
       - name: Publish to npm
         if: steps.meta.outputs.already != 'true'
-        run: npm publish --access public
         working-directory: packages/sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if npm publish --access public; then exit 0; fi
+          if npm view "@nivaro/sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "@nivaro/sdk@$VERSION was published by a concurrent run — treating as success"
+            exit 0
+          fi
+          exit 1
 
       - name: Generate changelog
         env:
@@ -64,6 +75,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          if gh release view "@sdk-${VERSION}" >/dev/null 2>&1; then
+            echo "release @sdk-${VERSION} already exists — skipping"
+            exit 0
+          fi
           gh release create "@sdk-${VERSION}" \
             --title "@nivaro/sdk v${VERSION}" \
             --notes-file CHANGELOG_DRAFT.md
