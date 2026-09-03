@@ -792,13 +792,16 @@ Server listening on http://0.0.0.0:3055</code></pre>
             <tbody><tr><tr><td>manual</td><td>Started by clicking "Run Flow" in the UI or calling POST /api/flows/:id/trigger</td></tr>
               <tr><td>schedule</td><td>Runs on a cron schedule. Specify a cron expression in Trigger Options.</td></tr>
               <tr><td>event</td><td>Triggered by an Inngest event name (planned).</td></tr>
-              <tr><td>webhook</td><td>Triggered by an incoming HTTP request (planned).</td></tr></tr></tbody>
+              <tr><td>webhook</td><td>Triggered by an incoming HTTP request (planned).</td></tr>
+              <tr><td>workflow-transition</td><td>Fires after any workflow/pipeline transition lands (manual or automatic). Payload carries collection, item, friendly_id, from/to state, owners and owner_emails.</td></tr>
+              <tr><td>staged-import-completed</td><td>Fires after a staged (file → staging table → procedure) import run completes. Payload: run_id, import_key, definition_label, staging_table, procedure, row_count, duration_seconds, created_by. Filter with a Condition on import_key. A flow listed in the import definition's "After each run" runs there instead and is not fired twice.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="flow-operations">Operations</h2>
           <p class="doc-p">Operations run in order of their position (top to bottom, left to right). Output from each operation is passed to the next as the flow's data payload.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Type</th><th>Status</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>log</td><td>✅ Live</td><td>Writes a structured line to the API server log (pino). Configure message and level in options.</td></tr>
+            <tbody><tr><tr><td>workflow-auto-sweep</td><td>✅ Live</td><td>Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.</td></tr>
+              <tr><td>log</td><td>✅ Live</td><td>Writes a structured line to the API server log (pino). Configure message and level in options.</td></tr>
               <tr><td>webhook</td><td>✅ Live</td><td>HTTP fetch to an external URL. Configure url and method in options.</td></tr>
               <tr><td>condition</td><td>⚙️ Stub</td><td>Branch on a condition expression (not yet implemented — resolves forward).</td></tr>
               <tr><td>exec-script</td><td>⚙️ Stub</td><td>Run arbitrary Node.js code (not yet implemented).</td></tr>
@@ -1737,7 +1740,8 @@ x-workspace: ws-uuid-here</code></pre>
             <li>condition_rules (optional): field conditions that must match to offer the transition.</li>
             <li>group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.</li>
             <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs or m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
-            <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, after manual transitions, and via the hourly sweep).</li>
+            <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).</li>
+            <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the requisition: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.requisition_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
           </ul>
           <div class="doc-note">Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.</div>
           <!-- /SYNC:workflow-overview -->
@@ -7151,7 +7155,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
-          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts) and sort. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.</p>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.</p>
           <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
