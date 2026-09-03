@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-03T23:33:56.651Z",
+  "generated_at": "2026-09-03T23:36:35.785Z",
   "releases": [
+    {
+      "version": "0.1.198",
+      "tag": "v0.1.198",
+      "date": "2026-09-03T19:36:27-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grids",
+              "text": "highlight empty required fields in the row editor",
+              "hash": "61120bd0"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.197",
       "tag": "v0.1.197",
-      "date": "2026-09-03T19:33:49-04:00",
+      "date": "2026-09-03T19:33:56-04:00",
       "sections": [
         {
           "label": "Fixed",
