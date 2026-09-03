@@ -108,11 +108,21 @@ if [ "${1:-}" = "--push" ]; then
   git push --force public main
   # Tags ONE PER PUSH: GitHub creates no push events (and fires no workflows)
   # when a single push contains more than three tags. filter-repo is
-  # deterministic, so unchanged tags re-push as no-ops with no event.
+  # deterministic, so a tag already on the remote at the same sha needs no
+  # push at all — compare once against the remote and push only new/changed
+  # tags (570 tags × one round trip each took 15 minutes; this takes seconds).
+  REMOTE_TAGS="$(git ls-remote --tags public | grep -v '\^{}$')"
+  pushed=0 skipped=0
   for t in $(git tag); do
+    local_sha="$(git rev-parse "refs/tags/$t")"
+    if printf '%s\n' "$REMOTE_TAGS" | grep -q "^${local_sha}[[:space:]]refs/tags/${t}$"; then
+      skipped=$((skipped + 1))
+      continue
+    fi
     git push --force public "refs/tags/$t"
+    pushed=$((pushed + 1))
   done
-  echo "✓ published"
+  echo "✓ published — tags pushed: $pushed, already current: $skipped"
 else
   echo "  (dry build — rerun with --push <github-url> to publish)"
 fi
