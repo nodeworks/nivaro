@@ -28,16 +28,21 @@ Options:
   --help, -h       Show this help
 
 Default mode runs api/src/scripts/generate-openapi.ts with tsx, building the
+spec from the GENERIC sample content model (community docs must never carry a
+real instance's schema). Pass --db to build from the connected database.
+Legacy note: previously the
 spec straight from nivaro_collections/nivaro_fields. Remote mode calls
 GET <url>/api/dev-tools/openapi.json (admin-only) instead.`;
 
 function parseArgs(argv) {
-  const opts = { url: '', token: process.env.NIVARO_TOKEN ?? '' };
+  const opts = { url: '', token: process.env.NIVARO_TOKEN ?? '', db: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') {
       console.log(HELP);
       process.exit(0);
+    } else if (arg === '--db') {
+      opts.db = true;
     } else if (arg === '--url') {
       opts.url = argv[++i] ?? '';
     } else if (arg === '--token') {
@@ -51,7 +56,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-const { url, token } = parseArgs(process.argv.slice(2));
+const { url, token, db: useDb } = parseArgs(process.argv.slice(2));
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -61,7 +66,7 @@ if (!url) {
   // Run from api/ so npx resolves the workspace-local tsx binary
   const result = spawnSync(
     'npx',
-    ['tsx', resolve(repoRoot, 'api/src/scripts/generate-openapi.ts')],
+    ['tsx', resolve(repoRoot, 'api/src/scripts/generate-openapi.ts'), ...(useDb ? ['--db'] : [])],
     { stdio: 'inherit', cwd: resolve(repoRoot, 'api') },
   );
   process.exit(result.status ?? 1);

@@ -1,8 +1,13 @@
 /**
- * Generate www/openapi.json directly from the schema registry in the database.
- * No running server needed — reads nivaro_collections/nivaro_fields via knex.
+ * Generate www/openapi.json for the PUBLIC docs site.
  *
- *   npx tsx api/src/scripts/generate-openapi.ts [outFile]
+ * Default source is the generic sample content model in
+ * openapi-sample-schema.ts — the community docs must never publish a real
+ * instance's registry (before 2026-09-03 they shipped a customer schema).
+ * Pass `--db` (or NIVARO_OPENAPI_SOURCE=db) to build from the connected
+ * database instead, for instance-specific references.
+ *
+ *   npx tsx api/src/scripts/generate-openapi.ts [outFile] [--db]
  *
  * Invoked by `pnpm docs:api` (scripts/generate-api-docs.mjs) by default.
  */
@@ -10,13 +15,19 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDb } from '../db/index.js'
-import { generateOpenApi, loadSchema } from '../routes/dev-tools.js'
+import { generateOpenApi } from '../routes/dev-tools.js'
+import { sampleSchema } from './openapi-sample-schema.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const outFile = resolve(process.argv[2] ?? resolve(repoRoot, 'www/openapi.json'))
+const args = process.argv.slice(2)
+const useDb = args.includes('--db') || process.env.NIVARO_OPENAPI_SOURCE === 'db'
+const outArg = args.find((a) => !a.startsWith('--'))
+const outFile = resolve(outArg ?? resolve(repoRoot, 'www/openapi.json'))
 
 async function main() {
-  const { collections, fieldsByCollection, projectName } = await loadSchema()
+  const { collections, fieldsByCollection, projectName } = useDb
+    ? await (await import('../routes/dev-tools.js')).loadSchema()
+    : sampleSchema()
   const spec = generateOpenApi(collections, fieldsByCollection, projectName)
   mkdirSync(dirname(outFile), { recursive: true })
   writeFileSync(outFile, `${JSON.stringify(spec, null, 2)}\n`)
