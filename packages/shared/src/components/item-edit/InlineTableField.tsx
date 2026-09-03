@@ -4691,7 +4691,7 @@ export function InlineTableField({
       </table>
 
       {uniqueError && (
-        <div className='border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600'>
+        <div className='border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
           {uniqueError}
         </div>
       )}
