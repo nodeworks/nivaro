@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-03T17:43:10.613Z",
+  "generated_at": "2026-09-03T18:19:43.181Z",
   "releases": [
+    {
+      "version": "0.1.194",
+      "tag": "v0.1.194",
+      "date": "2026-09-03T14:19:37-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "canvas pan swallowed clicks on node buttons (configure/remove)",
+              "hash": "2844d007"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.193",
       "tag": "v0.1.193",
-      "date": "2026-09-03T13:43:04-04:00",
+      "date": "2026-09-03T13:43:10-04:00",
       "sections": [
         {
           "label": "Added",
