@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-03T23:24:32.414Z",
+  "generated_at": "2026-09-03T23:33:56.651Z",
   "releases": [
+    {
+      "version": "0.1.197",
+      "tag": "v0.1.197",
+      "date": "2026-09-03T19:33:49-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "full-width rows span exactly the header's column count",
+              "hash": "cdba405e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "dark-mode variants for cell error, warning, and Delete badge tints",
+              "hash": "d5cfc3e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "dark-mode styling for the inline-grid row error line",
+              "hash": "0766eca5"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "use abbreviated install metadata for the concurrent-publish probe",
+              "hash": "6ae7c302"
+            },
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "probe the tarball, not npm view, when deciding a concurrent publish won",
+              "hash": "92bbdb37"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.196",
       "tag": "v0.1.196",
-      "date": "2026-09-03T19:24:26-04:00",
+      "date": "2026-09-03T19:24:32-04:00",
       "sections": [
         {
           "label": "Added",
