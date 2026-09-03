@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-09-03T18:19:43.181Z",
+  "generated_at": "2026-09-03T21:35:25.423Z",
   "releases": [
+    {
+      "version": "0.1.195",
+      "tag": "v0.1.195",
+      "date": "2026-09-03T17:35:16-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grids",
+              "text": "'lock' row rules — per-row read-only fields, server-enforced",
+              "hash": "64745c0e"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "www",
+              "text": "OpenAPI reference from a generic sample schema, never the live registry",
+              "hash": "2f95a19c"
+            },
+            {
+              "section": "Documentation",
+              "scope": "www",
+              "text": "sync flow trigger + op tables (staged-import-completed, workflow-auto-sweep)",
+              "hash": "245ae1a2"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "push only new or changed tags to the public mirror",
+              "hash": "34049843"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.194",
       "tag": "v0.1.194",
-      "date": "2026-09-03T14:19:37-04:00",
+      "date": "2026-09-03T14:19:43-04:00",
       "sections": [
         {
           "label": "Fixed",
