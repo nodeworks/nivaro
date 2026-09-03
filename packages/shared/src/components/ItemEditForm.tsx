@@ -95,6 +95,7 @@ import {
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
+import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
@@ -1088,6 +1089,9 @@ export function ItemEditForm({
     []
   )
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  // The 'Can't save yet' summary shows after a failed save until dismissed or
+  // the errors clear (it derives from validationErrors, so it never lingers).
+  const [showValidationSummary, setShowValidationSummary] = useState(false)
   // Change-reason challenge: a 422 from the items service pauses the save
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
@@ -2912,8 +2916,11 @@ export function ItemEditForm({
         const fieldMeta = (fieldConfig ?? []).find((f) => f.field === field)
         if (!fieldMeta?.required) return prev
         const next = { ...prev }
-        if (count === 0 && touchedFields.current.has(field)) {
-          next[field] = 'This field is required'
+        if (count === 0) {
+          // Untouched + empty: don't INTRODUCE an error (no nagging before the
+          // user has been near the field), but keep one a save attempt set —
+          // clearing it here made the 'Can't save yet' summary under-count.
+          if (touchedFields.current.has(field)) next[field] = 'This field is required'
         } else {
           delete next[field]
         }
@@ -3953,6 +3960,46 @@ export function ItemEditForm({
     return steps
   }, [hasTabs, sectionGroups, tabGroups, isStepsMode, ungroupedFields])
 
+  // Rows for the 'Can't save yet' summary — form order, labelled, with the
+  // step/tab/section the field lives on (steps layouts hide most fields).
+  const validationSummaryItems = useMemo<ValidationSummaryItem[]>(() => {
+    const keys = Object.keys(validationErrors)
+    if (keys.length === 0) return []
+    const locationFor = (field: string): string | null => {
+      const groupKey = Object.entries(groupedMap).find(([, fs]) => fs.some((f) => f.field === field))?.[0]
+      if (!groupKey) return hasTabs ? 'General' : null
+      const group = groups.find((g) => g.key === groupKey)
+      if (!group) return null
+      if (group.type === 'tab') return group.label ?? null
+      if (hasTabs && allSteps.some((st) => st.key === '__general__')) return 'General'
+      return group.label ?? null
+    }
+    // Layout order: step by step (tabs first in their order, General's
+    // sections where they sit), then the field's position inside its group;
+    // anything the layout doesn't place falls back to registry order.
+    const order = new Map<string, number>()
+    let pos = 0
+    const stepKeys = hasTabs ? allSteps.map((st) => st.key) : []
+    const groupKeys = [
+      ...stepKeys.filter((k) => k !== '__general__'),
+      ...Object.keys(groupedMap).filter((k) => !stepKeys.includes(k))
+    ]
+    for (const gk of groupKeys) for (const f of groupedMap[gk] ?? []) if (!order.has(f.field)) order.set(f.field, pos++)
+    for (const f of allFields) if (!order.has(f.field)) order.set(f.field, pos++)
+    return keys
+      .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9))
+      .map((field) => {
+        const meta = allFields.find((f) => f.field === field)
+        const message = validationErrors[field]
+        return {
+          field,
+          label: meta?.label || titleCase(field),
+          message: message === 'This field is required' ? 'Required' : message,
+          location: locationFor(field)
+        }
+      })
+  }, [validationErrors, allFields, groupedMap, groups, hasTabs, allSteps])
+
   // Consume ?step= once on mount (#129) — beats the persisted tab.
   const stepParamConsumedRef = useRef(false)
   useEffect(() => {
@@ -4662,7 +4709,8 @@ export function ItemEditForm({
           // Required O2M = at least one row, pending or existing. An
           // unsettled count (query in flight) never blocks.
           const n = o2mEffectiveCounts[f.field]
-          if (n !== undefined && n === 0) errs[f.field] = 'At least one row is required'
+          if (n !== undefined && n === 0)
+            errs[f.field] = `At least one ${f.label || titleCase(f.field)} item is required`
         } else if (
           relations.some((r) => r.one_collection === collection && r.one_field === f.field)
         ) {
@@ -4700,12 +4748,21 @@ export function ItemEditForm({
     }
     if (Object.keys(errs).length > 0) {
       setValidationErrors(errs)
-      // Surface a rule message when the failure isn't a plain required miss.
-      const ruleMsg = Object.values(errs).find((m) => m !== 'This field is required')
-      toast.error(ruleMsg ?? 'Please fill in all required fields')
+      setShowValidationSummary(true)
+      // One problem: say exactly what it is. Several: the count — the summary
+      // at the top of the form lists them and jumps to each.
+      const keys = Object.keys(errs)
+      const n = keys.length
+      if (n === 1) {
+        const f = allFields.find((x) => x.field === keys[0])
+        const label = f?.label || titleCase(keys[0])
+        toast.error(errs[keys[0]] === 'This field is required' ? `${label} is required` : errs[keys[0]])
+      } else {
+        toast.error(`Can’t save yet — ${n} fields need attention`)
+      }
       // Jump-to-error (#191): scroll + flash the first invalid field.
-      const firstBad = Object.keys(errs)[0]
-      if (firstBad) setTimeout(() => flashField(firstBad), 150)
+      const firstBad = keys[0]
+      if (firstBad) setTimeout(() => jumpToField(firstBad), 150)
       return false
     }
     return true
@@ -8150,6 +8207,13 @@ export function ItemEditForm({
                                   onScroll={summaryEnabled ? condenseOnScroll : undefined}
                                 >
                                   {extraTopContent}
+                                  {showValidationSummary && validationSummaryItems.length > 0 && (
+                                    <ValidationSummary
+                                      items={validationSummaryItems}
+                                      onJump={jumpToField}
+                                      onDismiss={() => setShowValidationSummary(false)}
+                                    />
+                                  )}
                                   {configUpdated && (
                                     <div className='mb-2 flex items-center gap-2 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
                                       <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
