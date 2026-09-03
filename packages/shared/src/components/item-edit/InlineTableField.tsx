@@ -2784,6 +2784,23 @@ export function InlineTableField({
         return
       }
     }
+    // Required columns (field-level or layout override) must hold a value
+    // before the row can be saved or staged. Locked / read-only columns are
+    // exempt — the user cannot type into them, a rule owns their value.
+    const isEmptyValue = (v: unknown) => v === null || v === undefined || v === ''
+    const missingRequired = displayCols.filter(
+      (c) =>
+        c.required &&
+        !isPanelReadOnly(c) &&
+        !editState.locks?.includes(c.field) &&
+        isEmptyValue(editState.draft[c.field])
+    )
+    if (missingRequired.length > 0) {
+      setUniqueError(
+        `Required: ${missingRequired.map((c) => c.label || titleCase(c.field)).join(', ')}`
+      )
+      return
+    }
     setUniqueError(null)
     setSaving(true)
     try {
