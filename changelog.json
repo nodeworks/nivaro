@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-03T21:35:25.423Z",
+  "generated_at": "2026-09-03T23:24:32.414Z",
   "releases": [
+    {
+      "version": "0.1.196",
+      "tag": "v0.1.196",
+      "date": "2026-09-03T19:24:26-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grids",
+              "text": "refuse to save an inline-grid row with empty required columns",
+              "hash": "d3cc0b87"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "tolerate concurrent publishes of the same tag",
+              "hash": "2f0fdf87"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.195",
       "tag": "v0.1.195",
-      "date": "2026-09-03T17:35:16-04:00",
+      "date": "2026-09-03T17:35:25-04:00",
       "sections": [
         {
           "label": "Added",
