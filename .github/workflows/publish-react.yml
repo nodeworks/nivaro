@@ -64,10 +64,13 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           if npm publish --access public; then exit 0; fi
-          # `npm view` reads the registry's metadata document, which lags a
-          # fresh publish by minutes; the tarball URL is authoritative at once.
+          # `npm view` (full metadata) and the tarball URL both lag a fresh
+          # publish; the abbreviated install-metadata document reflects it at
+          # once. Cache-bust the query so a CDN copy can't answer.
           for i in 1 2 3 4 5 6; do
-            if curl -sfI "https://registry.npmjs.org/@nivaro/react/-/react-$VERSION.tgz" >/dev/null; then
+            if curl -sf -H 'Accept: application/vnd.npm.install-v1+json' \
+                 "https://registry.npmjs.org/@nivaro%2freact?t=$(date +%s)" \
+               | grep -q "\"$VERSION\""; then
               echo "@nivaro/react@$VERSION was published by a concurrent run — treating as success"
               exit 0
             fi
