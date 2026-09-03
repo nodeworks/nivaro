@@ -132,6 +132,61 @@ async function getConfigs(childCollection: string): Promise<GridRuleConfig[]> {
  * `callerFields` is the set of keys the ORIGINAL request body carried — those
  * are never overwritten, whatever the rules say.
  */
+/**
+ * Enforce 'lock' row rules on a write. A locked field is dropped from the
+ * caller's payload (and from `callerFields`, so the create-time autofill can
+ * fill it) — the same silent-ignore posture as field lock_condition. On
+ * update the lock is judged against the merged row (existing + payload) so a
+ * category change in the same PATCH locks price immediately. Never throws.
+ */
+export async function applyRowLocksOnWrite(
+  collection: string,
+  payload: Record<string, unknown>,
+  callerFields: Set<string>,
+  existing: Record<string, unknown> | null
+): Promise<string[]> {
+  if (collection.startsWith('nivaro_')) return []
+  const dropped: string[] = []
+  try {
+    const configs = await getConfigs(collection)
+    if (configs.length === 0) return dropped
+    for (const cfg of configs) {
+      if (!cfg.rowRules.some((r) => r.target_type === 'lock')) continue
+      const merged = { ...(existing ?? {}), ...payload }
+      const fkValue = merged[cfg.fkField]
+      if (fkValue == null || fkValue === '') continue
+      const wanted = new Set(cfg.parentContextFields)
+      for (const rule of cfg.rowRules) {
+        const tf = rule.trigger_field
+        if (typeof tf === 'string' && tf.startsWith('$parent.')) wanted.add(tf.slice(8))
+      }
+      const parentContext: Record<string, unknown> = {}
+      if (wanted.size > 0) {
+        const parent = (await db(cfg.parentCollection)
+          .where({ id: String(fkValue) })
+          .first()) as Record<string, unknown> | undefined
+        if (parent) for (const f of wanted) parentContext[f] = parent[f] ?? null
+      }
+      const locks = new Set<string>()
+      await evaluateRowRules(db, collection, { ...merged }, parentContext, cfg.rowRules, undefined, {
+        locks,
+        locksOnly: true
+      })
+      for (const field of locks) {
+        if (!(field in payload)) continue
+        // Re-sending the stored value is harmless; only a CHANGE is refused.
+        if (existing && String(payload[field] ?? '') === String(existing[field] ?? '')) continue
+        delete payload[field]
+        callerFields.delete(field)
+        dropped.push(field)
+      }
+    }
+  } catch (err) {
+    console.warn(`row-rules lock check skipped for ${collection}:`, err)
+  }
+  return dropped
+}
+
 export async function applyRowRulesOnCreate(
   collection: string,
   payload: Record<string, unknown>,

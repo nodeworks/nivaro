@@ -240,6 +240,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       collection?: string
       data?: Record<string, unknown>
       changed_field?: string
+      /** Evaluate only 'lock' rules (row editor open) — no value changes. */
+      locks_only?: boolean
       parent_context?: Record<string, unknown>
       row_rules?: Array<{
         trigger_field?: string | null
@@ -248,7 +250,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         trigger_op?: string
         trigger_value?: string | null
         target_field: string
-        target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
+        target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick' | 'lock'
         target_value?: string | null
         sources?: Array<{ source_type: string; source_field: string; source_related_field: string; source_hop?: string; o2m_collection?: string; filter_field?: string; filter_value?: string; source_one_collection?: string }>
         only_if_empty?: boolean
@@ -263,6 +265,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const before = { ...body.data }
     const working = { ...body.data }
     const parentContext = body.parent_context ?? {}
+    const locks = new Set<string>()
 
     if (Array.isArray(body.row_rules) && body.row_rules.length > 0) {
       // The full evaluator lives in services/field-rules.ts now — createOne
@@ -274,7 +277,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         working,
         parentContext,
         body.row_rules as RowRule[],
-        body.changed_field
+        body.changed_field,
+        { locks, locksOnly: body.locks_only === true }
       )
     } else {
       await applyFieldRules(body.collection, working, body.changed_field)
@@ -286,6 +290,6 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       if (value !== before[key]) updates[key] = value
     }
 
-    return reply.send({ updates })
+    return reply.send({ updates, locks: [...locks] })
   })
 }

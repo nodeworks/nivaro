@@ -8744,7 +8744,7 @@ type RowRuleItem = {
   trigger_op?: string
   trigger_value?: string | null
   target_field: string
-  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
+  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick' | 'lock'
   target_value?: string | null
   sources?: RowRuleSource[]
   only_if_empty?: boolean
@@ -10286,7 +10286,8 @@ function RowRuleRow({
                       { value: 'pick', label: '= pick record' },
                       { value: 'relation_field', label: '= from M2O' },
                       { value: 'precedence', label: '= chain' },
-                      { value: 'clear', label: '= clear' }
+                      { value: 'clear', label: '= clear' },
+                      { value: 'lock', label: '🔒 lock (read-only while matched)' }
                     ]}
                     onChange={(v) =>
                       onChange({

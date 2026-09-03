@@ -1415,8 +1415,12 @@ export function InlineTableField({
   // Read-only mode also disables row reordering.
   if (readOnly) enableReorder = false
   // biome-ignore lint/style/noParameterAssign: intentional prop override
-  const [editState, setEditState] = useState<{ rowId: string; draft: Record<string, unknown> } | null>(null)
-  const editStateRef = useRef<{ rowId: string; draft: Record<string, unknown> } | null>(null)
+  // locks = fields the layout's 'lock' row rules currently make read-only for
+  // this row (server-evaluated, so they can follow M2O hops like
+  // category → sub_category → entity). Refreshed on open and on every edit.
+  type GridEditState = { rowId: string; draft: Record<string, unknown>; locks?: string[] }
+  const [editState, setEditState] = useState<GridEditState | null>(null)
+  const editStateRef = useRef<GridEditState | null>(null)
   useEffect(() => { editStateRef.current = editState }, [editState])
   // Clicking anywhere outside the row editor commits it — same as Save.
   // Portaled layers (combobox panels, Radix poppers, dialogs, overlays) are
@@ -2642,23 +2646,65 @@ export function InlineTableField({
     staleTime: 60_000
   })
 
+  function buildParentCtx(): Record<string, unknown> {
+    const parentCtx: Record<string, unknown> = {}
+    if (parentDraftCtx?.draft) {
+      if (parentContextFields?.length) {
+        for (const f of parentContextFields) parentCtx[f] = parentDraftCtx.draft[f] ?? null
+      }
+      for (const rule of rowRules ?? []) {
+        const tf = (rule as { trigger_field?: unknown }).trigger_field
+        if (typeof tf === 'string' && tf.startsWith('$parent.')) {
+          const key = tf.slice(8)
+          if (!(key in parentCtx)) parentCtx[key] = parentDraftCtx.draft[key] ?? null
+        }
+      }
+    }
+    return parentCtx
+  }
+
+  /** Ask the server which fields the layout's lock rules make read-only for
+   *  this row right now (lock rules only — no value changes on open). */
+  function refreshLocks(rowId: string, draft: Record<string, unknown>) {
+    if (!client || !rowRules?.some((r) => (r as { target_type?: string }).target_type === 'lock')) return
+    client
+      .request<{ locks?: string[] }>(
+        post('/field-rules/evaluate', {
+          collection: relatedCollection,
+          data: draft,
+          locks_only: true,
+          parent_context: buildParentCtx(),
+          row_rules: rowRules
+        })
+      )
+      .then((res) => {
+        setEditState((s) => (s && s.rowId === rowId ? { ...s, locks: res.locks ?? [] } : s))
+      })
+      .catch(() => {})
+  }
+
   function startEdit(row: Record<string, unknown>) {
     if (readOnly) return
     const id = String(row.id)
     if (editState?.rowId === id) return
-    setEditState({ rowId: id, draft: applyComputedFields({ ...row }) })
+    const draft = applyComputedFields({ ...row })
+    setEditState({ rowId: id, draft })
+    refreshLocks(id, draft)
   }
 
   function startPendingEdit(row: Record<string, unknown>, ri: number) {
     if (readOnly) return
     const rowId = `pending:${ri}`
     if (editState?.rowId === rowId) return
-    setEditState({ rowId, draft: applyComputedFields({ ...row }) })
+    const draft = applyComputedFields({ ...row })
+    setEditState({ rowId, draft })
+    refreshLocks(rowId, draft)
   }
 
   function startNew() {
     if (readOnly) return
     setEditState({ rowId: 'new', draft: { ...rowDefaultSeed } })
+    refreshLocks('new', { ...rowDefaultSeed })
   }
 
   function cancelEdit() {
@@ -2685,21 +2731,8 @@ export function InlineTableField({
     setEditState((s) => s ? { ...s, draft: nextDraft } : s)
 
     if (rowRules && rowRules.length > 0 && client) {
-      const parentCtx: Record<string, unknown> = {}
-      if (parentDraftCtx?.draft) {
-        if (parentContextFields?.length) {
-          for (const f of parentContextFields) parentCtx[f] = parentDraftCtx.draft[f] ?? null
-        }
-        // Auto-include any $parent.* fields referenced in rules, even if not in parentContextFields
-        for (const rule of rowRules) {
-          const tf = (rule as { trigger_field?: unknown }).trigger_field
-          if (typeof tf === 'string' && tf.startsWith('$parent.')) {
-            const key = tf.slice(8)
-            if (!(key in parentCtx)) parentCtx[key] = parentDraftCtx.draft[key] ?? null
-          }
-        }
-      }
-      client.request<{ updates: Record<string, unknown> }>(
+      const parentCtx = buildParentCtx()
+      client.request<{ updates: Record<string, unknown>; locks?: string[] }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
           data: nextDraft,
@@ -2708,12 +2741,15 @@ export function InlineTableField({
           row_rules: rowRules
         })
       ).then((res) => {
-        if (res.updates && Object.keys(res.updates).length > 0) {
-          setEditState((s) => {
-            if (!s) return s
-            return { ...s, draft: applyComputedFields({ ...s.draft, ...res.updates }) }
-          })
-        }
+        const hasUpdates = res.updates && Object.keys(res.updates).length > 0
+        setEditState((s) => {
+          if (!s) return s
+          return {
+            ...s,
+            draft: hasUpdates ? applyComputedFields({ ...s.draft, ...res.updates }) : s.draft,
+            locks: res.locks ?? s.locks
+          }
+        })
       }).catch(() => {})
     }
   }
@@ -3542,8 +3578,13 @@ export function InlineTableField({
                   <div className='text-[12px] italic text-slate-500'>
                     {renderCell(c, evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field])}
                   </div>
-                ) : displayOnlyIface || c.readonly ? (
-                  <div className='text-[12px] text-slate-500'>{renderCell(c, args.draft[c.field], args.rowId)}</div>
+                ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
+                  <div
+                    className='text-[12px] text-slate-500'
+                    title={editState?.locks?.includes(c.field) ? 'Set automatically for this row' : undefined}
+                  >
+                    {renderCell(c, args.draft[c.field], args.rowId)}
+                  </div>
                 ) : (
                   <FieldRenderer
                     field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}

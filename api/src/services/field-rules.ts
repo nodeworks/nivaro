@@ -529,7 +529,10 @@ export interface RowRule {
   trigger_op?: string
   trigger_value?: string | null
   target_field: string
-  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick'
+  /** 'lock' = when triggered, target_field is read-only for this row (the
+   *  grid shows it as display-only and the items service drops caller
+   *  writes to it). Evaluated on every pass regardless of changedField. */
+  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick' | 'lock'
   target_value?: string | null
   sources?: RowRuleSource[]
   only_if_empty?: boolean
@@ -543,13 +546,22 @@ export interface RowRule {
  * those triggered by that field (the live-edit path); the create path leaves
  * it unset so every rule gets its chance.
  */
+export interface RowRuleEvalOptions {
+  /** Collects the target fields of triggered 'lock' rules. */
+  locks?: Set<string>
+  /** Evaluate ONLY lock rules — used when a row editor opens, so 'set' rules
+   *  don't re-fire over values the user already has. */
+  locksOnly?: boolean
+}
+
 export async function evaluateRowRules(
   database: Knex,
   collection: string,
   working: Record<string, unknown>,
   parentContext: Record<string, unknown>,
   rowRules: RowRule[],
-  changedField?: string
+  changedField?: string,
+  evalOpts?: RowRuleEvalOptions
 ): Promise<Record<string, unknown>> {
   const subParent = (s: string | null | undefined): string | null => {
     if (s == null) return null
@@ -561,6 +573,8 @@ export async function evaluateRowRules(
 
   const sorted = [...rowRules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
   for (const rule of sorted) {
+    const isLock = rule.target_type === 'lock'
+    if (evalOpts?.locksOnly && !isLock) continue
     const triggerField = rule.trigger_field ?? null
     const isParentTrigger = !!triggerField && triggerField.startsWith('$parent.')
     const extraTriggerFields = Array.isArray(rule.trigger_fields)
@@ -571,7 +585,9 @@ export async function evaluateRowRules(
       : extraTriggerFields
 
     if (!isParentTrigger) {
-      if (changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField))
+      // Lock rules re-evaluate on EVERY pass — a lock follows the row's current
+      // state, not only the keystroke that changed its trigger.
+      if (!isLock && changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField))
         continue
       if (triggerField && !(triggerField in working)) continue
     }
@@ -673,6 +689,10 @@ export async function evaluateRowRules(
         break
       default:
         triggered = triggerField ? val != null : true
+    }
+    if (isLock) {
+      if (triggered) evalOpts?.locks?.add(rule.target_field)
+      continue
     }
     if (!triggered) continue
 

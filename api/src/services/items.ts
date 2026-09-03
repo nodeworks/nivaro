@@ -25,7 +25,7 @@ import { writeTrashRow } from './trash.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { span } from './request-trace.js'
-import { applyRowRulesOnCreate } from './row-rules-autofill.js'
+import { applyRowLocksOnWrite, applyRowRulesOnCreate } from './row-rules-autofill.js'
 import { enforceValidationRules } from './validation-rules.js'
 import {
   computeRollupTotal,
@@ -2342,6 +2342,9 @@ export async function createOne(
   // (oracle category from CIFA, task precedence chain, line_type from the
   // parent's workflow_type) now apply to API creates too. Fills only fields
   // the caller left out; never throws.
+  // Locked child-row fields (layout 'lock' row rules) are never caller-set —
+  // drop them first so the autofill below owns their value.
+  await applyRowLocksOnWrite(collection, ctx.payload, callerFields, null)
   await applyRowRulesOnCreate(collection, ctx.payload, callerFields)
 
   // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
@@ -2561,6 +2564,9 @@ export async function updateOne(
 
   // Field rules — apply inline field defaults based on other field values
   await span('field-rules', () => applyFieldRules(collection, ctx.payload))
+  await span('row-locks', () =>
+    applyRowLocksOnWrite(collection, ctx.payload, callerFields, previousData ?? null)
+  )
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_update')
