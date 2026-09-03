@@ -1418,7 +1418,13 @@ export function InlineTableField({
   // locks = fields the layout's 'lock' row rules currently make read-only for
   // this row (server-evaluated, so they can follow M2O hops like
   // category → sub_category → entity). Refreshed on open and on every edit.
-  type GridEditState = { rowId: string; draft: Record<string, unknown>; locks?: string[] }
+  type GridEditState = {
+    rowId: string
+    draft: Record<string, unknown>
+    locks?: string[]
+    /** Required columns the last save attempt found empty — highlighted until filled. */
+    missing?: string[]
+  }
   const [editState, setEditState] = useState<GridEditState | null>(null)
   const editStateRef = useRef<GridEditState | null>(null)
   useEffect(() => { editStateRef.current = editState }, [editState])
@@ -2728,7 +2734,16 @@ export function InlineTableField({
   function setDraftField(k: string, v: unknown) {
     const cur = editStateRef.current
     const nextDraft = cur ? applyComputedFields({ ...cur.draft, [k]: v }) : applyComputedFields({ [k]: v })
-    setEditState((s) => s ? { ...s, draft: nextDraft } : s)
+    const filled = v !== null && v !== undefined && v !== ''
+    setEditState((s) =>
+      s
+        ? {
+            ...s,
+            draft: nextDraft,
+            missing: filled && s.missing?.includes(k) ? s.missing.filter((f) => f !== k) : s.missing
+          }
+        : s
+    )
 
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
@@ -2799,6 +2814,7 @@ export function InlineTableField({
       setUniqueError(
         `Required: ${missingRequired.map((c) => c.label || titleCase(c.field)).join(', ')}`
       )
+      setEditState((s) => (s ? { ...s, missing: missingRequired.map((c) => c.field) } : s))
       return
     }
     setUniqueError(null)
@@ -3594,9 +3610,25 @@ export function InlineTableField({
                 </div>
               )
             }
+            const isMissing = !!editState?.missing?.includes(c.field)
             return (
-              <div key={c.field} className='flex min-w-0 flex-col gap-1'>
-                <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>{label}</span>
+              <div
+                key={c.field}
+                className={cn(
+                  'flex min-w-0 flex-col gap-1',
+                  isMissing &&
+                    'rounded-md [&_input]:border-red-400 [&_input]:ring-1 [&_input]:ring-red-300 [&_button]:border-red-400 [&_button]:ring-1 [&_button]:ring-red-300 dark:[&_input]:border-red-600 dark:[&_input]:ring-red-800 dark:[&_button]:border-red-600 dark:[&_button]:ring-red-800'
+                )}
+              >
+                <span
+                  className={cn(
+                    'text-[10px] font-medium uppercase tracking-wide',
+                    isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
+                  )}
+                >
+                  {label}
+                  {isMissing && <span className='ml-1 normal-case tracking-normal'>· required</span>}
+                </span>
                 {isComputedWrite ? (
                   <div className='text-[12px] italic text-slate-500'>
                     {renderCell(c, evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field])}
