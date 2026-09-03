@@ -3286,10 +3286,17 @@ export function InlineTableField({
 
   // Same arithmetic as the empty-state colSpan below — reused for the nested
   // relation editor's expandable section row so it spans the full grid width.
+  // EXACT header column count — every full-width row (editor panel, nested
+  // rows, empty states) must span precisely this many cells. Under
+  // `table-fixed` an overshooting colSpan is NOT clamped: the browser invents
+  // a phantom column with the leftover width and no header cell, which reads
+  // as a darker strip on the right of the header (reported from efp-new dark).
   const nestedColSpan =
+    (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0) +
+    (showLineNumbers ? 1 : 0) +
+    ((isNew || isPendingMode) ? 1 : 0) +
     effectiveCols.length +
-    ((isNew || isPendingMode) ? 2 : 1) +
-    (rowOrderField || isNew || isPendingMode ? 1 : 0)
+    1
 
   /**
    * Wide grids are unreadable to edit in place: a dozen columns squeezed into
@@ -3459,9 +3466,8 @@ export function InlineTableField({
   }) => (
     // Spans EVERY column — the leading grip/number/status cells are hidden
     // while the panel renders (the panel header already says "Line N · …"),
-    // so nothing pushes the form to the right. Overshoot is clamped by the
-    // browser to the table's real column count.
-    <td colSpan={nestedColSpan + (showLineNumbers ? 2 : 1)} className='p-0'>
+    // so nothing pushes the form to the right.
+    <td colSpan={nestedColSpan} className='p-0'>
       <div
         className='my-1.5 rounded-lg border border-nvr-cyan/40 bg-white px-4 py-3 shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
         onClick={(e) => e.stopPropagation()}
@@ -3955,7 +3961,7 @@ export function InlineTableField({
             const sectionCollapsed = section !== null && collapsedSections.has(section)
             const sectionHeader = isSectionStart && section !== null ? (
               <tr className='border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'>
-                <td colSpan={effectiveCols.length + 1 + ((isNew || isPendingMode) ? 1 : 0) + (showLineNumbers ? 1 : 0) + (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0)} className='px-2 py-1'>
+                <td colSpan={nestedColSpan} className='px-2 py-1'>
                   <button
                     type='button'
                     onClick={(e) => { e.stopPropagation(); toggleSection(section) }}
@@ -4308,7 +4314,7 @@ export function InlineTableField({
 
           {rows.length === 0 && pendingRows.length === 0 && !isEditingNew && (
             <tr>
-              <td colSpan={effectiveCols.length + ((isNew || isPendingMode) ? 2 : 1) + (rowOrderField || isNew || isPendingMode ? 1 : 0)} className='px-3 py-14 text-center text-slate-400'>
+              <td colSpan={nestedColSpan} className='px-3 py-14 text-center text-slate-400'>
                 {emptyLabel
                   ? `No ${emptyLabel.toLowerCase()} yet`
                   : isNew
