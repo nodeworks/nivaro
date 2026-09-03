@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-02T23:25:35.917Z",
+  "generated_at": "2026-09-03T17:43:10.613Z",
   "releases": [
+    {
+      "version": "0.1.193",
+      "tag": "v0.1.193",
+      "date": "2026-09-03T13:43:04-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "workflows",
+              "text": "PO-driven auto-completion via pipeline states + import post-run flows",
+              "hash": "782c9f89"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.192",
       "tag": "v0.1.192",
-      "date": "2026-09-02T19:25:30-04:00",
+      "date": "2026-09-02T19:25:35-04:00",
       "sections": [
         {
           "label": "Added",
