@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-03T23:36:35.785Z",
+  "generated_at": "2026-09-03T23:51:37.293Z",
   "releases": [
+    {
+      "version": "0.1.199",
+      "tag": "v0.1.199",
+      "date": "2026-09-03T19:51:28-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "'Can't save yet' summary + context-aware required messages",
+              "hash": "c9ec1004"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.198",
       "tag": "v0.1.198",
-      "date": "2026-09-03T19:36:27-04:00",
+      "date": "2026-09-03T19:36:35-04:00",
       "sections": [
         {
           "label": "Added",
