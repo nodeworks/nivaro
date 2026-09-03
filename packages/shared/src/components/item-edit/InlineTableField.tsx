@@ -758,7 +758,7 @@ function AllocateDrawer({
                                     className={cn(
                                       'h-7 w-28 rounded border px-2 text-[12px] tabular-nums focus:outline-none focus:ring-1',
                                       exceeds
-                                        ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400'
+                                        ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400 dark:border-red-700 dark:bg-red-950/30 dark:text-red-300'
                                         : 'border-slate-200 focus:ring-[#00ceff]'
                                     )}
                                   />
@@ -3830,7 +3830,7 @@ export function InlineTableField({
             className={cn(
               'h-6 px-2.5 rounded border transition-colors',
               applyOpen
-                ? 'border-amber-400 bg-amber-50 text-amber-700'
+                ? 'border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-300'
                 : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
             )}
           >
@@ -4036,7 +4036,7 @@ export function InlineTableField({
                     {isPendingMode && (
                       <td className='px-3 py-1 align-middle w-20'>
                         {isPendingDelete
-                          ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5'>Delete</span>
+                          ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>Delete</span>
                           : isPendingEdit
                             ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Edited</span>
                             : null
