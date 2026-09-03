@@ -2552,10 +2552,15 @@ function FlowCanvas({ flow, flowId }: { flow: Flow; flowId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** Pan on empty canvas — node pointerdowns stopPropagation, so this only
-   *  fires on the background (the edge SVG is pointer-events: none). */
+  /** Pan on empty canvas — node HEADER pointerdowns stopPropagation (that is
+   *  the drag handle), but a node's footer buttons (configure / remove) and
+   *  the branch handles bubble here. Capturing the pointer on the canvas
+   *  retargets the pointerup, so the button's click never fires — every
+   *  in-canvas control was dead. Bail on any interactive target. */
   function handleCanvasPointerDown(e: React.PointerEvent) {
     if (e.button !== 0 && e.button !== 1) return
+    const target = e.target as HTMLElement | null
+    if (target?.closest('button, a, input, select, textarea, [role="button"]')) return
     const el = scrollRef.current
     if (!el) return
     panState.current = {
