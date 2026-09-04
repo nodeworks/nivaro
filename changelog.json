@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T01:01:13.837Z",
+  "generated_at": "2026-09-04T13:03:40.961Z",
   "releases": [
+    {
+      "version": "0.1.204",
+      "tag": "v0.1.204",
+      "date": "2026-09-04T09:03:33-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "field-config",
+              "text": "PATCH accepts options as an object",
+              "hash": "e9c1df73"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.203",
       "tag": "v0.1.203",
-      "date": "2026-09-03T21:01:08-04:00",
+      "date": "2026-09-03T21:01:13-04:00",
       "sections": [
         {
           "label": "Added",
