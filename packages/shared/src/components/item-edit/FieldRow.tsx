@@ -1,10 +1,21 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellRing, ChartLine, History, Info, Loader2, Lock, Sigma, SlidersHorizontal, Sparkles } from 'lucide-react'
+import {
+  Bell,
+  BellRing,
+  ChartLine,
+  History,
+  Info,
+  Loader2,
+  Lock,
+  Sigma,
+  SlidersHorizontal,
+  Sparkles
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { useNivaroClient } from '../../context'
-import { del, get, post } from '../../lib/commands'
 import { toast } from 'sonner'
+import { useNivaroClient, useParentDraft } from '../../context'
+import { del, get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -18,7 +29,7 @@ import {
   parseJson,
   SYSTEM_FIELDS
 } from './helpers'
-import { useParentDraft } from '../../context'
+import { matchesRollupFilter, parseRollupParentFilter } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
@@ -280,9 +291,7 @@ function FieldLineageButton({
                     {src.error}
                   </p>
                 )}
-                {src.note && (
-                  <p className='px-1 py-1 text-[11.5px] text-slate-400'>{src.note}</p>
-                )}
+                {src.note && <p className='px-1 py-1 text-[11.5px] text-slate-400'>{src.note}</p>}
                 {src.rows.length > 0 && (
                   <div className='mt-0.5 space-y-px'>
                     {src.rows.map((r) => (
@@ -521,9 +530,7 @@ function FieldWatchButton({
     queryKey: watchedKey,
     queryFn: () =>
       client
-        .request<{ data: string[] }>(
-          get('/field-watches/self', { collection, item_id: itemId })
-        )
+        .request<{ data: string[] }>(get('/field-watches/self', { collection, item_id: itemId }))
         .then((r) => r.data ?? [])
         .catch(() => [] as string[]),
     enabled: !!cfg?.enabled,
@@ -542,7 +549,9 @@ function FieldWatchButton({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: watchedKey })
       toast.success(
-        isWatching ? 'No longer watching this field' : 'Watching — you will be notified when it changes'
+        isWatching
+          ? 'No longer watching this field'
+          : 'Watching — you will be notified when it changes'
       )
     },
     onError: () => toast.error('Could not update the watch')
@@ -552,12 +561,12 @@ function FieldWatchButton({
     <button
       type='button'
       onClick={() => toggle.mutate()}
-      title={isWatching ? 'Stop watching this field on this record' : 'Watch this field on this record'}
+      title={
+        isWatching ? 'Stop watching this field on this record' : 'Watch this field on this record'
+      }
       data-field-watch={field}
       className={`rounded p-0.5 transition-colors ${
-        isWatching
-          ? 'text-nvr-navy dark:text-nvr-cyan'
-          : 'text-slate-300 hover:text-slate-500'
+        isWatching ? 'text-nvr-navy dark:text-nvr-cyan' : 'text-slate-300 hover:text-slate-500'
       }`}
     >
       {isWatching ? <BellRing className='h-3 w-3' /> : <Bell className='h-3 w-3' />}
@@ -679,6 +688,15 @@ export function FieldRow({
     return null
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
+  // A rollup with a parent_filter is only derived for records that MATCH it
+  // (a CAR's Total REQ Amount is typed in — no lines to sum). The lineage
+  // (Σ) affordance is a lie on those records, so it follows the same test.
+  const isActuallyComputed = (() => {
+    if (field.computed_type !== 'rollup' && field.computed_type !== 'write') return false
+    if (field.computed_type !== 'rollup') return true
+    const pf = parseRollupParentFilter(field.computed_formula)
+    return !pf || matchesRollupFilter(draft, pf)
+  })()
   const autoIdPattern = parseJson<{ auto_id?: { pattern?: string } }>(field.options)?.auto_id
     ?.pattern
 
@@ -733,9 +751,8 @@ export function FieldRow({
   // layout renames it; only trustworthy when the context describes THIS
   // collection (grid cells carry the parent record's labels instead).
   const parentFieldLabel = (f: string): string =>
-    (parentDraftCtx?.collection === collection
-      ? parentDraftCtx?.fieldLabels?.[f]
-      : undefined) ?? titleCase(String(f))
+    (parentDraftCtx?.collection === collection ? parentDraftCtx?.fieldLabels?.[f] : undefined) ??
+    titleCase(String(f))
   const cascadeParentLabels: string[] = []
   const cascadeParentFieldKeys: string[] = []
   let unsatisfiedParentLabel: string | null = null
@@ -779,7 +796,14 @@ export function FieldRow({
         const vm = rule.value_map
         const mapOne = (v: unknown) => vm[String(v)] ?? rule.value_map_default ?? v
         filterVal = Array.isArray(parentVal)
-          ? [...new Set(parentVal.flatMap((v) => { const m = mapOne(v); return Array.isArray(m) ? m : [m] }))]
+          ? [
+              ...new Set(
+                parentVal.flatMap((v) => {
+                  const m = mapOne(v)
+                  return Array.isArray(m) ? m : [m]
+                })
+              )
+            ]
           : mapOne(parentVal)
       }
       const clause = Array.isArray(filterVal) ? { _in: filterVal } : { _eq: filterVal }
@@ -798,7 +822,8 @@ export function FieldRow({
       cascadeParentLabels.push(parentFieldLabel(String(rule.parent_field)))
       cascadeParentFieldKeys.push(String(rule.parent_field))
     } else {
-      if (!unsatisfiedParentLabel) unsatisfiedParentLabel = parentFieldLabel(String(rule.parent_field))
+      if (!unsatisfiedParentLabel)
+        unsatisfiedParentLabel = parentFieldLabel(String(rule.parent_field))
       if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
         requiredParentLabel = parentFieldLabel(String(rule.parent_field))
       }
@@ -902,19 +927,15 @@ export function FieldRow({
               collection={collection}
               itemId={itemId}
               field={field.field}
-              onRestore={
-                field.readonly ? undefined : (v) => onChange(field.field, v)
-              }
+              onRestore={field.readonly ? undefined : (v) => onChange(field.field, v)}
             />
           )}
           {itemId && itemId !== 'new' && (
             <FieldWatchButton collection={collection} itemId={itemId} field={field.field} />
           )}
-          {itemId &&
-            itemId !== 'new' &&
-            (field.computed_type === 'rollup' || field.computed_type === 'write') && (
-              <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
-            )}
+          {itemId && itemId !== 'new' && isActuallyComputed && (
+            <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
+          )}
           {isAiEligible(field) && layoutAiEnabled && (
             <button
               type='button'
@@ -976,7 +997,9 @@ export function FieldRow({
                 !!cascadeFilter &&
                 Object.keys(cascadeFilter).length > 0 &&
                 cascadeParentLabels.length > 0
-              const allParentLabels = cascadeRules.map((r) => parentFieldLabel(String(r.parent_field)))
+              const allParentLabels = cascadeRules.map((r) =>
+                parentFieldLabel(String(r.parent_field))
+              )
               return (
                 <TooltipProvider delayDuration={100}>
                   <Tooltip>
