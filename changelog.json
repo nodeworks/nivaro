@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T19:09:20.434Z",
+  "generated_at": "2026-09-04T20:15:36.384Z",
   "releases": [
+    {
+      "version": "0.1.213",
+      "tag": "v0.1.213",
+      "date": "2026-09-04T16:15:30-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "fields",
+              "text": "date pickers grey out days excluded by min/max_days_from_today rules",
+              "hash": "fba19068"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.212",
       "tag": "v0.1.212",
-      "date": "2026-09-04T15:09:13-04:00",
+      "date": "2026-09-04T15:09:20-04:00",
       "sections": [
         {
           "label": "Added",
