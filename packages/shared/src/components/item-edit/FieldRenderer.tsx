@@ -1,6 +1,44 @@
 import { ExternalLink } from 'lucide-react'
 import { useContext, useEffect, useRef, useState } from 'react'
 import {
+  fieldDrilldownConfig,
+  RelationPathDataContext,
+  useApiFetchConfig,
+  useDrilldown,
+  useParentDraft
+} from '../../context'
+import {
+  type FieldInterfaceHandle,
+  type FieldInterfacePlugin,
+  type FieldInterfaceProps,
+  getFieldInterface
+} from '../../lib/field-interfaces'
+import { precisionOf } from '../../lib/format-value'
+import { choiceLabel } from '../../lib/utils'
+import { Badge } from '../ui/badge'
+import { Input } from '../ui/input'
+import { Label } from '../ui/label'
+import { SimpleSelect } from '../ui/SimpleSelect'
+import { Switch } from '../ui/switch'
+import { Textarea } from '../ui/textarea'
+import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import {
+  AddressAutocompleteField,
+  ChecklistReadOnly,
+  ColorPackField,
+  DurationReadOnly,
+  EmailField,
+  PhoneField,
+  ProgressField,
+  RatingScaleField
+} from './FieldPack'
+import { FileM2MField, FilePickerField } from './FilePickerField'
+import { formatDisplayValue } from './GroupSection'
+import { parseJson, toLocalDatetime } from './helpers'
+import { InlineGridField } from './InlineGridField'
+import { InlineTableField } from './InlineTableField'
+import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
+import {
   AddressField,
   applyInputMask,
   ChecklistField,
@@ -13,39 +51,6 @@ import {
   RepeaterField,
   smartParseDate
 } from './PolishFields'
-import { useApiFetchConfig } from '../../context'
-import { fieldDrilldownConfig, RelationPathDataContext, useDrilldown , useParentDraft } from '../../context'
-import { precisionOf } from '../../lib/format-value'
-import { Badge } from '../ui/badge'
-import { formatDisplayValue } from './GroupSection'
-import { Input } from '../ui/input'
-import { Label } from '../ui/label'
-import { SimpleSelect } from '../ui/SimpleSelect'
-import { Switch } from '../ui/switch'
-import { Textarea } from '../ui/textarea'
-import {
-  AddressAutocompleteField,
-  ChecklistReadOnly,
-  ColorPackField,
-  DurationReadOnly,
-  EmailField,
-  PhoneField,
-  ProgressField,
-  RatingScaleField
-} from './FieldPack'
-import { CatalogPickerField, type CatalogModeConfig } from './CatalogPickerField'
-import { FilePickerField, FileM2MField } from './FilePickerField'
-import {
-  type FieldInterfaceHandle,
-  type FieldInterfacePlugin,
-  type FieldInterfaceProps,
-  getFieldInterface
-} from '../../lib/field-interfaces'
-import { choiceLabel } from '../../lib/utils'
-import { parseJson, toLocalDatetime } from './helpers'
-import { InlineGridField } from './InlineGridField'
-import { InlineTableField } from './InlineTableField'
-import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import { QuickCreateButton, type QuickCreateConfig } from './QuickCreateButton'
 import { RelationCombobox } from './RelationCombobox'
 import { RelationGroupedCombobox } from './RelationGroupedCombobox'
@@ -130,6 +135,34 @@ function CustomFieldInterface({
     handleRef.current?.update?.(props)
   }, [props])
   return <div ref={hostRef} data-custom-interface={plugin.interface} />
+}
+
+/**
+ * Native date-input bounds from the field's validation rules — a
+ * min_days_from_today / max_days_from_today rule greys those days out in the
+ * picker instead of only rejecting them on save. Calendar days, local time
+ * (the rule itself is calendar-day arithmetic, weekends included).
+ */
+function dateBoundsFor(field: { validation_rules?: unknown }): { min?: string; max?: string } {
+  const raw = field.validation_rules
+  const rules = Array.isArray(raw)
+    ? (raw as Array<{ type?: string; value?: unknown }>)
+    : parseJson<Array<{ type?: string; value?: unknown }>>(typeof raw === 'string' ? raw : null)
+  if (!Array.isArray(rules)) return {}
+  const iso = (offsetDays: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + offsetDays)
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  }
+  const out: { min?: string; max?: string } = {}
+  for (const r of rules) {
+    const n = Number(r?.value)
+    if (!Number.isFinite(n)) continue
+    if (r?.type === 'min_days_from_today') out.min = iso(n)
+    if (r?.type === 'max_days_from_today') out.max = iso(n)
+  }
+  return out
 }
 
 export function FieldRenderer({
@@ -238,7 +271,12 @@ export function FieldRenderer({
     }
     const m2oDrillCfg = drill && value != null && value !== '' ? fieldDrilldownConfig(field) : null
     const m2oOpts = parseJson<{
-      picker_facets?: Array<{ field: string; label?: string; sort?: string; filter?: Record<string, unknown> }>
+      picker_facets?: Array<{
+        field: string
+        label?: string
+        sort?: string
+        filter?: Record<string, unknown>
+      }>
       option_filter?: Record<string, unknown>
       option_sort?: string
       auto_select_single?: boolean
@@ -351,8 +389,22 @@ export function FieldRenderer({
       : null
   if (m2mRel) {
     if (iface === 'files-m2m') {
-      const fOpts = parseJson<{ allow_upload?: boolean; allow_pick?: boolean; pending_save?: boolean }>(field.options)
-      return <FileM2MField relation={m2mRel} parentId={itemId} allRelations={relations} disabled={field.readonly} allowUpload={fOpts?.allow_upload !== false} allowPick={fOpts?.allow_pick !== false} pendingSave={fOpts?.pending_save === true} />
+      const fOpts = parseJson<{
+        allow_upload?: boolean
+        allow_pick?: boolean
+        pending_save?: boolean
+      }>(field.options)
+      return (
+        <FileM2MField
+          relation={m2mRel}
+          parentId={itemId}
+          allRelations={relations}
+          disabled={field.readonly}
+          allowUpload={fOpts?.allow_upload !== false}
+          allowPick={fOpts?.allow_pick !== false}
+          pendingSave={fOpts?.pending_save === true}
+        />
+      )
     }
     const fieldOpts = parseJson<{ max_values?: number; option_sort?: string }>(field.options)
     const m2mOptionSort =
@@ -382,7 +434,8 @@ export function FieldRenderer({
         optionSort={m2mOptionSort}
         requiredParent={requiredParentLabel ?? undefined}
         onCountChange={onCountChange}
-      drilldown={fieldDrilldownConfig(field)} />
+        drilldown={fieldDrilldownConfig(field)}
+      />
     )
   }
 
@@ -423,8 +476,9 @@ export function FieldRenderer({
     // proposed lines, say — has to show BOTH figures. The new number alone
     // silently replaces the one they are amending, and the difference is the
     // whole point of the amendment.
-    const liveDelta = (field.options as { __live_delta?: { original: unknown; live: number } } | null)
-      ?.__live_delta
+    const liveDelta = (
+      field.options as { __live_delta?: { original: unknown; live: number } } | null
+    )?.__live_delta
     if (liveDelta && Number.isFinite(Number(liveDelta.live))) {
       const originalNum = Number(liveDelta.original)
       const rawDiff = Number(liveDelta.live) - (Number.isFinite(originalNum) ? originalNum : 0)
@@ -496,10 +550,13 @@ export function FieldRenderer({
     // bare yyyy-mm-dd (local midnight server-side, no tz shifting).
     const dtOpts = parseJson<{ date_mode?: string }>(field.options)
     if (dtOpts?.date_mode === 'date') {
+      const bounds = dateBoundsFor(field)
       return (
         <Input
           type='date'
           value={strVal.slice(0, 10)}
+          min={bounds.min}
+          max={bounds.max}
           onChange={(e) => onChange(e.target.value || null)}
           placeholder={field.placeholder ?? undefined}
         />
@@ -517,11 +574,14 @@ export function FieldRenderer({
 
   if (field.type === 'date' || iface === 'date') {
     const showCountdown = parseJson<{ countdown?: boolean }>(field.options)?.countdown === true
+    const bounds = dateBoundsFor(field)
     return (
       <div className='flex items-center'>
         <Input
           type='date'
           value={strVal.slice(0, 10)}
+          min={bounds.min}
+          max={bounds.max}
           onChange={(e) => onChange(e.target.value || null)}
           // Smart date entry (#138): paste/typed shorthands like "+30",
           // "eom", "next friday" resolve on paste into the text form.
@@ -540,9 +600,26 @@ export function FieldRenderer({
     )
   }
 
-  const isNumeric = ['integer', 'bigInteger', 'float', 'decimal', 'numeric', 'int', 'bigint', 'smallint', 'tinyint', 'real', 'money', 'smallmoney', 'double', 'number'].includes(field.type)
+  const isNumeric = [
+    'integer',
+    'bigInteger',
+    'float',
+    'decimal',
+    'numeric',
+    'int',
+    'bigint',
+    'smallint',
+    'tinyint',
+    'real',
+    'money',
+    'smallmoney',
+    'double',
+    'number'
+  ].includes(field.type)
   if (isNumeric) {
-    const isInt = ['integer', 'bigInteger', 'int', 'bigint', 'smallint', 'tinyint'].includes(field.type)
+    const isInt = ['integer', 'bigInteger', 'int', 'bigint', 'smallint', 'tinyint'].includes(
+      field.type
+    )
     // `precision` governs entry, not just display: a price configured for 4
     // decimal places must accept 0.0625 rather than being stepped to 2. Only
     // read for non-integers — an integer column with a stray precision must
@@ -638,12 +715,26 @@ export function FieldRenderer({
       const o2mCol = o2mRel.many_collection ?? null
       const o2mManyField = o2mRel.many_field ?? null
       if (o2mCol && o2mManyField && itemId) {
-        const opts = typeof field.options === 'string'
-          ? (() => { try { return JSON.parse(field.options) } catch { return {} } })()
-          : (field.options ?? {})
+        const opts =
+          typeof field.options === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(field.options)
+                } catch {
+                  return {}
+                }
+              })()
+            : (field.options ?? {})
         const layoutSlug = (opts.layout_slug as string | null) ?? null
         return (
-          <InlineGridField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} layoutSlug={layoutSlug} parentFieldKey={field.field} emptyLabel={field.label || undefined} />
+          <InlineGridField
+            relatedCollection={o2mCol}
+            manyField={o2mManyField}
+            parentId={itemId}
+            layoutSlug={layoutSlug}
+            parentFieldKey={field.field}
+            emptyLabel={field.label || undefined}
+          />
         )
       }
       return (
@@ -665,15 +756,22 @@ export function FieldRenderer({
       const o2mCol = o2mRel.many_collection ?? null
       const o2mManyField = o2mRel.many_field ?? null
       if (o2mCol && o2mManyField && itemId) {
-        const opts = typeof field.options === 'string'
-          ? (() => { try { return JSON.parse(field.options) } catch { return {} } })()
-          : (field.options ?? {})
+        const opts =
+          typeof field.options === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(field.options)
+                } catch {
+                  return {}
+                }
+              })()
+            : (field.options ?? {})
         const layoutId = (opts.layout_id as number | null) ?? null
         const showRowRevisions = !!opts.show_row_revisions
         const rowComments = !!opts.row_comments
         const allowRevisionRestore = opts.allow_revision_restore !== false
         const saveMode = (opts.save_mode as 'immediate' | 'pending') ?? 'immediate'
-        const showLineNumbers = !!(opts.show_line_numbers)
+        const showLineNumbers = !!opts.show_line_numbers
         const enableReorder = opts.enable_reorder !== false
         const parentCascades = Array.isArray(opts.parent_cascades)
           ? (opts.parent_cascades as Array<{ parent_field: string; child_field: string }>)
@@ -687,10 +785,13 @@ export function FieldRenderer({
         const drawerRelations = Array.isArray(opts.drawer_relations)
           ? opts.drawer_relations
           : undefined
-        const parentContextFields = Array.isArray(opts.parent_context_fields) ? opts.parent_context_fields as string[] : undefined
-        const uniqueBy = Array.isArray(opts.unique_by) ? opts.unique_by as string[] : undefined
-        const sortField = typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
-        const sortDir = opts.sort_dir === 'desc' ? 'desc' as const : 'asc' as const
+        const parentContextFields = Array.isArray(opts.parent_context_fields)
+          ? (opts.parent_context_fields as string[])
+          : undefined
+        const uniqueBy = Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : undefined
+        const sortField =
+          typeof opts.sort_field === 'string' && opts.sort_field ? opts.sort_field : undefined
+        const sortDir = opts.sort_dir === 'desc' ? ('desc' as const) : ('asc' as const)
         const freezeFirstColumn = opts.freeze_first_column === true
         const sectionGroupBy =
           typeof opts.section_group_by === 'string' && opts.section_group_by.includes('.')
@@ -739,7 +840,41 @@ export function FieldRenderer({
           )
         }
         return (
-          <InlineTableField relatedCollection={o2mCol} manyField={o2mManyField} parentId={itemId} parentCollection={collection} layoutId={layoutId} showRowRevisions={showRowRevisions} rowComments={rowComments} allowRevisionRestore={allowRevisionRestore} saveMode={saveMode} showLineNumbers={showLineNumbers} enableReorder={enableReorder} parentCascades={parentCascades} rowRules={rowRules} columnPresets={columnPresets} defaultPreset={defaultPreset} drawerRelations={drawerRelations} parentContextFields={parentContextFields} uniqueBy={uniqueBy} sortField={sortField} sortDir={sortDir} sectionGroupBy={sectionGroupBy} freezeFirstColumn={freezeFirstColumn} rowFilter={rowFilter} rowDefaults={rowDefaults} allocateDrawer={allocateDrawer} autoAllocate={autoAllocate} rowBulkActions={rowBulkActions} uploadTemplate={uploadTemplate} submissionErrors={submissionErrors} prefillParentId={prefillParentId} parentFieldKey={field.field} readOnly={field.readonly} emptyLabel={field.label || undefined} />
+          <InlineTableField
+            relatedCollection={o2mCol}
+            manyField={o2mManyField}
+            parentId={itemId}
+            parentCollection={collection}
+            layoutId={layoutId}
+            showRowRevisions={showRowRevisions}
+            rowComments={rowComments}
+            allowRevisionRestore={allowRevisionRestore}
+            saveMode={saveMode}
+            showLineNumbers={showLineNumbers}
+            enableReorder={enableReorder}
+            parentCascades={parentCascades}
+            rowRules={rowRules}
+            columnPresets={columnPresets}
+            defaultPreset={defaultPreset}
+            drawerRelations={drawerRelations}
+            parentContextFields={parentContextFields}
+            uniqueBy={uniqueBy}
+            sortField={sortField}
+            sortDir={sortDir}
+            sectionGroupBy={sectionGroupBy}
+            freezeFirstColumn={freezeFirstColumn}
+            rowFilter={rowFilter}
+            rowDefaults={rowDefaults}
+            allocateDrawer={allocateDrawer}
+            autoAllocate={autoAllocate}
+            rowBulkActions={rowBulkActions}
+            uploadTemplate={uploadTemplate}
+            submissionErrors={submissionErrors}
+            prefillParentId={prefillParentId}
+            parentFieldKey={field.field}
+            readOnly={field.readonly}
+            emptyLabel={field.label || undefined}
+          />
         )
       }
     }
@@ -760,10 +895,14 @@ export function FieldRenderer({
   }
   if (iface === 'progress') return <ProgressField value={value} onChange={onChange} />
   if (iface === 'phone') {
-    return <PhoneField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+    return (
+      <PhoneField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+    )
   }
   if (iface === 'email') {
-    return <EmailField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+    return (
+      <EmailField value={value} onChange={onChange} placeholder={field.placeholder ?? undefined} />
+    )
   }
   if (iface === 'address-autocomplete') {
     return (
@@ -865,7 +1004,7 @@ export function FieldRenderer({
           onChange(e.target.value || null)
         }
       }}
-      placeholder={field.placeholder ?? (mask ?? undefined)}
+      placeholder={field.placeholder ?? mask ?? undefined}
     />
   )
   // Character counter (#183): shows once past 60% of the limit.
@@ -890,7 +1029,6 @@ export function FieldRenderer({
   }
   return input
 }
-
 
 /** Tags interface (#92): chips + free-entry input; Enter/comma adds, ✕
  *  removes. Value is a JSON string array (stored in a text column). */
