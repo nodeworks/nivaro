@@ -1,11 +1,11 @@
 import { db } from '../db/index.js'
-import { ensureAutoWatch } from './auto-watch.js'
-import { logActivity } from './activity.js'
-import { syncMaterializedQueueItem } from './queue-materialization.js'
-import { resolveStateOwners } from './pipeline-engine.js'
 import { emitTrigger } from '../flows/registry.js'
-import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
+import { logActivity } from './activity.js'
+import { ensureAutoWatch } from './auto-watch.js'
+import { resolveStateOwners } from './pipeline-engine.js'
+import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
+import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
 // ─── Shared workflow transition engine ───────────────────────────────────────
 // Houses the transition mutation chain (instance update, history, materialized
@@ -152,11 +152,9 @@ export async function resolveRecordValue(
     return undefined
   }
   const { fetchRecordForConditions } = await import('./workflow-conditions.js')
-  const resolved = await fetchRecordForConditions(
-    collection,
-    itemId,
-    [JSON.stringify([{ field: path, op: 'nnull' }])]
-  )
+  const resolved = await fetchRecordForConditions(collection, itemId, [
+    JSON.stringify([{ field: path, op: 'nnull' }])
+  ])
   return resolved[path]
 }
 
@@ -185,7 +183,11 @@ function opPhrase(op: SkipOp | undefined): string {
 }
 
 function humanizeField(field: string | undefined): string {
-  return String(field ?? '').replace(/\./g, ' › ').replace(/_/g, ' ') || 'field'
+  return (
+    String(field ?? '')
+      .replace(/\./g, ' › ')
+      .replace(/_/g, ' ') || 'field'
+  )
 }
 
 function fmtVal(v: unknown): string {
@@ -239,7 +241,9 @@ async function evalLookupCompare(
       itemId,
       database
     )
-    const checks = rows.map((r) => evalFilterOp(cond.op as SkipOp, Number(recordVal), Number(r[cond.compare_column as string])))
+    const checks = rows.map((r) =>
+      evalFilterOp(cond.op as SkipOp, Number(recordVal), Number(r[cond.compare_column as string]))
+    )
     const matched = cond.match === 'all' ? checks.every(Boolean) : checks.some(Boolean)
     const compareVals = [
       ...new Set(rows.map((r) => fmtVal(r[cond.compare_column as string])))
@@ -335,9 +339,7 @@ export async function evaluateSkipCriteriaDetailed(
     }
 
     const skipped =
-      criteria.mode === 'any'
-        ? results.some((r) => r.matched)
-        : results.every((r) => r.matched)
+      criteria.mode === 'any' ? results.some((r) => r.matched) : results.every((r) => r.matched)
     // 'any' mode: only the criteria that fired explain the skip. 'all' mode:
     // every criterion held, so every reason belongs in the explanation.
     const reasons = skipped
@@ -367,7 +369,6 @@ export async function evaluateSkipCriteria(
   )
   return result.skipped
 }
-
 
 /** The state a record occupied before entering its CURRENT state — the
  *  newest history entry INTO the current state whose from_state still exists
@@ -473,6 +474,21 @@ export async function syncStateField(
       .update({ [binding.state_field]: value })
   } catch {
     // Non-fatal: field may not exist on this collection
+    return
+  }
+  // The mirror is a raw write, so rollups filtering on the state column
+  // (projects.pub_amount excludes canceled CARs) would never see it. Recalc
+  // the record's parent rollups the same way an items-service update would.
+  if (database === db) {
+    try {
+      const { recalcAffectedRollups } = await import('./rollups.js')
+      const row = (await db(collection).where({ id: item }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (row) await recalcAffectedRollups(collection, row, null)
+    } catch {
+      /* best effort */
+    }
   }
 }
 
@@ -804,7 +820,6 @@ export async function sweepAutoTransitions(): Promise<void> {
     console.error({ err }, 'sweepAutoTransitions failed')
   }
 }
-
 
 /**
  * Delegate transparency (#102): when the acting user is currently covering

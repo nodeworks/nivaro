@@ -1,4 +1,3 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Modifier } from '@dnd-kit/core'
 import {
   closestCenter,
@@ -41,6 +40,13 @@ import {
   Users,
   X
 } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 
 const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
   if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
@@ -403,8 +409,8 @@ function ReportWidgetConfigSection({
         </button>
       </div>
       <p className='text-[9px] leading-snug text-slate-400'>
-        Filter field scopes the report data by a record value (bind “Filter value” below, or
-        name a field the record already carries).
+        Filter field scopes the report data by a record value (bind “Filter value” below, or name a
+        field the record already carries).
       </p>
     </div>
   )
@@ -511,7 +517,15 @@ function O2MAggFieldCombobox({
 
 // ─── Rollup computed config ────────────────────────────────────────────────────
 
-type RollupAggregate = 'sum' | 'count' | 'avg' | 'min' | 'max' | 'median' | 'distinct_count' | 'weighted_avg'
+type RollupAggregate =
+  | 'sum'
+  | 'count'
+  | 'avg'
+  | 'min'
+  | 'max'
+  | 'median'
+  | 'distinct_count'
+  | 'weighted_avg'
 
 interface RollupSourceConfig {
   related_collection: string
@@ -525,6 +539,9 @@ interface RollupSourceConfig {
 
 interface RollupConfig {
   sources: RollupSourceConfig[]
+  /** Optional parent-row condition as JSON text — rows that don't match keep
+   *  a plain, hand-entered value (see api rollups.ts NormalizedRollup). */
+  parent_filter?: string
 }
 
 const ROLLUP_AGGREGATE_OPTIONS: { value: RollupAggregate; label: string }[] = [
@@ -562,7 +579,15 @@ function parseRollup(formula: string | null | undefined): RollupConfig {
       ...EMPTY_ROLLUP_SOURCE,
       ...s
     }))
-    return { sources: sources.length ? sources : [{ ...EMPTY_ROLLUP_SOURCE }] }
+    const pf = parsed?.parent_filter
+    const parent_filter =
+      pf && typeof pf === 'object' && !Array.isArray(pf) && Object.keys(pf).length > 0
+        ? JSON.stringify(pf)
+        : undefined
+    return {
+      sources: sources.length ? sources : [{ ...EMPTY_ROLLUP_SOURCE }],
+      ...(parent_filter ? { parent_filter } : {})
+    }
   } catch {
     return emptyRollup()
   }
@@ -571,8 +596,34 @@ function parseRollup(formula: string | null | undefined): RollupConfig {
 // Serializes back to the legacy single-source object when there's exactly one
 // source (round-trip safe with older formulas), else `{ sources: [...] }`.
 function serializeRollup(cfg: RollupConfig): string {
+  let parentFilter: Record<string, unknown> | undefined
+  if (cfg.parent_filter?.trim()) {
+    try {
+      const parsed = JSON.parse(cfg.parent_filter)
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        Object.keys(parsed).length
+      )
+        parentFilter = parsed
+    } catch {
+      /* invalid JSON is dropped — isRollupValid blocks the save first */
+    }
+  }
+  if (parentFilter) return JSON.stringify({ sources: cfg.sources, parent_filter: parentFilter })
   if (cfg.sources.length === 1) return JSON.stringify(cfg.sources[0])
   return JSON.stringify({ sources: cfg.sources })
+}
+
+function isParentFilterValid(text: string | undefined): boolean {
+  if (!text?.trim()) return true
+  try {
+    const parsed = JSON.parse(text)
+    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+  } catch {
+    return false
+  }
 }
 
 function isRollupSourceValid(cfg: RollupSourceConfig): boolean {
@@ -582,7 +633,11 @@ function isRollupSourceValid(cfg: RollupSourceConfig): boolean {
 }
 
 function isRollupValid(cfg: RollupConfig): boolean {
-  return cfg.sources.length > 0 && cfg.sources.every(isRollupSourceValid)
+  return (
+    cfg.sources.length > 0 &&
+    cfg.sources.every(isRollupSourceValid) &&
+    isParentFilterValid(cfg.parent_filter)
+  )
 }
 
 const NUMERIC_COLUMN_TYPES = new Set(['integer', 'bigInteger', 'decimal', 'float'])
@@ -763,13 +818,13 @@ function RollupConfigEditor({
   onComputedStoreChange: (next: boolean) => void
 }) {
   const updateSource = (i: number, next: RollupSourceConfig) => {
-    onChange({ sources: config.sources.map((s, idx) => (idx === i ? next : s)) })
+    onChange({ ...config, sources: config.sources.map((s, idx) => (idx === i ? next : s)) })
   }
   const addSource = () => {
-    onChange({ sources: [...config.sources, { ...EMPTY_ROLLUP_SOURCE }] })
+    onChange({ ...config, sources: [...config.sources, { ...EMPTY_ROLLUP_SOURCE }] })
   }
   const removeSource = (i: number) => {
-    onChange({ sources: config.sources.filter((_, idx) => idx !== i) })
+    onChange({ ...config, sources: config.sources.filter((_, idx) => idx !== i) })
   }
 
   return (
@@ -802,6 +857,26 @@ function RollupConfigEditor({
         <Plus className='mr-1 h-3 w-3' />
         Add source
       </Button>
+
+      <div className='space-y-1'>
+        <Label className='text-[11px] font-medium text-slate-600'>
+          Only roll up for records matching (JSON, optional)
+        </Label>
+        <Textarea
+          value={config.parent_filter ?? ''}
+          onChange={(e) => onChange({ ...config, parent_filter: e.target.value })}
+          placeholder='{"workflow_type": {"_neq": 2}}'
+          className={cn(
+            'min-h-[56px] font-mono text-[11.5px]',
+            !isParentFilterValid(config.parent_filter) && 'border-red-400'
+          )}
+          spellCheck={false}
+        />
+        <p className='text-[11px] text-slate-400'>
+          Records that don't match are never recalculated — the column keeps whatever was typed in.
+          Same operators as a source filter (_eq, _neq, _in, _gt…).
+        </p>
+      </div>
 
       <div className='flex items-center justify-between rounded-md border border-slate-200 bg-white p-3'>
         <div>
@@ -849,12 +924,14 @@ function LookupConfigEditor({
     queryFn: () => api.get(`/data-model/relations/for/${collection}`).then((r) => r.data.data),
     enabled: !!collection
   })
-  const m2o = ((rels ?? []) as Array<{
-    many_collection: string
-    many_field: string
-    one_collection: string | null
-    junction_field: string | null
-  }>).filter((r) => r.many_collection === collection && r.one_collection && !r.junction_field)
+  const m2o = (
+    (rels ?? []) as Array<{
+      many_collection: string
+      many_field: string
+      one_collection: string | null
+      junction_field: string | null
+    }>
+  ).filter((r) => r.many_collection === collection && r.one_collection && !r.junction_field)
   const target = m2o.find((r) => r.many_field === config.fk_field)?.one_collection ?? null
   const { data: targetMeta } = useQuery({
     queryKey: ['collection-meta', target],
@@ -877,7 +954,10 @@ function LookupConfigEditor({
           <Combobox
             value={config.fk_field}
             onChange={(v) => onChange({ fk_field: v, source_field: '' })}
-            options={m2o.map((r) => ({ value: r.many_field, label: `${r.many_field} → ${r.one_collection}` }))}
+            options={m2o.map((r) => ({
+              value: r.many_field,
+              label: `${r.many_field} → ${r.one_collection}`
+            }))}
             placeholder='Select relation…'
           />
         </div>
@@ -1406,8 +1486,7 @@ function FieldsTab({
               placeholder='Find a field… (name, label, or type)'
               className='mt-2 h-8 w-72 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] outline-none focus:border-[#00ceff80]'
             />
-            <p className='hidden'>{''}
-            </p>
+            <p className='hidden'>{''}</p>
           </div>
           <button
             type='button'
@@ -2052,7 +2131,9 @@ function FieldMetaEditor({
           : 'read'
   )
   const [lookup, setLookup] = useState<LookupConfig>(() =>
-    fm?.computed_type === 'lookup' ? parseLookup(fm?.computed_formula) : { fk_field: '', source_field: '' }
+    fm?.computed_type === 'lookup'
+      ? parseLookup(fm?.computed_formula)
+      : { fk_field: '', source_field: '' }
   )
   const [computedFormula, setComputedFormula] = useState(() =>
     fm?.computed_type === 'rollup' ? '' : (fm?.computed_formula ?? '')
@@ -4451,7 +4532,7 @@ function SettingsTab({
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
-          <DataProtectionSection tableName={tableName} />
+      <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
       <GenerateTestDataCard tableName={tableName} />
       <FieldUsageSection tableName={tableName} />
@@ -4485,7 +4566,8 @@ function AuditDepthSection({ tableName }: { tableName: string }) {
   })
 
   const saveMut = useMutation({
-    mutationFn: (accountability: string) => api.patch(`/collections/${tableName}`, { accountability }),
+    mutationFn: (accountability: string) =>
+      api.patch(`/collections/${tableName}`, { accountability }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-audit', tableName] })
       toast.success('Audit setting saved')
@@ -4599,7 +4681,9 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
   const [label, setLabel] = useState('')
-  const [actionType, setActionType] = useState<'flow' | 'external_api' | 'update_fields'>('update_fields')
+  const [actionType, setActionType] = useState<'flow' | 'external_api' | 'update_fields'>(
+    'update_fields'
+  )
   const [configText, setConfigText] = useState('{\n  "set": { "status": "done" }\n}')
   const [guardText, setGuardText] = useState('')
   const [confirmText, setConfirmText] = useState('')
@@ -4658,7 +4742,8 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
   const CONFIG_HINTS: Record<string, string> = {
     update_fields: '{"set": {"field": "value or {{other_field}}"}}',
     flow: '{"flow_id": "<flow uuid>"}',
-    external_api: '{"api_id": 1, "endpoint_path": "/path/{{id}}", "method": "POST", "body_template": "{\\"id\\": \\"{{id}}\\"}"}'
+    external_api:
+      '{"api_id": 1, "endpoint_path": "/path/{{id}}", "method": "POST", "body_template": "{\\"id\\": \\"{{id}}\\"}"}'
   }
 
   return (
@@ -4671,7 +4756,12 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
             with optional guard conditions and confirm text. Shown in the record header.
           </p>
         </div>
-        <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setAdding((v) => !v)}>
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-7 text-[12px]'
+          onClick={() => setAdding((v) => !v)}
+        >
           {adding ? 'Close' : '+ Add action'}
         </Button>
       </div>
@@ -4720,8 +4810,8 @@ function CustomActionsSection({ tableName }: { tableName: string }) {
           </div>
           <div>
             <Label className='mb-1 block text-[11px]'>
-              Guard (optional JSON) — [{'{'}"field": "status", "op": "eq", "value": "open"{'}'}] hides
-              the button when unmet
+              Guard (optional JSON) — [{'{'}"field": "status", "op": "eq", "value": "open"{'}'}]
+              hides the button when unmet
             </Label>
             <textarea
               value={guardText}
@@ -4812,7 +4902,9 @@ function DependencyMapSection({ tableName }: { tableName: string }) {
   }
   const ordered = [...nodes].sort(
     (a, b) =>
-      (inDeg.get(a.id) ?? 0) - (outDeg.get(a.id) ?? 0) - ((inDeg.get(b.id) ?? 0) - (outDeg.get(b.id) ?? 0))
+      (inDeg.get(a.id) ?? 0) -
+      (outDeg.get(a.id) ?? 0) -
+      ((inDeg.get(b.id) ?? 0) - (outDeg.get(b.id) ?? 0))
   )
   const ROW = 30
   const LEFT = 250
@@ -4941,11 +5033,19 @@ function SnapshotsSection({ tableName }: { tableName: string }) {
   const [name, setName] = useState('')
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null)
   const { data: snaps = [] } = useQuery<
-    Array<{ id: number; name: string; row_count: number; created_at: string; created_by_name: string | null }>
+    Array<{
+      id: number
+      name: string
+      row_count: number
+      created_at: string
+      created_by_name: string | null
+    }>
   >({
     queryKey: ['collection-snapshots', tableName],
     queryFn: () =>
-      api.get('/collection-snapshots', { params: { collection: tableName } }).then((r) => r.data.data)
+      api
+        .get('/collection-snapshots', { params: { collection: tableName } })
+        .then((r) => r.data.data)
   })
   const create = useMutation({
     mutationFn: () => api.post('/collection-snapshots', { collection: tableName, name }),
@@ -4982,8 +5082,8 @@ function SnapshotsSection({ tableName }: { tableName: string }) {
         <p className='text-[13px] font-semibold text-slate-800'>Snapshots</p>
         <p className='mt-0.5 text-[11.5px] text-slate-500'>
           Point-in-time checkpoints for small reference tables (up to 5,000 rows) — capture one
-          before a risky edit. Restore updates changed rows and re-inserts deleted ones by id;
-          rows created AFTER the snapshot are left alone and reported.
+          before a risky edit. Restore updates changed rows and re-inserts deleted ones by id; rows
+          created AFTER the snapshot are left alone and reported.
         </p>
       </div>
       <div className='space-y-2.5 px-4 py-3'>
@@ -5071,7 +5171,9 @@ function DeleteGuardSection({ tableName }: { tableName: string }) {
   const { data: meta } = useQuery({
     queryKey: ['collection-meta-delguard', tableName],
     queryFn: () =>
-      api.get<{ data: { delete_guard?: unknown } }>(`/collections/${tableName}`).then((r) => r.data.data),
+      api
+        .get<{ data: { delete_guard?: unknown } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
     enabled: !!tableName
   })
   useEffect(() => {
@@ -5101,10 +5203,12 @@ function DeleteGuardSection({ tableName }: { tableName: string }) {
       <div className='border-b border-slate-100 px-4 py-3'>
         <p className='text-[13px] font-semibold text-slate-800'>Deletion protection</p>
         <p className='mt-0.5 text-[11.5px] text-slate-500'>
-          Rules that BLOCK deleting a record, with their own message. Applies to everyone —
-          admins included. Rule shapes:{' '}
+          Rules that BLOCK deleting a record, with their own message. Applies to everyone — admins
+          included. Rule shapes:{' '}
           <code className='text-[10.5px]'>
-            {'{'}"type":"children","collection":"purchase_orders","fk_field":"workflow","message":"…"{'}'}
+            {'{'}
+            "type":"children","collection":"purchase_orders","fk_field":"workflow","message":"…"
+            {'}'}
           </code>{' '}
           (blocks when linked rows exist) and{' '}
           <code className='text-[10.5px]'>
@@ -5143,9 +5247,15 @@ function DataProtectionSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-protection', tableName],
     queryFn: () =>
       api
-        .get<{ data: { read_logging?: boolean; export_watermark?: boolean; collision_detection?: boolean; activity_retention_days?: number | null; trash_retention_days?: number | null } }>(
-          `/collections/${tableName}`
-        )
+        .get<{
+          data: {
+            read_logging?: boolean
+            export_watermark?: boolean
+            collision_detection?: boolean
+            activity_retention_days?: number | null
+            trash_retention_days?: number | null
+          }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName
   })
@@ -5253,10 +5363,13 @@ function RenameCollectionSection({ tableName }: { tableName: string }) {
   const rename = useMutation({
     mutationFn: () =>
       api
-        .post<{ data: { renamed: boolean; new_name: string; remaining_references: Array<{ surface: string; hits: unknown[] }> } }>(
-          `/data-model/${tableName}/rename`,
-          { new_name: newName.trim() }
-        )
+        .post<{
+          data: {
+            renamed: boolean
+            new_name: string
+            remaining_references: Array<{ surface: string; hits: unknown[] }>
+          }
+        }>(`/data-model/${tableName}/rename`, { new_name: newName.trim() })
         .then((r) => r.data.data),
     onSuccess: (d) => {
       toast.success(`Renamed to ${d.new_name}`)
@@ -5266,11 +5379,18 @@ function RenameCollectionSection({ tableName }: { tableName: string }) {
       setTimeout(() => navigate(`/data-model/${d.new_name}`), 1500)
     },
     onError: (e: unknown) =>
-      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Rename failed')
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Rename failed'
+      )
   })
   return (
     <div className='overflow-hidden rounded-lg border border-amber-200 bg-white'>
-      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-3 text-left'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
         <div>
           <p className='text-[13px] font-medium text-amber-700'>Rename collection</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
@@ -5294,10 +5414,23 @@ function RenameCollectionSection({ tableName }: { tableName: string }) {
             />
             {confirming ? (
               <>
-                <Button type='button' size='sm' variant='destructive' className='h-8 text-[12px]' disabled={rename.isPending} onClick={() => rename.mutate()}>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='destructive'
+                  className='h-8 text-[12px]'
+                  disabled={rename.isPending}
+                  onClick={() => rename.mutate()}
+                >
                   {rename.isPending ? 'Renaming…' : `Yes — rename to ${newName.trim()}`}
                 </Button>
-                <Button type='button' size='sm' variant='outline' className='h-8 text-[12px]' onClick={() => setConfirming(false)}>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='h-8 text-[12px]'
+                  onClick={() => setConfirming(false)}
+                >
                   Cancel
                 </Button>
               </>
@@ -5307,7 +5440,9 @@ function RenameCollectionSection({ tableName }: { tableName: string }) {
                 size='sm'
                 variant='outline'
                 className='h-8 border-amber-300 text-[12px] text-amber-700'
-                disabled={!/^[a-z_][a-z0-9_]*$/.test(newName.trim()) || newName.trim() === tableName}
+                disabled={
+                  !/^[a-z_][a-z0-9_]*$/.test(newName.trim()) || newName.trim() === tableName
+                }
                 onClick={() => setConfirming(true)}
               >
                 Rename…
@@ -5357,17 +5492,21 @@ function CastCheckSection({ tableName }: { tableName: string }) {
   const run = useMutation({
     mutationFn: () =>
       api
-        .post<{ data: { total: number; failures: number; samples: Array<{ id: unknown; value: string }> } }>(
-          `/data-model/${tableName}/columns/${col}/cast-check`,
-          { to_type: toType, max_length: lenBody }
-        )
+        .post<{
+          data: { total: number; failures: number; samples: Array<{ id: unknown; value: string }> }
+        }>(`/data-model/${tableName}/columns/${col}/cast-check`, {
+          to_type: toType,
+          max_length: lenBody
+        })
         .then((r) => r.data.data),
     onSuccess: (d) => {
       setResult(d)
       setConfirmText('')
     },
     onError: (e: unknown) =>
-      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Check failed')
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Check failed'
+      )
   })
   // Convert type (#510): executes the previewed conversion via the change-type
   // route. force only when the preview showed failures the operator has seen;
@@ -5394,14 +5533,19 @@ function CastCheckSection({ tableName }: { tableName: string }) {
       qc.invalidateQueries({ queryKey: ['data-model-table', tableName] })
     },
     onError: (e: unknown) => {
-      const data = (e as { response?: { data?: { error?: string; code?: string } } })?.response?.data
+      const data = (e as { response?: { data?: { error?: string; code?: string } } })?.response
+        ?.data
       toast.error(data?.error ?? 'Conversion failed')
       if (data?.code === 'CAST_DRIFT') setResult(null)
     }
   })
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-3 text-left'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-3 text-left'
+      >
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Convert column type</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
@@ -5429,9 +5573,18 @@ function CastCheckSection({ tableName }: { tableName: string }) {
                 setToType(v)
                 setResult(null)
               }}
-              options={['integer', 'bigInteger', 'decimal', 'float', 'boolean', 'date', 'datetime', 'uuid', 'string', 'text'].map(
-                (t) => ({ value: t, label: t })
-              )}
+              options={[
+                'integer',
+                'bigInteger',
+                'decimal',
+                'float',
+                'boolean',
+                'date',
+                'datetime',
+                'uuid',
+                'string',
+                'text'
+              ].map((t) => ({ value: t, label: t }))}
             />
             {toType === 'string' && (
               <Input
@@ -5448,7 +5601,13 @@ function CastCheckSection({ tableName }: { tableName: string }) {
                 className='h-7 w-20 text-[11.5px]'
               />
             )}
-            <Button type='button' size='sm' className='h-7 text-[11.5px]' disabled={!col || run.isPending} onClick={() => run.mutate()}>
+            <Button
+              type='button'
+              size='sm'
+              className='h-7 text-[11.5px]'
+              disabled={!col || run.isPending}
+              onClick={() => run.mutate()}
+            >
               {run.isPending ? 'Scanning…' : 'Preview'}
             </Button>
           </div>
@@ -5461,8 +5620,8 @@ function CastCheckSection({ tableName }: { tableName: string }) {
               ) : (
                 <>
                   <p className='font-medium text-red-600'>
-                    {result.failures.toLocaleString()} of {result.total.toLocaleString()} values would
-                    NOT survive — the alter would fail or null them.
+                    {result.failures.toLocaleString()} of {result.total.toLocaleString()} values
+                    would NOT survive — the alter would fail or null them.
                   </p>
                   <div className='mt-1 max-h-32 overflow-y-auto rounded border border-red-100 bg-red-50/40 p-2 font-mono text-[11px] text-slate-600'>
                     {result.samples.map((sm) => (
@@ -5640,9 +5799,13 @@ function EditFrequencySection({ tableName }: { tableName: string }) {
     queryKey: ['edit-frequency', tableName],
     queryFn: () =>
       api
-        .get<{ data: { days: number; sampled_revisions: number; fields: Array<{ field: string; edits: number }> } }>(
-          `/data-model/${tableName}/edit-frequency`
-        )
+        .get<{
+          data: {
+            days: number
+            sampled_revisions: number
+            fields: Array<{ field: string; edits: number }>
+          }
+        }>(`/data-model/${tableName}/edit-frequency`)
         .then((r) => r.data.data),
     enabled: open && !!tableName,
     staleTime: 5 * 60_000
@@ -5657,8 +5820,8 @@ function EditFrequencySection({ tableName }: { tableName: string }) {
         <div>
           <p className='text-[13px] font-medium text-slate-800'>Edit frequency</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>
-            Which fields people actually EDIT (revision deltas, last 90 days) — the behavioral
-            layer over fill rates.
+            Which fields people actually EDIT (revision deltas, last 90 days) — the behavioral layer
+            over fill rates.
           </p>
         </div>
         <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
@@ -5676,12 +5839,19 @@ function EditFrequencySection({ tableName }: { tableName: string }) {
               </p>
               <div className='max-h-64 overflow-y-auto'>
                 {data.fields.slice(0, 40).map((f) => (
-                  <div key={f.field} className='flex items-center gap-2 border-b border-slate-50 py-1 last:border-b-0'>
-                    <span className='w-48 truncate font-mono text-[11.5px] text-slate-600'>{f.field}</span>
+                  <div
+                    key={f.field}
+                    className='flex items-center gap-2 border-b border-slate-50 py-1 last:border-b-0'
+                  >
+                    <span className='w-48 truncate font-mono text-[11.5px] text-slate-600'>
+                      {f.field}
+                    </span>
                     <span className='relative h-2 flex-1 overflow-hidden rounded-full bg-slate-100'>
                       <span
                         className='absolute inset-y-0 left-0 rounded-full bg-[#00a5cc]'
-                        style={{ width: `${Math.min(100, (f.edits / data.fields[0].edits) * 100)}%` }}
+                        style={{
+                          width: `${Math.min(100, (f.edits / data.fields[0].edits) * 100)}%`
+                        }}
                       />
                     </span>
                     <span className='w-14 text-right text-[11px] tabular-nums text-slate-500'>
@@ -5709,9 +5879,9 @@ function FieldUsageSection({ tableName }: { tableName: string }) {
     queryKey: ['field-usage', tableName],
     queryFn: () =>
       api
-        .get<{ data: { total: number; fields: Array<{ field: string; populated: number; pct: number }> } }>(
-          `/data-model/${tableName}/field-usage`
-        )
+        .get<{
+          data: { total: number; fields: Array<{ field: string; populated: number; pct: number }> }
+        }>(`/data-model/${tableName}/field-usage`)
         .then((r) => r.data.data),
     enabled: open && !!tableName,
     staleTime: 5 * 60_000
@@ -6290,8 +6460,8 @@ function UrlAliasSection({ tableName }: { tableName: string }) {
           {col?.slug_field && (
             <div className='mt-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 dark:border-amber-500/30 dark:bg-amber-500/10'>
               <span className='text-[11.5px] text-amber-700 dark:text-amber-400'>
-                Legacy slug field <span className='font-mono'>{col.slug_field}</span> still
-                resolves as a fallback — aliases are the one engine now.
+                Legacy slug field <span className='font-mono'>{col.slug_field}</span> still resolves
+                as a fallback — aliases are the one engine now.
               </span>
               <button
                 type='button'
@@ -6502,9 +6672,9 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
     <div className='mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>Empty state</p>
       <p className='mt-0.5 text-[11.5px] text-slate-400'>
-        Replaces the default &quot;no records&quot; panel when the collection has no rows — say
-        what this collection is for and where to start. (Human record URLs live in the URL alias
-        card above.)
+        Replaces the default &quot;no records&quot; panel when the collection has no rows — say what
+        this collection is for and where to start. (Human record URLs live in the URL alias card
+        above.)
       </p>
       <div className='mt-3 space-y-2'>
         {(
@@ -6527,7 +6697,12 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
         ))}
         {draft && (
           <div className='flex justify-end gap-2 pt-1'>
-            <Button size='sm' variant='ghost' className='h-7 text-[11.5px]' onClick={() => setDraft(null)}>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='h-7 text-[11.5px]'
+              onClick={() => setDraft(null)}
+            >
               Cancel
             </Button>
             <Button
@@ -6563,7 +6738,9 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { browser_config: BrowserConfig | null; color?: string | null } }>(`/collections/${tableName}`)
+        .get<{ data: { browser_config: BrowserConfig | null; color?: string | null } }>(
+          `/collections/${tableName}`
+        )
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
@@ -7743,7 +7920,13 @@ function AttributesTab({ tableName }: { tableName: string }) {
 // ─── Layout tab ──────────────────────────────────────────────────────────────
 
 // ── Page slot sentinels (special ItemEdit panels) ──
-type SlotKey = '__pipeline__' | '__comments__' | '__tasks__' | '__addendums__' | '__referenced_by__' | '__related_records__'
+type SlotKey =
+  | '__pipeline__'
+  | '__comments__'
+  | '__tasks__'
+  | '__addendums__'
+  | '__referenced_by__'
+  | '__related_records__'
 interface SlotState {
   sort: number
   label_override: string | null
@@ -7754,7 +7937,14 @@ interface SlotState {
    * hide_actions_collapsed / hide_actions_expanded. */
   overrides?: Record<string, unknown> | null
 }
-const SLOT_KEYS: SlotKey[] = ['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__referenced_by__', '__related_records__']
+const SLOT_KEYS: SlotKey[] = [
+  '__pipeline__',
+  '__comments__',
+  '__tasks__',
+  '__addendums__',
+  '__referenced_by__',
+  '__related_records__'
+]
 const SLOT_META: Record<SlotKey, { name: string; defaultLabel: string; editable: boolean }> = {
   __pipeline__: { name: 'Pipeline', defaultLabel: 'Pipeline', editable: true },
   __comments__: { name: 'Comments', defaultLabel: 'Comments', editable: true },
@@ -12419,8 +12609,8 @@ function FieldSettingsPopover({
                 />
                 <p className='text-[10.5px] leading-relaxed text-slate-400'>
                   Formats typing in place: # = digit, A = letter, * = any; other characters are
-                  literal. The stored value keeps only what the user typed (no mask literals).
-                  Empty = no mask.
+                  literal. The stored value keeps only what the user typed (no mask literals). Empty
+                  = no mask.
                 </p>
               </div>
             )}
@@ -13620,7 +13810,9 @@ function ContentBlockTextEditor({
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={5}
-        placeholder={'Guidance shown on the form.\n\n**bold** and [links](https://…) work; blank line = new paragraph.'}
+        placeholder={
+          'Guidance shown on the form.\n\n**bold** and [links](https://…) work; blank line = new paragraph.'
+        }
         className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] dark:border-border dark:bg-card'
       />
       <div className='mt-1.5 flex justify-end'>
@@ -14647,7 +14839,9 @@ function SortableGroupCard({
                         ops eq/neq/null/nnull/in)
                       </p>
                       <Input
-                        defaultValue={(group as { visible_when?: string | null }).visible_when ?? ''}
+                        defaultValue={
+                          (group as { visible_when?: string | null }).visible_when ?? ''
+                        }
                         placeholder='[{"field":"...","op":"eq","value":"..."}]'
                         className='h-7 font-mono text-[11px]'
                         onChange={(e) =>
@@ -16442,7 +16636,10 @@ function LayoutsTab({
                             </span>
                             <input
                               type='checkbox'
-                              checked={!!(selected as { dossier_enabled?: boolean | number }).dossier_enabled}
+                              checked={
+                                !!(selected as { dossier_enabled?: boolean | number })
+                                  .dossier_enabled
+                              }
                               onChange={(e) =>
                                 patchLayoutMut.mutate({
                                   id: selected.id,
@@ -16452,7 +16649,8 @@ function LayoutsTab({
                               className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                             />
                           </label>
-                          {!!(selected as { dossier_enabled?: boolean | number }).dossier_enabled && (
+                          {!!(selected as { dossier_enabled?: boolean | number })
+                            .dossier_enabled && (
                             <label className='flex items-center justify-between gap-2'>
                               <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                                 Dossier button label
@@ -16461,7 +16659,8 @@ function LayoutsTab({
                                 key={`dl-${selected.id}`}
                                 type='text'
                                 defaultValue={
-                                  (selected as { dossier_label?: string | null }).dossier_label ?? ''
+                                  (selected as { dossier_label?: string | null }).dossier_label ??
+                                  ''
                                 }
                                 placeholder='Dossier'
                                 onBlur={(e) =>
@@ -17522,8 +17721,8 @@ function SortableSlotCard({
                 Action buttons in this slot
               </p>
               <p className='mb-2.5 text-[11px] text-slate-400 dark:text-muted-foreground'>
-                The record header can already show the transition buttons — hide them here to
-                avoid showing them twice.
+                The record header can already show the transition buttons — hide them here to avoid
+                showing them twice.
               </p>
               {(
                 [
@@ -18377,9 +18576,7 @@ function FieldGroupsTab({
           try {
             const ov = row._overrides
             const parsed = typeof ov === 'string' ? JSON.parse(ov) : ov
-            return parsed && typeof parsed === 'object'
-              ? (parsed as Record<string, unknown>)
-              : null
+            return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
           } catch {
             return null
           }
@@ -18883,7 +19080,9 @@ function FieldGroupsTab({
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newLabel, setNewLabel] = useState('')
-  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata' | 'container' | 'content'>('section')
+  const [newType, setNewType] = useState<'section' | 'tab' | 'metadata' | 'container' | 'content'>(
+    'section'
+  )
 
   // ── dnd ──
   const sensors = useSensors(
@@ -20218,59 +20417,16 @@ function FieldGroupsTab({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className='w-56 p-1' align='end'>
-                      {availableWidgets.map((w) => {
-                        const key = `__widget_${w.id}__`
-                        const alreadyAdded = widgetSlotMeta[key] !== undefined
-                        return (
-                          <button
-                            key={w.id}
-                            type='button'
-                            disabled={alreadyAdded}
-                            onClick={() => {
-                              if (alreadyAdded) return
-                              setWidgetSlotMeta((prev) => ({
-                                ...prev,
-                                [key]: {
-                                  widget_id: w.id,
-                                  name: w.name,
-                                  label_override: null,
-                                  is_visible: true,
-                                  // review_list widgets need record_id bound to the host
-                                  // record's id to resolve rows — default it so the
-                                  // widget works without an extra manual binding step.
-                                  input_bindings: ['review_list', 'rollup'].includes(w.widget_type)
-                                    ? [
-                                        {
-                                          key: 'record_id',
-                                          binding_type: 'item_field',
-                                          binding_value: 'id'
-                                        }
-                                      ]
-                                    : []
-                                }
-                              }))
-                              setLocalFieldOrder((prev) => ({
-                                ...prev,
-                                __pool__: [...(prev.__pool__ ?? []), key],
-                                __unassigned__: [...(prev.__unassigned__ ?? []), key]
-                              }))
-                              hasLocalChangeRef.current = true
-                              changeSeqRef.current++
-                              setAddingWidget(false)
-                            }}
-                            className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-40'
-                          >
-                            <span className='flex-1'>{w.name}</span>
-                            <span className='rounded bg-nvr-cyan/10 px-1 py-px text-[10px] text-nvr-cyan'>
-                              {w.widget_type}
-                            </span>
-                          </button>
-                        )
-                      })}
-                      <NewReportWidgetForm
-                        onCreated={(w) => {
-                          const key = `__widget_${w.id}__`
-                          if (widgetSlotMeta[key] === undefined) {
+                    {availableWidgets.map((w) => {
+                      const key = `__widget_${w.id}__`
+                      const alreadyAdded = widgetSlotMeta[key] !== undefined
+                      return (
+                        <button
+                          key={w.id}
+                          type='button'
+                          disabled={alreadyAdded}
+                          onClick={() => {
+                            if (alreadyAdded) return
                             setWidgetSlotMeta((prev) => ({
                               ...prev,
                               [key]: {
@@ -20278,7 +20434,18 @@ function FieldGroupsTab({
                                 name: w.name,
                                 label_override: null,
                                 is_visible: true,
-                                input_bindings: []
+                                // review_list widgets need record_id bound to the host
+                                // record's id to resolve rows — default it so the
+                                // widget works without an extra manual binding step.
+                                input_bindings: ['review_list', 'rollup'].includes(w.widget_type)
+                                  ? [
+                                      {
+                                        key: 'record_id',
+                                        binding_type: 'item_field',
+                                        binding_value: 'id'
+                                      }
+                                    ]
+                                  : []
                               }
                             }))
                             setLocalFieldOrder((prev) => ({
@@ -20288,10 +20455,42 @@ function FieldGroupsTab({
                             }))
                             hasLocalChangeRef.current = true
                             changeSeqRef.current++
-                          }
-                          setAddingWidget(false)
-                        }}
-                      />
+                            setAddingWidget(false)
+                          }}
+                          className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-40'
+                        >
+                          <span className='flex-1'>{w.name}</span>
+                          <span className='rounded bg-nvr-cyan/10 px-1 py-px text-[10px] text-nvr-cyan'>
+                            {w.widget_type}
+                          </span>
+                        </button>
+                      )
+                    })}
+                    <NewReportWidgetForm
+                      onCreated={(w) => {
+                        const key = `__widget_${w.id}__`
+                        if (widgetSlotMeta[key] === undefined) {
+                          setWidgetSlotMeta((prev) => ({
+                            ...prev,
+                            [key]: {
+                              widget_id: w.id,
+                              name: w.name,
+                              label_override: null,
+                              is_visible: true,
+                              input_bindings: []
+                            }
+                          }))
+                          setLocalFieldOrder((prev) => ({
+                            ...prev,
+                            __pool__: [...(prev.__pool__ ?? []), key],
+                            __unassigned__: [...(prev.__unassigned__ ?? []), key]
+                          }))
+                          hasLocalChangeRef.current = true
+                          changeSeqRef.current++
+                        }
+                        setAddingWidget(false)
+                      }}
+                    />
                   </PopoverContent>
                 </Popover>
                 <Button
@@ -20682,7 +20881,9 @@ function FieldGroupsTab({
                   <Label className='mb-1 block text-[11px]'>Type</Label>
                   <Sel
                     value={newType}
-                    onChange={(v) => setNewType(v as 'section' | 'tab' | 'metadata' | 'container' | 'content')}
+                    onChange={(v) =>
+                      setNewType(v as 'section' | 'tab' | 'metadata' | 'container' | 'content')
+                    }
                     options={[
                       { value: 'section', label: 'Section' },
                       { value: 'tab', label: 'Tab' },
@@ -21604,16 +21805,61 @@ function ValidationRulesEditor({
   // Regex preset library (#391): the patterns people reach for — picking one
   // fills the pattern AND a default message (kept if the author already wrote one).
   const REGEX_PRESETS = [
-    { value: 'phone_us', label: 'US phone', pattern: '^\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$', message: 'Enter a 10-digit US phone number' },
-    { value: 'zip_us', label: 'US ZIP', pattern: '^\\d{5}(-\\d{4})?$', message: 'Enter a 5-digit ZIP (or ZIP+4)' },
-    { value: 'email', label: 'Email', pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$', message: 'Enter a valid email address' },
-    { value: 'url_https', label: 'HTTPS URL', pattern: '^https://\\S+$', message: 'Enter a full https:// link' },
-    { value: 'uuid', label: 'UUID', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', message: 'Enter a valid UUID' },
+    {
+      value: 'phone_us',
+      label: 'US phone',
+      pattern: '^\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$',
+      message: 'Enter a 10-digit US phone number'
+    },
+    {
+      value: 'zip_us',
+      label: 'US ZIP',
+      pattern: '^\\d{5}(-\\d{4})?$',
+      message: 'Enter a 5-digit ZIP (or ZIP+4)'
+    },
+    {
+      value: 'email',
+      label: 'Email',
+      pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$',
+      message: 'Enter a valid email address'
+    },
+    {
+      value: 'url_https',
+      label: 'HTTPS URL',
+      pattern: '^https://\\S+$',
+      message: 'Enter a full https:// link'
+    },
+    {
+      value: 'uuid',
+      label: 'UUID',
+      pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+      message: 'Enter a valid UUID'
+    },
     { value: 'digits', label: 'Digits only', pattern: '^\\d+$', message: 'Digits only' },
-    { value: 'alnum', label: 'Letters & numbers', pattern: '^[A-Za-z0-9]+$', message: 'Letters and numbers only' },
-    { value: 'currency', label: 'Dollar amount', pattern: '^\\$?\\d{1,3}(,?\\d{3})*(\\.\\d{2})?$', message: 'Enter a dollar amount' },
-    { value: 'ein', label: 'EIN (tax id)', pattern: '^\\d{2}-\\d{7}$', message: 'Enter an EIN like 12-3456789' },
-    { value: 'po_number', label: 'PO number (alnum-dash)', pattern: '^[A-Z0-9][A-Z0-9-]{2,}$', message: 'Uppercase letters, numbers, dashes' }
+    {
+      value: 'alnum',
+      label: 'Letters & numbers',
+      pattern: '^[A-Za-z0-9]+$',
+      message: 'Letters and numbers only'
+    },
+    {
+      value: 'currency',
+      label: 'Dollar amount',
+      pattern: '^\\$?\\d{1,3}(,?\\d{3})*(\\.\\d{2})?$',
+      message: 'Enter a dollar amount'
+    },
+    {
+      value: 'ein',
+      label: 'EIN (tax id)',
+      pattern: '^\\d{2}-\\d{7}$',
+      message: 'Enter an EIN like 12-3456789'
+    },
+    {
+      value: 'po_number',
+      label: 'PO number (alnum-dash)',
+      pattern: '^[A-Z0-9][A-Z0-9-]{2,}$',
+      message: 'Uppercase letters, numbers, dashes'
+    }
   ]
 
   const RULE_TYPES = [
@@ -21645,7 +21891,9 @@ function ValidationRulesEditor({
               value={rule.value ?? ''}
               onChange={(e) => updateRule(idx, { value: e.target.value })}
               placeholder={rule.type === 'regex' ? '^[A-Z].*' : '10'}
-              className={rule.type === 'regex' ? 'h-7 w-52 font-mono text-[12px]' : 'h-7 text-[12px] w-28'}
+              className={
+                rule.type === 'regex' ? 'h-7 w-52 font-mono text-[12px]' : 'h-7 text-[12px] w-28'
+              }
             />
           )}
           {rule.type === 'regex' && (
@@ -21653,7 +21901,11 @@ function ValidationRulesEditor({
               value=''
               onChange={(v) => {
                 const preset = REGEX_PRESETS.find((r) => r.value === v)
-                if (preset) updateRule(idx, { value: preset.pattern, message: rule.message || preset.message })
+                if (preset)
+                  updateRule(idx, {
+                    value: preset.pattern,
+                    message: rule.message || preset.message
+                  })
               }}
               options={REGEX_PRESETS.map((r) => ({ value: r.value, label: r.label }))}
               placeholder='Presets…'
@@ -22941,7 +23193,6 @@ export function TableEditorPage() {
     </>
   )
 }
-
 
 // ─── Quick relation builders (#242 M2A / #243 multi-user) ────────────────────
 function QuickRelationBuilder({

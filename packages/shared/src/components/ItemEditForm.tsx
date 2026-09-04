@@ -1,7 +1,6 @@
 import type { ImportParseResponse, ImportTemplateSummary } from '@nivaro/sdk'
-import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clipboard,
+import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
@@ -9,6 +8,7 @@ import { Clipboard,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clipboard,
   Copy,
   FileDown,
   Loader2,
@@ -26,6 +26,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import {
   GridFlushContext,
@@ -38,9 +39,11 @@ import {
   useApiFetchConfig,
   useNivaroClient
 } from '../context'
-import { createPortal } from 'react-dom'
 import { del, get, patch, post } from '../lib/commands'
-import { cn, formatRelative, choiceLabel, titleCase } from '../lib/utils'
+import { setFormulaConstants } from '../lib/expression'
+import { setFiscalStartMonth } from '../lib/fiscal'
+import { extSlotKey } from '../lib/layout-slots'
+import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
@@ -59,9 +62,8 @@ import {
   changeReasonChallenge
 } from './item-edit/ChangeReasonDialog'
 import { CloneDialog } from './item-edit/CloneDialog'
-import { HeaderTools } from './item-edit/HeaderTools'
+import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 import { FieldRow } from './item-edit/FieldRow'
-import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
 import {
   GroupSection,
   InlineDisplay,
@@ -69,9 +71,10 @@ import {
   OwnersInlineCompact,
   StripFieldValue
 } from './item-edit/GroupSection'
+import { HeaderTools } from './item-edit/HeaderTools'
 import {
-  type CascadeRule,
   applyDisplayTemplate,
+  type CascadeRule,
   isSentinelKey,
   parseJson,
   resolveColSpan,
@@ -80,7 +83,13 @@ import {
   useContainerWidth
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
-import { computeLiveRollup, parseRollupSources } from './item-edit/live-rollups'
+import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
+import {
+  computeLiveRollup,
+  matchesRollupFilter,
+  parseRollupParentFilter,
+  parseRollupSources
+} from './item-edit/live-rollups'
 import { m2aWriteMeta } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import {
@@ -94,19 +103,17 @@ import {
 } from './item-edit/O2MStagingContext'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { invalidateRecordInsights, RecordInsightsButton } from './item-edit/RecordInsights'
+import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
+import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
-import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
-import { RecordInsightsButton, invalidateRecordInsights } from './item-edit/RecordInsights'
-import { setFiscalStartMonth } from '../lib/fiscal'
-import { setFormulaConstants } from '../lib/expression'
-import { extSlotKey } from '../lib/layout-slots'
-import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 
 let formulaCtxHydrated = false
-import { FindInRecordButton, type FindableField } from './item-edit/FindInRecord'
+
+import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
 import { SummaryPanel } from './item-edit/SummaryPanel'
@@ -126,15 +133,15 @@ import {
   AccessDeniedPanel,
   AddendumPanel,
   CommentPanel,
+  CustomActionButtons,
   ExternalRequestsChip,
   ItemActionButtons,
-  CustomActionButtons,
   ItemLockBanner,
   OwnersSlot,
   PipelinePanel,
   PipelineTransitionButtons,
-  RelatedRecordsPanel,
   ReferencedByPanel,
+  RelatedRecordsPanel,
   RevisionsPanel,
   TaskPanel,
   useItemLock,
@@ -577,7 +584,11 @@ function UnsavedInspector({
           <X className='h-3.5 w-3.5' />
         </button>
       </div>
-      {rows.length === 0 && linkCount === 0 && unlinkCount === 0 && pendingRowCount === 0 && pendingDeleteCount === 0 ? (
+      {rows.length === 0 &&
+      linkCount === 0 &&
+      unlinkCount === 0 &&
+      pendingRowCount === 0 &&
+      pendingDeleteCount === 0 ? (
         <p className='text-[11.5px] text-slate-400'>
           Nothing differs from the saved record — this flag may be stale. Saving is a no-op;
           reloading clears it.
@@ -603,7 +614,9 @@ function UnsavedInspector({
             <p className='text-[11.5px] text-slate-500'>{pendingRowCount} grid row(s) queued</p>
           )}
           {pendingDeleteCount > 0 && (
-            <p className='text-[11.5px] text-slate-500'>{pendingDeleteCount} grid row deletion(s) queued</p>
+            <p className='text-[11.5px] text-slate-500'>
+              {pendingDeleteCount} grid row deletion(s) queued
+            </p>
           )}
         </div>
       )}
@@ -2240,13 +2253,16 @@ export function ItemEditForm({
     },
     [m2mStagingCtx]
   )
-  const recordDerivedFill = useCallback((source: string, parent: string, stagingKey: string, ids: string[]) => {
-    if (ids.length === 0) return
-    const list = derivedFillsRef.current.get(source) ?? []
-    list.push({ parent, stagingKey, ids })
-    derivedFillsRef.current.set(source, list)
-    derivedOriginRef.current.set(parent, source)
-  }, [])
+  const recordDerivedFill = useCallback(
+    (source: string, parent: string, stagingKey: string, ids: string[]) => {
+      if (ids.length === 0) return
+      const list = derivedFillsRef.current.get(source) ?? []
+      list.push({ parent, stagingKey, ids })
+      derivedFillsRef.current.set(source, list)
+      derivedOriginRef.current.set(parent, source)
+    },
+    []
+  )
 
   const runUpstreamCascades = useCallback(
     (field: string, pickedId: unknown, depth = 0, seen?: Set<string>, rootSource?: string) => {
@@ -2314,9 +2330,14 @@ export function ItemEditForm({
             if (col.includes('.')) {
               // 'regions.regions_id' — first hop is an alias on the picked
               // record's collection, leaf a junction/child column.
-              const [aliasName, leaf] = [col.slice(0, col.indexOf('.')), col.slice(col.indexOf('.') + 1)]
+              const [aliasName, leaf] = [
+                col.slice(0, col.indexOf('.')),
+                col.slice(col.indexOf('.') + 1)
+              ]
               pickedRels ??= await client
-                .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${pickedCollection}`))
+                .request<{ data: CMSRelation[] }>(
+                  get(`/data-model/relations/for/${pickedCollection}`)
+                )
                 .then((r) => r.data ?? [])
                 .catch(() => [])
               const aliasRel = pickedRels.find(
@@ -2343,11 +2364,14 @@ export function ItemEditForm({
               // path) — resolve via its junction; the pairing-marker
               // junction_field IS the related-id column.
               pickedRels ??= await client
-                .request<{ data: CMSRelation[] }>(get(`/data-model/relations/for/${pickedCollection}`))
+                .request<{ data: CMSRelation[] }>(
+                  get(`/data-model/relations/for/${pickedCollection}`)
+                )
                 .then((r) => r.data ?? [])
                 .catch(() => [])
               const bareAlias = pickedRels.find(
-                (r) => r.one_collection === pickedCollection && r.one_field === col && r.junction_field
+                (r) =>
+                  r.one_collection === pickedCollection && r.one_field === col && r.junction_field
               )
               const o2mAlias = !bareAlias
                 ? pickedRels.find(
@@ -2413,8 +2437,9 @@ export function ItemEditForm({
               // undone above, so a re-pick still re-derives.
               if (already.size > 0) continue
               const parentMeta = (fieldConfig ?? []).find((f) => f.field === parent)
-              const maxVals = parseJson<{ max_values?: number | null }>(parentMeta?.options ?? null)
-                ?.max_values
+              const maxVals = parseJson<{ max_values?: number | null }>(
+                parentMeta?.options ?? null
+              )?.max_values
               // More values than the field allows = ambiguous, fill nothing
               // (a 5-region project cannot answer a single-region field).
               if (maxVals != null && values.length > maxVals) continue
@@ -2455,7 +2480,16 @@ export function ItemEditForm({
         }
       })()
     },
-    [fieldConfig, relations, collection, m2mAliasFieldsForRules, m2mStagingCtx, client, undoDerivedFills, recordDerivedFill]
+    [
+      fieldConfig,
+      relations,
+      collection,
+      m2mAliasFieldsForRules,
+      m2mStagingCtx,
+      client,
+      undoDerivedFills,
+      recordDerivedFill
+    ]
   )
   const upstreamCascadesRef = useRef(runUpstreamCascades)
   upstreamCascadesRef.current = runUpstreamCascades
@@ -2570,8 +2604,9 @@ export function ItemEditForm({
               // parent already agreed with this pick.
               if (already.size > 0) return
               const targetMeta = (fieldConfig ?? []).find((f) => f.field === target)
-              const maxV = parseJson<{ max_values?: number | null }>(targetMeta?.options ?? null)
-                ?.max_values
+              const maxV = parseJson<{ max_values?: number | null }>(
+                targetMeta?.options ?? null
+              )?.max_values
               if (maxV != null && ids.length > maxV) return
               const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
@@ -2640,7 +2675,14 @@ export function ItemEditForm({
           })
       }
     },
-    [fieldConfig, client, m2mAliasFieldsForRules, m2mStagingCtx, undoDerivedFills, recordDerivedFill]
+    [
+      fieldConfig,
+      client,
+      m2mAliasFieldsForRules,
+      m2mStagingCtx,
+      undoDerivedFills,
+      recordDerivedFill
+    ]
   )
   crossDefaultsRef.current = runCrossDefaults
 
@@ -3246,13 +3288,17 @@ export function ItemEditForm({
     const out = new Map<string, number>()
     for (const f of fieldConfig ?? []) {
       if (f.computed_type !== 'rollup' || !f.computed_formula) continue
+      // A parent the rollup does not apply to (a CAR's hand-entered
+      // requisition amount) keeps its draft value — never the live sum.
+      const parentFilter = parseRollupParentFilter(f.computed_formula)
+      if (parentFilter && !matchesRollupFilter(draft, parentFilter)) continue
       const merged = new Map(liveRowsByRelation)
       for (const [k, v] of stagedRowsByRelation) if (!merged.has(k)) merged.set(k, v)
       const value = computeLiveRollup(parseRollupSources(f.computed_formula), merged)
       if (value !== null) out.set(f.field, value)
     }
     return out
-  }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation])
+  }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation, draft])
 
   const effectiveDraft = useMemo(
     () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
@@ -3544,9 +3590,7 @@ export function ItemEditForm({
     () =>
       groups.filter(
         (g) =>
-          g.type === 'tab' &&
-          !g.container_id &&
-          stepVisible(g as { visible_when?: string | null })
+          g.type === 'tab' && !g.container_id && stepVisible(g as { visible_when?: string | null })
       ),
     [groups, stepVisible]
   )
@@ -3628,7 +3672,12 @@ export function ItemEditForm({
     // table itself (legacy child-table-name form).
     const o2mByField = new Map<string, { target: string; fk: string }>()
     for (const r of relations) {
-      if (r.junction_field || r.one_collection !== collection || !r.many_collection || !r.many_field)
+      if (
+        r.junction_field ||
+        r.one_collection !== collection ||
+        !r.many_collection ||
+        !r.many_field
+      )
         continue
       const aliasName = (r.one_field as string | null) ?? r.many_collection
       if (!o2mByField.has(aliasName))
@@ -3775,9 +3824,7 @@ export function ItemEditForm({
   const copyRecordSummaryInner = async () => {
     const m2oByField = new Map(
       relations
-        .filter(
-          (r) => r.many_collection === collection && !r.junction_field && r.many_field
-        )
+        .filter((r) => r.many_collection === collection && !r.junction_field && r.many_field)
         .map((r) => [r.many_field as string, r.one_collection as string])
     )
     const labelCache = new Map<string, string>()
@@ -3868,9 +3915,18 @@ export function ItemEditForm({
         lines.push(`${label}: ${new Date(str).toLocaleDateString()}`)
         continue
       }
-      lines.push(`${label}: ${str.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}`)
+      lines.push(
+        `${label}: ${str
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 160)}`
+      )
     }
-    const heading = itemTitle && itemTitle !== (colMeta?.display_name ?? '') ? itemTitle : `${singularTitle} ${String(itemId ?? '')}`
+    const heading =
+      itemTitle && itemTitle !== (colMeta?.display_name ?? '')
+        ? itemTitle
+        : `${singularTitle} ${String(itemId ?? '')}`
     const text = `${heading}\n${window.location.href}\n\n${lines.join('\n')}`
     await navigator.clipboard.writeText(text).then(
       () => toast.success('Summary copied'),
@@ -3947,8 +4003,6 @@ export function ItemEditForm({
     bodyRef.current?.scrollTo({ top: 0 })
   }
 
-
-
   const allSteps = useMemo<StepDef[]>(() => {
     if (!hasTabs) return []
     const steps: StepDef[] = []
@@ -3966,7 +4020,9 @@ export function ItemEditForm({
     const keys = Object.keys(validationErrors)
     if (keys.length === 0) return []
     const locationFor = (field: string): string | null => {
-      const groupKey = Object.entries(groupedMap).find(([, fs]) => fs.some((f) => f.field === field))?.[0]
+      const groupKey = Object.entries(groupedMap).find(([, fs]) =>
+        fs.some((f) => f.field === field)
+      )?.[0]
       if (!groupKey) return hasTabs ? 'General' : null
       const group = groups.find((g) => g.key === groupKey)
       if (!group) return null
@@ -3984,7 +4040,8 @@ export function ItemEditForm({
       ...stepKeys.filter((k) => k !== '__general__'),
       ...Object.keys(groupedMap).filter((k) => !stepKeys.includes(k))
     ]
-    for (const gk of groupKeys) for (const f of groupedMap[gk] ?? []) if (!order.has(f.field)) order.set(f.field, pos++)
+    for (const gk of groupKeys)
+      for (const f of groupedMap[gk] ?? []) if (!order.has(f.field)) order.set(f.field, pos++)
     for (const f of allFields) if (!order.has(f.field)) order.set(f.field, pos++)
     return keys
       .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9))
@@ -4016,8 +4073,6 @@ export function ItemEditForm({
     }
     // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot consume
   }, [hasTabs, allSteps])
-
-
 
   // Stale persisted tab key (layout/groups changed since last visit) would
   // leave steps/tabs rendering with no active entry — snap to the first one.
@@ -4474,7 +4529,15 @@ export function ItemEditForm({
       total: required.length,
       requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
     }
-  }, [fieldConfig, draft, m2mAliasFieldsForRules, m2mAliasFieldStates, activeLayoutData, o2mAliasFields, o2mEffectiveCounts])
+  }, [
+    fieldConfig,
+    draft,
+    m2mAliasFieldsForRules,
+    m2mAliasFieldStates,
+    activeLayoutData,
+    o2mAliasFields,
+    o2mEffectiveCounts
+  ])
 
   // Provenance (#29): where the record came from — shown as a chip beside the
   // last-touched line.
@@ -4737,7 +4800,12 @@ export function ItemEditForm({
         if (Array.isArray(rules)) {
           for (const rule of rules) {
             if (!rule || rule.soft) continue
-            const err = applyValidationRule(rule, draft[f.field], f.label ?? titleCase(f.field), draft)
+            const err = applyValidationRule(
+              rule,
+              draft[f.field],
+              f.label ?? titleCase(f.field),
+              draft
+            )
             if (err) {
               errs[f.field] = err
               break
@@ -4756,7 +4824,9 @@ export function ItemEditForm({
       if (n === 1) {
         const f = allFields.find((x) => x.field === keys[0])
         const label = f?.label || titleCase(keys[0])
-        toast.error(errs[keys[0]] === 'This field is required' ? `${label} is required` : errs[keys[0]])
+        toast.error(
+          errs[keys[0]] === 'This field is required' ? `${label} is required` : errs[keys[0]]
+        )
       } else {
         toast.error(`Can’t save yet — ${n} fields need attention`)
       }
@@ -5413,9 +5483,9 @@ export function ItemEditForm({
             for (const m of text.matchAll(/@([A-Z][a-z]+ [A-Z][a-zA-Z'-]+)/g)) names.add(m[1])
           }
           if (names.size === 0) return
-          const res = (await client.request(
-            get('/users', { limit: '500' })
-          )) as { data?: Array<{ id: string; first_name?: string; last_name?: string }> }
+          const res = (await client.request(get('/users', { limit: '500' }))) as {
+            data?: Array<{ id: string; first_name?: string; last_name?: string }>
+          }
           for (const name of names) {
             const hit = (res.data ?? []).find(
               (u) =>
@@ -7158,580 +7228,621 @@ export function ItemEditForm({
                                   <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
                                     {headerExtra}
                                     <HeaderTools>
-                                    {isNew && (
-                                      <ImportFromFileButton
-                                        collection={collection}
-                                        onParsed={applyImportResult}
-                                      />
-                                    )}
-                                    {!isNew && (
-                                      <ImportFromFileButton
-                                        collection={collection}
-                                        templateFilter={(t) => t.reimport?.enabled === true}
-                                        getLabel={(t) => t.reimport?.button_label ?? t.button_label}
-                                        onParsed={handleReimportParsed}
-                                      />
-                                    )}
-                                    <FindInRecordButton fields={findableFields} onJump={jumpToField} />
-                                    {!isNew && itemId && (
-                                      <button
-                                        type='button'
-                                        title='Copy a plain-text summary of this record (fields + link) for chat or email'
-                                        onClick={() => void copyRecordSummary()}
-                                        disabled={copyingSummary}
-                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
-                                      >
-                                        {copyingSummary ? (
-                                          <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                        ) : (
-                                          <Clipboard className='h-3.5 w-3.5' />
-                                        )}
-                                      </button>
-                                    )}
-                                    {!isNew && itemId && (
-                                      <RecordSubscribeButton
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {!isNew && itemId && (
-                                      <RecordInsightsButton
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {!isNew && itemId && (
-                                      <RecordChatActions
-                                        collection={collection}
-                                        itemDraft={draft}
-                                      />
-                                    )}
-                                    {!isNew && itemId && (
-                                      <button
-                                        type='button'
-                                        title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
-                                        data-save-as-template
-                                        onClick={() => {
-                                          setTemplateName('')
-                                          setTemplateShared(false)
-                                          setTemplateDialogOpen(true)
-                                        }}
-                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                      >
-                                        <svg
-                                          width='13'
-                                          height='13'
-                                          viewBox='0 0 24 24'
-                                          fill='none'
-                                          stroke='currentColor'
-                                          strokeWidth='2'
-                                          strokeLinecap='round'
-                                          strokeLinejoin='round'
-                                          aria-hidden='true'
-                                        >
-                                          <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
-                                          <polyline points='17 21 17 13 7 13 7 21' />
-                                          <polyline points='7 3 7 8 15 8' />
-                                        </svg>
-                                        Save as template
-                                      </button>
-                                    )}
-                                    {templateDialogOpen &&
-                                      createPortal(
-                                        <div className='fixed inset-0 z-[130] flex items-center justify-center'>
-                                          {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
-                                          <div
-                                            className='absolute inset-0 bg-black/30'
-                                            onClick={() => setTemplateDialogOpen(false)}
-                                          />
-                                          <div
-                                            role='dialog'
-                                            aria-label='Save as template'
-                                            className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
-                                            onKeyDown={(e) => {
-                                              if (e.key === 'Escape') setTemplateDialogOpen(false)
-                                            }}
-                                          >
-                                            <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-                                              Save as template
-                                            </p>
-                                            <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
-                                              This record's plain field values become a reusable
-                                              pre-fill template — same exclusions as Duplicate (no
-                                              ids, audit stamps, computed fields, or line items).
-                                            </p>
-                                            <input
-                                              // biome-ignore lint/a11y/noAutofocus: dialog's single input
-                                              autoFocus
-                                              value={templateName}
-                                              onChange={(e) => setTemplateName(e.target.value)}
-                                              onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && templateName.trim()) {
-                                                  ;(
-                                                    document.querySelector(
-                                                      '[data-template-save-btn]'
-                                                    ) as HTMLButtonElement | null
-                                                  )?.click()
-                                                }
-                                              }}
-                                              placeholder='Template name'
-                                              className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
-                                            />
-                                            <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-                                              <input
-                                                type='checkbox'
-                                                checked={templateShared}
-                                                onChange={(e) => setTemplateShared(e.target.checked)}
-                                                className='h-3.5 w-3.5'
-                                              />
-                                              Share with everyone (otherwise it's just yours)
-                                            </label>
-                                            <div className='mt-4 flex justify-end gap-2'>
-                                              <button
-                                                type='button'
-                                                onClick={() => setTemplateDialogOpen(false)}
-                                                className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
-                                              >
-                                                Cancel
-                                              </button>
-                                              <button
-                                                type='button'
-                                                data-template-save-btn
-                                                disabled={!templateName.trim() || templateSaving}
-                                                onClick={async () => {
-                                                  // Same harvest rules as Duplicate: visible,
-                                                  // editable, non-computed, non-auto-id scalars
-                                                  // + M2O FKs only.
-                                                  const AUDIT = new Set([
-                                                    'id', 'user_created', 'date_created', 'user_updated',
-                                                    'date_updated', 'created_at', 'updated_at', 'created',
-                                                    'changed', 'creator', 'last_state_change'
-                                                  ])
-                                                  const values: Record<string, unknown> = {}
-                                                  for (const fc of fieldConfig ?? []) {
-                                                    const opts = fc.options as Record<string, unknown> | null
-                                                    if (AUDIT.has(fc.field)) continue
-                                                    if (opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id) continue
-                                                    if ((fc as { computed_type?: string | null }).computed_type) continue
-                                                    if (fc.hidden || (fc as { readonly?: boolean }).readonly) continue
-                                                    if ((fc as { layout_assigned?: boolean }).layout_assigned === false) continue
-                                                    const v = draft[fc.field]
-                                                    if (v === undefined || v === null || v === '') continue
-                                                    if (typeof v === 'object') continue
-                                                    values[fc.field] = v
-                                                  }
-                                                  if (Object.keys(values).length === 0) {
-                                                    toast.error('Nothing to save — no plain field values on this record')
-                                                    return
-                                                  }
-                                                  setTemplateSaving(true)
-                                                  try {
-                                                    await client.request(
-                                                      post('/record-templates', {
-                                                        collection,
-                                                        name: templateName.trim(),
-                                                        data: values,
-                                                        is_shared: templateShared
-                                                      })
-                                                    )
-                                                    toast.success(`Template "${templateName.trim()}" saved`)
-                                                    setTemplateDialogOpen(false)
-                                                  } catch {
-                                                    toast.error('Failed to save template')
-                                                  } finally {
-                                                    setTemplateSaving(false)
-                                                  }
-                                                }}
-                                                className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
-                                              >
-                                                {templateSaving ? 'Saving…' : 'Save template'}
-                                              </button>
-                                            </div>
-                                          </div>
-                                        </div>,
-                                        document.body
+                                      {isNew && (
+                                        <ImportFromFileButton
+                                          collection={collection}
+                                          onParsed={applyImportResult}
+                                        />
                                       )}
-                                    {!isNew &&
-                                      itemId &&
-                                      !!(
-                                        activeLayoutData?.layout as
-                                          | { dossier_enabled?: boolean | number }
-                                          | undefined
-                                      )?.dossier_enabled && (
+                                      {!isNew && (
+                                        <ImportFromFileButton
+                                          collection={collection}
+                                          templateFilter={(t) => t.reimport?.enabled === true}
+                                          getLabel={(t) =>
+                                            t.reimport?.button_label ?? t.button_label
+                                          }
+                                          onParsed={handleReimportParsed}
+                                        />
+                                      )}
+                                      <FindInRecordButton
+                                        fields={findableFields}
+                                        onJump={jumpToField}
+                                      />
+                                      {!isNew && itemId && (
                                         <button
                                           type='button'
-                                          data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
-                                          onClick={async () => {
-                                            // #641 — server assembles the whole story; this just
-                                            // streams the PDF down with the caller's own auth.
-                                            try {
-                                              const res = await fetch(
-                                                `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
-                                                {
-                                                  headers: fetchCfg.authHeaders,
-                                                  credentials: fetchCfg.credentials
-                                                }
-                                              )
-                                              if (!res.ok) throw new Error(String(res.status))
-                                              const blob = await res.blob()
-                                              const url = URL.createObjectURL(blob)
-                                              const a = document.createElement('a')
-                                              a.href = url
-                                              a.download = `dossier-${collection}-${itemId}.pdf`
-                                              a.click()
-                                              setTimeout(() => URL.revokeObjectURL(url), 30_000)
-                                            } catch {
-                                              toast.error('Dossier export failed')
-                                            }
+                                          title='Copy a plain-text summary of this record (fields + link) for chat or email'
+                                          onClick={() => void copyRecordSummary()}
+                                          disabled={copyingSummary}
+                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
+                                        >
+                                          {copyingSummary ? (
+                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                          ) : (
+                                            <Clipboard className='h-3.5 w-3.5' />
+                                          )}
+                                        </button>
+                                      )}
+                                      {!isNew && itemId && (
+                                        <RecordSubscribeButton
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {!isNew && itemId && (
+                                        <RecordInsightsButton
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {!isNew && itemId && (
+                                        <RecordChatActions
+                                          collection={collection}
+                                          itemDraft={draft}
+                                        />
+                                      )}
+                                      {!isNew && itemId && (
+                                        <button
+                                          type='button'
+                                          title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
+                                          data-save-as-template
+                                          onClick={() => {
+                                            setTemplateName('')
+                                            setTemplateShared(false)
+                                            setTemplateDialogOpen(true)
                                           }}
                                           className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                         >
-                                          <FileDown className='h-3.5 w-3.5' />
-                                          {(
-                                            activeLayoutData?.layout as
-                                              | { dossier_label?: string | null }
-                                              | undefined
-                                          )?.dossier_label || 'Dossier'}
+                                          <svg
+                                            width='13'
+                                            height='13'
+                                            viewBox='0 0 24 24'
+                                            fill='none'
+                                            stroke='currentColor'
+                                            strokeWidth='2'
+                                            strokeLinecap='round'
+                                            strokeLinejoin='round'
+                                            aria-hidden='true'
+                                          >
+                                            <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
+                                            <polyline points='17 21 17 13 7 13 7 21' />
+                                            <polyline points='7 3 7 8 15 8' />
+                                          </svg>
+                                          Save as template
                                         </button>
                                       )}
-                                    {!isNew && itemId && onDuplicate && (
-                                      <button
-                                        type='button'
-                                        title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
-                                        onClick={async () => {
-                                          // Copy what a person would re-create: plain scalars + M2O
-                                          // FKs, the M2M link sets (Zone, funding years…), and the
-                                          // O2M grids' child rows. Excluded: id, audit stamps,
-                                          // auto-id fields (they regenerate), computed fields
-                                          // (server re-derives), attachments.
-                                          const AUDIT = new Set([
-                                            'id',
-                                            'user_created',
-                                            'date_created',
-                                            'user_updated',
-                                            'date_updated',
-                                            'created_at',
-                                            'updated_at',
-                                            'created',
-                                            'changed',
-                                            'creator',
-                                            'last_state_change'
-                                          ])
-                                          // Only fields the form actually SHOWS copy — hidden columns
-                                          // are integration/system state (external ids, status
-                                          // mirrors) that must not follow the record.
-                                          const copyable = new Set<string>()
-                                          const skip = new Set<string>(AUDIT)
-                                          for (const fc of fieldConfig ?? []) {
-                                            const opts = fc.options as Record<
-                                              string,
-                                              unknown
-                                            > | null
-                                            if (
-                                              opts &&
-                                              typeof opts === 'object' &&
-                                              (opts as { auto_id?: unknown }).auto_id
-                                            )
-                                              skip.add(fc.field)
-                                            if (
-                                              (fc as { computed_type?: string | null })
-                                                .computed_type
-                                            )
-                                              skip.add(fc.field)
-                                            const readonlyFc = Boolean(
-                                              (fc as { readonly?: boolean }).readonly
-                                            )
-                                            const noDupe = Boolean(
-                                              opts &&
-                                                typeof opts === 'object' &&
-                                                (opts as { no_duplicate?: unknown }).no_duplicate
-                                            )
-                                            if (
-                                              !fc.hidden &&
-                                              !readonlyFc &&
-                                              !noDupe &&
-                                              (fc as { layout_assigned?: boolean })
-                                                .layout_assigned !== false
-                                            ) {
-                                              copyable.add(fc.field)
-                                            }
-                                          }
-                                          const values: Record<string, unknown> = {}
-                                          for (const [k, v] of Object.entries(draft)) {
-                                            if (
-                                              !copyable.has(k) ||
-                                              skip.has(k) ||
-                                              k.includes('.') ||
-                                              k.startsWith('__')
-                                            )
-                                              continue
-                                            if (v === undefined || v === null || v === '') continue
-                                            if (typeof v === 'object') continue
-                                            values[k] = v
-                                          }
-                                          // M2M links — every alias's committed id set, staged on the
-                                          // new form exactly like hand-picked selections.
-                                          const links: Record<string, unknown[]> = {}
-                                          for (const [
-                                            aliasField,
-                                            info
-                                          ] of m2mAliasFieldsForRules.entries()) {
-                                            // Attachments never copy — file links belong to the original.
-                                            if (
-                                              aliasField === 'files' ||
-                                              /_files$/i.test(info.manyCollection)
-                                            )
-                                              continue
-                                            const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
-                                            if (ids.length) links[info.stagingKey] = ids
-                                          }
-                                          // O2M child rows for the grids this layout shows (files
-                                          // and audit children are not grids, so they never copy).
-                                          const rows: Record<
-                                            string,
-                                            Array<Record<string, unknown>>
-                                          > = {}
-                                          const CHILD_SKIP = [
-                                            'id',
-                                            'user_created',
-                                            'date_created',
-                                            'user_updated',
-                                            'date_updated',
-                                            'created_at',
-                                            'updated_at',
-                                            'created',
-                                            'changed',
-                                            'creator'
-                                          ]
-                                          for (const fc of fieldConfig ?? []) {
-                                            if (fc.hidden) continue
-                                            const rel = (relations ?? []).find(
-                                              (r) =>
-                                                r.one_collection === collection &&
-                                                !r.junction_field &&
-                                                (r.one_field === fc.field ||
-                                                  r.many_collection === fc.field)
-                                            )
-                                            if (!rel?.many_collection || !rel.many_field) continue
-                                            const key = `${rel.many_collection}.${rel.many_field}`
-                                            if (rows[key]) continue
-                                            try {
-                                              const res = (await client.request(
-                                                get<{ data: Array<Record<string, unknown>> }>(
-                                                  `/items/${rel.many_collection}`,
+                                      {templateDialogOpen &&
+                                        createPortal(
+                                          <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+                                            {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
+                                            <div
+                                              className='absolute inset-0 bg-black/30'
+                                              onClick={() => setTemplateDialogOpen(false)}
+                                            />
+                                            <div
+                                              role='dialog'
+                                              aria-label='Save as template'
+                                              className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Escape') setTemplateDialogOpen(false)
+                                              }}
+                                            >
+                                              <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                                                Save as template
+                                              </p>
+                                              <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                                                This record's plain field values become a reusable
+                                                pre-fill template — same exclusions as Duplicate (no
+                                                ids, audit stamps, computed fields, or line items).
+                                              </p>
+                                              <input
+                                                // biome-ignore lint/a11y/noAutofocus: dialog's single input
+                                                autoFocus
+                                                value={templateName}
+                                                onChange={(e) => setTemplateName(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === 'Enter' && templateName.trim()) {
+                                                    ;(
+                                                      document.querySelector(
+                                                        '[data-template-save-btn]'
+                                                      ) as HTMLButtonElement | null
+                                                    )?.click()
+                                                  }
+                                                }}
+                                                placeholder='Template name'
+                                                className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
+                                              />
+                                              <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                                                <input
+                                                  type='checkbox'
+                                                  checked={templateShared}
+                                                  onChange={(e) =>
+                                                    setTemplateShared(e.target.checked)
+                                                  }
+                                                  className='h-3.5 w-3.5'
+                                                />
+                                                Share with everyone (otherwise it's just yours)
+                                              </label>
+                                              <div className='mt-4 flex justify-end gap-2'>
+                                                <button
+                                                  type='button'
+                                                  onClick={() => setTemplateDialogOpen(false)}
+                                                  className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+                                                >
+                                                  Cancel
+                                                </button>
+                                                <button
+                                                  type='button'
+                                                  data-template-save-btn
+                                                  disabled={!templateName.trim() || templateSaving}
+                                                  onClick={async () => {
+                                                    // Same harvest rules as Duplicate: visible,
+                                                    // editable, non-computed, non-auto-id scalars
+                                                    // + M2O FKs only.
+                                                    const AUDIT = new Set([
+                                                      'id',
+                                                      'user_created',
+                                                      'date_created',
+                                                      'user_updated',
+                                                      'date_updated',
+                                                      'created_at',
+                                                      'updated_at',
+                                                      'created',
+                                                      'changed',
+                                                      'creator',
+                                                      'last_state_change'
+                                                    ])
+                                                    const values: Record<string, unknown> = {}
+                                                    for (const fc of fieldConfig ?? []) {
+                                                      const opts = fc.options as Record<
+                                                        string,
+                                                        unknown
+                                                      > | null
+                                                      if (AUDIT.has(fc.field)) continue
+                                                      if (
+                                                        opts &&
+                                                        typeof opts === 'object' &&
+                                                        (opts as { auto_id?: unknown }).auto_id
+                                                      )
+                                                        continue
+                                                      if (
+                                                        (fc as { computed_type?: string | null })
+                                                          .computed_type
+                                                      )
+                                                        continue
+                                                      if (
+                                                        fc.hidden ||
+                                                        (fc as { readonly?: boolean }).readonly
+                                                      )
+                                                        continue
+                                                      if (
+                                                        (fc as { layout_assigned?: boolean })
+                                                          .layout_assigned === false
+                                                      )
+                                                        continue
+                                                      const v = draft[fc.field]
+                                                      if (v === undefined || v === null || v === '')
+                                                        continue
+                                                      if (typeof v === 'object') continue
+                                                      values[fc.field] = v
+                                                    }
+                                                    if (Object.keys(values).length === 0) {
+                                                      toast.error(
+                                                        'Nothing to save — no plain field values on this record'
+                                                      )
+                                                      return
+                                                    }
+                                                    setTemplateSaving(true)
+                                                    try {
+                                                      await client.request(
+                                                        post('/record-templates', {
+                                                          collection,
+                                                          name: templateName.trim(),
+                                                          data: values,
+                                                          is_shared: templateShared
+                                                        })
+                                                      )
+                                                      toast.success(
+                                                        `Template "${templateName.trim()}" saved`
+                                                      )
+                                                      setTemplateDialogOpen(false)
+                                                    } catch {
+                                                      toast.error('Failed to save template')
+                                                    } finally {
+                                                      setTemplateSaving(false)
+                                                    }
+                                                  }}
+                                                  className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
+                                                >
+                                                  {templateSaving ? 'Saving…' : 'Save template'}
+                                                </button>
+                                              </div>
+                                            </div>
+                                          </div>,
+                                          document.body
+                                        )}
+                                      {!isNew &&
+                                        itemId &&
+                                        !!(
+                                          activeLayoutData?.layout as
+                                            | { dossier_enabled?: boolean | number }
+                                            | undefined
+                                        )?.dossier_enabled && (
+                                          <button
+                                            type='button'
+                                            data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
+                                            onClick={async () => {
+                                              // #641 — server assembles the whole story; this just
+                                              // streams the PDF down with the caller's own auth.
+                                              try {
+                                                const res = await fetch(
+                                                  `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
                                                   {
-                                                    limit: 200,
-                                                    filter: JSON.stringify({
-                                                      [rel.many_field]: { _eq: itemId }
-                                                    })
+                                                    headers: fetchCfg.authHeaders,
+                                                    credentials: fetchCfg.credentials
                                                   }
                                                 )
-                                              )) as { data: Array<Record<string, unknown>> }
-                                              const childRows = (res.data ?? []).map((r0) => {
-                                                const c = { ...r0 }
-                                                for (const k of CHILD_SKIP) delete c[k]
-                                                delete c[rel.many_field as string]
-                                                for (const k of Object.keys(c)) {
-                                                  if (c[k] === null || typeof c[k] === 'object')
-                                                    delete c[k]
-                                                }
-                                                return c
-                                              })
-                                              if (childRows.length) rows[key] = childRows
-                                            } catch {
-                                              /* a grid that fails to read just doesn't copy */
-                                            }
-                                          }
-                                          onDuplicate({ values, links, rows })
-                                        }}
-                                        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                        data-duplicate-record
-                                      >
-                                        <svg
-                                          width='13'
-                                          height='13'
-                                          viewBox='0 0 24 24'
-                                          fill='none'
-                                          stroke='currentColor'
-                                          strokeWidth='2'
-                                          strokeLinecap='round'
-                                          strokeLinejoin='round'
-                                          aria-hidden='true'
-                                        >
-                                          <rect x='9' y='9' width='13' height='13' rx='2' />
-                                          <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
-                                        </svg>
-                                        Duplicate
-                                      </button>
-                                    )}
-                                    {showItemActions && !isNew && (
-                                      <ItemActionButtons
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {/* Admin-defined no-code actions (#39) — always
-                                        mounted; renders nothing when none exist. */}
-                                    {!isNew && itemId && (
-                                      <CustomActionButtons
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                        draft={draft}
-                                      />
-                                    )}
-                                    {!isNew &&
-                                      itemId &&
-                                      fileLayouts.map((fl) => (
-                                        <Button
-                                          key={fl.id}
-                                          type='button'
-                                          variant='outline'
-                                          size='sm'
-                                          disabled={pdfLoading === fl.id}
-                                          onClick={() => void downloadPdf(fl.id)}
-                                          className='gap-1.5'
-                                        >
-                                          {pdfLoading === fl.id ? (
-                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                          ) : (
+                                                if (!res.ok) throw new Error(String(res.status))
+                                                const blob = await res.blob()
+                                                const url = URL.createObjectURL(blob)
+                                                const a = document.createElement('a')
+                                                a.href = url
+                                                a.download = `dossier-${collection}-${itemId}.pdf`
+                                                a.click()
+                                                setTimeout(() => URL.revokeObjectURL(url), 30_000)
+                                              } catch {
+                                                toast.error('Dossier export failed')
+                                              }
+                                            }}
+                                            className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                          >
                                             <FileDown className='h-3.5 w-3.5' />
-                                          )}
-                                          {fl.pdf_button_label || 'Export PDF'}
-                                        </Button>
-                                      ))}
-                                    {(effectiveShowRevisions && !isNew) ||
-                                    (effectiveShowClone && !isNew && isAdmin) ||
-                                    canDelete ? (
-                                      <>
-                                        {effectiveShowRevisions && !isNew && (
-                                          <RevisionsPanel
-                                            collection={collection}
-                                            item={itemId}
-                                            onRollback={() =>
-                                              qc.invalidateQueries({
-                                                queryKey: ['item', collection, itemId]
-                                              })
-                                            }
-                                          />
+                                            {(
+                                              activeLayoutData?.layout as
+                                                | { dossier_label?: string | null }
+                                                | undefined
+                                            )?.dossier_label || 'Dossier'}
+                                          </button>
                                         )}
-                                        {collision && (
-                                          <MidairCollisionDialog
-                                            collision={collision}
+                                      {!isNew && itemId && onDuplicate && (
+                                        <button
+                                          type='button'
+                                          title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                          onClick={async () => {
+                                            // Copy what a person would re-create: plain scalars + M2O
+                                            // FKs, the M2M link sets (Zone, funding years…), and the
+                                            // O2M grids' child rows. Excluded: id, audit stamps,
+                                            // auto-id fields (they regenerate), computed fields
+                                            // (server re-derives), attachments.
+                                            const AUDIT = new Set([
+                                              'id',
+                                              'user_created',
+                                              'date_created',
+                                              'user_updated',
+                                              'date_updated',
+                                              'created_at',
+                                              'updated_at',
+                                              'created',
+                                              'changed',
+                                              'creator',
+                                              'last_state_change'
+                                            ])
+                                            // Only fields the form actually SHOWS copy — hidden columns
+                                            // are integration/system state (external ids, status
+                                            // mirrors) that must not follow the record.
+                                            const copyable = new Set<string>()
+                                            const skip = new Set<string>(AUDIT)
+                                            for (const fc of fieldConfig ?? []) {
+                                              const opts = fc.options as Record<
+                                                string,
+                                                unknown
+                                              > | null
+                                              if (
+                                                opts &&
+                                                typeof opts === 'object' &&
+                                                (opts as { auto_id?: unknown }).auto_id
+                                              )
+                                                skip.add(fc.field)
+                                              if (
+                                                (fc as { computed_type?: string | null })
+                                                  .computed_type
+                                              )
+                                                skip.add(fc.field)
+                                              const readonlyFc = Boolean(
+                                                (fc as { readonly?: boolean }).readonly
+                                              )
+                                              const noDupe = Boolean(
+                                                opts &&
+                                                  typeof opts === 'object' &&
+                                                  (opts as { no_duplicate?: unknown }).no_duplicate
+                                              )
+                                              if (
+                                                !fc.hidden &&
+                                                !readonlyFc &&
+                                                !noDupe &&
+                                                (fc as { layout_assigned?: boolean })
+                                                  .layout_assigned !== false
+                                              ) {
+                                                copyable.add(fc.field)
+                                              }
+                                            }
+                                            const values: Record<string, unknown> = {}
+                                            for (const [k, v] of Object.entries(draft)) {
+                                              if (
+                                                !copyable.has(k) ||
+                                                skip.has(k) ||
+                                                k.includes('.') ||
+                                                k.startsWith('__')
+                                              )
+                                                continue
+                                              if (v === undefined || v === null || v === '')
+                                                continue
+                                              if (typeof v === 'object') continue
+                                              values[k] = v
+                                            }
+                                            // M2M links — every alias's committed id set, staged on the
+                                            // new form exactly like hand-picked selections.
+                                            const links: Record<string, unknown[]> = {}
+                                            for (const [
+                                              aliasField,
+                                              info
+                                            ] of m2mAliasFieldsForRules.entries()) {
+                                              // Attachments never copy — file links belong to the original.
+                                              if (
+                                                aliasField === 'files' ||
+                                                /_files$/i.test(info.manyCollection)
+                                              )
+                                                continue
+                                              const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
+                                              if (ids.length) links[info.stagingKey] = ids
+                                            }
+                                            // O2M child rows for the grids this layout shows (files
+                                            // and audit children are not grids, so they never copy).
+                                            const rows: Record<
+                                              string,
+                                              Array<Record<string, unknown>>
+                                            > = {}
+                                            const CHILD_SKIP = [
+                                              'id',
+                                              'user_created',
+                                              'date_created',
+                                              'user_updated',
+                                              'date_updated',
+                                              'created_at',
+                                              'updated_at',
+                                              'created',
+                                              'changed',
+                                              'creator'
+                                            ]
+                                            for (const fc of fieldConfig ?? []) {
+                                              if (fc.hidden) continue
+                                              const rel = (relations ?? []).find(
+                                                (r) =>
+                                                  r.one_collection === collection &&
+                                                  !r.junction_field &&
+                                                  (r.one_field === fc.field ||
+                                                    r.many_collection === fc.field)
+                                              )
+                                              if (!rel?.many_collection || !rel.many_field) continue
+                                              const key = `${rel.many_collection}.${rel.many_field}`
+                                              if (rows[key]) continue
+                                              try {
+                                                const res = (await client.request(
+                                                  get<{ data: Array<Record<string, unknown>> }>(
+                                                    `/items/${rel.many_collection}`,
+                                                    {
+                                                      limit: 200,
+                                                      filter: JSON.stringify({
+                                                        [rel.many_field]: { _eq: itemId }
+                                                      })
+                                                    }
+                                                  )
+                                                )) as { data: Array<Record<string, unknown>> }
+                                                const childRows = (res.data ?? []).map((r0) => {
+                                                  const c = { ...r0 }
+                                                  for (const k of CHILD_SKIP) delete c[k]
+                                                  delete c[rel.many_field as string]
+                                                  for (const k of Object.keys(c)) {
+                                                    if (c[k] === null || typeof c[k] === 'object')
+                                                      delete c[k]
+                                                  }
+                                                  return c
+                                                })
+                                                if (childRows.length) rows[key] = childRows
+                                              } catch {
+                                                /* a grid that fails to read just doesn't copy */
+                                              }
+                                            }
+                                            onDuplicate({ values, links, rows })
+                                          }}
+                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                          data-duplicate-record
+                                        >
+                                          <svg
+                                            width='13'
+                                            height='13'
+                                            viewBox='0 0 24 24'
+                                            fill='none'
+                                            stroke='currentColor'
+                                            strokeWidth='2'
+                                            strokeLinecap='round'
+                                            strokeLinejoin='round'
+                                            aria-hidden='true'
+                                          >
+                                            <rect x='9' y='9' width='13' height='13' rx='2' />
+                                            <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                          </svg>
+                                          Duplicate
+                                        </button>
+                                      )}
+                                      {showItemActions && !isNew && (
+                                        <ItemActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {/* Admin-defined no-code actions (#39) — always
+                                        mounted; renders nothing when none exist. */}
+                                      {!isNew && itemId && (
+                                        <CustomActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          draft={draft}
+                                        />
+                                      )}
+                                      {!isNew &&
+                                        itemId &&
+                                        fileLayouts.map((fl) => (
+                                          <Button
+                                            key={fl.id}
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            disabled={pdfLoading === fl.id}
+                                            onClick={() => void downloadPdf(fl.id)}
+                                            className='gap-1.5'
+                                          >
+                                            {pdfLoading === fl.id ? (
+                                              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                            ) : (
+                                              <FileDown className='h-3.5 w-3.5' />
+                                            )}
+                                            {fl.pdf_button_label || 'Export PDF'}
+                                          </Button>
+                                        ))}
+                                      {(effectiveShowRevisions && !isNew) ||
+                                      (effectiveShowClone && !isNew && isAdmin) ||
+                                      canDelete ? (
+                                        <>
+                                          {effectiveShowRevisions && !isNew && (
+                                            <RevisionsPanel
+                                              collection={collection}
+                                              item={itemId}
+                                              onRollback={() =>
+                                                qc.invalidateQueries({
+                                                  queryKey: ['item', collection, itemId]
+                                                })
+                                              }
+                                            />
+                                          )}
+                                          {collision && (
+                                            <MidairCollisionDialog
+                                              collision={collision}
+                                              fieldLabel={(f) => {
+                                                const fc = allFields.find((af) => af.field === f)
+                                                return fc?.label || titleCase(f)
+                                              }}
+                                              onCancel={() => setCollision(null)}
+                                              onResolve={(takeTheirs) => {
+                                                // 'theirs' fields adopt the newer value in the
+                                                // draft; the retry then writes only what the
+                                                // person explicitly kept, against the new base.
+                                                for (const c of collision.conflicts) {
+                                                  if (takeTheirs.has(c.field)) {
+                                                    setDraft((prev) => ({
+                                                      ...prev,
+                                                      [c.field]: c.current_value
+                                                    }))
+                                                  }
+                                                }
+                                                baseRevisionOverrideRef.current = collision.latest
+                                                setCollision(null)
+                                                setTimeout(() => saveMut.mutate(), 0)
+                                              }}
+                                            />
+                                          )}
+                                          <ChangeReasonDialog
+                                            challenge={crChallenge}
                                             fieldLabel={(f) => {
                                               const fc = allFields.find((af) => af.field === f)
                                               return fc?.label || titleCase(f)
                                             }}
-                                            onCancel={() => setCollision(null)}
-                                            onResolve={(takeTheirs) => {
-                                              // 'theirs' fields adopt the newer value in the
-                                              // draft; the retry then writes only what the
-                                              // person explicitly kept, against the new base.
-                                              for (const c of collision.conflicts) {
-                                                if (takeTheirs.has(c.field)) {
-                                                  setDraft((prev) => ({
-                                                    ...prev,
-                                                    [c.field]: c.current_value
-                                                  }))
-                                                }
-                                              }
-                                              baseRevisionOverrideRef.current = collision.latest
-                                              setCollision(null)
-                                              setTimeout(() => saveMut.mutate(), 0)
+                                            onCancel={() => setCrChallenge(null)}
+                                            onSubmit={(reason) => {
+                                              changeReasonRef.current = reason
+                                              setCrChallenge(null)
+                                              saveMut.mutate()
                                             }}
                                           />
-                                        )}
-                                        <ChangeReasonDialog
-                                          challenge={crChallenge}
-                                          fieldLabel={(f) => {
-                                            const fc = allFields.find((af) => af.field === f)
-                                            return fc?.label || titleCase(f)
-                                          }}
-                                          onCancel={() => setCrChallenge(null)}
-                                          onSubmit={(reason) => {
-                                            changeReasonRef.current = reason
-                                            setCrChallenge(null)
-                                            saveMut.mutate()
-                                          }}
-                                        />
-                                        {isAdmin && !isNew && itemId && (
-                                          <>
-                                            <Button
-                                              type='button'
-                                              variant='outline'
-                                              size='sm'
-                                              onClick={() => setRawEditOpen(true)}
-                                              title='Edit every field with conditional logic bypassed (admin)'
-                                              className='gap-1.5'
-                                            >
-                                              <Wrench className='h-3.5 w-3.5' />
-                                              Raw edit
-                                            </Button>
-                                            <RawEditSheet
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                              open={rawEditOpen}
-                                              onClose={() => setRawEditOpen(false)}
-                                              onSaved={() => {
-                                                qc.invalidateQueries({
-                                                  queryKey: ['item', collection, String(itemId)]
-                                                })
-                                              }}
-                                            />
-                                          </>
-                                        )}
-                                        {effectiveShowClone && !isNew && isAdmin && (
-                                          <CloneDialog
-                                            collection={collection}
-                                            itemId={itemId}
-                                            fields={fieldConfig ?? []}
-                                            relations={relations}
-                                            currentValues={itemData ?? {}}
-                                            onSuccess={(newId) => onSaved?.(String(newId))}
-                                          />
-                                        )}
-                                        {canDelete &&
-                                          (confirmDelete ? (
+                                          {isAdmin && !isNew && itemId && (
                                             <>
-                                              <span className='text-sm text-muted-foreground'>
-                                                Delete?
-                                              </span>
                                               <Button
                                                 type='button'
+                                                variant='outline'
                                                 size='sm'
-                                                variant='destructive'
+                                                onClick={() => setRawEditOpen(true)}
+                                                title='Edit every field with conditional logic bypassed (admin)'
                                                 className='gap-1.5'
-                                                onClick={() => deleteMut.mutate()}
-                                                disabled={deleteMut.isPending}
                                               >
-                                                {deleteMut.isPending ? (
-                                                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                                ) : (
-                                                  'Yes, delete'
-                                                )}
+                                                <Wrench className='h-3.5 w-3.5' />
+                                                Raw edit
                                               </Button>
+                                              <RawEditSheet
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                open={rawEditOpen}
+                                                onClose={() => setRawEditOpen(false)}
+                                                onSaved={() => {
+                                                  qc.invalidateQueries({
+                                                    queryKey: ['item', collection, String(itemId)]
+                                                  })
+                                                }}
+                                              />
+                                            </>
+                                          )}
+                                          {effectiveShowClone && !isNew && isAdmin && (
+                                            <CloneDialog
+                                              collection={collection}
+                                              itemId={itemId}
+                                              fields={fieldConfig ?? []}
+                                              relations={relations}
+                                              currentValues={itemData ?? {}}
+                                              onSuccess={(newId) => onSaved?.(String(newId))}
+                                            />
+                                          )}
+                                          {canDelete &&
+                                            (confirmDelete ? (
+                                              <>
+                                                <span className='text-sm text-muted-foreground'>
+                                                  Delete?
+                                                </span>
+                                                <Button
+                                                  type='button'
+                                                  size='sm'
+                                                  variant='destructive'
+                                                  className='gap-1.5'
+                                                  onClick={() => deleteMut.mutate()}
+                                                  disabled={deleteMut.isPending}
+                                                >
+                                                  {deleteMut.isPending ? (
+                                                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                  ) : (
+                                                    'Yes, delete'
+                                                  )}
+                                                </Button>
+                                                <Button
+                                                  type='button'
+                                                  size='sm'
+                                                  variant='outline'
+                                                  onClick={() => setConfirmDelete(false)}
+                                                >
+                                                  Cancel
+                                                </Button>
+                                              </>
+                                            ) : (
                                               <Button
                                                 type='button'
                                                 size='sm'
                                                 variant='outline'
-                                                onClick={() => setConfirmDelete(false)}
+                                                className='gap-1.5 text-destructive hover:text-destructive'
+                                                onClick={() => setConfirmDelete(true)}
                                               >
-                                                Cancel
+                                                <Trash2 className='h-3.5 w-3.5' />
                                               </Button>
-                                            </>
-                                          ) : (
-                                            <Button
-                                              type='button'
-                                              size='sm'
-                                              variant='outline'
-                                              className='gap-1.5 text-destructive hover:text-destructive'
-                                              onClick={() => setConfirmDelete(true)}
-                                            >
-                                              <Trash2 className='h-3.5 w-3.5' />
-                                            </Button>
-                                          ))}
-                                        <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
-                                      </>
-                                    ) : null}
+                                            ))}
+                                          <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
+                                        </>
+                                      ) : null}
                                     </HeaderTools>
                                     {!isStepsMode && (
                                       <div className='relative'>
@@ -7754,8 +7865,13 @@ export function ItemEditForm({
                                           initial={initialDataRef.current}
                                           m2mLinks={m2mLinks}
                                           m2mUnlinks={m2mUnlinks}
-                                          pendingRowCount={[...pendingO2MRows.values()].reduce((n, r) => n + r.length, 0)}
-                                          pendingDeleteCount={[...pendingO2MDeletes.values()].reduce((n, r) => n + r.size, 0)}
+                                          pendingRowCount={[...pendingO2MRows.values()].reduce(
+                                            (n, r) => n + r.length,
+                                            0
+                                          )}
+                                          pendingDeleteCount={[
+                                            ...pendingO2MDeletes.values()
+                                          ].reduce((n, r) => n + r.size, 0)}
                                         />
                                         <Button
                                           type='button'
@@ -8227,19 +8343,23 @@ export function ItemEditForm({
                                       itemId={String(itemId)}
                                     />
                                   )}
-                                  {!isNew && itemId && !activeLayoutData?.layout?.hide_integrity_banner && (
-                                    <RecordIntegrityBanner
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                      onJumpToField={flashField}
-                                    />
-                                  )}
-                                  {!isNew && itemId && !activeLayoutData?.layout?.hide_sla_banner && (
-                                    <SlaBreachBanner
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                    />
-                                  )}
+                                  {!isNew &&
+                                    itemId &&
+                                    !activeLayoutData?.layout?.hide_integrity_banner && (
+                                      <RecordIntegrityBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                        onJumpToField={flashField}
+                                      />
+                                    )}
+                                  {!isNew &&
+                                    itemId &&
+                                    !activeLayoutData?.layout?.hide_sla_banner && (
+                                      <SlaBreachBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
                                   {importIssues.length > 0 && (
                                     <ImportIssuesPanel
                                       issues={importIssues}
@@ -8484,7 +8604,11 @@ function MidairCollisionDialog({
     () => new Set(collision.conflicts.map((c) => c.field))
   )
   const fmt = (v: unknown) =>
-    v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : String(v).slice(0, 200)
+    v == null || v === ''
+      ? '—'
+      : typeof v === 'object'
+        ? JSON.stringify(v).slice(0, 120)
+        : String(v).slice(0, 200)
   return createPortal(
     <div className='fixed inset-0 z-[130] flex items-center justify-center'>
       <div className='absolute inset-0 bg-black/40' onClick={onCancel} />
@@ -8500,7 +8624,10 @@ function MidairCollisionDialog({
           {collision.conflicts.map((c) => {
             const theirs = takeTheirs.has(c.field)
             return (
-              <div key={c.field} className='rounded-md border border-slate-200 p-2.5 dark:border-border'>
+              <div
+                key={c.field}
+                className='rounded-md border border-slate-200 p-2.5 dark:border-border'
+              >
                 <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
                   {fieldLabel(c.field)}
                 </p>

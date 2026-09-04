@@ -317,3 +317,46 @@ describe('recalcAffectedRollups', () => {
     await expect(recalcAffectedRollups('unit_workflows', { id: 'w1' })).resolves.toBeUndefined()
   })
 })
+
+describe('parent_filter', () => {
+  it('parseRollupFormula carries parent_filter for both config shapes', async () => {
+    const { parseRollupFormula } = await import('../../../services/rollups.js')
+    const single = parseRollupFormula(
+      JSON.stringify({
+        related_collection: 'lines',
+        fk_field: 'wf',
+        aggregate: 'sum',
+        value_field: 'amount',
+        parent_filter: { workflow_type: { _neq: 2 } }
+      })
+    )
+    expect(single?.parent_filter).toEqual({ workflow_type: { _neq: 2 } })
+    const multi = parseRollupFormula(
+      JSON.stringify({
+        sources: [{ related_collection: 'lines', fk_field: 'wf', aggregate: 'count' }],
+        parent_filter: { kind: 'x' }
+      })
+    )
+    expect(multi?.parent_filter).toEqual({ kind: 'x' })
+    expect(
+      parseRollupFormula(
+        JSON.stringify({ related_collection: 'l', fk_field: 'f', aggregate: 'count' })
+      )?.parent_filter
+    ).toBeUndefined()
+  })
+
+  it('matchesParentFilter mirrors the SQL filter: _neq is null-safe, literals mean _eq', async () => {
+    const { matchesParentFilter } = await import('../../../services/rollups.js')
+    const f = { workflow_type: { _neq: 2 } }
+    expect(matchesParentFilter({ workflow_type: 1 }, f)).toBe(true)
+    expect(matchesParentFilter({ workflow_type: null }, f)).toBe(true)
+    expect(matchesParentFilter({ workflow_type: 2 }, f)).toBe(false)
+    expect(matchesParentFilter({ workflow_type: '2' }, f)).toBe(false)
+    expect(matchesParentFilter({ status: 'open' }, { status: 'open' })).toBe(true)
+    expect(matchesParentFilter({ status: 'closed' }, { status: { _in: ['open', 'draft'] } })).toBe(
+      false
+    )
+    expect(matchesParentFilter(undefined, f)).toBe(false)
+    expect(matchesParentFilter({ workflow_type: 2 }, undefined)).toBe(true)
+  })
+})

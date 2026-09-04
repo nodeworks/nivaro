@@ -1,8 +1,7 @@
 import { Parser } from 'expr-eval'
-import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { dbRead, db } from '../db/index.js'
+import { db, dbRead } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
@@ -18,29 +17,31 @@ import {
 import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
-import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import { enforceContracts } from './integration-contracts.js'
-import { applyUserScopesToQuery } from './user-scopes.js'
-import { writeTrashRow } from './trash.js'
+import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { span } from './request-trace.js'
-import { applyRowLocksOnWrite, applyRowRulesOnCreate } from './row-rules-autofill.js'
-import { enforceValidationRules } from './validation-rules.js'
 import {
   computeRollupTotal,
-  parseRollupFormula,
-  recalcAffectedRollups,
+  matchesParentFilter,
   type NormalizedRollup,
-  type RollupSource
+  parseRollupFormula,
+  type RollupSource,
+  recalcAffectedRollups
 } from './rollups.js'
+import { applyRowLocksOnWrite, applyRowRulesOnCreate } from './row-rules-autofill.js'
+import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
+import { applyUserScopesToQuery } from './user-scopes.js'
+import { enforceValidationRules } from './validation-rules.js'
 
+export type { NormalizedRollup, RollupSource }
 // Re-exported for compatibility with existing importers/tests — canonical
 // definitions and the recalc engine live in ./rollups.js.
 export { computeRollupTotal, parseRollupFormula }
-export type { NormalizedRollup, RollupSource }
 
 const _exprParser = new Parser({
   operators: {
@@ -219,11 +220,13 @@ const columnCache = new Map<string, Set<string>>()
 export async function getActualColumns(table: string): Promise<Set<string>> {
   const cached = columnCache.get(table)
   if (cached) return cached
-  const rows = rawRows<{ COLUMN_NAME: string }>(await db.raw(
-    `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
-    [table]
-  ))
-  const set = new Set(rows.map(r => r.COLUMN_NAME))
+  const rows = rawRows<{ COLUMN_NAME: string }>(
+    await db.raw(
+      `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      [table]
+    )
+  )
+  const set = new Set(rows.map((r) => r.COLUMN_NAME))
   columnCache.set(table, set)
   return set
 }
@@ -361,7 +364,9 @@ async function applyReadComputedFields(
   // costs one aggregate query PER ROW, and pickers fetching `fields=id,<label>`
   // must not pay for rollups they never render (workflows list read was 14s).
   const wanted = (f: { field: string }) => !requestedFields || requestedFields.includes(f.field)
-  const readFields = fields.filter((f) => f.computed_type === 'read' && f.computed_formula && wanted(f))
+  const readFields = fields.filter(
+    (f) => f.computed_type === 'read' && f.computed_formula && wanted(f)
+  )
   const rollupFields = fields.filter(
     (f) => f.computed_type === 'rollup' && f.computed_formula && wanted(f)
   )
@@ -383,6 +388,8 @@ async function applyReadComputedFields(
         item[f.field] = null
         continue
       }
+      // A parent the rollup does not apply to keeps whatever the row holds.
+      if (cfg.parent_filter && !matchesParentFilter(item, cfg.parent_filter)) continue
       item[f.field] = await computeRollupTotal(cfg, item.id, collection)
     }
   }
@@ -559,7 +566,9 @@ async function applyDatetimeAutoFields(
     try {
       const opts = JSON.parse(f.options ?? '{}') as Record<string, unknown>
       if (opts[event] === 'now') payload[f.field] = now
-    } catch { /* malformed options — skip */ }
+    } catch {
+      /* malformed options — skip */
+    }
   }
 }
 
@@ -573,11 +582,13 @@ export async function applyFieldRules(
     if (changedField) {
       triggerFields = [changedField]
     } else {
-      triggerFields = ((await db('nivaro_field_rules')
-        .where({ collection, is_active: true })
-        .orderBy('sort')
-        .distinct('trigger_field')
-        .pluck('trigger_field')) as string[]).filter((f) => f in payload)
+      triggerFields = (
+        (await db('nivaro_field_rules')
+          .where({ collection, is_active: true })
+          .orderBy('sort')
+          .distinct('trigger_field')
+          .pluck('trigger_field')) as string[]
+      ).filter((f) => f in payload)
     }
   } catch {
     // Table may not exist yet before migration runs — non-fatal.
@@ -588,7 +599,13 @@ export async function applyFieldRules(
   // + only_when_empty resolution to the shared engine used by POST /field-rules/evaluate.
   for (const triggerField of triggerFields) {
     if (!(triggerField in payload)) continue
-    const updates = await evaluateRulesForTrigger(db, collection, triggerField, payload[triggerField], payload)
+    const updates = await evaluateRulesForTrigger(
+      db,
+      collection,
+      triggerField,
+      payload[triggerField],
+      payload
+    )
     Object.assign(payload, updates)
   }
 }
@@ -756,7 +773,10 @@ function parseFieldExpansion(fields: string[]): {
   const direct = new Set<string>()
   const nested: Record<string, string[]> = {}
   for (const f of fields) {
-    if (f === '*') { direct.add('*'); continue }
+    if (f === '*') {
+      direct.add('*')
+      continue
+    }
     const dot = f.indexOf('.')
     if (dot === -1) {
       direct.add(f)
@@ -794,7 +814,7 @@ async function expandRelations(
   const rels = await getRelsForCollection(collection)
 
   // Resolve wildcard parent: expand ALL M2O relations for this collection
-  let expandEntries = Object.entries(nested).filter(([k]) => k !== '*')
+  const expandEntries = Object.entries(nested).filter(([k]) => k !== '*')
   if ('*' in nested) {
     const wildcardSubs = nested['*']
     for (const r of rels) {
@@ -1242,14 +1262,23 @@ function applyFilters(
 
     // ── Junction existence filter (for cascade parent → O2M child M2O) ─────
     if (key === '_exists_junction') {
-      const { table, self_fk, filter_fk, value: filterValue } = value as {
-        table: string; self_fk: string; filter_fk: string; value: unknown
+      const {
+        table,
+        self_fk,
+        filter_fk,
+        value: filterValue
+      } = value as {
+        table: string
+        self_fk: string
+        filter_fk: string
+        value: unknown
       }
       // Security: validate table/self_fk/filter_fk against the loaded relation
       // metadata for this collection. Accepts only identifiers that correspond to
       // a real M2M junction row in nivaro_relations — prevents table/column injection.
       const isValidJunction = rels.some(
-        (r) => r.many_collection === table && r.many_field === self_fk && r.junction_field === filter_fk
+        (r) =>
+          r.many_collection === table && r.many_field === self_fk && r.junction_field === filter_fk
       )
       if (!isValidJunction) {
         q.whereRaw('1=0') // deny — invalid junction identifier
@@ -1423,7 +1452,12 @@ async function planConditionPath(collection: string, path: string[]): Promise<Pa
           | undefined)
     if (segs.length === 1) {
       if (alias?.many_collection) {
-        hops.push({ kind: 'alias', from: current, child: alias.many_collection, childFk: alias.many_field })
+        hops.push({
+          kind: 'alias',
+          from: current,
+          child: alias.many_collection,
+          childFk: alias.many_field
+        })
         return { hops, leafTable: alias.many_collection, leafCol: alias.junction_field ?? 'id' }
       }
       return { hops, leafTable: current, leafCol: seg }
@@ -1433,7 +1467,12 @@ async function planConditionPath(collection: string, path: string[]): Promise<Pa
       current = m2o.one_collection
       segs = segs.slice(1)
     } else if (alias?.many_collection) {
-      hops.push({ kind: 'alias', from: current, child: alias.many_collection, childFk: alias.many_field })
+      hops.push({
+        kind: 'alias',
+        from: current,
+        child: alias.many_collection,
+        childFk: alias.many_field
+      })
       current = alias.many_collection
       // M2M: remaining segments live on the junction's target — route the walk
       // through the junction_field M2O next. O2M: the child IS the target.
@@ -1525,7 +1564,8 @@ async function applyConditions(
     if (cond.path.length === 1 && cond.path[0].startsWith('$has_')) {
       const wantHas = cond.value !== false && cond.value !== 'false' && cond.value !== 0
       const kind = cond.path[0]
-      const exists = (cb: (this: QB) => void) => (wantHas ? q.whereExists(cb) : q.whereNotExists(cb))
+      const exists = (cb: (this: QB) => void) =>
+        wantHas ? q.whereExists(cb) : q.whereNotExists(cb)
       if (kind === '$has_comments') {
         exists(function () {
           this.select(db.raw('1'))
@@ -1568,7 +1608,10 @@ async function applyConditions(
         if (!fileAlias?.many_collection || !fileAlias.junction_field) continue
         const junction = fileAlias.many_collection
         const parentFk = fileAlias.many_field
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(junction) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(parentFk))
+        if (
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(junction) ||
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(parentFk)
+        )
           continue
         exists(function () {
           this.select(db.raw('1'))
@@ -1753,14 +1796,18 @@ export async function readItems(
   if (search) {
     // Escape MSSQL LIKE special characters to prevent wildcard injection.
     // Bracket is the MSSQL escape character for [ itself.
-    const escapedSearch = search.replace(/[%_\[]/g, (c) => `[${c}]`)
+    const escapedSearch = search.replace(/[%_[]/g, (c) => `[${c}]`)
 
     const [fieldMeta, actualCols] = await Promise.all([
       getFields(collection),
-      db.raw(
-        `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
-        [collection]
-      ).then((res) => rawRows<{ COLUMN_NAME: string }>(res).map(r => r.COLUMN_NAME)) as Promise<string[]>
+      db
+        .raw(
+          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+          [collection]
+        )
+        .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME)) as Promise<
+        string[]
+      >
     ])
     const actualColSet = new Set(actualCols)
     let searchCols = fieldMeta
@@ -1783,9 +1830,7 @@ export async function readItems(
         .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME))) as string[]
       // Never search a secret: these are stripped from responses, and matching
       // on them would let a caller confirm a token by probing for it.
-      searchCols = textCols.filter(
-        (c) => !/password|token|secret|totp|external_id/i.test(c)
-      )
+      searchCols = textCols.filter((c) => !/password|token|secret|totp|external_id/i.test(c))
     }
 
     if (searchCols.length) {
@@ -1900,7 +1945,13 @@ export async function readItems(
     )
   }
 
-  const result = { data, total, limit, offset: effectiveOffset, ...(aggregates ? { aggregates } : {}) }
+  const result = {
+    data,
+    total,
+    limit,
+    offset: effectiveOffset,
+    ...(aggregates ? { aggregates } : {})
+  }
 
   await span('hooks:after-read', () =>
     hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })
@@ -1980,7 +2031,6 @@ async function primeRelCacheForFilter(
     }
   }
 }
-
 
 /** Column names are interpolated into a query, so they must be identifiers. */
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -2477,7 +2527,11 @@ export async function updateOne(
       .where('id', '>', baseRevision)
       .orderBy('id', 'asc')
       .limit(50)
-      .select('id', 'delta', 'data')) as Array<{ id: number; delta: string | null; data: string | null }>
+      .select('id', 'delta', 'data')) as Array<{
+      id: number
+      delta: string | null
+      data: string | null
+    }>
     if (newer.length > 0) {
       const theirFields = new Set<string>()
       for (const r of newer) {
@@ -2490,9 +2544,9 @@ export async function updateOne(
       }
       const overlap = [...callerFields].filter((f) => theirFields.has(f))
       if (overlap.length > 0) {
-        const currentRow = (await db(collection)
-          .where({ id })
-          .first()) as Record<string, unknown> | undefined
+        const currentRow = (await db(collection).where({ id }).first()) as
+          | Record<string, unknown>
+          | undefined
         const err = new Error(
           `Someone else changed ${overlap.join(', ')} since you loaded this record`
         ) as Error & {
@@ -2701,18 +2755,23 @@ export async function deleteOne(
   // OPEN with a warning: a typo must not make every record undeletable.
   try {
     const guardRaw = (col as { delete_guard?: string | null }).delete_guard
-    const guards = guardRaw
-      ? (JSON.parse(String(guardRaw)) as Array<Record<string, unknown>>)
-      : []
+    const guards = guardRaw ? (JSON.parse(String(guardRaw)) as Array<Record<string, unknown>>) : []
     for (const g of Array.isArray(guards) ? guards : []) {
       if (g.type === 'children') {
         const child = String(g.collection ?? '')
         const fk = String(g.fk_field ?? '')
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk)) continue
-        const row = await db(child).where(fk, id).first('id').catch(() => undefined)
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(child) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fk))
+          continue
+        const row = await db(child)
+          .where(fk, id)
+          .first('id')
+          .catch(() => undefined)
         if (row) {
           throw new DeleteGuardError(
-            String(g.message ?? `This record has linked ${child.replace(/_/g, ' ')} and cannot be deleted`)
+            String(
+              g.message ??
+                `This record has linked ${child.replace(/_/g, ' ')} and cannot be deleted`
+            )
           )
         }
       } else if (g.type === 'condition' && previousData) {

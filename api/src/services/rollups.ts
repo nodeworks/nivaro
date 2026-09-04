@@ -36,35 +36,126 @@ export interface RollupSource {
 
 export interface NormalizedRollup {
   sources: RollupSource[]
+  /** Optional PARENT-row condition (same operator vocabulary as a source
+   *  filter). A parent that does not match is left alone by every compute
+   *  path — recalc, backfill, virtual read, the client's live figure — so the
+   *  column holds a plain, hand-entered value for those rows. The CAR case:
+   *  workflows.requisition_amount is a rollup over lines for PUBs but a simple
+   *  decimal for CARs (workflow_type 2), which have no lines. */
+  parent_filter?: Record<string, unknown>
 }
 
-const ROLLUP_AGGREGATES = new Set(['sum', 'count', 'avg', 'min', 'max', 'median', 'distinct_count', 'weighted_avg'])
+/** JS twin of applyRollupFilter for a row already in hand. `_neq` is
+ *  null-safe here too; a literal value means `_eq`. */
+export function matchesParentFilter(
+  row: Record<string, unknown> | null | undefined,
+  filter: Record<string, unknown> | undefined
+): boolean {
+  if (!filter || typeof filter !== 'object') return true
+  if (!row) return false
+  const num = (v: unknown) => (v === null || v === undefined || v === '' ? Number.NaN : Number(v))
+  const same = (a: unknown, b: unknown) =>
+    a === b ||
+    (a != null && b != null && String(a) === String(b)) ||
+    (typeof b === 'boolean' && num(a) === (b ? 1 : 0))
+  for (const [col, spec] of Object.entries(filter)) {
+    if (!IDENT_RE.test(col)) continue
+    const val = row[col]
+    if (spec !== null && typeof spec === 'object' && !Array.isArray(spec)) {
+      for (const [op, v] of Object.entries(spec as Record<string, unknown>)) {
+        switch (op) {
+          case '_eq':
+            if (!same(val, v)) return false
+            break
+          case '_neq':
+            if (val != null && same(val, v)) return false
+            break
+          case '_gt':
+            if (!(num(val) > num(v))) return false
+            break
+          case '_gte':
+            if (!(num(val) >= num(v))) return false
+            break
+          case '_lt':
+            if (!(num(val) < num(v))) return false
+            break
+          case '_lte':
+            if (!(num(val) <= num(v))) return false
+            break
+          case '_null':
+            if (val != null) return false
+            break
+          case '_nnull':
+            if (val == null) return false
+            break
+          case '_in':
+            if (!Array.isArray(v) || !v.some((x) => same(val, x))) return false
+            break
+          default:
+            break
+        }
+      }
+    } else if (!same(val, spec)) return false
+  }
+  return true
+}
+
+const ROLLUP_AGGREGATES = new Set([
+  'sum',
+  'count',
+  'avg',
+  'min',
+  'max',
+  'median',
+  'distinct_count',
+  'weighted_avg'
+])
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** Apply a RollupSource.filter to a query. Unknown ops and bad identifiers are
  *  skipped (filter is admin-authored config; a typo must not break the write
  *  path that triggers recalcs). */
-function applyRollupFilter(q: Knex.QueryBuilder, filter: Record<string, unknown> | undefined): void {
+function applyRollupFilter(
+  q: Knex.QueryBuilder,
+  filter: Record<string, unknown> | undefined
+): void {
   if (!filter || typeof filter !== 'object') return
   for (const [col, spec] of Object.entries(filter)) {
     if (!IDENT_RE.test(col)) continue
     if (spec !== null && typeof spec === 'object' && !Array.isArray(spec)) {
       for (const [op, v] of Object.entries(spec as Record<string, unknown>)) {
         switch (op) {
-          case '_eq': q.where(col, v as Knex.Value); break
+          case '_eq':
+            q.where(col, v as Knex.Value)
+            break
           case '_neq':
             // Null-safe: MSSQL `col != v` silently excludes NULL rows.
             q.where((b) => b.whereNot(col, v as Knex.Value).orWhereNull(col))
             break
-          case '_gt': q.where(col, '>', v as Knex.Value); break
-          case '_gte': q.where(col, '>=', v as Knex.Value); break
-          case '_lt': q.where(col, '<', v as Knex.Value); break
-          case '_lte': q.where(col, '<=', v as Knex.Value); break
-          case '_null': q.whereNull(col); break
-          case '_nnull': q.whereNotNull(col); break
-          case '_in': if (Array.isArray(v)) q.whereIn(col, v as Knex.Value[]); break
-          default: break
+          case '_gt':
+            q.where(col, '>', v as Knex.Value)
+            break
+          case '_gte':
+            q.where(col, '>=', v as Knex.Value)
+            break
+          case '_lt':
+            q.where(col, '<', v as Knex.Value)
+            break
+          case '_lte':
+            q.where(col, '<=', v as Knex.Value)
+            break
+          case '_null':
+            q.whereNull(col)
+            break
+          case '_nnull':
+            q.whereNotNull(col)
+            break
+          case '_in':
+            if (Array.isArray(v)) q.whereIn(col, v as Knex.Value[])
+            break
+          default:
+            break
         }
       }
     } else {
@@ -192,7 +283,14 @@ export function parseRollupFormula(raw: string | null): NormalizedRollup | null 
   if (!rawSources.length) return null
   if (!rawSources.every(isValidRollupSource)) return null
 
-  return { sources: rawSources as RollupSource[] }
+  const pf = (parsed as { parent_filter?: unknown }).parent_filter
+  const parent_filter =
+    pf && typeof pf === 'object' && !Array.isArray(pf) && Object.keys(pf as object).length > 0
+      ? (pf as Record<string, unknown>)
+      : undefined
+  return parent_filter
+    ? { sources: rawSources as RollupSource[], parent_filter }
+    : { sources: rawSources as RollupSource[] }
 }
 
 /**
@@ -294,9 +392,7 @@ OPTION (MAXRECURSION 100)`
         .modify((q) => applyRollupFilter(q, cfg.filter))
         .limit(10_000)
         .select(cols)) as Array<Record<string, unknown>>
-      const nums = rows
-        .map((row) => Number(row[cfg.value_field]))
-        .filter((n) => Number.isFinite(n))
+      const nums = rows.map((row) => Number(row[cfg.value_field])).filter((n) => Number.isFinite(n))
       if (cfg.aggregate === 'distinct_count') return new Set(nums).size
       if (nums.length === 0) return null
       if (cfg.aggregate === 'median') {
@@ -360,6 +456,8 @@ export interface RollupContributorEntry {
   parentFk: string
   rollupField: string
   sources: RollupSource[] // full config — recalc recomputes ALL sources, not just the triggering one
+  /** Parent rows not matching this are never written (see NormalizedRollup). */
+  parentFilter?: Record<string, unknown>
 }
 
 interface RollupFieldRow {
@@ -393,7 +491,8 @@ async function buildContributorCache(): Promise<Map<string, RollupContributorEnt
           parentCollection: row.collection,
           parentFk: source.fk_field,
           rollupField: row.field,
-          sources: cfg.sources
+          sources: cfg.sources,
+          parentFilter: cfg.parent_filter
         }
         const list = map.get(source.related_collection)
         if (list) list.push(entry)
@@ -427,12 +526,26 @@ export function bustRollupContributorCache(): void {
  * Skips the write when the recomputed total matches the current value.
  * Never throws: a recalc failure must not break the write that triggered it.
  */
+// A stored rollup can itself feed another stored rollup (workflow lines →
+// workflows.requisition_amount → projects.pub_amount). The parent write here
+// is RAW, so nothing downstream would ever notice it; cascade explicitly,
+// bounded so a mis-configured cycle cannot run away.
+const MAX_CASCADE_DEPTH = 3
+
 export async function recalcRollupsForParent(
   entry: RollupContributorEntry,
-  parentId: unknown
+  parentId: unknown,
+  depth = 0
 ): Promise<void> {
   if (parentId == null) return
   try {
+    if (entry.parentFilter) {
+      const cols = Object.keys(entry.parentFilter).filter((c) => IDENT_RE.test(c))
+      const parent = (await db(entry.parentCollection)
+        .where({ id: parentId })
+        .first(...(cols.length ? cols : ['id']))) as Record<string, unknown> | undefined
+      if (!matchesParentFilter(parent, entry.parentFilter)) return
+    }
     const total = await computeRollupTotal(
       { sources: entry.sources },
       parentId,
@@ -451,6 +564,28 @@ export async function recalcRollupsForParent(
     await db(entry.parentCollection)
       .where({ id: parentId })
       .update({ [entry.rollupField]: total })
+    // Cascade: is this parent row itself a contributor to a stored rollup on
+    // ITS parent? Only when one of those rollups reads the field we just wrote.
+    if (depth < MAX_CASCADE_DEPTH) {
+      const grand = (await getRollupContributors(entry.parentCollection)).filter((g) =>
+        g.sources.some(
+          (s) =>
+            s.related_collection === entry.parentCollection &&
+            (s.value_field === entry.rollupField ||
+              (s.value_formula ?? '').includes(`{{${entry.rollupField}}}`))
+        )
+      )
+      if (grand.length > 0) {
+        const fks = [...new Set(grand.map((g) => g.parentFk))]
+        const row = (await db(entry.parentCollection)
+          .where({ id: parentId })
+          .first(...fks)) as Record<string, unknown> | undefined
+        for (const g of grand) {
+          const gid = row?.[g.parentFk]
+          if (gid != null) await recalcRollupsForParent(g, gid, depth + 1)
+        }
+      }
+    }
   } catch (err) {
     console.error(
       { err, parentCollection: entry.parentCollection, rollupField: entry.rollupField, parentId },

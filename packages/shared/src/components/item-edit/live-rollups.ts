@@ -54,6 +54,24 @@ export function parseRollupSources(formula: unknown): RollupSource[] {
   )
 }
 
+/** The rollup's optional parent condition (see the server's NormalizedRollup):
+ *  when the host record does not match, the field is a plain value and the
+ *  live figure must not replace it. */
+export function parseRollupParentFilter(formula: unknown): Record<string, unknown> | undefined {
+  let cfg = formula
+  if (typeof cfg === 'string') {
+    try {
+      cfg = JSON.parse(cfg)
+    } catch {
+      return undefined
+    }
+  }
+  const pf = (cfg as { parent_filter?: unknown } | null)?.parent_filter
+  return pf && typeof pf === 'object' && !Array.isArray(pf)
+    ? (pf as Record<string, unknown>)
+    : undefined
+}
+
 function compare(value: unknown, op: string, operand: unknown): boolean {
   const num = (v: unknown) => (v === null || v === undefined || v === '' ? Number.NaN : Number(v))
   switch (op) {
@@ -115,7 +133,10 @@ function evalRowFormula(formula: string, row: Record<string, unknown>): number |
  * Returns null when the source contributes nothing measurable, so a caller can
  * tell "no rows" apart from "sums to zero".
  */
-export function aggregateRows(source: RollupSource, rows: Record<string, unknown>[]): number | null {
+export function aggregateRows(
+  source: RollupSource,
+  rows: Record<string, unknown>[]
+): number | null {
   const matching = rows.filter((r) => matchesRollupFilter(r, source.filter))
   const aggregate = source.aggregate ?? 'sum'
   if (aggregate === 'count') return matching.length
