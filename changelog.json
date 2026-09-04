@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-04T00:44:09.300Z",
+  "generated_at": "2026-09-04T01:01:13.837Z",
   "releases": [
+    {
+      "version": "0.1.203",
+      "tag": "v0.1.203",
+      "date": "2026-09-03T21:01:08-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "rules",
+              "text": "m2m_map keeps related sets equal across collections — CAR ↔ project junction sync",
+              "hash": "e3c1649d"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "rollups",
+              "text": "CAR = PUB'd amount, non-CAR = purchase order request — fix wording in the parent_filter comment",
+              "hash": "62650b5a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.202",
       "tag": "v0.1.202",
-      "date": "2026-09-03T20:44:02-04:00",
+      "date": "2026-09-03T20:44:09-04:00",
       "sections": [
         {
           "label": "Added",
