@@ -6,8 +6,9 @@ import {
   Globe,
   Play,
   Plus,
-  Sparkles,
+  Power,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   Workflow,
@@ -112,6 +113,7 @@ function FlowRow({
   isDeleting,
   onOpen,
   onExport,
+  onToggleStatus,
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete
@@ -121,6 +123,7 @@ function FlowRow({
   isDeleting: boolean
   onOpen: () => void
   onExport: () => void
+  onToggleStatus: () => void
   onRequestDelete: () => void
   onCancelDelete: () => void
   onConfirmDelete: () => void
@@ -187,6 +190,23 @@ function FlowRow({
           </span>
         ) : (
           <span className='hidden items-center gap-0.5 group-hover/row:flex'>
+            <button
+              type='button'
+              title={
+                flow.status === 'active'
+                  ? 'Disable — the trigger stops firing until re-enabled'
+                  : 'Enable flow'
+              }
+              onClick={onToggleStatus}
+              className={cn(
+                'rounded-md p-1.5 transition-colors',
+                flow.status === 'active'
+                  ? 'text-emerald-500 hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/20'
+                  : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-900/20'
+              )}
+            >
+              <Power className='h-3.5 w-3.5' />
+            </button>
             <button
               type='button'
               title='Export flow'
@@ -259,65 +279,65 @@ function CreateFlowDialog({
         <form onSubmit={handleSubmit}>
           <DialogBody>
             <div className='space-y-4'>
-            <div className='space-y-1.5'>
-              <Label htmlFor='flow-name'>
-                Name <span className='text-red-500'>*</span>
-              </Label>
-              <Input
-                id='flow-name'
-                value={form.name}
-                onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                placeholder='e.g. Send welcome email'
-                required
-              />
-            </div>
-
-            <div className='grid grid-cols-2 gap-3'>
               <div className='space-y-1.5'>
-                <Label htmlFor='flow-trigger'>Trigger</Label>
-                <Select
-                  value={form.trigger}
-                  onValueChange={(v) => setForm((p) => ({ ...p, trigger: v }))}
-                >
-                  <SelectTrigger id='flow-trigger'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='manual'>Manual</SelectItem>
-                    <SelectItem value='schedule'>Schedule</SelectItem>
-                    <SelectItem value='event'>Event</SelectItem>
-                    <SelectItem value='webhook'>Webhook</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor='flow-name'>
+                  Name <span className='text-red-500'>*</span>
+                </Label>
+                <Input
+                  id='flow-name'
+                  value={form.name}
+                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder='e.g. Send welcome email'
+                  required
+                />
+              </div>
+
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='space-y-1.5'>
+                  <Label htmlFor='flow-trigger'>Trigger</Label>
+                  <Select
+                    value={form.trigger}
+                    onValueChange={(v) => setForm((p) => ({ ...p, trigger: v }))}
+                  >
+                    <SelectTrigger id='flow-trigger'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='manual'>Manual</SelectItem>
+                      <SelectItem value='schedule'>Schedule</SelectItem>
+                      <SelectItem value='event'>Event</SelectItem>
+                      <SelectItem value='webhook'>Webhook</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className='space-y-1.5'>
+                  <Label htmlFor='flow-status'>Status</Label>
+                  <Select
+                    value={form.status}
+                    onValueChange={(v) => setForm((p) => ({ ...p, status: v }))}
+                  >
+                    <SelectTrigger id='flow-status'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='active'>Active</SelectItem>
+                      <SelectItem value='inactive'>Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className='space-y-1.5'>
-                <Label htmlFor='flow-status'>Status</Label>
-                <Select
-                  value={form.status}
-                  onValueChange={(v) => setForm((p) => ({ ...p, status: v }))}
-                >
-                  <SelectTrigger id='flow-status'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='active'>Active</SelectItem>
-                    <SelectItem value='inactive'>Inactive</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor='flow-description'>Description</Label>
+                <Textarea
+                  id='flow-description'
+                  value={form.description}
+                  onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                  placeholder='What does this flow do?'
+                  rows={3}
+                />
               </div>
-            </div>
-
-            <div className='space-y-1.5'>
-              <Label htmlFor='flow-description'>Description</Label>
-              <Textarea
-                id='flow-description'
-                value={form.description}
-                onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-                placeholder='What does this flow do?'
-                rows={3}
-              />
-            </div>
             </div>
           </DialogBody>
 
@@ -356,7 +376,8 @@ export function FlowsPage() {
       navigate(`/flows/${r.data.data.id}`)
     } catch (e) {
       toast.error(
-        (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'AI build failed'
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
+          'AI build failed'
       )
     } finally {
       setAiBusy(false)
@@ -392,6 +413,18 @@ export function FlowsPage() {
       )
     : flows
 
+  // Enable/disable from the list — the same status PATCH the editor uses;
+  // the trigger simply stops firing while inactive (nothing is deleted, and
+  // the Versions panel in the editor still reverts config).
+  const toggleStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: 'active' | 'inactive' }) =>
+      api.patch(`/flows/${id}`, { status }),
+    onSuccess: (_r, v) => {
+      queryClient.invalidateQueries({ queryKey: ['flows'] })
+      toast.success(v.status === 'active' ? 'Flow enabled' : 'Flow disabled')
+    },
+    onError: () => toast.error('Could not update the flow')
+  })
   const deleteFlow = useMutation({
     mutationFn: (id: string) => api.delete(`/flows/${id}`),
     onSuccess: () => {
@@ -428,7 +461,12 @@ export function FlowsPage() {
             <Button size='sm' variant='outline' onClick={() => importInputRef.current?.click()}>
               <Upload className='mr-1.5 h-3.5 w-3.5' /> Import
             </Button>
-            <Button size='sm' variant='outline' className='gap-1.5' onClick={() => setAiOpen((v) => !v)}>
+            <Button
+              size='sm'
+              variant='outline'
+              className='gap-1.5'
+              onClick={() => setAiOpen((v) => !v)}
+            >
               <Sparkles className='h-3.5 w-3.5' /> Build with AI
             </Button>
             <Button size='sm' onClick={() => setShowCreate(true)}>
@@ -523,6 +561,12 @@ export function FlowsPage() {
                       toast.error('Export failed')
                     }
                   }}
+                  onToggleStatus={() =>
+                    toggleStatus.mutate({
+                      id: flow.id,
+                      status: flow.status === 'active' ? 'inactive' : 'active'
+                    })
+                  }
                   onRequestDelete={() => setPendingDelete(flow.id)}
                   onCancelDelete={() => setPendingDelete(null)}
                   onConfirmDelete={() => deleteFlow.mutate(flow.id)}

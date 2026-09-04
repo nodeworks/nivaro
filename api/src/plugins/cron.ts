@@ -5,7 +5,12 @@ import { startJobRun } from '../services/job-runs.js'
 
 export interface CronEntry {
   id: string
+  /** The EFFECTIVE schedule (override when one is set). */
   expression: string
+  /** The schedule the code registered — what revert restores. */
+  defaultExpression: string
+  /** True when an admin override is in force. */
+  overridden: boolean
   extensionId?: string
   nextRun: Date | null
   /** #136 — heavy jobs serialize through one global slot. */
@@ -22,6 +27,29 @@ interface InternalEntry extends CronEntry {
   fn: CronFn
   job: Cron
   catchUpHours?: number
+  scheduleOpts?: ScheduleOpts
+}
+
+export interface ScheduleOpts {
+  extensionId?: string
+  watchdogMs?: number
+  catchUpHours?: number
+  heavy?: boolean
+  idempotent?: 'safe' | 'unsafe' | 'unknown'
+}
+
+/** Throws with croner's own message when the expression is not valid. */
+export function assertCronExpression(expression: string): void {
+  const probe = new Cron(expression, { paused: true })
+  probe.stop()
+}
+
+/** The next N fire times of an expression, for admin previews. */
+export function previewCronRuns(expression: string, count = 5): Date[] {
+  const probe = new Cron(expression, { paused: true })
+  const runs = probe.nextRuns(count)
+  probe.stop()
+  return runs
 }
 
 // Cron watchdog (#93): a tick still running when its budget expires raises a
@@ -43,6 +71,9 @@ export class CronManager {
   private runningSince = new Map<string, number>()
   /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
   private pausedIds = new Set<string>()
+  /** Schedule overrides (cron id → expression) — hydrated from settings BEFORE
+   *  extensions register, so a job scheduled later still gets its override. */
+  private overrides = new Map<string, string>()
   /** Heavy-job serialization (#136): heavy ticks run one at a time, queued in
    *  arrival order — nightly procs/sweeps/backfills stop piling onto the pool. */
   private heavyChain: Promise<void> = Promise.resolve()
@@ -59,10 +90,52 @@ export class CronManager {
   isPaused(id: string): boolean {
     return this.pausedIds.has(id)
   }
+
+  /** Replace the override map and re-create every job whose effective
+   *  schedule changed. Safe to call before or after jobs register. */
+  setOverrides(map: Record<string, string>): void {
+    const next = new Map<string, string>()
+    for (const [id, expr] of Object.entries(map)) {
+      try {
+        assertCronExpression(expr)
+        next.set(id, expr)
+      } catch (err) {
+        console.warn(`[cron] ignoring invalid override for "${id}": ${expr}`, err)
+      }
+    }
+    this.overrides = next
+    for (const id of [...this.entries.keys()]) this.rebuild(id)
+  }
+  getOverride(id: string): string | null {
+    return this.overrides.get(id) ?? null
+  }
+  /** Override one job's schedule live. Throws on an invalid expression. */
+  override(id: string, expression: string): void {
+    assertCronExpression(expression)
+    this.overrides.set(id, expression)
+    this.rebuild(id)
+  }
+  /** Back to the schedule the code registered. */
+  revert(id: string): void {
+    this.overrides.delete(id)
+    this.rebuild(id)
+  }
+  /** Re-create a job from its registered fn/opts under the current override. */
+  private rebuild(id: string): void {
+    const e = this.entries.get(id)
+    if (!e) return
+    const effective = this.overrides.get(id) ?? e.defaultExpression
+    if (effective === e.expression) return
+    const { fn, defaultExpression, scheduleOpts, catchUpHours, heavy, idempotent } = e
+    this.schedule(id, defaultExpression, fn, { ...scheduleOpts, catchUpHours, heavy, idempotent })
+  }
   /** Post-registration metadata (#136/#305) — one annotation block in
    *  server.ts marks heaviness and re-run safety without touching each
    *  schedule() call site. */
-  annotate(id: string, meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }): void {
+  annotate(
+    id: string,
+    meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }
+  ): void {
     const e = this.entries.get(id)
     if (!e) return
     if (meta.heavy !== undefined) e.heavy = meta.heavy
@@ -75,24 +148,16 @@ export class CronManager {
     return next
   }
 
-  schedule(
-    id: string,
-    expression: string,
-    fn: CronFn,
-    opts?: {
-      extensionId?: string
-      watchdogMs?: number
-      catchUpHours?: number
-      heavy?: boolean
-      idempotent?: 'safe' | 'unsafe' | 'unknown'
-    }
-  ): void {
+  schedule(id: string, expression: string, fn: CronFn, opts?: ScheduleOpts): void {
     // Replace any existing job with the same id
     this.unschedule(id)
 
+    // An admin override (settings.cron_overrides) wins over the registered
+    // expression; the registered one is kept as the revert target.
+    const effective = this.overrides.get(id) ?? expression
     const budget = opts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
     const job = new Cron(
-      expression,
+      effective,
       {
         // protect blocks the tick when the previous one is still running —
         // the callback form makes the skip VISIBLE instead of silent.
@@ -113,24 +178,24 @@ export class CronManager {
         // Every tick lands in nivaro_job_runs (best-effort) so the Background
         // Jobs console and per-extension health read one source of truth.
         await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
-        const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
-        this.runningSince.set(id, Date.now())
-        const watchdog = setTimeout(() => {
-          raiseCronIssue(
-            `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
-            'high'
-          )
-        }, budget)
-        try {
-          await fn()
-          await run.complete()
-        } catch (err) {
-          console.error({ err, cronId: id }, 'Cron job error')
-          await run.fail(err)
-        } finally {
-          clearTimeout(watchdog)
-          this.runningSince.delete(id)
-        }
+          const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
+          this.runningSince.set(id, Date.now())
+          const watchdog = setTimeout(() => {
+            raiseCronIssue(
+              `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
+              'high'
+            )
+          }, budget)
+          try {
+            await fn()
+            await run.complete()
+          } catch (err) {
+            console.error({ err, cronId: id }, 'Cron job error')
+            await run.fail(err)
+          } finally {
+            clearTimeout(watchdog)
+            this.runningSince.delete(id)
+          }
         })
       }
     )
@@ -138,8 +203,11 @@ export class CronManager {
     const self = this
     this.entries.set(id, {
       id,
-      expression,
+      expression: effective,
+      defaultExpression: expression,
+      overridden: effective !== expression,
       fn,
+      scheduleOpts: opts,
       extensionId: opts?.extensionId,
       catchUpHours: opts?.catchUpHours,
       heavy: opts?.heavy,
@@ -236,15 +304,19 @@ export class CronManager {
   }
 
   list(): CronEntry[] {
-    return Array.from(this.entries.values()).map(({ id, expression, extensionId, job, heavy, idempotent }) => ({
-      id,
-      expression,
-      extensionId,
-      nextRun: job.nextRun() ?? null,
-      heavy,
-      idempotent,
-      paused: this.pausedIds.has(id)
-    }))
+    return Array.from(this.entries.values()).map(
+      ({ id, expression, defaultExpression, overridden, extensionId, job, heavy, idempotent }) => ({
+        id,
+        expression,
+        defaultExpression,
+        overridden,
+        extensionId,
+        nextRun: job.nextRun() ?? null,
+        heavy,
+        idempotent,
+        paused: this.pausedIds.has(id)
+      })
+    )
   }
 
   stopAll(): void {

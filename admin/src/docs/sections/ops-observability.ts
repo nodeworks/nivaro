@@ -14,21 +14,57 @@ export const dbHealthDocs: DocSection = {
       type: 'table',
       head: ['Panel', 'What it tells you'],
       rows: [
-        ['This process', 'Uptime, memory, event-loop lag, and connection-pool usage for the replica that answered — per process, not fleet-wide.'],
-        ['Instance roster', 'Every live API replica registered in Redis (empty when Redis is down).'],
-        ['Cache console', 'In-process caches on this replica, each with a Bust button (and a bust-all). Every bust is audit-logged.'],
-        ['Degradation map', 'What stops working when each dependency (database, Redis, Inngest, SMTP) goes down. Database and Redis are probed live.'],
-        ['Top expensive SQL', 'The 15 statements costing the server the most CPU since its last restart. SELECT statements get an Explain button that opens the query plan.'],
-        ['Deadlocks', 'Recent deadlock events mined from the server health session, with the statements involved.'],
-        ['Long transactions', 'Sleeping sessions that have held an open transaction idle for 5+ minutes.'],
-        ['Unused indexes', 'Nonclustered indexes with heavy writes and zero reads since the server last restarted.'],
+        [
+          'This process',
+          'Uptime, memory, event-loop lag, and connection-pool usage for the replica that answered — per process, not fleet-wide.'
+        ],
+        [
+          'Instance roster',
+          'Every live API replica registered in Redis (empty when Redis is down).'
+        ],
+        [
+          'Cache console',
+          'In-process caches on this replica, each with a Bust button (and a bust-all). Every bust is audit-logged.'
+        ],
+        [
+          'Degradation map',
+          'What stops working when each dependency (database, Redis, Inngest, SMTP) goes down. Database and Redis are probed live.'
+        ],
+        [
+          'Top expensive SQL',
+          'The 15 statements costing the server the most CPU since its last restart. SELECT statements get an Explain button that opens the query plan.'
+        ],
+        [
+          'Deadlocks',
+          'Recent deadlock events mined from the server health session, with the statements involved.'
+        ],
+        [
+          'Long transactions',
+          'Sleeping sessions that have held an open transaction idle for 5+ minutes.'
+        ],
+        [
+          'Unused indexes',
+          'Nonclustered indexes with heavy writes and zero reads since the server last restarted.'
+        ],
         ['Table heat', 'Read/write activity per table since the server last restarted.'],
         ['Redis', 'Memory, clients, keys, hit/miss counters, evictions.'],
-        ['Storage runway', 'Database size now, a daily growth rate from nightly snapshots, and the largest tables.'],
-        ['Held connections', 'Checked-out pool connections attributed to the request holding them — the leak finder.'],
-        ['Data velocity', 'Which collections are being created/updated the most, from the activity log.'],
+        [
+          'Storage runway',
+          'Database size now, a daily growth rate from nightly snapshots, and the largest tables.'
+        ],
+        [
+          'Held connections',
+          'Checked-out pool connections attributed to the request holding them — the leak finder.'
+        ],
+        [
+          'Data velocity',
+          'Which collections are being created/updated the most, from the activity log.'
+        ],
         ['Latency by hour', 'Slowest routes by hour of day (UTC) over the last 7 days.'],
-        ['Dangling foreign keys', 'Registered relations whose FK values point at rows that no longer exist, with guarded repair actions.'],
+        [
+          'Dangling foreign keys',
+          'Registered relations whose FK values point at rows that no longer exist, with guarded repair actions.'
+        ],
         ['Inngest', 'Whether the job runner answers, and how many recent events it reports.']
       ]
     },
@@ -56,6 +92,20 @@ export const opsConsoleDocs: DocSection = {
     {
       type: 'p',
       text: 'The Ops Console at /ops-console (Monitoring → Ops Console) is the operational side of the API process: the live log, log-based alerting, environment inspection, maintenance windows, and controlled restart. Admin-only throughout.'
+    },
+    { type: 'h2', id: 'ops-console-crons', text: 'Scheduled jobs: pause, override, revert' },
+    {
+      type: 'p',
+      text: 'Background Jobs (Monitoring nav) lists every cron the process registered — core schedules and extension-registered ones alike — with its effective schedule, last outcome and next run. Each row can be paused/resumed, run now, and have its schedule OVERRIDDEN from the admin: click the expression, type a new cron expression (the next fire times preview live; an invalid expression is refused with the parser message), Save. Revert puts the job back on the schedule its code registered.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Overrides persist in settings.cron_overrides and are hydrated before extensions register, so an override binds to an extension job on every replica after a restart — no deploy needed.',
+        'Pause keeps the job registered but its ticks return immediately (settings.paused_crons); Resume is instant.',
+        'API: GET /api/cron (effective + default expression, override metadata), GET /api/cron/preview?expression=, PATCH /api/cron/:id {expression | null, note}, POST /api/cron/:id/revert, /pause, /resume, /run. Every change is activity-logged (cron-override, cron-revert, cron-pause, cron-resume, cron-run-now).',
+        'Flows have the same enable/disable from the Flows list (the Power action on a row) — an inactive flow keeps its config and its version history; the editor’s Versions panel reverts config.'
+      ]
     },
     { type: 'h2', id: 'ops-console-logs', text: 'Log tail and log alert rules' },
     {

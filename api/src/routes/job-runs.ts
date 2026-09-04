@@ -109,6 +109,8 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
         crons: crons.map((c) => ({
           id: c.id,
           expression: c.expression,
+          default_expression: c.defaultExpression,
+          overridden: c.overridden,
           extension_id: c.extensionId ?? null,
           next_run: c.nextRun,
           paused: c.paused ?? false,

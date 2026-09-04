@@ -259,6 +259,22 @@ export async function buildServer() {
   // In cloud mode, background crons use the static DB (no request context).
   // Per-tenant cron scheduling is handled by the cloud provisioning system.
   await app.register(cronPlugin)
+  // Schedule overrides hydrate BEFORE anything schedules (core crons below,
+  // extensions in loadExtensions) so an admin override binds to every job no
+  // matter which code registered it. Pauses hydrate later (checked per tick).
+  try {
+    const row = (await db('nivaro_settings').orderBy('id', 'asc').first('cron_overrides')) as
+      | { cron_overrides?: string | null }
+      | undefined
+    if (row?.cron_overrides) {
+      const parsed = JSON.parse(row.cron_overrides) as Record<string, { expression?: string }>
+      const map: Record<string, string> = {}
+      for (const [id, v] of Object.entries(parsed ?? {})) if (v?.expression) map[id] = String(v.expression)
+      app.cron.setOverrides(map)
+    }
+  } catch {
+    /* column mid-migration or unparseable — no overrides */
+  }
   if (!process.env.CLOUD_META_DB_URL) {
     registerFileCleanup(app.cron)
     registerDigestCrons(app.cron)
