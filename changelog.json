@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T14:01:31.303Z",
+  "generated_at": "2026-09-04T14:17:00.992Z",
   "releases": [
+    {
+      "version": "0.1.207",
+      "tag": "v0.1.207",
+      "date": "2026-09-04T10:16:51-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "hide the lineage (Σ) button on rollup fields the record does not derive",
+              "hash": "cd212a52"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.206",
       "tag": "v0.1.206",
-      "date": "2026-09-04T10:01:25-04:00",
+      "date": "2026-09-04T10:01:31-04:00",
       "sections": [
         {
           "label": "Fixed",
