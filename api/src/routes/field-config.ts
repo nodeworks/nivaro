@@ -578,7 +578,10 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       !('inline_relation' in body) &&
       !('max_values' in body)
     ) {
-      patch.options = body.options ?? null
+      // GET returns options PARSED; accept the object form back (a round-trip
+      // of what was read used to reach tedious as an object → 'Invalid string').
+      const o = body.options as unknown
+      patch.options = o == null ? null : typeof o === 'string' ? o : JSON.stringify(o)
     }
     if ('col_span' in body || 'inline_relation' in body || 'max_values' in body) {
       let opts: Record<string, unknown> = {}
