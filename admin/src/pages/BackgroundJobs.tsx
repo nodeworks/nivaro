@@ -225,7 +225,7 @@ export default function BackgroundJobs() {
   const pauseResume = async (id: string, pause: boolean) => {
     try {
       await api.post(`/cron/${id}/${pause ? 'pause' : 'resume'}`)
-      toast.success(pause ? `Paused ${id}` : `Resumed ${id}`)
+      toast.success(pause ? `Disabled ${id}` : `Enabled ${id}`)
       qc.invalidateQueries({ queryKey: ['job-registry'] })
     } catch {
       toast.error('Could not update the schedule')
@@ -270,7 +270,7 @@ export default function BackgroundJobs() {
               {c.id}
               {c.paused && (
                 <span className='ml-1.5 rounded bg-amber-500/10 px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400'>
-                  paused
+                  disabled
                 </span>
               )}
               {c.heavy && (
@@ -410,11 +410,11 @@ export default function BackgroundJobs() {
                 className='ml-1.5 inline-flex items-center rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
                 title={
                   c.paused
-                    ? 'Resume — ticks run again immediately'
-                    : 'Pause — ticks skip until resumed; survives restarts'
+                    ? 'Enable — ticks run again immediately'
+                    : 'Disable — ticks skip until enabled again; survives restarts'
                 }
               >
-                {c.paused ? 'Resume' : 'Pause'}
+                {c.paused ? 'Enable' : 'Disable'}
               </button>
               {c.overridden && editing !== c.id && (
                 <button

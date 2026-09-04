@@ -9658,6 +9658,23 @@ Authorization: Bearer &lt;token&gt;
 
         <div class="doc-section" id="s-upsert-keys" data-toc='[{"id":"upsert-keys","label":"Natural Key (Upsert)"}]'>
           <!-- SYNC:upsert-keys -->
+          <h1 class="doc-h1" id="upsert-keys">Natural Key (Upsert)</h1>
+          <p class="doc-p">A collection can declare the columns that identify a record — its natural key. When a create arrives whose payload matches an existing row on every key column, the items service updates that row instead of inserting a duplicate. The collection stays one-row-per-key no matter which client writes: a form grid, the REST API, or a GraphQL integration that still sends one create per change.</p>
+          <h3 class="doc-h3">Config</h3>
+          <pre class="doc-pre"><code>// Stored on nivaro_collections.upsert_keys — a JSON array of column names
+["workflow", "year"]
+
+// PATCH /api/collections/forecasts
+{"upsert_keys": ["workflow", "year"]}
+
+// Empty list = plain inserts (the default)</code></pre>
+          <ul class="doc-ul">
+            <li>Every key column must be present and non-empty in the create payload; otherwise the create inserts normally.</li>
+            <li>The matched write runs as an update — update permission, row-level security, hooks, rules, validation and revision history all apply exactly as they do for PATCH.</li>
+            <li>Pair it with a unique index on the same columns when the database must enforce the key as well.</li>
+            <li>Configure it in Data Model → the collection → Settings → "Natural key (upsert)".</li>
+          </ul>
+          <div class="doc-note">Example: <code class="doc-code">forecasts</code> is keyed on (workflow, year). A partner integration that models every re-forecast as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.</div>
           <!-- /SYNC:upsert-keys -->
         </div>
 
