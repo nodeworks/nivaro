@@ -288,7 +288,9 @@ interface LevelInfo {
 export async function resolveRollupRows(
   database: Knex,
   config: RollupConfig,
-  recordId: string,
+  /** null = the host record does not exist yet: nothing to walk, the tree is
+   *  built from `staged` alone (a new record's pending lines + allocations). */
+  recordId: string | null,
   logger: Logger = consoleLogger,
   staged?: RollupStaged
 ): Promise<RollupResult> {
@@ -306,14 +308,10 @@ export async function resolveRollupRows(
   const configError = validateRollupConfig(config, relations)
   if (configError) badConfig(`rollup: ${configError}`)
 
-  const { idSet, truncated: walkTruncated } = await walkReversePath(
-    database,
-    config,
-    relations,
-    recordId,
-    logger,
-    'rollup'
-  )
+  const { idSet, truncated: walkTruncated } =
+    recordId == null
+      ? { idSet: [] as Array<string | number>, truncated: false }
+      : await walkReversePath(database, config, relations, recordId, logger, 'rollup')
   let truncated = walkTruncated
 
   const leafSpecs = normalizeColumnSpecs(config.leaf_columns)

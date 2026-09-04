@@ -220,9 +220,6 @@ async function renderWidget(
     }
 
     const recordId = inputs.record_id
-    if (recordId == null || recordId === '') {
-      throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
-    }
 
     // Client-staged grid changes (pending rows / queued allocation edits) ride
     // along so the widget reflects them before the record saves. Shape is
@@ -237,6 +234,14 @@ async function renderWidget(
           })
         : undefined
 
+    if (recordId == null || recordId === '') {
+      // A record that doesn't exist yet can still show its PENDING lines'
+      // allocations: staged-only render, nothing walked from the database.
+      if (!staged?.created?.length) {
+        throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
+      }
+      return await resolveRollupRows(db, cfg, null, undefined, staged)
+    }
     return await resolveRollupRows(db, cfg, String(recordId), undefined, staged)
   }
 

@@ -1241,12 +1241,11 @@ export function WidgetSlot({
     // — the server 400s on a missing record_id. Skip the fetch entirely
     // rather than surfacing that 400 as a sticky "Render failed" (the
     // null-render gate below already handles the empty-record display).
-    if (
-      (widget.widget_type === 'review_list' || widget.widget_type === 'rollup') &&
-      (inputs.record_id == null || inputs.record_id === '')
-    ) {
-      return
-    }
+    // Exception: a rollup with STAGED rows (a new record's pending lines and
+    // their allocations) renders from those alone — the server skips the walk.
+    const noRecord = inputs.record_id == null || inputs.record_id === ''
+    if (widget.widget_type === 'review_list' && noRecord) return
+    if (widget.widget_type === 'rollup' && noRecord && !rollupStaged) return
 
     let cancelled = false
     if (!hasRenderDataRef.current) {
@@ -1328,11 +1327,9 @@ export function WidgetSlot({
   // server's own emptiness check (renderWidget's review_list/rollup branch)
   // so a falsy-but-valid id (e.g. 0) isn't misread as "new".
   const reviewListRecordId = inputs.record_id
-  if (
-    (widget?.widget_type === 'review_list' || widget?.widget_type === 'rollup') &&
-    (reviewListRecordId == null || reviewListRecordId === '')
-  )
-    return null
+  const noRecordYet = reviewListRecordId == null || reviewListRecordId === ''
+  if (widget?.widget_type === 'review_list' && noRecordYet) return null
+  if (widget?.widget_type === 'rollup' && noRecordYet && !rollupStaged) return null
 
   if (compact) {
     const compactStyle = (widget?.config?.compact_style as string | undefined) ?? 'default'
