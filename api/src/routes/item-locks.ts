@@ -284,7 +284,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         collection,
         item,
         user: req.user!.id,
-        acquired_at: new Date(),
+        locked_at: new Date(),
         expires_at: new Date(Date.now() + 5 * 60_000)
       })
       await logActivity({
