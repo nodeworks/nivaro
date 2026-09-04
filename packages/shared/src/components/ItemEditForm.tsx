@@ -86,6 +86,7 @@ import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
 import {
   computeLiveRollup,
+  isDerivedForRecord,
   matchesRollupFilter,
   parseRollupParentFilter,
   parseRollupSources
@@ -4501,7 +4502,7 @@ export function ItemEditForm({
         : null
     const fields = (fieldConfig ?? []).filter((fc) => {
       if (fc.hidden || (fc as { readonly?: boolean }).readonly) return false
-      if ((fc as { computed_type?: string | null }).computed_type) return false
+      if (isDerivedForRecord(fc as { computed_type?: string | null }, draft)) return false
       if ((fc as { layout_assigned?: boolean }).layout_assigned === false) return false
       if (layoutFieldSet && !layoutFieldSet.has(fc.field)) return false
       if (fc.field.startsWith('__') || fc.field.includes('.')) return false
@@ -7425,8 +7426,10 @@ export function ItemEditForm({
                                                       )
                                                         continue
                                                       if (
-                                                        (fc as { computed_type?: string | null })
-                                                          .computed_type
+                                                        isDerivedForRecord(
+                                                          fc as { computed_type?: string | null },
+                                                          draft
+                                                        )
                                                       )
                                                         continue
                                                       if (
@@ -7563,8 +7566,10 @@ export function ItemEditForm({
                                               )
                                                 skip.add(fc.field)
                                               if (
-                                                (fc as { computed_type?: string | null })
-                                                  .computed_type
+                                                isDerivedForRecord(
+                                                  fc as { computed_type?: string | null },
+                                                  draft
+                                                )
                                               )
                                                 skip.add(fc.field)
                                               const readonlyFc = Boolean(

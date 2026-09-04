@@ -188,3 +188,18 @@ export function computeLiveRollup(
   }
   return total
 }
+
+/** Is this field actually DERIVED for the given record? A write-computed
+ *  field always is; a rollup only when it has no parent_filter or the record
+ *  matches it (a CAR's Total REQ Amount is typed, never summed). Every client
+ *  surface that special-cases computed fields should ask this, not
+ *  computed_type alone. */
+export function isDerivedForRecord(
+  field: { computed_type?: string | null; computed_formula?: unknown },
+  draft: Record<string, unknown>
+): boolean {
+  if (field.computed_type !== 'rollup' && field.computed_type !== 'write') return false
+  if (field.computed_type !== 'rollup') return true
+  const pf = parseRollupParentFilter(field.computed_formula)
+  return !pf || matchesRollupFilter(draft, pf)
+}

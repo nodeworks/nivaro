@@ -29,7 +29,7 @@ import {
   parseJson,
   SYSTEM_FIELDS
 } from './helpers'
-import { matchesRollupFilter, parseRollupParentFilter } from './live-rollups'
+import { isDerivedForRecord } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
@@ -691,12 +691,8 @@ export function FieldRow({
   // A rollup with a parent_filter is only derived for records that MATCH it
   // (a CAR's Total REQ Amount is typed in — no lines to sum). The lineage
   // (Σ) affordance is a lie on those records, so it follows the same test.
-  const isActuallyComputed = (() => {
-    if (field.computed_type !== 'rollup' && field.computed_type !== 'write') return false
-    if (field.computed_type !== 'rollup') return true
-    const pf = parseRollupParentFilter(field.computed_formula)
-    return !pf || matchesRollupFilter(draft, pf)
-  })()
+  const isActuallyComputed = isDerivedForRecord(field, draft)
+
   const autoIdPattern = parseJson<{ auto_id?: { pattern?: string } }>(field.options)?.auto_id
     ?.pattern
 
