@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T20:15:36.384Z",
+  "generated_at": "2026-09-04T20:26:19.722Z",
   "releases": [
+    {
+      "version": "0.1.214",
+      "tag": "v0.1.214",
+      "date": "2026-09-04T16:26:12-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "role conditions are an allow-list on every resolution path; dark-mode fixes",
+              "hash": "d80261fa"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.213",
       "tag": "v0.1.213",
-      "date": "2026-09-04T16:15:30-04:00",
+      "date": "2026-09-04T16:15:36-04:00",
       "sections": [
         {
           "label": "Added",
