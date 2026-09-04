@@ -40,7 +40,7 @@ export interface NormalizedRollup {
    *  filter). A parent that does not match is left alone by every compute
    *  path — recalc, backfill, virtual read, the client's live figure — so the
    *  column holds a plain, hand-entered value for those rows. The CAR case:
-   *  workflows.requisition_amount is a rollup over lines for PUBs but a simple
+   *  workflows.requisition_amount is a rollup over lines for purchase order requests but a simple
    *  decimal for CARs (workflow_type 2), which have no lines. */
   parent_filter?: Record<string, unknown>
 }
