@@ -2354,6 +2354,47 @@ async function applyAliasM2MWrites(
   }
 }
 
+/**
+ * Resolve a collection's `upsert_keys` (JSON array of column names) against a
+ * create payload: returns the id of the row that already holds this natural
+ * key, or null when the collection has no keys, the payload does not carry
+ * all of them, or no row matches. Null-valued keys never match (a key with no
+ * value is not an identity).
+ */
+async function findUpsertTarget(
+  collection: string,
+  col: { upsert_keys?: string | null } | null,
+  data: Record<string, unknown>
+): Promise<string | number | null> {
+  const raw = col?.upsert_keys
+  if (!raw) return null
+  let keys: string[]
+  try {
+    const parsed = JSON.parse(String(raw))
+    keys = Array.isArray(parsed)
+      ? parsed.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+      : []
+  } catch {
+    return null
+  }
+  if (keys.length === 0) return null
+  const where: Record<string, unknown> = {}
+  for (const k of keys) {
+    const v = data[k]
+    if (v === undefined || v === null || v === '') return null
+    where[k] =
+      typeof v === 'object' && v !== null && 'id' in (v as object) ? (v as { id: unknown }).id : v
+  }
+  try {
+    const row = (await db(collection).where(where).orderBy('id').first('id')) as
+      | { id: string | number }
+      | undefined
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function createOne(
   user: User,
   collection: string,
@@ -2377,6 +2418,27 @@ export async function createOne(
 
   const allowed = await can(user, 'create', collection)
   if (!allowed) throw new ForbiddenError()
+
+  // Natural-key upsert: when the collection declares upsert_keys and a row
+  // already matches every key in this payload, the create becomes an update
+  // of that row — the collection stays one-row-per-key no matter which client
+  // writes (form grid, REST, GraphQL integration). Judged on the caller's raw
+  // payload; the update path applies its own permission/RLS/hook contract.
+  const upsertTarget = await findUpsertTarget(
+    collection,
+    col as { upsert_keys?: string | null },
+    data
+  )
+  if (upsertTarget != null) {
+    // A create-shaped write cannot carry a human change reason (the caller
+    // did not know it was editing), so the change-reason requirement takes a
+    // stated default rather than rejecting the write with a 422.
+    const patch =
+      '_change_reason' in data
+        ? data
+        : { ...data, _change_reason: 'Natural-key upsert (create matched an existing record)' }
+    return updateOne(user, collection, upsertTarget, patch, req, workspaceId)
+  }
 
   // Workspace item quota — checked against the active workspace (default when unscoped)
   const quotaWorkspace = workspaceId ?? (await fetchDefaultWorkspaceId())

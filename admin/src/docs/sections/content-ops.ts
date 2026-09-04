@@ -1596,6 +1596,42 @@ POST /api/items/pages
   ]
 }
 
+export const upsertKeysGuide: DocSection = {
+  id: 'upsert-keys',
+  label: 'Natural Key (Upsert)',
+  content: [
+    { type: 'h1', id: 'upsert-keys', text: 'Natural Key (Upsert)' },
+    {
+      type: 'p',
+      text: 'A collection can declare the columns that identify a record — its natural key. When a create arrives whose payload matches an existing row on every key column, the items service updates that row instead of inserting a duplicate. The collection stays one-row-per-key no matter which client writes: a form grid, the REST API, or a GraphQL integration that still sends one create per change.'
+    },
+    { type: 'h3', text: 'Config' },
+    {
+      type: 'pre',
+      code: `// Stored on nivaro_collections.upsert_keys — a JSON array of column names
+["workflow", "year"]
+
+// PATCH /api/collections/forecasts
+{"upsert_keys": ["workflow", "year"]}
+
+// Empty list = plain inserts (the default)`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every key column must be present and non-empty in the create payload; otherwise the create inserts normally.',
+        'The matched write runs as an update — update permission, row-level security, hooks, rules, validation and revision history all apply exactly as they do for PATCH.',
+        'Pair it with a unique index on the same columns when the database must enforce the key as well.',
+        'Configure it in Data Model → the collection → Settings → "Natural key (upsert)".'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Example: `forecasts` is keyed on (workflow, year). A partner integration that models every re-forecast as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.'
+    }
+  ]
+}
+
 export const pickerFilterGuide: DocSection = {
   id: 'picker-filter',
   label: 'Relation Picker Filter',
@@ -1754,7 +1790,7 @@ export const contentOpsGridPresets: DocSection = {
     },
     {
       type: 'p',
-      text: "What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same `__o2m_<field>` prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an `inline-table` field's `save_mode: \"pending\"` batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row's drawer depends on the outer grid's own save mode: under `save_mode: \"immediate\"` (the default), every Add/Edit/Delete is a live `POST`/`PATCH`/`DELETE` against the grandchild collection. Under `save_mode: \"pending\"`, drawer ops on an already-saved row stage too — as explicit created/updated/deleted ops keyed to that row's queued edit — and only flush (in that order, deletes last) when the outer batch is saved."
+      text: 'What actually happens on Add/Edit/Delete inside the drawer depends on whether the parent row it belongs to has been saved yet. Editing a NEW or still-pending row stages grandchild members client-side (reusing the same `__o2m_<field>` prefill staging contract import templates use — see Import Templates gotchas) and only creates them once the parent row itself is saved, so they correctly participate in an `inline-table` field\'s `save_mode: "pending"` batching (including a batch cancel, which discards the staged members along with the rest of the pending row). Editing an ALREADY-SAVED row\'s drawer depends on the outer grid\'s own save mode: under `save_mode: "immediate"` (the default), every Add/Edit/Delete is a live `POST`/`PATCH`/`DELETE` against the grandchild collection. Under `save_mode: "pending"`, drawer ops on an already-saved row stage too — as explicit created/updated/deleted ops keyed to that row\'s queued edit — and only flush (in that order, deletes last) when the outer batch is saved.'
     },
     {
       type: 'note',

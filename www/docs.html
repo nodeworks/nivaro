@@ -800,7 +800,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <p class="doc-p">Operations run in order of their position (top to bottom, left to right). Output from each operation is passed to the next as the flow's data payload.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Type</th><th>Status</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>workflow-auto-sweep</td><td>✅ Live</td><td>Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.</td></tr>
+            <tbody><tr><tr><td>workflow-auto-sweep</td><td>✅ Live</td><td>Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), items (template or comma list of record ids — scopes the sweep to exactly those; an empty resolved list evaluates nothing), recalc_rollups (recompute stored rollups on the swept records before evaluating — defaults on when items is set), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.</td></tr>
               <tr><td>log</td><td>✅ Live</td><td>Writes a structured line to the API server log (pino). Configure message and level in options.</td></tr>
               <tr><td>webhook</td><td>✅ Live</td><td>HTTP fetch to an external URL. Configure url and method in options.</td></tr>
               <tr><td>condition</td><td>⚙️ Stub</td><td>Branch on a condition expression (not yet implemented — resolves forward).</td></tr>
@@ -7002,7 +7002,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>State Key</td><td>The specific workflow state to measure time in.</td></tr>
               <tr><td>Duration (hours)</td><td>Total allowed time in this state.</td></tr>
               <tr><td>Warning Threshold %</td><td>Notification fires when this % of duration has elapsed. Default 80%.</td></tr>
-              <tr><td>Business Hours Only</td><td>When enabled, only counts Mon–Fri 9am–5pm towards elapsed time.</td></tr>
+              <tr><td>Business Hours Only</td><td>When enabled, only counts working hours towards elapsed time — the days, hours and holidays from Settings → SLA, evaluated in the SLA timezone (or the record's regional clock when its region is mapped).</td></tr>
               <tr><td>Notify on Warning</td><td>Send in-app notification to escalation user at warning threshold.</td></tr>
               <tr><td>Notify on Breach</td><td>Send in-app notification to escalation user on full breach.</td></tr>
               <tr><td>Escalation User</td><td>Optional. User to notify on warning/breach.</td></tr></tr></tbody>
@@ -7016,7 +7016,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>Breached (red)</td><td>Over the full allowed duration.</td></tr>
               <tr><td>No SLA (gray)</td><td>No active SLA rule for the current workflow state.</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours calculation uses Mon–Fri, 09:00–17:00 local server time.</div>
+          <div class="doc-note">SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours use the schedule and timezone configured in Settings → SLA (default Mon–Fri, 09:00–17:00) — the zone matters: an empty timezone means the API server's clock, which is UTC in a deployed container. Regional clocks can override the zone per record.</div>
           <!-- /SYNC:sla-tracking -->
         </div>
 
@@ -9654,6 +9654,11 @@ Authorization: Bearer &lt;token&gt;
           </table></div>
           <div class="doc-note">Read endpoints require authentication. Write endpoints require admin access.</div>
           <!-- /SYNC:picker-exclusions -->
+        </div>
+
+        <div class="doc-section" id="s-upsert-keys" data-toc='[{"id":"upsert-keys","label":"Natural Key (Upsert)"}]'>
+          <!-- SYNC:upsert-keys -->
+          <!-- /SYNC:upsert-keys -->
         </div>
 
         <div class="doc-section" id="s-content-ops-validation" data-toc='[{"id":"content-ops-validation","label":"Field Validation Rules"}]'>

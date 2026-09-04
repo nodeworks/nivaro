@@ -76,6 +76,8 @@ export type {
   ImportStats
 } from './components/imports/types'
 export { CloneDialog } from './components/item-edit/CloneDialog'
+export { ChangeReasonDialog, changeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
+export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
 export { InlineTableField } from './components/item-edit/InlineTableField'

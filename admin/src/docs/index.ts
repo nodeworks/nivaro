@@ -25,9 +25,9 @@ export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/platform.js'
+export * from './sections/platform-additions.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
-export * from './sections/platform-additions.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -57,19 +57,6 @@ import {
   ssoDocs
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
-import { commandCenterDocs } from './sections/command-center.js'
-import {
-  dbHealthDocs,
-  instanceOverridesDocs,
-  opsConsoleDocs
-} from './sections/ops-observability.js'
-import { recordInsightsDocs } from './sections/record-insights.js'
-import {
-  adminOpsAdditions,
-  eventsAndFlags,
-  recordToolkit,
-  reportingAdditions
-} from './sections/platform-additions.js'
 import {
   collabApprovals,
   collabChat,
@@ -81,6 +68,7 @@ import {
   collabTasks,
   collabUserActivityFeed
 } from './sections/collaboration.js'
+import { commandCenterDocs } from './sections/command-center.js'
 import {
   contentOpsAddendums,
   contentOpsCascadeFilters,
@@ -110,7 +98,8 @@ import {
   contentOpsValidationRules,
   contentOpsVirtualCollections,
   pickerExclusionsGuide,
-  pickerFilterGuide
+  pickerFilterGuide,
+  upsertKeysGuide
 } from './sections/content-ops.js'
 import {
   auditLevelDocs,
@@ -247,6 +236,11 @@ import {
   obsIssueLog
 } from './sections/observability.js'
 import {
+  dbHealthDocs,
+  instanceOverridesDocs,
+  opsConsoleDocs
+} from './sections/ops-observability.js'
+import {
   opsBackups,
   opsContentPromotion,
   opsErdView,
@@ -288,7 +282,14 @@ import {
   zapierMake,
   zeroDowntimeMigrations
 } from './sections/platform.js'
+import {
+  adminOpsAdditions,
+  eventsAndFlags,
+  recordToolkit,
+  reportingAdditions
+} from './sections/platform-additions.js'
 import { queuesGuide } from './sections/queues.js'
+import { recordInsightsDocs } from './sections/record-insights.js'
 import {
   apiCollections,
   apiFiles,
@@ -348,8 +349,8 @@ import {
   securityRowIsolation,
   securitySaml,
   securityScim,
-  securityUserScopes,
   securityTwoFactor,
+  securityUserScopes,
   securityWorkspaceTemplates
 } from './sections/security.js'
 import {
@@ -643,7 +644,8 @@ export const navSections: NavGroup[] = [
       contentOpsPolymorphicRelations,
       contentOpsGridPresets,
       pickerFilterGuide,
-      pickerExclusionsGuide
+      pickerExclusionsGuide,
+      upsertKeysGuide
     ]
   },
   {

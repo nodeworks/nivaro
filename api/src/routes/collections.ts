@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { clearAccountabilityCache } from '../hooks/activity.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
-import { clearAccountabilityCache } from '../hooks/activity.js'
 import * as svc from '../services/collections.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
@@ -195,7 +195,10 @@ export async function collectionsRoutes(app: FastifyInstance) {
             return null
           }
         })(),
-        url_alias_fields: parseJsonList((col as { url_alias_fields?: string | null }).url_alias_fields)
+        url_alias_fields: parseJsonList(
+          (col as { url_alias_fields?: string | null }).url_alias_fields
+        ),
+        upsert_keys: parseJsonList((col as { upsert_keys?: string | null }).upsert_keys)
       }
     })
   })
@@ -236,6 +239,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       delete_guard?: unknown
       slug_field?: unknown
       empty_state?: unknown
+      upsert_keys?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
@@ -245,6 +249,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       delete_guard: rawDeleteGuard,
       slug_field: rawSlugField,
       empty_state: rawEmptyState,
+      upsert_keys: rawUpsertKeys,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
@@ -254,10 +259,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       if (rawSlugField == null || rawSlugField === '') {
         patch.slug_field = null
       } else {
-        if (
-          typeof rawSlugField !== 'string' ||
-          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawSlugField)
-        ) {
+        if (typeof rawSlugField !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawSlugField)) {
           return reply.code(400).send({ error: 'slug_field must be a plain column name' })
         }
         const cols = rawRows<{ COLUMN_NAME: string }>(
@@ -311,6 +313,14 @@ export async function collectionsRoutes(app: FastifyInstance) {
     }
     if ('delete_guard' in body) {
       patch.delete_guard = rawDeleteGuard != null ? JSON.stringify(rawDeleteGuard) : null
+      svc.clearMetadataCache()
+    }
+    if ('upsert_keys' in body) {
+      // Column names only — an empty list means "no natural key".
+      const list = Array.isArray(rawUpsertKeys)
+        ? rawUpsertKeys.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+        : []
+      patch.upsert_keys = list.length > 0 ? JSON.stringify(list) : null
       svc.clearMetadataCache()
     }
     if ('url_alias_fields' in body) {

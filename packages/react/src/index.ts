@@ -390,3 +390,5 @@ export type {
   UseNivaroFormOptions,
   UseNivaroFormReturn
 } from './types'
+export { ChangeReasonDialog, changeReasonChallenge } from '@nivaro/shared'
+export type { ChangeReasonChallenge } from '@nivaro/shared'

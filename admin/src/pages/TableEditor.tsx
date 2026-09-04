@@ -4587,6 +4587,7 @@ function SettingsTab({
       <ChangeReasonSection tableName={tableName} />
       <CustomActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
+      <UpsertKeysSection tableName={tableName} />
       <SnapshotsSection tableName={tableName} />
       <DependencyMapSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
@@ -5204,6 +5205,76 @@ function SnapshotsSection({ tableName }: { tableName: string }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+/** Natural-key upsert: columns that identify a record. A create that matches
+ *  an existing row on every key updates that row instead of inserting a
+ *  duplicate — one row per key regardless of which client writes. */
+function UpsertKeysSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const [text, setText] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-upsert', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { upsert_keys?: string[] | null } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  useEffect(() => {
+    if (meta && !loaded) {
+      setText((meta.upsert_keys ?? []).join(', '))
+      setLoaded(true)
+    }
+  }, [meta, loaded])
+  const saveMut = useMutation({
+    mutationFn: () =>
+      api.patch(`/collections/${tableName}`, {
+        upsert_keys: text
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      }),
+    onSuccess: () => {
+      toast.success('Upsert keys saved')
+      qc.invalidateQueries({ queryKey: ['collection-meta-upsert', tableName] })
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message ?? 'Save failed')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='border-b border-slate-100 px-4 py-3'>
+        <p className='text-[13px] font-semibold text-slate-800'>Natural key (upsert)</p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500'>
+          Comma-separated columns that identify a record — e.g.{' '}
+          <code className='text-[10.5px]'>workflow, year</code>. A create whose payload matches an
+          existing row on every key becomes an update of that row, so the collection stays
+          one-row-per-key whether the write comes from a form grid, the REST API or a GraphQL
+          integration. Empty = plain inserts.
+        </p>
+      </div>
+      <div className='space-y-2 px-4 py-3'>
+        <Input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder='workflow, year'
+          className='h-8 font-mono text-[12px]'
+        />
+        <div className='flex justify-end'>
+          <Button
+            size='sm'
+            className='h-7 bg-nvr-cyan text-[12px] text-white'
+            disabled={saveMut.isPending}
+            onClick={() => saveMut.mutate()}
+          >
+            Save keys
+          </Button>
+        </div>
       </div>
     </div>
   )

@@ -24,6 +24,7 @@
     "fix:junction-fields": "tsx extensions/efp-ops/scripts/fix-junction-fields.ts",
     "migrate:legacy-history": "tsx extensions/efp-ops/scripts/migrate-legacy-history.ts",
     "migrate:forecast-revisions": "tsx extensions/efp-ops/scripts/migrate-forecast-revisions.ts",
+    "forecast:new-model": "tsx extensions/efp-ops/scripts/forecast-new-model.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
     "promote:config": "tsx extensions/efp-ops/scripts/promote-config.ts",
