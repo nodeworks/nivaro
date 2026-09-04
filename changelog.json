@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T00:14:37.058Z",
+  "generated_at": "2026-09-04T00:44:09.300Z",
   "releases": [
+    {
+      "version": "0.1.202",
+      "tag": "v0.1.202",
+      "date": "2026-09-03T20:44:02-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "rollups",
+              "text": "parent_filter, chained cascade, state-change recalc — CAR ↔ project sync",
+              "hash": "008d47e9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.201",
       "tag": "v0.1.201",
-      "date": "2026-09-03T20:14:30-04:00",
+      "date": "2026-09-03T20:14:37-04:00",
       "sections": [
         {
           "label": "Added",
