@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T16:55:11.847Z",
+  "generated_at": "2026-09-04T19:00:30.595Z",
   "releases": [
+    {
+      "version": "0.1.211",
+      "tag": "v0.1.211",
+      "date": "2026-09-04T15:00:24-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "natural-key upsert (upsert_keys); forecasts on the one-row-per-year model",
+              "hash": "fc8f9aba"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.210",
       "tag": "v0.1.210",
-      "date": "2026-09-04T12:55:06-04:00",
+      "date": "2026-09-04T12:55:11-04:00",
       "sections": [
         {
           "label": "Added",
