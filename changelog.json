@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T13:03:40.961Z",
+  "generated_at": "2026-09-04T13:19:23.222Z",
   "releases": [
+    {
+      "version": "0.1.205",
+      "tag": "v0.1.205",
+      "date": "2026-09-04T09:19:17-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "auto-id",
+              "text": "conditional pattern variants — CAR names drop the project number",
+              "hash": "42412e7c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.204",
       "tag": "v0.1.204",
-      "date": "2026-09-04T09:03:33-04:00",
+      "date": "2026-09-04T09:03:41-04:00",
       "sections": [
         {
           "label": "Fixed",
