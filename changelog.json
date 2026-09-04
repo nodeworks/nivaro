@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-04T15:57:29.458Z",
+  "generated_at": "2026-09-04T16:55:11.847Z",
   "releases": [
+    {
+      "version": "0.1.210",
+      "tag": "v0.1.210",
+      "date": "2026-09-04T12:55:06-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "flows",
+              "text": "workflow-auto-sweep takes an items scope + recalc_rollups",
+              "hash": "07cd0a8d"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "server-side field rules never ran on API writes; SLA docs mention timezones",
+              "hash": "3a08d69a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.209",
       "tag": "v0.1.209",
-      "date": "2026-09-04T11:57:23-04:00",
+      "date": "2026-09-04T11:57:29-04:00",
       "sections": [
         {
           "label": "Added",
