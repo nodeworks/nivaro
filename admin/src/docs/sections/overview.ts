@@ -220,7 +220,7 @@ export const userFlows: DocSection = {
         [
           'workflow-auto-sweep',
           '✅ Live',
-          'Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.'
+          'Re-evaluates automatic (auto_trigger) transitions for the open workflow instances of a collection — options collection, states (comma-separated state keys, blank = all open), items (template or comma list of record ids — scopes the sweep to exactly those; an empty resolved list evaluates nothing), recalc_rollups (recompute stored rollups on the swept records before evaluating — defaults on when items is set), limit, result_key. Built for post-import flows: a raw-SQL import fires no record hooks, so this is what advances records whose conditions now pass. Output {evaluated, transitioned, items}.'
         ],
         [
           'log',

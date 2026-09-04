@@ -515,6 +515,33 @@ export async function getRollupContributors(
   return contributorCache.get(childCollection) ?? []
 }
 
+/**
+ * Recompute EVERY stored rollup column on the given parent records. For code
+ * paths that know a record was touched by a raw write (staged imports, procs)
+ * and cannot name the child collection that changed — the post-import sweep.
+ * One recalc per (rollup field, record); never throws.
+ */
+export async function recalcStoredRollupsForRecords(
+  parentCollection: string,
+  parentIds: unknown[]
+): Promise<{ fields: string[]; records: number }> {
+  if (!parentIds.length) return { fields: [], records: 0 }
+  if (!contributorCache) contributorCache = await buildContributorCache()
+  const byField = new Map<string, RollupContributorEntry>()
+  for (const list of contributorCache.values()) {
+    for (const entry of list) {
+      if (entry.parentCollection === parentCollection && !byField.has(entry.rollupField)) {
+        byField.set(entry.rollupField, entry)
+      }
+    }
+  }
+  if (byField.size === 0) return { fields: [], records: 0 }
+  for (const id of parentIds) {
+    for (const entry of byField.values()) await recalcRollupsForParent(entry, id)
+  }
+  return { fields: [...byField.keys()], records: parentIds.length }
+}
+
 /** Clears the cached contributor map; the next lookup rebuilds it from nivaro_fields. */
 export function bustRollupContributorCache(): void {
   contributorCache = null

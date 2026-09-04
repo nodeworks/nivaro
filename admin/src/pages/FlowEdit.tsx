@@ -1191,6 +1191,42 @@ function EditOperationDialog({
                       className='font-mono text-[13px]'
                     />
                   </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Only these record ids (template or comma list, blank = scan the collection)
+                    </Label>
+                    <Input
+                      value={(optsState.items as string) ?? ''}
+                      onChange={(e) => setOpt('items', e.target.value)}
+                      placeholder='{{po_linked.workflow_ids}}'
+                      className='font-mono text-[13px]'
+                    />
+                    <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+                      Scopes the sweep to ids an earlier op produced — a post-import flow should
+                      evaluate only the records the import touched. An empty resolved list evaluates
+                      nothing; it never falls back to the full scan.
+                    </p>
+                  </div>
+                  <label className='flex items-start gap-2 text-[12px]'>
+                    <input
+                      type='checkbox'
+                      className='mt-0.5'
+                      checked={
+                        optsState.recalc_rollups === undefined || optsState.recalc_rollups === null
+                          ? Boolean((optsState.items as string) ?? '')
+                          : Boolean(optsState.recalc_rollups)
+                      }
+                      onChange={(e) => setOpt('recalc_rollups', e.target.checked)}
+                    />
+                    <span>
+                      Recompute stored rollups on the swept records first
+                      <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
+                        A raw-SQL import leaves every stored rollup on the records it touched stale
+                        (e.g. a PO-amount sum). Defaults on when the sweep is scoped by ids, off for
+                        a full scan.
+                      </span>
+                    </span>
+                  </label>
                   <div className='grid grid-cols-2 gap-3'>
                     <div className='space-y-1.5'>
                       <Label>Max instances</Label>

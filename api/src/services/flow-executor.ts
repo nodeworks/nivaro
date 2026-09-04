@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { callExternalApi } from './external-apis.js'
+import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 
 interface FlowOperation {
@@ -682,6 +683,17 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
     .filter(Boolean)
   const limit = Math.min(Math.max(Number(opts.limit) || 5000, 1), 20000)
   const resultKey = (opts.result_key as string) || 'auto_sweep'
+  // `items` scopes the sweep to explicit record ids (a template like
+  // {{po_linked.workflow_ids}} or a literal list). Configured-but-empty means
+  // "nothing to evaluate" — it must never widen back to the whole collection.
+  const items = resolveSweepItems(opts.items, data, resolveTemplate, getByPath)
+  // Raw imports leave every stored rollup on the touched records stale, and a
+  // condition may read one — so a scoped sweep recomputes them first. Off by
+  // default for a full scan (thousands of rows × every rollup).
+  const recalcRollups =
+    opts.recalc_rollups === undefined || opts.recalc_rollups === null
+      ? Boolean(items)
+      : Boolean(opts.recalc_rollups)
 
   if (!collection || !COLLECTION_RE.test(collection) || /^nivaro_/i.test(collection)) {
     ctx.log.warn(
@@ -710,10 +722,29 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
       .where('i.collection', collection)
       .whereNull('i.completed_at')
     if (stateKeys.length > 0) q = q.whereIn('s.key', stateKeys)
-    const rows = (await q.select('i.item', 'i.current_state').limit(limit)) as Array<{
-      item: string
-      current_state: string
-    }>
+    let rows: Array<{ item: string; current_state: string }>
+    if (items) {
+      rows = []
+      // MSSQL caps bound parameters (~2100) — chunk the id list.
+      for (let i = 0; i < items.length && rows.length < limit; i += 1000) {
+        const chunk = items.slice(i, i + 1000)
+        rows.push(
+          ...((await q
+            .clone()
+            .whereIn('i.item', chunk)
+            .select('i.item', 'i.current_state')) as Array<{
+            item: string
+            current_state: string
+          }>)
+        )
+      }
+      rows = rows.slice(0, limit)
+    } else {
+      rows = (await q.select('i.item', 'i.current_state').limit(limit)) as Array<{
+        item: string
+        current_state: string
+      }>
+    }
 
     if (ctx.dryRun) {
       return {
@@ -724,6 +755,8 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
             op: 'workflow-auto-sweep',
             collection,
             states: stateKeys,
+            scoped_to: items ? items.length : null,
+            recalc_rollups: recalcRollups,
             would_evaluate: rows.length
           },
           [resultKey]: { evaluated: rows.length, transitioned: 0, dry_run: true }
@@ -732,6 +765,14 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
     }
 
     const { runAutoTransitions } = await import('./workflow-transitions.js')
+    let rollupFields: string[] = []
+    if (recalcRollups) {
+      const { recalcStoredRollupsForRecords } = await import('./rollups.js')
+      // Scoped ids first (a completed record is still a stale one), else the
+      // rows about to be evaluated.
+      const targets = items ?? rows.map((r) => String(r.item))
+      rollupFields = (await recalcStoredRollupsForRecords(collection, targets)).fields
+    }
     let transitioned = 0
     const moved: string[] = []
     for (const row of rows) {
@@ -745,12 +786,28 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
       }
     }
     ctx.log.info(
-      { flowId: ctx.flowId, key: op.key, collection, evaluated: rows.length, transitioned },
+      {
+        flowId: ctx.flowId,
+        key: op.key,
+        collection,
+        scoped_to: items ? items.length : null,
+        rollups_recalced: rollupFields,
+        evaluated: rows.length,
+        transitioned
+      },
       'workflow-auto-sweep executed'
     )
     return {
       status: 'resolve' as const,
-      output: { ...data, [resultKey]: { evaluated: rows.length, transitioned, items: moved } }
+      output: {
+        ...data,
+        [resultKey]: {
+          evaluated: rows.length,
+          transitioned,
+          items: moved,
+          rollups_recalced: rollupFields
+        }
+      }
     }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'workflow-auto-sweep failed')
