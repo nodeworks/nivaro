@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T00:08:08.931Z",
+  "generated_at": "2026-09-04T00:14:37.058Z",
   "releases": [
+    {
+      "version": "0.1.201",
+      "tag": "v0.1.201",
+      "date": "2026-09-03T20:14:30-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "rollups render pending rows on a record that isn't saved yet",
+              "hash": "bc7c44f1"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.200",
       "tag": "v0.1.200",
-      "date": "2026-09-03T20:08:03-04:00",
+      "date": "2026-09-03T20:08:08-04:00",
       "sections": [
         {
           "label": "Fixed",
