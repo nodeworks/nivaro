@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-04T15:47:15.036Z",
+  "generated_at": "2026-09-04T15:57:29.458Z",
   "releases": [
+    {
+      "version": "0.1.209",
+      "tag": "v0.1.209",
+      "date": "2026-09-04T11:57:23-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "create_record",
+              "text": "optional record_link writes a Related Record to the created row",
+              "hash": "14058e10"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "a rollup outside its parent_filter is a plain field everywhere on the client",
+              "hash": "bcd68361"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.208",
       "tag": "v0.1.208",
-      "date": "2026-09-04T11:47:08-04:00",
+      "date": "2026-09-04T11:47:15-04:00",
       "sections": [
         {
           "label": "Fixed",
