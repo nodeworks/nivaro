@@ -3,8 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { restoreLayoutVersion, snapshotLayoutVersion } from '../services/layout-versions.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { restoreLayoutVersion, snapshotLayoutVersion } from '../services/layout-versions.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { can } from '../services/permissions.js'
@@ -47,7 +47,9 @@ function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
   if (typeof raw !== 'string') return null
   try {
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
   } catch {
     return null
   }
@@ -56,7 +58,10 @@ function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
 // Does every rule match the given record? eq/neq compare via
 // String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
 // e.g. workflow_type stored as 2 vs '2'); nnull checks raw != null.
-export function matchesRecordConditions(rules: RecordConditionRule[], record: Record<string, unknown>): boolean {
+export function matchesRecordConditions(
+  rules: RecordConditionRule[],
+  record: Record<string, unknown>
+): boolean {
   return rules.every((rule) => {
     const raw = record[rule.field]
     if (rule.op === 'nnull') return raw != null
@@ -96,7 +101,8 @@ function validateDefaultValues(values: unknown): string | null {
     return 'default_values must be an object'
   }
   for (const key of Object.keys(values as Record<string, unknown>)) {
-    if (!FIELD_IDENTIFIER_RE.test(key)) return `default_values.${key} is not a valid field identifier`
+    if (!FIELD_IDENTIFIER_RE.test(key))
+      return `default_values.${key} is not a valid field identifier`
   }
   return null
 }
@@ -138,11 +144,36 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
 // when it does not match (or no record is supplied) — it can never leak to
 // non-matching records. Returns the raw DB row (JSON columns still strings)
 // or null when no layout exists.
-function pickBestLayout(
-  layouts: Record<string, unknown>[],
+/**
+ * Role allow-list. `conditions.role_ids` on a layout is a RESTRICTION, not a
+ * preference: a non-admin whose role is not listed can never resolve, pin
+ * (?layout=<slug>), list, or drill into that layout — record-condition
+ * matches included (a CAR still resolves the admin-only PUB layout for an
+ * admin, and the next allowed layout for everyone else). Empty/absent list =
+ * open to all. Admins always pass.
+ */
+function roleAllows(
+  row: Record<string, unknown>,
   userRoleId: string | null | undefined,
-  record: Record<string, unknown> | null
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return true
+  const roleIds = parseConditions(row.conditions)?.role_ids
+  if (!Array.isArray(roleIds) || roleIds.length === 0) return true
+  if (!userRoleId) return false
+  const want = String(userRoleId).toUpperCase()
+  return roleIds.some((r) => String(r).toUpperCase() === want)
+}
+
+function pickBestLayout(
+  allCandidates: Record<string, unknown>[],
+  userRoleId: string | null | undefined,
+  record: Record<string, unknown> | null,
+  isAdmin = false
 ) {
+  // Role-restricted layouts leave the candidate set entirely for non-listed
+  // roles — before record conditions, before the default fallback.
+  const layouts = allCandidates.filter((row) => roleAllows(row, userRoleId, isAdmin))
   if (layouts.length === 0) return null
 
   const fallbackPool: typeof layouts = []
@@ -152,7 +183,8 @@ function pickBestLayout(
     if (rules) {
       if (record && matchesRecordConditions(rules, record)) {
         const matches = rules.length
-        if (!bestRecordMatch || matches > bestRecordMatch.matches) bestRecordMatch = { row, matches }
+        if (!bestRecordMatch || matches > bestRecordMatch.matches)
+          bestRecordMatch = { row, matches }
       }
       continue // excluded from the role/default fallback pool regardless of match
     }
@@ -194,7 +226,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const layouts = (await db('nivaro_collection_layouts')
       .where({ collection, layout_type: 'grouped' })
       .orderBy('sort')) as Record<string, unknown>[]
-    const picked = pickBestLayout(layouts, String(role_id), null)
+    const picked = pickBestLayout(layouts, String(role_id), null, !!role.admin_access)
     const recordConditional = layouts.filter((l) => parseRecordConditions(l.record_conditions))
 
     // Field permissions via a synthetic user — the permission-simulator
@@ -211,9 +243,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       getAllowedFields(syntheticUser, 'update', collection)
     ])
 
-    const allFields = (await db('nivaro_fields')
-      .where({ collection })
-      .pluck('field')) as string[]
+    const allFields = (await db('nivaro_fields').where({ collection }).pluck('field')) as string[]
     const readSet = readFields ? new Set(readFields) : null
     const updateSet = updateFields ? new Set(updateFields) : null
     return reply.send({
@@ -221,9 +251,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         role: { id: role.id, name: role.name, admin_access: !!role.admin_access },
         can_read: !!canRead,
         can_update: !!canUpdate,
-        layout: picked
-          ? { id: picked.id, name: picked.name, is_active: !!picked.is_active }
-          : null,
+        layout: picked ? { id: picked.id, name: picked.name, is_active: !!picked.is_active } : null,
         // null field list = policy grants all fields
         hidden_fields: readSet ? allFields.filter((f) => !readSet.has(f)) : [],
         readonly_fields:
@@ -231,16 +259,21 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             ? allFields.filter((f) => !updateSet.has(f) && (!readSet || readSet.has(f)))
             : [],
         record_conditional_layouts: recordConditional.map((l) => String(l.name)),
-        note: recordConditional.length > 0
-          ? 'Record-conditional layouts depend on the record being opened and are not judged here.'
-          : null
+        note:
+          recordConditional.length > 0
+            ? 'Record-conditional layouts depend on the record being opened and are not judged here.'
+            : null
       }
     })
   })
 
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, slug, item } = req.query as { collection?: string; slug?: string; item?: string }
+    const { collection, slug, item } = req.query as {
+      collection?: string
+      slug?: string
+      item?: string
+    }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
     // Explicit slug pins a specific layout (any type — detail layouts use this
@@ -248,6 +281,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     let layout: Record<string, unknown> | undefined | null
     if (slug) {
       layout = await db('nivaro_collection_layouts').where({ collection, slug }).first()
+      // A pinned slug the caller's role may not open (queue row_click,
+      // ?layout= links, CBV) silently falls through to normal resolution.
+      if (layout && !roleAllows(layout, req.user?.role ?? null, !!req.isAdmin)) layout = null
     }
     if (!layout) {
       // Admins always see the default layout (no conditional override).
@@ -267,10 +303,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         if (registered) {
           const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
           record =
-            (await db(collection).where({ id: item }).select(columns).first().catch(() => null)) ?? null
+            (await db(collection)
+              .where({ id: item })
+              .select(columns)
+              .first()
+              .catch(() => null)) ?? null
         }
       }
-      layout = pickBestLayout(layouts, userRoleId, record)
+      layout = pickBestLayout(layouts, userRoleId, record, !!req.isAdmin)
     }
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
@@ -282,7 +322,21 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'default_expanded',
+          'lock_conditions',
+          'overrides',
+          'show_row_revisions',
+          'show_approval_chain',
+          'widget_id',
+          'input_bindings',
+          'allow_revision_restore'
+        )
         .orderBy('sort', 'asc')
     ])
 
@@ -299,7 +353,21 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             .orderBy('sort', 'asc'),
           db('nivaro_layout_field_assignments')
             .where({ layout_id: Number(layout.parent_layout_id) })
-            .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'lock_conditions', 'overrides', 'show_row_revisions', 'show_approval_chain', 'widget_id', 'input_bindings', 'allow_revision_restore')
+            .select(
+              'field',
+              'group_key',
+              'sort',
+              'label_override',
+              'is_visible',
+              'default_expanded',
+              'lock_conditions',
+              'overrides',
+              'show_row_revisions',
+              'show_approval_chain',
+              'widget_id',
+              'input_bindings',
+              'allow_revision_restore'
+            )
             .orderBy('sort', 'asc')
         ])
         const childFields = new Set(assignments.map((a: { field: string }) => a.field))
@@ -328,14 +396,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             return !(
               Array.isArray(hidden) &&
               req.user?.role &&
-              hidden.map((r) => String(r).toUpperCase()).includes(String(req.user.role).toUpperCase())
+              hidden
+                .map((r) => String(r).toUpperCase())
+                .includes(String(req.user.role).toUpperCase())
             )
           } catch {
             return true
           }
         })
 
-    const ungroupedRow = assignments.find((a: { field: string; sort: number }) => a.field === '__ungrouped_pos__')
+    const ungroupedRow = assignments.find(
+      (a: { field: string; sort: number }) => a.field === '__ungrouped_pos__'
+    )
     const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null
 
     return reply.send({ data: { layout, groups, assignments, ungrouped_sort } })
@@ -349,17 +421,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const { layout_id } = req.query as { layout_id?: string }
 
+    const roleId = req.user?.role ?? null
+    const isAdmin = !!req.isAdmin
     let layout: Record<string, unknown> | undefined
     if (layout_id) {
       layout = await db('nivaro_collection_layouts')
         .where({ id: Number(layout_id), collection, layout_type: 'detail' })
         .first()
+      if (layout && !roleAllows(layout, roleId, isAdmin)) layout = undefined
     }
     if (!layout) {
-      layout = await db('nivaro_collection_layouts')
+      const candidates = (await db('nivaro_collection_layouts')
         .where({ collection, layout_type: 'detail' })
-        .orderByRaw('is_active desc, sort asc')
-        .first()
+        .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
+      layout = candidates.find((l) => roleAllows(l, roleId, isAdmin))
     }
     if (!layout) return reply.send({ data: null })
 
@@ -367,7 +442,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: layout.id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'overrides', 'widget_id', 'input_bindings')
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'default_expanded',
+          'overrides',
+          'widget_id',
+          'input_bindings'
+        )
         .orderBy('sort', 'asc')
     ])
     return reply.send({ data: { layout, groups, assignments } })
@@ -382,19 +467,61 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .where({ collection })
       .orderBy('sort', 'asc')
       .select(
-        'id', 'collection', 'name', 'slug', 'create_label', 'create_hidden', 'is_active', 'sort', 'created_at',
-        'disable_comments', 'disable_tasks', 'disable_revisions', 'disable_clone', 'disable_delete',
-        'accordion_mode', 'tab_mode', 'validate_before_next', 'summary_enabled', 'summary_show_all',
-        'summary_hide_empty', 'ai_enabled', 'conditions', 'allow_clone', 'allow_schedule',
-        'allow_disable_pickers', 'layout_type', 'row_order_field',
-        'pdf_theme', 'pdf_template_id', 'pdf_cover_enabled', 'pdf_cover_title_field',
-        'pdf_cover_subtitle', 'pdf_show_logo', 'pdf_page_size', 'pdf_orientation', 'pdf_button_label',
-        'addendum_layout_id', 'workflow_template_id', 'single_active_addendum', 'addendum_default_view',
-        'record_conditions', 'default_values', 'display_mode', 'hide_integrity_banner', 'hide_sla_banner', 'dossier_enabled', 'dossier_label'
+        'id',
+        'collection',
+        'name',
+        'slug',
+        'create_label',
+        'create_hidden',
+        'is_active',
+        'sort',
+        'created_at',
+        'disable_comments',
+        'disable_tasks',
+        'disable_revisions',
+        'disable_clone',
+        'disable_delete',
+        'accordion_mode',
+        'tab_mode',
+        'validate_before_next',
+        'summary_enabled',
+        'summary_show_all',
+        'summary_hide_empty',
+        'ai_enabled',
+        'conditions',
+        'allow_clone',
+        'allow_schedule',
+        'allow_disable_pickers',
+        'layout_type',
+        'row_order_field',
+        'pdf_theme',
+        'pdf_template_id',
+        'pdf_cover_enabled',
+        'pdf_cover_title_field',
+        'pdf_cover_subtitle',
+        'pdf_show_logo',
+        'pdf_page_size',
+        'pdf_orientation',
+        'pdf_button_label',
+        'addendum_layout_id',
+        'workflow_template_id',
+        'single_active_addendum',
+        'addendum_default_view',
+        'record_conditions',
+        'default_values',
+        'display_mode',
+        'hide_integrity_banner',
+        'hide_sla_banner',
+        'dossier_enabled',
+        'dossier_label'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
-    const rows = await q
+    // Non-admins never see role-restricted layouts they cannot open (New-item
+    // menus, queue builders, drill pickers all read this list).
+    const rows = (await q).filter((row: Record<string, unknown>) =>
+      roleAllows(row, req.user?.role ?? null, !!req.isAdmin)
+    )
     for (const row of rows) {
       row.conditions = parseConditions(row.conditions)
       row.record_conditions = parseRecordConditions(row.record_conditions)
@@ -406,7 +533,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // POST /collection-layouts
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as { collection: string; name: string }
-    if (!body.collection || !body.name) return reply.code(400).send({ error: 'collection and name are required' })
+    if (!body.collection || !body.name)
+      return reply.code(400).send({ error: 'collection and name are required' })
 
     const maxSortRow = await db('nivaro_collection_layouts')
       .where({ collection: body.collection })
@@ -415,8 +543,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
     try {
-      await db('nivaro_collection_layouts')
-        .insert({ collection: body.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+      await db('nivaro_collection_layouts').insert({
+        collection: body.collection,
+        name: body.name,
+        is_active: 0,
+        sort: maxSort + 1
+      })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
@@ -429,7 +561,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .orderBy('id', 'desc')
       .first()
 
-    await logActivity({ action: 'create', user: req.user?.id, collection: 'nivaro_collection_layouts', item: String(created.id), req })
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: String(created.id),
+      req
+    })
     return reply.code(201).send({ data: created })
   })
 
@@ -437,7 +575,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = await db('nivaro_collection_layouts').where({ id }).first()
-    if (!row) return reply.code(404).send({ error: 'Not found' })
+    if (!row || !roleAllows(row, req.user?.role ?? null, !!req.isAdmin)) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
     row.conditions = parseConditions(row.conditions)
     row.record_conditions = parseRecordConditions(row.record_conditions)
     row.default_values = parseDefaultValues(row.default_values)
@@ -452,7 +592,38 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
-    const body = req.body as Partial<{ name: string; slug: string | null; create_label: string | null; create_hidden: boolean; sort: number; is_active: boolean; disable_comments: boolean; disable_tasks: boolean; tab_mode: string; validate_before_next: boolean; summary_enabled: boolean; summary_show_all: boolean; ai_enabled: boolean; conditions: { role_ids?: string[] } | null; allow_clone: boolean; allow_schedule: boolean; allow_disable_pickers: boolean; layout_type: string; addendum_layout_id: number | null; workflow_template_id: string | null; single_active_addendum: boolean; addendum_default_view: boolean; record_conditions: RecordConditionRule[] | null; default_values: Record<string, unknown> | null; display_mode: string | null; parent_layout_id: number | null; hide_integrity_banner: boolean; hide_sla_banner: boolean; dossier_enabled: boolean; dossier_label: string | null }>
+    const body = req.body as Partial<{
+      name: string
+      slug: string | null
+      create_label: string | null
+      create_hidden: boolean
+      sort: number
+      is_active: boolean
+      disable_comments: boolean
+      disable_tasks: boolean
+      tab_mode: string
+      validate_before_next: boolean
+      summary_enabled: boolean
+      summary_show_all: boolean
+      ai_enabled: boolean
+      conditions: { role_ids?: string[] } | null
+      allow_clone: boolean
+      allow_schedule: boolean
+      allow_disable_pickers: boolean
+      layout_type: string
+      addendum_layout_id: number | null
+      workflow_template_id: string | null
+      single_active_addendum: boolean
+      addendum_default_view: boolean
+      record_conditions: RecordConditionRule[] | null
+      default_values: Record<string, unknown> | null
+      display_mode: string | null
+      parent_layout_id: number | null
+      hide_integrity_banner: boolean
+      hide_sla_banner: boolean
+      dossier_enabled: boolean
+      dossier_label: string | null
+    }>
 
     if (body.record_conditions !== undefined && body.record_conditions !== null) {
       const err = validateRecordConditions(body.record_conditions)
@@ -480,7 +651,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         const parent = await db('nivaro_collection_layouts')
           .where({ id: Number(body.parent_layout_id) })
           .first('id', 'collection', 'parent_layout_id')
-        const self = await db('nivaro_collection_layouts').where({ id: Number(id) }).first('collection')
+        const self = await db('nivaro_collection_layouts')
+          .where({ id: Number(id) })
+          .first('collection')
         if (
           !parent ||
           parent.collection !== self?.collection ||
@@ -495,27 +668,41 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
     }
     if (body.layout_type !== undefined) patch.layout_type = body.layout_type
-    if (body.validate_before_next !== undefined) patch.validate_before_next = body.validate_before_next ? 1 : 0
+    if (body.validate_before_next !== undefined)
+      patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
     if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
     if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
-    if (body.conditions !== undefined) patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
+    if (body.conditions !== undefined)
+      patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
     if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
     if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
-    if (body.allow_disable_pickers !== undefined) patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
-    if (body.addendum_layout_id !== undefined) patch.addendum_layout_id = body.addendum_layout_id ?? null
-    if (body.workflow_template_id !== undefined) patch.workflow_template_id = body.workflow_template_id ?? null
-    if (body.single_active_addendum !== undefined) patch.single_active_addendum = body.single_active_addendum ? 1 : 0
-    if (body.addendum_default_view !== undefined) patch.addendum_default_view = body.addendum_default_view ? 1 : 0
-    if (body.record_conditions !== undefined) patch.record_conditions = body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
-    if (body.default_values !== undefined) patch.default_values = body.default_values == null ? null : JSON.stringify(body.default_values)
+    if (body.allow_disable_pickers !== undefined)
+      patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
+    if (body.addendum_layout_id !== undefined)
+      patch.addendum_layout_id = body.addendum_layout_id ?? null
+    if (body.workflow_template_id !== undefined)
+      patch.workflow_template_id = body.workflow_template_id ?? null
+    if (body.single_active_addendum !== undefined)
+      patch.single_active_addendum = body.single_active_addendum ? 1 : 0
+    if (body.addendum_default_view !== undefined)
+      patch.addendum_default_view = body.addendum_default_view ? 1 : 0
+    if (body.record_conditions !== undefined)
+      patch.record_conditions =
+        body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
+    if (body.default_values !== undefined)
+      patch.default_values =
+        body.default_values == null ? null : JSON.stringify(body.default_values)
     if (body.display_mode !== undefined) patch.display_mode = body.display_mode ?? null
-    if (body.hide_integrity_banner !== undefined) patch.hide_integrity_banner = body.hide_integrity_banner === true
+    if (body.hide_integrity_banner !== undefined)
+      patch.hide_integrity_banner = body.hide_integrity_banner === true
     if (body.dossier_enabled !== undefined) patch.dossier_enabled = body.dossier_enabled === true
-    if (body.dossier_label !== undefined) patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
+    if (body.dossier_label !== undefined)
+      patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
     if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
 
-    if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
+    if (Object.keys(patch).length === 0)
+      return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_collection_layouts').where({ id }).update(patch)
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
@@ -523,7 +710,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     updated.record_conditions = parseRecordConditions(updated.record_conditions)
     updated.default_values = parseDefaultValues(updated.default_values)
 
-    await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: id,
+      req
+    })
     return reply.send({ data: updated })
   })
 
@@ -539,7 +732,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const count = Number(countRow?.c ?? 0)
 
-    if (count <= 1) return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
+    if (count <= 1)
+      return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
     // If deleting the active layout, promote the next one of the SAME type first
     // (activation is type-scoped — grouped and detail defaults are independent).
@@ -558,10 +752,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
     }
 
-    await db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
-    await db('nivaro_field_groups').where({ layout_id: Number(id) }).delete()
+    await db('nivaro_layout_field_assignments')
+      .where({ layout_id: Number(id) })
+      .delete()
+    await db('nivaro_field_groups')
+      .where({ layout_id: Number(id) })
+      .delete()
     await db('nivaro_collection_layouts').where({ id }).delete()
-    await logActivity({ action: 'delete', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
+    await logActivity({
+      action: 'delete',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: id,
+      req
+    })
     return reply.code(204).send()
   })
 
@@ -580,34 +784,70 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     await db('nivaro_collection_layouts').where({ id }).update({ is_active: 1 })
 
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
-    await logActivity({ action: 'update', user: req.user?.id, collection: 'nivaro_collection_layouts', item: id, req })
+    await logActivity({
+      action: 'update',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: id,
+      req
+    })
     return reply.send({ data: updated })
   })
 
   app.get('/:id/preview-html', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
-    if (!layout || layout.layout_type !== 'file') return reply.code(404).send({ error: 'Not found' })
+    if (!layout || layout.layout_type !== 'file')
+      return reply.code(404).send({ error: 'Not found' })
 
     const [groups, assignments, fieldMeta] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id', 'key', 'label', 'sort').orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'widget_id', 'input_bindings').orderBy('sort', 'asc'),
-      db('nivaro_fields').where({ collection: layout.collection }).select('field', 'label', 'type'),
+      db('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .select('id', 'key', 'label', 'sort')
+        .orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'widget_id',
+          'input_bindings'
+        )
+        .orderBy('sort', 'asc'),
+      db('nivaro_fields').where({ collection: layout.collection }).select('field', 'label', 'type')
     ])
 
-    const fieldMetaMap = new Map((fieldMeta as Array<{ field: string; label: string | null; type: string }>).map(f => [f.field, f]))
+    const fieldMetaMap = new Map(
+      (fieldMeta as Array<{ field: string; label: string | null; type: string }>).map((f) => [
+        f.field,
+        f
+      ])
+    )
 
     const realSections = groups
       .sort((a: { sort: number }, b: { sort: number }) => a.sort - b.sort)
       .map((group: { id: number; key: string; label: string; sort: number }) => {
-        const groupFields = (assignments as Array<{ field: string; group_key: string | null; sort: number; label_override: string | null; is_visible: number | boolean | null }>)
-          .filter(a =>
-            (group.key ? a.group_key === group.key : a.group_key === String(group.id)) &&
-            a.is_visible !== 0 && a.is_visible !== false &&
-            !a.field.startsWith('__')
+        const groupFields = (
+          assignments as Array<{
+            field: string
+            group_key: string | null
+            sort: number
+            label_override: string | null
+            is_visible: number | boolean | null
+          }>
+        )
+          .filter(
+            (a) =>
+              (group.key ? a.group_key === group.key : a.group_key === String(group.id)) &&
+              a.is_visible !== 0 &&
+              a.is_visible !== false &&
+              !a.field.startsWith('__')
           )
           .sort((a, b) => a.sort - b.sort)
-          .map(a => {
+          .map((a) => {
             const meta = fieldMetaMap.get(a.field)
             return { label: a.label_override ?? meta?.label ?? a.field, value: `[${a.field}]` }
           })
@@ -615,23 +855,41 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       })
       .filter((s: { fields: unknown[] }) => s.fields.length > 0)
 
-    const sections = realSections.length > 0 ? realSections : [
-      { label: 'No fields configured', fields: [
-        { label: 'Groups in layout', value: String(groups.length) },
-        { label: 'Assignments in layout', value: String((assignments as unknown[]).length) },
-        { label: 'Fix', value: 'Drag fields into groups in the Layouts tab to populate this PDF.' },
-      ]},
-    ]
+    const sections =
+      realSections.length > 0
+        ? realSections
+        : [
+            {
+              label: 'No fields configured',
+              fields: [
+                { label: 'Groups in layout', value: String(groups.length) },
+                {
+                  label: 'Assignments in layout',
+                  value: String((assignments as unknown[]).length)
+                },
+                {
+                  label: 'Fix',
+                  value: 'Drag fields into groups in the Layouts tab to populate this PDF.'
+                }
+              ]
+            }
+          ]
 
     const previewData = {
-      coverTitle: layout.pdf_cover_title_field ? `[${layout.pdf_cover_title_field}]` : 'Document Title',
+      coverTitle: layout.pdf_cover_title_field
+        ? `[${layout.pdf_cover_title_field}]`
+        : 'Document Title',
       coverSubtitle: layout.pdf_cover_subtitle ?? 'Preview · Real Layout',
       logoUrl: null as string | null,
       collectionLabel: layout.collection ?? 'Collection',
-      generatedAt: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+      generatedAt: new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }),
       generatedBy: 'Preview',
       coverEnabled: Boolean(layout.pdf_cover_enabled ?? true),
-      sections,
+      sections
     }
 
     const theme = layout.pdf_theme ?? 'classic'
@@ -654,11 +912,17 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Layout not found' })
-    if (layout.layout_type !== 'file') return reply.code(400).send({ error: 'Layout is not a file layout' })
+    if (layout.layout_type !== 'file')
+      return reply.code(400).send({ error: 'Layout is not a file layout' })
 
     let item: Record<string, unknown>
     try {
-      item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
+      item = (await readOne(
+        req.user!,
+        collection,
+        String(item_id),
+        req.workspaceId ?? undefined
+      )) as Record<string, unknown>
     } catch (err) {
       if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
       if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
@@ -672,27 +936,59 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'col_span', 'overrides')
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'col_span',
+          'overrides'
+        )
         .orderBy('sort', 'asc'),
-      db('nivaro_fields').where({ collection }).select('field', 'label', 'type', 'interface', 'options'),
+      db('nivaro_fields')
+        .where({ collection })
+        .select('field', 'label', 'type', 'interface', 'options'),
       db('nivaro_collections').where({ collection }).first('display_name'),
-      db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
+      db('nivaro_settings')
+        .where({ id: 1 })
+        .first('logo_url')
+        .catch(() => null),
       db('nivaro_relations')
         .where('many_collection', collection)
         .orWhere('one_collection', collection)
-        .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field'),
+        .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
     ])
 
     // For M2M: also fetch the junction→other relations so we can resolve display values
-    const m2mJunctions = (directRelations as Array<{ many_collection: string; junction_field: string | null; one_collection: string | null }>)
-      .filter(r => r.one_collection === collection && r.junction_field != null)
-      .map(r => r.many_collection)
-    const junctionRelations = m2mJunctions.length > 0
-      ? await db('nivaro_relations')
-          .whereIn('many_collection', m2mJunctions)
-          .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
-      : []
-    const relations = [...directRelations, ...junctionRelations] as Array<{ many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }>
+    const m2mJunctions = (
+      directRelations as Array<{
+        many_collection: string
+        junction_field: string | null
+        one_collection: string | null
+      }>
+    )
+      .filter((r) => r.one_collection === collection && r.junction_field != null)
+      .map((r) => r.many_collection)
+    const junctionRelations =
+      m2mJunctions.length > 0
+        ? await db('nivaro_relations')
+            .whereIn('many_collection', m2mJunctions)
+            .select(
+              'many_collection',
+              'many_field',
+              'one_collection',
+              'one_field',
+              'junction_field'
+            )
+        : []
+    const relations = [...directRelations, ...junctionRelations] as Array<{
+      many_collection: string
+      many_field: string
+      one_collection: string | null
+      one_field: string | null
+      junction_field: string | null
+    }>
 
     const collectionLabel = (colMeta?.display_name as string | null) ?? collection
     const logoUrl = (settings?.logo_url as string | null) ?? null
@@ -710,7 +1006,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       fieldMeta,
       relations,
       logoUrl,
-      generatedBy,
+      generatedBy
     })
 
     await logActivity({
@@ -718,7 +1014,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       user: req.user?.id,
       collection,
       item: String(item_id),
-      req,
+      req
     })
 
     const safeFilename = `${collection}-${item_id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -733,14 +1029,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
   app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { collection, item_id, attach_field, filename_template, replace_generated } = req.body as {
-      collection: string; item_id: string | number; attach_field: string; filename_template?: string | null
-      /** Detach (and delete) PDFs this layout generated before for the same
-       *  record, so re-saving refreshes the document instead of stacking a new
-       *  copy every time. Only ever removes files THIS endpoint created — a
-       *  user-uploaded attachment is never touched. */
-      replace_generated?: boolean
-    }
+    const { collection, item_id, attach_field, filename_template, replace_generated } =
+      req.body as {
+        collection: string
+        item_id: string | number
+        attach_field: string
+        filename_template?: string | null
+        /** Detach (and delete) PDFs this layout generated before for the same
+         *  record, so re-saving refreshes the document instead of stacking a new
+         *  copy every time. Only ever removes files THIS endpoint created — a
+         *  user-uploaded attachment is never touched. */
+        replace_generated?: boolean
+      }
 
     if (!collection || item_id == null || !attach_field) {
       return reply.code(400).send({ error: 'collection, item_id, and attach_field are required' })
@@ -753,14 +1053,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!req.isAdmin) {
       const [canRead, canUpdate] = await Promise.all([
         can(req.user!, 'read', collection),
-        can(req.user!, 'update', collection),
+        can(req.user!, 'update', collection)
       ])
       if (!canRead || !canUpdate) return reply.code(403).send({ error: 'Forbidden' })
     }
 
     let item: Record<string, unknown>
     try {
-      item = await readOne(req.user!, collection, String(item_id), req.workspaceId ?? undefined) as Record<string, unknown>
+      item = (await readOne(
+        req.user!,
+        collection,
+        String(item_id),
+        req.workspaceId ?? undefined
+      )) as Record<string, unknown>
     } catch (err) {
       if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
       if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
@@ -768,24 +1073,65 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
 
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: Number(id) }).select('id','key','label','sort').orderBy('sort','asc'),
-      db('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).select('field','group_key','sort','label_override','is_visible','col_span','overrides','widget_id','input_bindings').orderBy('sort','asc'),
-      db('nivaro_fields').where({ collection }).select('field','label','type','interface','options'),
+      db('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .select('id', 'key', 'label', 'sort')
+        .orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'col_span',
+          'overrides',
+          'widget_id',
+          'input_bindings'
+        )
+        .orderBy('sort', 'asc'),
+      db('nivaro_fields')
+        .where({ collection })
+        .select('field', 'label', 'type', 'interface', 'options'),
       db('nivaro_collections').where({ collection }).first('display_name'),
-      db('nivaro_settings').where({ id: 1 }).first('logo_url').catch(() => null),
-      db('nivaro_relations').where('many_collection', collection).orWhere('one_collection', collection)
-        .select('many_collection','many_field','one_collection','one_field','junction_field'),
+      db('nivaro_settings')
+        .where({ id: 1 })
+        .first('logo_url')
+        .catch(() => null),
+      db('nivaro_relations')
+        .where('many_collection', collection)
+        .orWhere('one_collection', collection)
+        .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
     ])
 
-    const m2mJunctions = (directRelations as Array<{ many_collection: string; junction_field: string | null; one_collection: string | null }>)
-      .filter(r => r.one_collection === collection && r.junction_field != null)
-      .map(r => r.many_collection)
-    const junctionRelations = m2mJunctions.length > 0
-      ? await db('nivaro_relations').whereIn('many_collection', m2mJunctions)
-          .select('many_collection','many_field','one_collection','one_field','junction_field')
-      : []
+    const m2mJunctions = (
+      directRelations as Array<{
+        many_collection: string
+        junction_field: string | null
+        one_collection: string | null
+      }>
+    )
+      .filter((r) => r.one_collection === collection && r.junction_field != null)
+      .map((r) => r.many_collection)
+    const junctionRelations =
+      m2mJunctions.length > 0
+        ? await db('nivaro_relations')
+            .whereIn('many_collection', m2mJunctions)
+            .select(
+              'many_collection',
+              'many_field',
+              'one_collection',
+              'one_field',
+              'junction_field'
+            )
+        : []
     const relations = [...directRelations, ...junctionRelations] as Array<{
-      many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null
+      many_collection: string
+      many_field: string
+      one_collection: string | null
+      one_field: string | null
+      junction_field: string | null
     }>
 
     const collectionLabel = (colMeta?.display_name as string | null) ?? collection
@@ -795,7 +1141,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       : (req.user?.email ?? 'System')
 
     const pdfBuffer = await generatePdfFromLayout({
-      layout, collectionLabel, collection, item, groups, assignments, fieldMeta, relations, logoUrl, generatedBy,
+      layout,
+      collectionLabel,
+      collection,
+      item,
+      groups,
+      assignments,
+      fieldMeta,
+      relations,
+      logoUrl,
+      generatedBy
     })
 
     // Save PDF to file storage
@@ -824,30 +1179,43 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       filesize: pdfBuffer.length,
       // Provenance, so a later replace_generated run can tell its own output
       // apart from a file a person uploaded.
-      generated_by_layout: Number(id),
+      generated_by_layout: Number(id)
     }
     await db('nivaro_files').insert(fileRow)
 
     // Attach file to the item via the relation for attach_field
     // Require exact match using the same alias derivation as the config picker
-    const junctionRels = (directRelations as Array<{ many_collection: string; many_field: string; one_collection: string | null; one_field: string | null; junction_field: string | null }>)
-      .filter(r => r.one_collection === collection && r.junction_field != null)
+    const junctionRels = (
+      directRelations as Array<{
+        many_collection: string
+        many_field: string
+        one_collection: string | null
+        one_field: string | null
+        junction_field: string | null
+      }>
+    ).filter((r) => r.one_collection === collection && r.junction_field != null)
     const getFieldAlias = (jr: { one_field: string | null; many_collection: string }) => {
       if (jr.one_field && jr.one_field !== 'id') return jr.one_field
-      return jr.many_collection
-        .replace(new RegExp(`^${collection}_?|_?${collection}$`, 'i'), '')
-        .replace(/^_|_$/g, '') || jr.many_collection
+      return (
+        jr.many_collection
+          .replace(new RegExp(`^${collection}_?|_?${collection}$`, 'i'), '')
+          .replace(/^_|_$/g, '') || jr.many_collection
+      )
     }
     let attached = false
-    const targetJr = junctionRels.find(jr => getFieldAlias(jr) === attach_field)
+    const targetJr = junctionRels.find((jr) => getFieldAlias(jr) === attach_field)
     if (!targetJr) {
-      return reply.code(400).send({ error: `No M2M relation found for field '${attach_field}' on collection '${collection}'` })
+      return reply.code(400).send({
+        error: `No M2M relation found for field '${attach_field}' on collection '${collection}'`
+      })
     }
     // targetJr encodes both FK columns:
     //   many_field      = junction column pointing to the parent (item_id side)
     //   junction_field  = junction column pointing to the related files record
     if (!targetJr.junction_field) {
-      return reply.code(400).send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
+      return reply
+        .code(400)
+        .send({ error: `Relation '${attach_field}' does not link to nivaro_files` })
     }
     if (replace_generated) {
       // Identify prior generations by the marker stamped on the file row, not
@@ -871,7 +1239,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
               .where({ [targetJr.many_field]: item_id })
               .whereIn(targetJr.junction_field as string, [...generatedIds])
               .del()
-            await db('nivaro_files').whereIn('id', [...generatedIds]).del()
+            await db('nivaro_files')
+              .whereIn('id', [...generatedIds])
+              .del()
           }
         }
       } catch {
@@ -881,12 +1251,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     try {
       await db(targetJr.many_collection).insert({
         [targetJr.many_field]: item_id,
-        [targetJr.junction_field]: fileId,
+        [targetJr.junction_field]: fileId
       })
       attached = true
-    } catch { /* duplicate/constraint — file already attached */ }
+    } catch {
+      /* duplicate/constraint — file already attached */
+    }
 
-    await logActivity({ action: 'pdf-generate-attach', user: req.user?.id, collection, item: String(item_id), req })
+    await logActivity({
+      action: 'pdf-generate-attach',
+      user: req.user?.id,
+      collection,
+      item: String(item_id),
+      req
+    })
 
     return reply.send({ data: { file_id: fileId, attached } })
   })
@@ -907,8 +1285,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
     try {
-      await db('nivaro_collection_layouts')
-        .insert({ collection: source.collection, name: body.name, is_active: 0, sort: maxSort + 1 })
+      await db('nivaro_collection_layouts').insert({
+        collection: source.collection,
+        name: body.name,
+        is_active: 0,
+        sort: maxSort + 1
+      })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
@@ -923,7 +1305,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const newId = newLayout.id
 
     // Clone groups
-    const groups = await db('nivaro_field_groups').where({ layout_id: Number(id) }).select('*')
+    const groups = await db('nivaro_field_groups')
+      .where({ layout_id: Number(id) })
+      .select('*')
     for (const g of groups) {
       await db('nivaro_field_groups').insert({
         collection: g.collection,
@@ -952,7 +1336,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       )
     }
 
-    await logActivity({ action: 'create', user: req.user?.id, collection: 'nivaro_collection_layouts', item: String(newId), req })
+    await logActivity({
+      action: 'create',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: String(newId),
+      req
+    })
     return reply.code(201).send({ data: newLayout })
   })
 
@@ -963,7 +1353,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'show_row_revisions', 'allow_revision_restore', 'lock_conditions', 'overrides', 'widget_id', 'input_bindings')
+      .select(
+        'field',
+        'group_key',
+        'sort',
+        'label_override',
+        'is_visible',
+        'default_expanded',
+        'show_row_revisions',
+        'allow_revision_restore',
+        'lock_conditions',
+        'overrides',
+        'widget_id',
+        'input_bindings'
+      )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })
@@ -975,8 +1378,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id), field: '__ungrouped_pos__' })
       .delete()
-    await db('nivaro_layout_field_assignments')
-      .insert({ layout_id: Number(id), field: '__ungrouped_pos__', group_key: null, sort: ungrouped_sort })
+    await db('nivaro_layout_field_assignments').insert({
+      layout_id: Number(id),
+      field: '__ungrouped_pos__',
+      group_key: null,
+      sort: ungrouped_sort
+    })
     return reply.send({ data: { ungrouped_sort } })
   })
 
@@ -1001,24 +1408,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // POST /collection-layouts/:id/versions/:versionId/restore — id-preserving,
   // captures a 'before restore' version first so the restore is reversible.
-  app.post(
-    '/:id/versions/:versionId/restore',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      const { id, versionId } = req.params as { id: string; versionId: string }
-      const result = await restoreLayoutVersion(Number(id), Number(versionId), req.user?.id)
-      if (!result) return reply.code(404).send({ error: 'Version not found' })
-      await logActivity({
-        action: 'layout-version-restore',
-        user: req.user?.id,
-        collection: 'nivaro_collection_layouts',
-        item: String(id),
-        comment: `restored ${result.restored_assignments} assignments, ${result.restored_groups} groups`,
-        req
-      })
-      return reply.send({ data: result })
-    }
-  )
+  app.post('/:id/versions/:versionId/restore', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    const result = await restoreLayoutVersion(Number(id), Number(versionId), req.user?.id)
+    if (!result) return reply.code(404).send({ error: 'Version not found' })
+    await logActivity({
+      action: 'layout-version-restore',
+      user: req.user?.id,
+      collection: 'nivaro_collection_layouts',
+      item: String(id),
+      comment: `restored ${result.restored_assignments} assignments, ${result.restored_groups} groups`,
+      req
+    })
+    return reply.send({ data: result })
+  })
 
   // PUT /collection-layouts/:id/assignments — bulk replace
   app.put('/:id/assignments', { preHandler: requireAdmin }, async (req, reply) => {
@@ -1049,10 +1452,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         show_approval_chain?: boolean
       }>
     }
-    if (!Array.isArray(body.assignments)) return reply.code(400).send({ error: 'assignments array required' })
+    if (!Array.isArray(body.assignments))
+      return reply.code(400).send({ error: 'assignments array required' })
 
     await db.transaction(async (trx) => {
-      await trx('nivaro_layout_field_assignments').where({ layout_id: Number(id) }).delete()
+      await trx('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .delete()
       if (body.assignments.length > 0) {
         await trx('nivaro_layout_field_assignments').insert(
           body.assignments.map((a) => ({
@@ -1070,7 +1476,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             lock_conditions: a.lock_conditions ?? null,
             input_bindings: a.input_bindings != null ? JSON.stringify(a.input_bindings) : null,
             widget_id: a.widget_id ?? null,
-            show_approval_chain: a.show_approval_chain ? 1 : 0,
+            show_approval_chain: a.show_approval_chain ? 1 : 0
           }))
         )
       }
@@ -1087,7 +1493,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'default_expanded', 'col_span', 'overrides', 'show_row_revisions', 'allow_revision_restore', 'lock_conditions', 'input_bindings', 'widget_id', 'show_approval_chain')
+      .select(
+        'field',
+        'group_key',
+        'sort',
+        'label_override',
+        'is_visible',
+        'default_expanded',
+        'col_span',
+        'overrides',
+        'show_row_revisions',
+        'allow_revision_restore',
+        'lock_conditions',
+        'input_bindings',
+        'widget_id',
+        'show_approval_chain'
+      )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
   })

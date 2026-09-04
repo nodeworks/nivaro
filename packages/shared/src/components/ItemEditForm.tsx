@@ -243,7 +243,7 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
     return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
   if (status === 'done') return <Check className='h-4 w-4 text-green-500 shrink-0' />
   if (status === 'error') return <AlertCircle className='h-4 w-4 text-red-500 shrink-0' />
-  return <div className='h-4 w-4 rounded-full border-2 border-slate-200 shrink-0' />
+  return <div className='h-4 w-4 rounded-full border-2 border-slate-200 dark:border-slate-600 shrink-0' />
 }
 
 function SaveProgressDialog({
@@ -289,7 +289,7 @@ function SaveProgressDialog({
             {hasError ? 'Saved with errors' : allSettled ? 'All changes saved' : 'Saving changes…'}
           </DialogTitle>
           <div className='flex items-center gap-3 pt-1'>
-            <div className='flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden'>
+            <div className='flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-muted overflow-hidden'>
               <div
                 className='h-full rounded-full bg-[#00ceff] transition-all duration-500'
                 style={{ width: `${overallPct}%` }}
@@ -313,9 +313,10 @@ function SaveProgressDialog({
                   className={cn(
                     'rounded-lg border px-3 py-2.5 transition-colors duration-200',
                     step.status === 'running' && 'border-[#00ceff]/30 bg-[#00ceff]/5',
-                    step.status === 'done' && 'border-green-100 bg-green-50/40',
-                    step.status === 'error' && 'border-red-200 bg-red-50',
-                    step.status === 'pending' && 'border-slate-100 bg-slate-50/60'
+                    step.status === 'done' &&
+                      'border-green-100 bg-green-50/40 dark:border-green-500/25 dark:bg-green-500/10',
+                    step.status === 'error' && 'border-red-200 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10',
+                    step.status === 'pending' && 'border-slate-100 bg-slate-50/60 dark:border-border dark:bg-muted/30'
                   )}
                 >
                   <div className='flex items-start gap-2.5'>
@@ -327,10 +328,10 @@ function SaveProgressDialog({
                         <span
                           className={cn(
                             'text-[13px] font-medium leading-snug',
-                            step.status === 'done' && 'text-slate-400',
-                            step.status === 'error' && 'text-red-700',
-                            step.status === 'running' && 'text-slate-900',
-                            step.status === 'pending' && 'text-slate-500'
+                            step.status === 'done' && 'text-slate-400 dark:text-slate-300',
+                            step.status === 'error' && 'text-red-700 dark:text-red-300',
+                            step.status === 'running' && 'text-slate-900 dark:text-foreground',
+                            step.status === 'pending' && 'text-slate-500 dark:text-muted-foreground'
                           )}
                         >
                           {step.label}

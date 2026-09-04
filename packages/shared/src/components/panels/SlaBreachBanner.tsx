@@ -75,7 +75,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
               if (!ackOpen) setAckOpen(true)
               else ack.mutate()
             }}
-            className='shrink-0 rounded-md border border-red-300 px-2.5 py-1 text-[12px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-500/40 dark:text-red-300'
+            className='shrink-0 rounded-md border border-red-300 px-2.5 py-1 text-[12px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-500/40 dark:bg-transparent dark:text-red-300 dark:hover:bg-red-500/15'
           >
             {ack.isPending ? 'Acknowledging…' : ackOpen ? 'Confirm acknowledge' : 'Acknowledge'}
           </button>

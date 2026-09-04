@@ -151,7 +151,7 @@ export function ItemLockBanner({
   const name = lockHolder.locked_by_name || 'Another user'
 
   return (
-    <div className='mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'>
+    <div className='mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'>
       <Lock className='h-4 w-4 shrink-0 text-amber-500' />
       <span className='flex-1'>
         <span className='font-medium'>{name}</span> is editing this item — fields are read-only
@@ -161,7 +161,7 @@ export function ItemLockBanner({
         <Button
           size='sm'
           variant='outline'
-          className='h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100'
+          className='h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
           onClick={onTakeOver}
           disabled={takingOver}
         >

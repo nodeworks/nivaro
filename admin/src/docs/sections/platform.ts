@@ -828,7 +828,7 @@ export const layoutConditional: DocSection = {
     { type: 'h1', id: 'layout-conditional', text: 'Conditional Layouts by Role' },
     {
       type: 'p',
-      text: 'A layout can be restricted to specific roles so different users see different forms for the same collection. Set the role conditions in the "Visibility" section of layout settings; the server resolves the best-matching layout for the requesting user automatically.'
+      text: 'A layout can be restricted to specific roles so different users see different forms for the same collection. Set the role conditions in the "Visibility" section of layout settings. The role list is an ALLOW-LIST enforced by the server on every path: a user whose role is not listed can never resolve the layout, pin it by slug (?layout=… from queues, links or the collection browser), list it in New-item menus or queue builders, or drill into it — record-condition matches included. Admins always pass.'
     },
     { type: 'h3', text: 'Config format' },
     {
@@ -841,7 +841,7 @@ export const layoutConditional: DocSection = {
     },
     {
       type: 'note',
-      text: 'When several layouts qualify for a user, the server picks the best match — a role-scoped layout wins over the unconditional active layout. A layout with no conditions remains the default fallback for everyone else.'
+      text: 'When several layouts qualify for a user, the server picks the best match — a role-scoped layout wins over the unconditional active layout. A layout with no conditions remains the default fallback for everyone else; a role-restricted record-conditional layout (e.g. an admin-only PUB layout matched by workflow_type) resolves for admins and falls through to the next allowed layout for everyone else.'
     }
   ]
 }
