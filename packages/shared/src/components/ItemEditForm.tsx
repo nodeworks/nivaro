@@ -5065,6 +5065,25 @@ export function ItemEditForm({
           payload[f.field] = cur
         }
       }
+      // Layout default_values may name fields the layout does NOT show (the PUB
+      // layout stamps workflow_type = CAR without a Type field). allFields is
+      // the assigned set in slug mode, so those defaults were stamped on the
+      // draft and then silently dropped here — the record saved with the
+      // discriminator NULL and every CAR rule skipped it.
+      if (isNew) {
+        const defaults = activeLayoutData?.layout?.default_values as
+          | Record<string, unknown>
+          | null
+          | undefined
+        for (const key of Object.keys(defaults ?? {})) {
+          if (key in payload || !(key in draftNow)) continue
+          if (key.startsWith('__') || key.includes('.') || SYSTEM_FIELDS.has(key)) continue
+          const v = draftNow[key]
+          if (v === undefined || Array.isArray(v)) continue
+          if (!(fieldConfig ?? []).some((f) => f.field === key)) continue
+          payload[key] = v
+        }
+      }
       if (changeReasonRef.current) payload._change_reason = changeReasonRef.current
       if (!isNew) {
         const base = baseRevisionOverrideRef.current ?? baseRevisionData?.latest ?? null
