@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T20:41:26.021Z",
+  "generated_at": "2026-09-04T20:50:08.613Z",
   "releases": [
+    {
+      "version": "0.1.216",
+      "tag": "v0.1.216",
+      "date": "2026-09-04T16:50:02-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-locks",
+              "text": "take-over inserted acquired_at — the column is locked_at",
+              "hash": "0a8e226b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.215",
       "tag": "v0.1.215",
-      "date": "2026-09-04T16:41:18-04:00",
+      "date": "2026-09-04T16:41:26-04:00",
       "sections": [
         {
           "label": "Added",
