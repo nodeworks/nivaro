@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T14:17:00.992Z",
+  "generated_at": "2026-09-04T15:47:15.036Z",
   "releases": [
+    {
+      "version": "0.1.208",
+      "tag": "v0.1.208",
+      "date": "2026-09-04T11:47:08-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "create_record",
+              "text": "recalc stored rollups after the link_field write-back",
+              "hash": "6e08937b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.207",
       "tag": "v0.1.207",
-      "date": "2026-09-04T10:16:51-04:00",
+      "date": "2026-09-04T10:17:01-04:00",
       "sections": [
         {
           "label": "Fixed",
