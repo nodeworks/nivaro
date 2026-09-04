@@ -9,6 +9,7 @@ import {
   dbLookups,
   extractSuffix,
   parseAutoIdPattern,
+  resolveAutoIdPattern,
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
@@ -379,10 +380,11 @@ export async function itemsRoutes(app: FastifyInstance) {
     const fields = await autoIdFieldsFor(db, collection)
     const target = fields.find((f) => f.field === body.field)
     if (!target) return reply.code(400).send({ error: 'Field has no auto_id config' })
-    const err = validateAutoIdPattern(target.config.pattern)
+    const chosen = resolveAutoIdPattern(target.config, body.values ?? {})
+    const err = validateAutoIdPattern(chosen)
     if (err) return reply.code(400).send({ error: err })
 
-    const parsed = parseAutoIdPattern(target.config.pattern)
+    const parsed = parseAutoIdPattern(chosen)
     const seqToken = parsed.tokens[parsed.tokens.length - 1] as Extract<
       AutoIdToken,
       { kind: 'seq' }
@@ -492,7 +494,8 @@ export async function itemsRoutes(app: FastifyInstance) {
       if (!info) return { readable: true, target } // plain column leaf — no further hop
       const hop = info.relatedCollection
       if (!hop) return { readable: false, target: null }
-      if (hop.startsWith('nivaro_') && hop !== 'nivaro_users') return { readable: false, target: null }
+      if (hop.startsWith('nivaro_') && hop !== 'nivaro_users')
+        return { readable: false, target: null }
       if (!(await can(user, 'read', hop))) return { readable: false, target: null }
       current = hop
       target = hop
@@ -507,9 +510,12 @@ export async function itemsRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const { field, limit } = req.query as { field?: string; limit?: string }
     if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!/^[a-zA-Z0-9_]+$/.test(collection)) return reply.code(400).send({ error: 'Invalid collection' })
-    if (!(await can(req.user!, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
-    if (!field || !/^[a-zA-Z0-9_]+$/.test(field)) return reply.code(400).send({ error: 'Invalid field' })
+    if (!/^[a-zA-Z0-9_]+$/.test(collection))
+      return reply.code(400).send({ error: 'Invalid collection' })
+    if (!(await can(req.user!, 'read', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    if (!field || !/^[a-zA-Z0-9_]+$/.test(field))
+      return reply.code(400).send({ error: 'Invalid field' })
     const colCheck = (await db.raw(
       'SELECT 1 AS ok FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
       [collection, field]
@@ -535,8 +541,13 @@ export async function itemsRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const { ids, paths } = req.query as { ids?: string; paths?: string }
     if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'read', collection))) return reply.code(403).send({ error: 'Forbidden' })
-    const requestedIds = (ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+    if (!(await can(req.user!, 'read', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    const requestedIds = (ids ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 500)
     const pathList = (paths ?? '')
       .split(',')
       .map((p) => p.trim())
@@ -614,7 +625,8 @@ export async function itemsRoutes(app: FastifyInstance) {
 
     const { resolvePathValues } = await import('../services/queues.js')
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
-    const out: Record<string, { value: string; ids: string[]; target_collection: string | null }> = {}
+    const out: Record<string, { value: string; ids: string[]; target_collection: string | null }> =
+      {}
     await Promise.all(
       pathList.map(async (path) => {
         try {
@@ -736,7 +748,11 @@ export async function itemsRoutes(app: FastifyInstance) {
           user: req.user!.id,
           collection: parentCollection,
           item: parentId,
-          comment: JSON.stringify({ child_collection: collection, child_id: String((item as Record<string, unknown>).id), snapshot: item }),
+          comment: JSON.stringify({
+            child_collection: collection,
+            child_id: String((item as Record<string, unknown>).id),
+            snapshot: item
+          }),
           req
         })
       }
@@ -792,7 +808,11 @@ export async function itemsRoutes(app: FastifyInstance) {
     // capture snapshot before deletion so we can store it in parent activity
     let childSnapshot: Record<string, unknown> | null = null
     if (parentCollection && parentId) {
-      childSnapshot = await db(collection).where({ id }).first().catch(() => null) ?? null
+      childSnapshot =
+        (await db(collection)
+          .where({ id })
+          .first()
+          .catch(() => null)) ?? null
     }
     try {
       await deleteOne(req.user!, collection, id, req, req.workspaceId ?? undefined)
@@ -802,7 +822,11 @@ export async function itemsRoutes(app: FastifyInstance) {
           user: req.user!.id,
           collection: parentCollection,
           item: parentId,
-          comment: JSON.stringify({ child_collection: collection, child_id: id, snapshot: childSnapshot }),
+          comment: JSON.stringify({
+            child_collection: collection,
+            child_id: id,
+            snapshot: childSnapshot
+          }),
           req
         })
       }
@@ -835,13 +859,19 @@ export async function itemsRoutes(app: FastifyInstance) {
       // Apply caller-supplied field overrides — restricted to registered CMS fields only.
       // Never allow overwriting system/protected columns.
       const PROTECTED_FIELDS = new Set([
-        'id', 'created_at', 'created_by', 'updated_at', 'updated_by',
-        '_status', 'workspace_id', 'is_redacted'
+        'id',
+        'created_at',
+        'created_by',
+        'updated_at',
+        'updated_by',
+        '_status',
+        'workspace_id',
+        'is_redacted'
       ])
       if (body.field_overrides) {
-        const allowedFields = await db('nivaro_fields')
+        const allowedFields = (await db('nivaro_fields')
           .where({ collection })
-          .pluck('field') as string[]
+          .pluck('field')) as string[]
         const allowedSet = new Set(allowedFields)
         for (const [field, value] of Object.entries(body.field_overrides)) {
           if (allowedSet.has(field) && !PROTECTED_FIELDS.has(field)) {

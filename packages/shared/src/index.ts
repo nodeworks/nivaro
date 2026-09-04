@@ -1,6 +1,7 @@
+export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
+export { AutolinkedText } from './components/AutolinkedText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
-export { SlaRulesView, type SlaRule } from './components/SlaRulesView'
 export {
   AlertRuleDrawer,
   AnomalyRuleDrawer
@@ -14,12 +15,17 @@ export type {
   MetricAlertSubscription,
   MetricDefinition
 } from './components/alerts/types'
+export type { BaseMapBubble, BaseMapPin } from './components/BaseMap'
+export { BaseMap } from './components/BaseMap'
+export * from './components/BroadcastView'
 export { CellCopyLayer } from './components/CellCopyLayer'
 export type {
   CollectionBrowserColumn,
   CollectionBrowserViewProps
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
+export * from './components/ConformanceView'
+export { CronBuilder, describeCron } from './components/CronBuilder'
 export {
   ChatChannelBrowser,
   ChatChannelSettings,
@@ -31,10 +37,13 @@ export {
   type ChatTheme
 } from './components/chat/ChatPanel'
 export * from './components/chat/chat-core'
-export * from './lib/catalog-item-open'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
+export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
+export { EmptyState } from './components/EmptyState'
+export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
+export { FirstLoginChecklist } from './components/FirstLoginChecklist'
 export type { FormulaEditorProps, FormulaField } from './components/FormulaEditor'
 export { FormulaEditor } from './components/FormulaEditor'
 export { HScrollProxy } from './components/HScrollProxy'
@@ -80,23 +89,7 @@ export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
 export { NotificationSourcesCard } from './components/NotificationSourcesCard'
-export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'
-export {
-  AiReviewCard,
-  OwnerGapsCard,
-  PipelineEditorView,
-  PipelineSimulatorCard
-} from './components/pipeline/PipelineEditorView'
-export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
-export { TeamScopeEditor } from './components/pipeline/TeamScopeEditor'
-export { TeamsView, type TeamRow } from './components/pipeline/TeamsView'
-export type { ScopeDimensionLite, TeamScopeMap, TeamTier } from './components/pipeline/teamScopes'
-export {
-  matchFilterDimension,
-  rankTeamForFilters,
-  tierOrder,
-  useScopeDimensions
-} from './components/pipeline/teamScopes'
+export { OfflineBanner } from './components/OfflineBanner'
 export type {
   PageRendererPage,
   PageRendererProps,
@@ -105,12 +98,32 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
-export { ProfileView, TimezoneCard, DisplayPrefsCard, NotificationRulesCard, ProfileFieldsCard } from './components/ProfileView'
-export { FirstLoginChecklist } from './components/FirstLoginChecklist'
-export { CommandCenterView } from './components/command-center/CommandCenterView'
-export { BaseMap } from './components/BaseMap'
-export type { BaseMapPin, BaseMapBubble } from './components/BaseMap'
+export {
+  DisplayPrefsCard,
+  NotificationRulesCard,
+  ProfileFieldsCard,
+  ProfileView,
+  TimezoneCard
+} from './components/ProfileView'
 export * from './components/panels'
+export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
+export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'
+export {
+  AiReviewCard,
+  OwnerGapsCard,
+  PipelineEditorView,
+  PipelineSimulatorCard
+} from './components/pipeline/PipelineEditorView'
+export { TeamScopeEditor } from './components/pipeline/TeamScopeEditor'
+export { type TeamRow, TeamsView } from './components/pipeline/TeamsView'
+export type { ScopeDimensionLite, TeamScopeMap, TeamTier } from './components/pipeline/teamScopes'
+export {
+  matchFilterDimension,
+  rankTeamForFilters,
+  tierOrder,
+  useScopeDimensions
+} from './components/pipeline/teamScopes'
+export { QualityRulesView } from './components/QualityRulesView'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'
 export type { QueryTableColumn, QueryTableConfig } from './components/QueryTable'
@@ -130,9 +143,10 @@ export { RecordGridEditor } from './components/RecordGridEditor'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView } from './components/ReportView'
+export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export { TickerNumber } from './components/TickerNumber'
 export { TipLayer } from './components/TipLayer'
 export { UserAvatar } from './components/UserAvatar'
-export { AutolinkedText } from './components/AutolinkedText'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'
 export type {
@@ -145,6 +159,7 @@ export type {
 export { ReviewListWidget } from './components/widgets/ReviewListWidget'
 export * from './context'
 export * from './hooks/useDebounced'
+export { useElapsedLoading } from './hooks/useElapsedLoading'
 export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
@@ -155,15 +170,26 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
-export * from './components/AnnouncementBanner'
-export * from './components/BroadcastView'
-export * from './components/ConformanceView'
-export { QualityRulesView } from './components/QualityRulesView'
+export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
+export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
+export * from './lib/catalog-item-open'
 export * from './lib/commands'
 export * from './lib/expression'
+export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
+export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
+export * from './lib/field-interfaces'
+export {
+  fiscalPeriodOf,
+  fiscalQuarterOf,
+  fiscalYearOf,
+  getFiscalStartMonth,
+  setFiscalStartMonth
+} from './lib/fiscal'
 export * from './lib/format-value'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
-export { rumRouteChange, startRum } from './lib/rum'
+export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
+export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
 export {
   type NotificationRouteMap,
   type NotificationTarget,
@@ -171,34 +197,22 @@ export {
   runNotificationTarget
 } from './lib/notification-target'
 export * from './lib/queue-grouping'
+export {
+  type CollectionUpdateEvent,
+  type RealtimeAdapter,
+  RealtimeContext,
+  useOptionalRealtime
+} from './lib/realtime'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
+export { rumRouteChange, startRum } from './lib/rum'
 export {
   effectiveScopeSeedIds,
   matchScopeDimension,
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
-export * from './lib/utils'
-export {
-  RealtimeContext,
-  useOptionalRealtime,
-  type RealtimeAdapter,
-  type CollectionUpdateEvent
-} from './lib/realtime'
-export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { useOnlineUsers } from './lib/use-online-users'
-export { TickerNumber } from './components/TickerNumber'
-export { CronBuilder, describeCron } from './components/CronBuilder'
-export { EmptyState } from './components/EmptyState'
-export { ErrorSurface } from './components/ErrorSurface'
-export { OfflineBanner } from './components/OfflineBanner'
-export { useElapsedLoading } from './hooks/useElapsedLoading'
-export * from './lib/field-interfaces'
+export * from './lib/utils'
+export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'
 export * from './types'
-export { setFiscalStartMonth, getFiscalStartMonth, fiscalYearOf, fiscalQuarterOf, fiscalPeriodOf } from './lib/fiscal'
-export { setFormulaConstants, formulaConstant, networkdaysBetween } from './lib/expression'
-export { registerLayoutSlot, getLayoutSlot, extSlotKey } from './lib/layout-slots'
-export { setTimeDisplay, setNumberFormat } from './lib/utils'
-export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
-export { playNotificationSound, type NotificationSound } from './lib/notification-sound'

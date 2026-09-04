@@ -11,8 +11,10 @@ import {
   applyAutoIdsExt,
   autoIdFieldsFor,
   autoIdJunctionTargets,
+  autoIdVariantFields,
   parseAutoIdPattern,
-  recomputeAutoIdPrefix
+  recomputeAutoIdPrefix,
+  resolveAutoIdPattern
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
 import { decryptItemFields, encryptItemFields } from './encryption.js'
@@ -2643,13 +2645,14 @@ export async function updateOne(
 
     let parsed: ReturnType<typeof parseAutoIdPattern> | null
     try {
-      parsed = parseAutoIdPattern(config.pattern)
+      parsed = parseAutoIdPattern(resolveAutoIdPattern(config, writeCtx))
     } catch {
       continue
     }
 
     const firstSegs = parsed.tokens.filter((t) => t.kind === 'relation').map((t) => t.path[0])
-    if (!firstSegs.some((seg) => seg in ctx.payload)) continue
+    const variantFlip = autoIdVariantFields(config).some((f) => f in ctx.payload)
+    if (!variantFlip && !firstSegs.some((seg) => seg in ctx.payload)) continue
 
     const newVal = await recomputeAutoIdPrefix(db, collection, field, config, id, writeCtx)
     if (newVal != null && newVal !== previousData?.[field]) {

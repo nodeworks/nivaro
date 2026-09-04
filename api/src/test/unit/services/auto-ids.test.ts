@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   type AutoIdLookups,
+  allAutoIdPatterns,
+  autoIdVariantFields,
   extractSuffix,
   parseAutoIdPattern,
   renderAutoIdPattern,
+  resolveAutoIdPattern,
   resolveAutoIdTokens,
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
@@ -316,5 +319,44 @@ describe('resolveAutoIdTokensDetailed completeness', () => {
     })
     expect(rendered).toBe('26-####')
     expect(complete).toBe(false)
+  })
+})
+
+describe('auto-id pattern variants', () => {
+  const cfg = {
+    pattern:
+      '{regions[0].short_code}{funding_years[0] % 100}{project_type.short_code} {project.project_id} {description}',
+    variants: [
+      {
+        when: { field: 'workflow_type', op: 'eq' as const, value: '2' },
+        pattern:
+          '{regions[0].short_code}{funding_years[0] % 100}{project_type.short_code} {description}'
+      }
+    ]
+  }
+  it('picks the variant when the condition matches (number vs string tolerant)', () => {
+    expect(resolveAutoIdPattern(cfg, { workflow_type: 2 })).toBe(cfg.variants[0].pattern)
+    expect(resolveAutoIdPattern(cfg, { workflow_type: '2' })).toBe(cfg.variants[0].pattern)
+  })
+  it('falls back to the base pattern otherwise', () => {
+    expect(resolveAutoIdPattern(cfg, { workflow_type: 1 })).toBe(cfg.pattern)
+    expect(resolveAutoIdPattern(cfg, {})).toBe(cfg.pattern)
+    expect(resolveAutoIdPattern({ pattern: 'X-{seq}' }, { workflow_type: 2 })).toBe('X-{seq}')
+  })
+  it('supports neq / in / null / nnull', () => {
+    const mk = (op: 'neq' | 'in' | 'null' | 'nnull', value?: unknown) => ({
+      pattern: 'B',
+      variants: [{ when: { field: 'k', op, value }, pattern: 'V' }]
+    })
+    expect(resolveAutoIdPattern(mk('neq', '2'), { k: 3 })).toBe('V')
+    expect(resolveAutoIdPattern(mk('neq', '2'), { k: 2 })).toBe('B')
+    expect(resolveAutoIdPattern(mk('in', [1, 2]), { k: '2' })).toBe('V')
+    expect(resolveAutoIdPattern(mk('in', '1, 2'), { k: 3 })).toBe('B')
+    expect(resolveAutoIdPattern(mk('null'), { k: null })).toBe('V')
+    expect(resolveAutoIdPattern(mk('nnull'), { k: null })).toBe('B')
+  })
+  it('lists variant fields and every pattern', () => {
+    expect(autoIdVariantFields(cfg)).toEqual(['workflow_type'])
+    expect(allAutoIdPatterns(cfg)).toEqual([cfg.pattern, cfg.variants[0].pattern])
   })
 })

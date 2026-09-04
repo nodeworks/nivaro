@@ -4,9 +4,64 @@
 
 import type { Knex } from 'knex'
 
+export interface AutoIdVariant {
+  /** Condition on the record's own columns; first matching variant wins. */
+  when: { field: string; op?: 'eq' | 'neq' | 'in' | 'null' | 'nnull'; value?: unknown }
+  pattern: string
+}
+
 export interface AutoIdConfig {
   pattern: string
   padding?: number
+  /** Alternative patterns chosen per record — e.g. a CAR workflow's name
+   *  omits the project number a purchase-order request's name carries. */
+  variants?: AutoIdVariant[]
+}
+
+function variantMatches(v: AutoIdVariant, values: Record<string, unknown>): boolean {
+  const w = v?.when
+  if (!w?.field) return false
+  const actual = values[w.field]
+  const empty = actual === null || actual === undefined || actual === ''
+  switch (w.op ?? 'eq') {
+    case 'eq':
+      return !empty && String(actual) === String(w.value ?? '')
+    case 'neq':
+      return empty || String(actual) !== String(w.value ?? '')
+    case 'in': {
+      const list = Array.isArray(w.value) ? w.value : String(w.value ?? '').split(',')
+      return !empty && list.map((x) => String(x).trim()).includes(String(actual))
+    }
+    case 'null':
+      return empty
+    case 'nnull':
+      return !empty
+    default:
+      return false
+  }
+}
+
+/** The pattern to use for THIS record: first matching variant, else base. */
+export function resolveAutoIdPattern(
+  config: AutoIdConfig,
+  values: Record<string, unknown>
+): string {
+  for (const v of config.variants ?? []) {
+    if (typeof v?.pattern === 'string' && variantMatches(v, values)) return v.pattern
+  }
+  return config.pattern
+}
+
+/** Base pattern + every variant pattern (junction-watch / validation walk all). */
+export function allAutoIdPatterns(config: AutoIdConfig): string[] {
+  const out = [config.pattern]
+  for (const v of config.variants ?? []) if (typeof v?.pattern === 'string') out.push(v.pattern)
+  return out
+}
+
+/** Record columns the variant conditions read. */
+export function autoIdVariantFields(config: AutoIdConfig): string[] {
+  return [...new Set((config.variants ?? []).map((v) => v?.when?.field).filter(Boolean))]
 }
 
 export type AutoIdToken =
@@ -423,7 +478,7 @@ export async function applyAutoIdsExt(
 
     let parsed: ParsedAutoIdPattern
     try {
-      parsed = parseAutoIdPattern(config.pattern)
+      parsed = parseAutoIdPattern(resolveAutoIdPattern(config, payload))
     } catch {
       // Invalid pattern — skip this field silently and continue with others.
       continue
@@ -460,17 +515,18 @@ export async function recomputeAutoIdPrefix(
   recordId: unknown,
   mergedValues: Record<string, unknown>
 ): Promise<string | null> {
+  const lookups = dbLookups(db)
+  const variantFields = autoIdVariantFields(config)
+  const row = await lookups.readRow(collection, recordId, [field, ...variantFields])
+  const current = row?.[field]
+  if (current == null || current === '') return null
+
   let parsed: ParsedAutoIdPattern
   try {
-    parsed = parseAutoIdPattern(config.pattern)
+    parsed = parseAutoIdPattern(resolveAutoIdPattern(config, { ...(row ?? {}), ...mergedValues }))
   } catch {
     return null
   }
-
-  const lookups = dbLookups(db)
-  const row = await lookups.readRow(collection, recordId, [field])
-  const current = row?.[field]
-  if (current == null || current === '') return null
 
   // Seq-less template fields re-render wholesale (nothing to preserve).
   const suffix = parsed.separator ? extractSuffix(parsed, String(current)) : ''
@@ -528,14 +584,16 @@ export async function autoIdJunctionTargets(
     const config = opts?.auto_id
     if (!config?.pattern) continue
 
-    let parsed: ParsedAutoIdPattern
-    try {
-      parsed = parseAutoIdPattern(config.pattern)
-    } catch {
-      continue
+    const tokens: AutoIdToken[] = []
+    for (const pattern of allAutoIdPatterns(config)) {
+      try {
+        tokens.push(...parseAutoIdPattern(pattern).tokens)
+      } catch {
+        /* skip an invalid variant */
+      }
     }
 
-    for (const token of parsed.tokens) {
+    for (const token of tokens) {
       if (token.kind !== 'relation' || !token.firstIsMany) continue
       const seg0 = token.path[0]
       const rels = await lookups.relationsFor(row.collection)

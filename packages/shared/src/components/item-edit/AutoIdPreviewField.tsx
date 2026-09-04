@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
+import { type AutoIdConfigLike, autoIdVariantFields, resolveAutoIdPattern } from '../../lib/auto-id'
 import { post } from '../../lib/commands'
 import { Input } from '../ui/input'
 import { parseJson } from './helpers'
@@ -35,11 +36,23 @@ export function useAutoIdPreview({
   staging?: M2MStagingCtx | null
 }): string {
   const client = useNivaroClient()
-  const pattern = useMemo(
-    () => parseJson<{ auto_id?: { pattern?: string } }>(field?.options ?? null)?.auto_id?.pattern,
+  const autoIdConfig = useMemo(
+    () => parseJson<{ auto_id?: AutoIdConfigLike }>(field?.options ?? null)?.auto_id ?? null,
     [field?.options]
   )
-  const deps = useMemo(() => (pattern ? relationFirstSegments(pattern) : []), [pattern])
+  const variantFields = useMemo(() => autoIdVariantFields(autoIdConfig), [autoIdConfig])
+  // The pattern itself can depend on the draft (variants keyed on e.g. workflow_type).
+  const variantKey = JSON.stringify(variantFields.map((f) => draft[f]))
+  // biome-ignore lint/correctness/useExhaustiveDependencies: variantKey is the proxy for the draft columns the variants read
+  const pattern = useMemo(
+    () => resolveAutoIdPattern(autoIdConfig, draft),
+    [autoIdConfig, variantKey]
+  )
+  // Variant columns ride along so the server's preview picks the same pattern.
+  const deps = useMemo(
+    () => [...new Set([...(pattern ? relationFirstSegments(pattern) : []), ...variantFields])],
+    [pattern, variantFields]
+  )
   // M2M selections on new records live in the staging context, not the draft —
   // fall back to staged links so tokens like {funding_years[0]} preview live.
   const valueFor = (d: string): unknown => {

@@ -2163,6 +2163,23 @@ function FieldMetaEditor({
   const [autoIdPadding, setAutoIdPadding] = useState(
     () => parseJson<{ auto_id?: { padding?: number } }>(fm?.options)?.auto_id?.padding ?? 0
   )
+  // Conditional patterns: [{when: {field, op?, value?}, pattern}] — first match wins.
+  const [autoIdVariants, setAutoIdVariants] = useState(() => {
+    const v = parseJson<{ auto_id?: { variants?: unknown[] } }>(fm?.options)?.auto_id?.variants
+    return Array.isArray(v) && v.length ? JSON.stringify(v, null, 2) : ''
+  })
+  const autoIdVariantsValid = (() => {
+    if (!autoIdVariants.trim()) return true
+    try {
+      const v = JSON.parse(autoIdVariants)
+      return (
+        Array.isArray(v) &&
+        v.every((x) => x && typeof x.pattern === 'string' && typeof x?.when?.field === 'string')
+      )
+    } catch {
+      return false
+    }
+  })()
   const [autoIdSeed, setAutoIdSeed] = useState<number | null>(null)
 
   const { data: seedInfo } = useQuery({
@@ -2274,9 +2291,18 @@ function FieldMetaEditor({
     if (Array.isArray(raw)) return base
     const parsed = raw as Record<string, unknown>
     if (autoIdPattern) {
+      let variants: unknown[] | undefined
+      if (autoIdVariants.trim() && autoIdVariantsValid) {
+        try {
+          variants = JSON.parse(autoIdVariants)
+        } catch {
+          variants = undefined
+        }
+      }
       parsed.auto_id = {
         pattern: autoIdPattern,
-        ...(autoIdPadding ? { padding: autoIdPadding } : {})
+        ...(autoIdPadding ? { padding: autoIdPadding } : {}),
+        ...(variants?.length ? { variants } : {})
       }
     } else {
       delete parsed.auto_id
@@ -2858,6 +2884,27 @@ function FieldMetaEditor({
               >
                 Backfill empty rows…
               </button>
+            )}
+            {autoIdPattern && (
+              <div>
+                <Label className='mb-1 block text-[11px]'>Pattern variants (JSON, optional)</Label>
+                <Textarea
+                  value={autoIdVariants}
+                  onChange={(e) => setAutoIdVariants(e.target.value)}
+                  placeholder={
+                    '[{"when": {"field": "workflow_type", "op": "eq", "value": "2"},\n  "pattern": "{regions[0].short_code}{funding_years[0] % 100}{project_type.short_code} {description}"}]'
+                  }
+                  className={cn(
+                    'min-h-[72px] font-mono text-[11px]',
+                    !autoIdVariantsValid && 'border-red-400'
+                  )}
+                  spellCheck={false}
+                />
+                <p className='mt-1 text-[11px] text-slate-400'>
+                  First variant whose condition matches the record wins; otherwise the pattern
+                  above. Ops: eq (default), neq, in, null, nnull.
+                </p>
+              </div>
             )}
             {autoIdPattern && (
               <div className='grid grid-cols-2 gap-3'>

@@ -1147,12 +1147,23 @@ export async function dataModelRoutes(app: FastifyInstance) {
       try {
         const parsedOptions = JSON.parse(body.options) as Record<string, unknown>
         if (parsedOptions && typeof parsedOptions === 'object' && 'auto_id' in parsedOptions) {
-          const autoId = parsedOptions.auto_id as { pattern?: unknown } | null
+          const autoId = parsedOptions.auto_id as {
+            pattern?: unknown
+            variants?: Array<{ when?: { field?: unknown }; pattern?: unknown }>
+          } | null
           if (!autoId || typeof autoId.pattern !== 'string') {
             return reply.code(400).send({ error: 'auto_id.pattern is required' })
           }
           const patternErr = validateAutoIdPattern(autoId.pattern)
           if (patternErr) return reply.code(400).send({ error: patternErr })
+          for (const v of Array.isArray(autoId.variants) ? autoId.variants : []) {
+            if (typeof v?.pattern !== 'string' || typeof v?.when?.field !== 'string')
+              return reply
+                .code(400)
+                .send({ error: 'auto_id.variants entries need when.field + pattern' })
+            const vErr = validateAutoIdPattern(v.pattern)
+            if (vErr) return reply.code(400).send({ error: `variant: ${vErr}` })
+          }
         }
       } catch {
         // options isn't valid JSON — leave validation to existing behavior
