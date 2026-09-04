@@ -63,6 +63,7 @@ import {
   XCircle,
   Zap
 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
@@ -1036,6 +1037,39 @@ export function WidgetSlot({
   // First-load marker: input-driven render refetches keep stale values on
   // screen instead of flashing the skeleton.
   const hasRenderDataRef = useRef(false)
+
+  // Record-scoped widgets summarise RELATED rows (a rollup over lines and
+  // their allocations), and nothing in the parent draft moves when a grid
+  // saves a row — the render deps only see scalar fields, so the widget kept
+  // its last tree after every line/allocation write, and on a freshly created
+  // record its first render fired before the staged rows finished flushing.
+  // The grids already refetch their row queries after every write (and the
+  // form after the post-save flush); piggyback on those settling instead of
+  // threading a signal through every call site.
+  const qc = useQueryClient()
+  useEffect(() => {
+    const t = widget?.widget_type
+    if (t !== 'rollup' && t !== 'review_list' && t !== 'custom-query') return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsub = qc.getQueryCache().subscribe((ev) => {
+      if (ev.type !== 'updated' || ev.action?.type !== 'success') return
+      const head = ev.query.queryKey?.[0]
+      if (typeof head !== 'string') return
+      if (
+        !head.startsWith('o2m-rows') &&
+        !head.startsWith('nested') &&
+        head !== 'match-agg' &&
+        head !== 'm2m-items'
+      )
+        return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setRefetchTick((n) => n + 1), 400)
+    })
+    return () => {
+      if (timer) clearTimeout(timer)
+      unsub()
+    }
+  }, [qc, widget?.widget_type])
 
   // Auto-include scalar item draft fields so toggle/field-update actions work
   // without requiring explicit input bindings for every field. Explicit bindings override.
