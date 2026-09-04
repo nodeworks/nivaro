@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { FieldCombobox, type FieldOption } from '@/components/rule-condition-row'
 import { Button } from '@/components/ui/button'
@@ -20,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type CMSField, type Collection } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -58,6 +58,7 @@ export interface RuleAction {
   field_map?: Record<string, string>
   match_field?: string
   match_map?: Record<string, string>
+  m2m_map?: Record<string, string>
 }
 
 type Rule = {
@@ -326,6 +327,73 @@ function useCollectionFieldOptions(collection: string): FieldOption[] {
     type: f.type,
     interface: f.interface
   }))
+}
+
+function isM2MAlias(f: FieldOption): boolean {
+  return /m2m/i.test(f.interface ?? '') || f.type === 'alias'
+}
+
+/** `{ targetAlias: sourceAlias }` — both sides picked from that collection's
+ *  M2M alias fields (relation-backed, so the server can resolve the junction). */
+function AliasMapEditor({
+  map,
+  targetFields,
+  sourceFields,
+  onChange
+}: {
+  map: Record<string, string>
+  targetFields: FieldOption[]
+  sourceFields: FieldOption[]
+  onChange: (m: Record<string, string>) => void
+}) {
+  const entries = Object.entries(map)
+  const targets = targetFields.filter(isM2MAlias)
+  const sources = sourceFields.filter(isM2MAlias)
+  return (
+    <div className='space-y-2'>
+      {entries.map(([target, source], i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: order-stable map rows
+        <div key={i} className='flex items-center gap-2'>
+          <FieldCombobox
+            fields={targets}
+            value={target}
+            onChange={(f) => {
+              const next: Record<string, string> = {}
+              entries.forEach(([k, v], j) => {
+                next[j === i ? f : k] = v
+              })
+              onChange(next)
+            }}
+          />
+          <span className='text-[12px] text-slate-400'>←</span>
+          <FieldCombobox
+            fields={sources}
+            value={source}
+            onChange={(f) => onChange({ ...map, [target]: f })}
+          />
+          <button
+            type='button'
+            onClick={() => {
+              const next = { ...map }
+              delete next[target]
+              onChange(next)
+            }}
+            className='text-slate-400 hover:text-red-500'
+            aria-label='Remove'
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        </div>
+      ))}
+      <button
+        type='button'
+        onClick={() => onChange({ ...map, '': '' })}
+        className='text-[11px] text-nvr-cyan hover:underline'
+      >
+        + Add related set
+      </button>
+    </div>
+  )
 }
 
 // ─── Type-aware value input ───────────────────────────────────────────────────
@@ -864,6 +932,25 @@ function ActionCard({
                         onChange({
                           ...action,
                           match_map: Object.keys(m).length ? m : undefined
+                        })
+                      }
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Related sets to keep equal</Label>
+                    <p className='text-[11px] text-slate-400'>
+                      Target M2M field ← source M2M field. The target's linked set is made equal to
+                      the source's on every save, and whenever a link on the source is added or
+                      removed.
+                    </p>
+                    <AliasMapEditor
+                      map={action.m2m_map ?? {}}
+                      targetFields={targetFields}
+                      sourceFields={sourceFields}
+                      onChange={(m) =>
+                        onChange({
+                          ...action,
+                          m2m_map: Object.keys(m).length ? m : undefined
                         })
                       }
                     />
