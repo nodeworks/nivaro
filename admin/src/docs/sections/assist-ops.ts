@@ -71,6 +71,9 @@ export const slaScheduleDocs: DocSection = {
       items: [
         'Holiday dates count zero business hours regardless of weekday.',
         'Defaults: Monday–Friday, 9:00–17:00, no holidays.',
+        'Timezone: the day start/end hours are wall-clock times in the IANA zone set in Settings → SLA (e.g. America/New_York). Leave it empty and the API server\'s own zone applies — deployed containers run UTC, so set it explicitly.',
+        'Regional clocks: map a region collection (Settings → SLA → Regional clocks) and each record linked to a mapped region counts business hours on that region\'s zone. Unmapped regions, and records with no region link, follow the SLA timezone.',
+        'Applies to every SLA consumer — status endpoints, queue SLA columns, breach notifications, escalation ladders and My Work.',
         'Applies only to rules with "business hours only" enabled; other rules use wall-clock hours.'
       ]
     }

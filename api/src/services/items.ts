@@ -584,13 +584,17 @@ export async function applyFieldRules(
     if (changedField) {
       triggerFields = [changedField]
     } else {
-      triggerFields = (
-        (await db('nivaro_field_rules')
-          .where({ collection, is_active: true })
-          .orderBy('sort')
-          .distinct('trigger_field')
-          .pluck('trigger_field')) as string[]
-      ).filter((f) => f in payload)
+      // NOT .distinct().pluck(): on mssql that compiles to
+      // `SELECT DISTINCT x, x … ORDER BY sort`, which SQL Server rejects
+      // ("ORDER BY items must appear in the select list") — and the catch below
+      // then silently disabled every server-side field rule. Dedupe in JS.
+      const rows = (await db('nivaro_field_rules')
+        .where({ collection, is_active: true })
+        .orderBy('sort')
+        .select('trigger_field')) as Array<{ trigger_field: string }>
+      triggerFields = [...new Set(rows.map((r) => String(r.trigger_field)))].filter(
+        (f) => f in payload
+      )
     }
   } catch {
     // Table may not exist yet before migration runs — non-fatal.

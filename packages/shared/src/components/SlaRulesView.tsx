@@ -551,8 +551,10 @@ function SlaRuleForm({
               <div>
                 <p className='text-[13px] font-medium'>Count business hours only</p>
                 <p className='text-[11px] text-muted-foreground'>
-                  The clock only runs during working hours (as configured in Settings — weekends
-                  and holidays don't count).
+                  The clock only runs during working hours — the working days, day start/end and
+                  holidays from Settings → SLA, on that schedule's timezone. A record linked to a
+                  mapped region (Settings → SLA → Regional clocks) counts on that region's clock
+                  instead. Weekends and holidays don't count.
                 </p>
               </div>
               <Switch

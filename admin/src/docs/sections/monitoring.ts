@@ -219,7 +219,7 @@ export const slaTrackingGuide: DocSection = {
           'Warning Threshold %',
           'Notification fires when this % of duration has elapsed. Default 80%.'
         ],
-        ['Business Hours Only', 'When enabled, only counts Mon–Fri 9am–5pm towards elapsed time.'],
+        ['Business Hours Only', 'When enabled, only counts working hours towards elapsed time — the days, hours and holidays from Settings → SLA, evaluated in the SLA timezone (or the record\'s regional clock when its region is mapped).'],
         ['Notify on Warning', 'Send in-app notification to escalation user at warning threshold.'],
         ['Notify on Breach', 'Send in-app notification to escalation user on full breach.'],
         ['Escalation User', 'Optional. User to notify on warning/breach.']
@@ -242,7 +242,7 @@ export const slaTrackingGuide: DocSection = {
     },
     {
       type: 'note',
-      text: 'SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours calculation uses Mon–Fri, 09:00–17:00 local server time.'
+      text: 'SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours use the schedule and timezone configured in Settings → SLA (default Mon–Fri, 09:00–17:00) — the zone matters: an empty timezone means the API server\'s clock, which is UTC in a deployed container. Regional clocks can override the zone per record.'
     }
   ]
 }
