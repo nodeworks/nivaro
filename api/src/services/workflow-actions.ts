@@ -94,6 +94,11 @@ interface TransitionActionDef {
   target_collection?: string
   skip_if_exists?: { match_field: string; value_template: string }
   link_field?: string
+  /** Also write a nivaro_record_links row source → created record (skipped
+   *  when the same link already exists), so the pair shows under Related
+   *  Records on both sides. link_type must be one of routes/record-links
+   *  LINK_TYPES; defaults to 'relates to'. */
+  record_link?: { link_type?: string; note?: string }
   m2m?: Record<
     string,
     { junction_collection: string; parent_field: string; related_field: string; values_template: string }
@@ -895,6 +900,32 @@ async function runCreateRecordAction(
       if (before) {
         const { recalcAffectedRollups } = await import('./rollups.js')
         await recalcAffectedRollups(collection, { ...before, [action.link_field]: targetId }, before)
+      }
+    }
+
+    if (action.record_link && targetId != null) {
+      try {
+        const { LINK_TYPES } = await import('../routes/record-links.js')
+        const linkType = LINK_TYPES.includes(String(action.record_link.link_type))
+          ? String(action.record_link.link_type)
+          : 'relates to'
+        const key = {
+          from_collection: collection,
+          from_item: String(item),
+          to_collection: target,
+          to_item: String(targetId)
+        }
+        const exists = await db('nivaro_record_links').where(key).first('id')
+        if (!exists) {
+          await db('nivaro_record_links').insert({
+            ...key,
+            link_type: linkType,
+            note: action.record_link.note ? String(action.record_link.note).slice(0, 255) : null,
+            created_by: null
+          })
+        }
+      } catch (err) {
+        console.error({ err, collection, item, target }, 'create_record record_link failed')
       }
     }
 
