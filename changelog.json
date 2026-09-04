@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-04T19:00:30.595Z",
+  "generated_at": "2026-09-04T19:09:20.434Z",
   "releases": [
+    {
+      "version": "0.1.212",
+      "tag": "v0.1.212",
+      "date": "2026-09-04T15:09:13-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "cron",
+              "text": "admin schedule overrides for every cron; flow enable/disable from the list",
+              "hash": "bb15a6a0"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "background-jobs",
+              "text": "label cron pause/resume as Disable/Enable; sync www docs",
+              "hash": "993d78c1"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.211",
       "tag": "v0.1.211",
-      "date": "2026-09-04T15:00:24-04:00",
+      "date": "2026-09-04T15:00:30-04:00",
       "sections": [
         {
           "label": "Added",
