@@ -882,9 +882,20 @@ async function runCreateRecordAction(
 
     // Link the created/found record back onto the transitioning record
     if (action.link_field && IDENTIFIER_RE.test(action.link_field)) {
+      const before = (await db(collection).where({ id: item }).first()) as
+        | Record<string, unknown>
+        | undefined
       await db(collection)
         .where({ id: item })
         .update({ [action.link_field]: targetId })
+      // A raw write never reaches the rollup hooks — but the record just became
+      // a contributor to the NEW parent (a CAR's requisition_amount feeds the
+      // created project's pub_amount). Recalc as if the FK had been set
+      // through the items service.
+      if (before) {
+        const { recalcAffectedRollups } = await import('./rollups.js')
+        await recalcAffectedRollups(collection, { ...before, [action.link_field]: targetId }, before)
+      }
     }
 
     responses.push({ created_id: targetId })
