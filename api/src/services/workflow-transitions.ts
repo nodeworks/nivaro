@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
+import { adminBaseUrl } from '../admin-base.js'
 import { logActivity } from './activity.js'
 import { ensureAutoWatch } from './auto-watch.js'
 import { resolveStateOwners } from './pipeline-engine.js'
@@ -670,6 +671,14 @@ export async function applyTransition(opts: {
       instance.collection === ADDENDUM_COLLECTION
         ? ((await loadAddendums([String(instance.item)])).get(String(instance.item)) ?? null)
         : null
+    // Absolute link to the record for mail/notification templates — the
+    // SUBJECT record (an addendum links its parent with the addendum view
+    // pinned), built from the instance's own base URL so a flow body never
+    // has to hardcode a host or guess an id shape.
+    const recordPath =
+      `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
+      (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
+    const recordUrl = `${adminBaseUrl() ?? ''}${recordPath}`
     // State timing tokens (#393): when the record ENTERED the state it just
     // left, and how long it sat there — templated as {{entered_previous_state_at}}
     // / {{hours_in_previous_state}} in flow mail/notification ops.
@@ -694,6 +703,8 @@ export async function applyTransition(opts: {
         subject_item: subject.itemId,
         is_addendum: instance.collection === ADDENDUM_COLLECTION,
         addendum: addendumInfo ? { id: addendumInfo.id, title: addendumInfo.title } : null,
+        record_url: recordUrl,
+        record_path: recordPath,
         friendly_id: friendlyId,
         template: instance.template,
         transition_id: transition.id,
