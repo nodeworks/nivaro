@@ -4,12 +4,14 @@ import { useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
+  useDrilldownViews,
   useItemNavigation,
-  useNivaroClient, useDrilldownViews } from '../context'
+  useNivaroClient
+} from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { ItemEditForm } from './ItemEditForm'
-import { RecordReadView, type ReadViewLayout } from './RecordReadView'
+import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
 // Drill-down sheet: a detailed view of any record, rendered by the SAME
@@ -172,7 +174,7 @@ export function RecordDrilldownSheet({
         {/* overflow-hidden (not auto): ItemEditForm owns its scrolling — its body
             and summary rail each get an independent scrollbar, which only works
             when this parent constrains height instead of growing unbounded. */}
-        <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+        <div className='nvr-tab-enter flex min-h-0 flex-1 flex-col overflow-hidden'>
           {customView ? (
             <DrilldownContext.Provider value={drillCtx}>
               {customView.render({ itemId: String(current.itemId) })}
@@ -180,7 +182,10 @@ export function RecordDrilldownSheet({
           ) : layoutLoading && !useRootSlug ? (
             <div className='space-y-2 px-4 py-3'>
               {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                <div
+                  key={i}
+                  className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+                />
               ))}
             </div>
           ) : !useRootSlug && detailLayout?.layout.display_mode === 'read' ? (

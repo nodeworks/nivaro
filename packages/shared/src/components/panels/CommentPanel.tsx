@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, ClipboardPlus, MessageSquare, Pencil, SmilePlus, Trash2, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ClipboardPlus,
+  MessageSquare,
+  Pencil,
+  SmilePlus,
+  Trash2,
+  X
+} from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -106,14 +115,18 @@ function MentionTextarea({
   const roleMatches = !mention
     ? []
     : allRoles
-        .filter((r) => r.name.toLowerCase().replace(/\s+/g, '-').startsWith(debouncedQuery.toLowerCase()))
+        .filter((r) =>
+          r.name.toLowerCase().replace(/\s+/g, '-').startsWith(debouncedQuery.toLowerCase())
+        )
         .slice(0, 3)
   // "@owners" is a pseudo-entry: it fans out server-side to whoever currently
   // resolves as the record's pipeline owners.
   const ownersMatch =
     !!mention && debouncedQuery.length >= 2 && 'owners'.startsWith(debouncedQuery.toLowerCase())
   const open =
-    !!mention && debouncedQuery.length >= 2 && (users.length > 0 || ownersMatch || roleMatches.length > 0)
+    !!mention &&
+    debouncedQuery.length >= 2 &&
+    (users.length > 0 || ownersMatch || roleMatches.length > 0)
   const optionCount = users.length + (ownersMatch ? 1 : 0) + roleMatches.length
 
   // The menu portals to <body>: CommentPanel's rounded card is overflow-hidden
@@ -496,7 +509,9 @@ export function CommentPanel({
     if (!draft.trim() || cleaning) return
     setCleaning(true)
     try {
-      const r = await client.request<{ data: { text: string } }>(post('/ai/cleanup', { text: draft }))
+      const r = await client.request<{ data: { text: string } }>(
+        post('/ai/cleanup', { text: draft })
+      )
       if (r.data?.text) setDraft(r.data.text)
     } catch {
       /* cleanup is optional polish */
@@ -789,16 +804,20 @@ export function CommentPanel({
               ) : threadEntries.length === 0 ? (
                 <p className='py-6 text-center text-[12px] text-slate-400'>No notes yet.</p>
               ) : (
-                <div className='space-y-4'>
+                <div className='nvr-stagger-direct space-y-4'>
                   {threadEntries.map((entry) => {
                     if (entry.kind === 'related') {
-                      return <RecordedNote key={entry.note.id} note={entry.note} />
+                      return (
+                        <div key={entry.note.id} className='nvr-section-enter'>
+                          <RecordedNote note={entry.note} />
+                        </div>
+                      )
                     }
                     const c = entry.comment
                     const isOwn = userId === c.user.id
                     const isEditing = editingId === c.id
                     return (
-                      <div key={c.id} className='group flex gap-3'>
+                      <div key={c.id} className='nvr-section-enter group flex gap-3'>
                         <UserAvatar
                           userId={c.user.id}
                           className='h-8 w-8'
@@ -905,7 +924,9 @@ export function CommentPanel({
                                   }`}
                                 >
                                   {r.emoji}
-                                  <span className='tabular-nums text-[10px] font-semibold'>{r.count}</span>
+                                  <span className='tabular-nums text-[10px] font-semibold'>
+                                    {r.count}
+                                  </span>
                                 </button>
                               ))}
                               <span className='relative'>

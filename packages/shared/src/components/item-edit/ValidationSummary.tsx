@@ -32,7 +32,8 @@ export function ValidationSummary({
   if (items.length === 0) return null
   const n = items.length
   const locations = new Set(items.map((i) => i.location).filter(Boolean))
-  const showLocation = locations.size > 1 || (locations.size === 1 && items.some((i) => !i.location))
+  const showLocation =
+    locations.size > 1 || (locations.size === 1 && items.some((i) => !i.location))
   const visible = expanded ? items : items.slice(0, COLLAPSED_LIMIT)
   const hidden = n - visible.length
   return (
@@ -56,9 +57,9 @@ export function ValidationSummary({
           <X className='h-3.5 w-3.5' />
         </button>
       </div>
-      <ul className='mt-1.5 space-y-0.5'>
+      <ul className='nvr-stagger-direct mt-1.5 space-y-0.5'>
         {visible.map((it) => (
-          <li key={it.field} className='flex items-baseline gap-2 text-[12px]'>
+          <li key={it.field} className='nvr-section-enter flex items-baseline gap-2 text-[12px]'>
             <button
               type='button'
               onClick={() => onJump(it.field)}
@@ -66,7 +67,9 @@ export function ValidationSummary({
             >
               {it.label}
             </button>
-            <span className='min-w-0 flex-1 text-red-800/90 dark:text-red-200/90'>{it.message}</span>
+            <span className='min-w-0 flex-1 text-red-800/90 dark:text-red-200/90'>
+              {it.message}
+            </span>
             {showLocation && it.location && (
               <span className='shrink-0 text-[11px] text-red-600/80 dark:text-red-400/70'>
                 {it.location}

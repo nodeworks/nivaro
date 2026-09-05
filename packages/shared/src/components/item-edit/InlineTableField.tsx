@@ -4651,7 +4651,7 @@ export function InlineTableField({
                         }
                       }}
                       className={cn(
-                        'nvr-rise-in border-b border-slate-100 transition-colors',
+                        'border-b border-slate-100 transition-[color,background-color,opacity] duration-300',
                         isDragging ? 'opacity-40' : '',
                         isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                         isPendingDelete
@@ -4693,7 +4693,7 @@ export function InlineTableField({
                                   Delete
                                 </span>
                               ) : isPendingEdit ? (
-                                <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
+                                <span className='nvr-pop inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
                                   Edited
                                 </span>
                               ) : null}
@@ -5261,7 +5261,7 @@ export function InlineTableField({
                         }
                       }}
                       className={cn(
-                        'border-b border-slate-100 transition-colors',
+                        'nvr-rise-in border-b border-slate-100 transition-colors',
                         isPDragging ? 'opacity-40' : '',
                         isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                         isEditing
@@ -5290,7 +5290,7 @@ export function InlineTableField({
                           )}
                           <td className='px-3 py-1 align-middle w-16'>
                             {!isEditing && !isPrefilled && (
-                              <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
+                              <span className='nvr-pop inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
                                 Pending
                               </span>
                             )}

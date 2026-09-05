@@ -7149,7 +7149,7 @@ export function ItemEditForm({
                                         {completeness && (
                                           <span
                                             data-completeness-chip
-                                            className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums ${
+                                            className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
                                               completeness.requiredMissing.length > 0
                                                 ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
                                                 : completeness.pct >= 100
@@ -7162,7 +7162,9 @@ export function ItemEditForm({
                                                 : ''
                                             }`}
                                           >
-                                            {completeness.pct}% complete
+                                            <span key={completeness.pct} className='nvr-fade-in'>
+                                              {completeness.pct}% complete
+                                            </span>
                                           </span>
                                         )}
                                         {provenance && (
@@ -8396,27 +8398,33 @@ export function ItemEditForm({
                                     </div>
                                   )}
                                   {!isNew && itemId && (
-                                    <RecordRecapStrip
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                    />
+                                    <div className='nvr-expand-in'>
+                                      <RecordRecapStrip
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    </div>
                                   )}
                                   {!isNew &&
                                     itemId &&
                                     !activeLayoutData?.layout?.hide_integrity_banner && (
-                                      <RecordIntegrityBanner
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                        onJumpToField={flashField}
-                                      />
+                                      <div className='nvr-expand-in'>
+                                        <RecordIntegrityBanner
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          onJumpToField={flashField}
+                                        />
+                                      </div>
                                     )}
                                   {!isNew &&
                                     itemId &&
                                     !activeLayoutData?.layout?.hide_sla_banner && (
-                                      <SlaBreachBanner
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
+                                      <div className='nvr-expand-in'>
+                                        <SlaBreachBanner
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      </div>
                                     )}
                                   {importIssues.length > 0 && (
                                     <ImportIssuesPanel
@@ -8425,14 +8433,16 @@ export function ItemEditForm({
                                     />
                                   )}
                                   {showLockBanner && (
-                                    <ItemLockBanner
-                                      lockHolder={lockHolder}
-                                      onTakeOver={takeOver}
-                                      takingOver={takingOver}
-                                      isAdmin={isAdmin}
-                                      onRequestLock={requestLock}
-                                      requesting={requesting}
-                                    />
+                                    <div className='nvr-expand-in'>
+                                      <ItemLockBanner
+                                        lockHolder={lockHolder}
+                                        onTakeOver={takeOver}
+                                        takingOver={takingOver}
+                                        isAdmin={isAdmin}
+                                        onRequestLock={requestLock}
+                                        requesting={requesting}
+                                      />
+                                    </div>
                                   )}
                                   {!isNew && (
                                     <RecordLiveSync
