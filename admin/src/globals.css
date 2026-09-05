@@ -384,6 +384,23 @@ tr.nvr-row-flash > td {
 .nvr-stagger-direct > .nvr-section-enter:nth-child(5) { animation-delay: 140ms; }
 .nvr-stagger-direct > .nvr-section-enter:nth-child(n+6) { animation-delay: 175ms; }
 
+/* Item editor polish, round 5 */
+/* Sliding underline under the active tab. */
+.nvr-tab-indicator { transition: left 220ms var(--nvr-ease-out-expo), width 220ms var(--nvr-ease-out-expo); }
+/* The unsaved-changes dot breathes once every few seconds once edits have sat unsaved for a while. */
+@keyframes nvr-idle-breathe {
+  0%, 85%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+  92% { box-shadow: 0 0 0 5px rgba(251, 191, 36, 0.28); }
+}
+.nvr-idle-breathe { animation: nvr-idle-breathe 6s ease-out infinite; }
+@keyframes nvr-value-pulse-bg {
+  0% { background-color: rgba(0, 206, 255, 0.22); }
+  100% { background-color: rgba(0, 206, 255, 0); }
+}
+.nvr-value-pulse-bg { animation: nvr-value-pulse-bg 1100ms ease-out 1; }
+
+
+
 
 
 @media (prefers-reduced-motion: reduce) {

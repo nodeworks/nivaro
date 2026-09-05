@@ -1161,6 +1161,18 @@ export function ItemEditForm({
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
+  // Unsaved edits left sitting for a few minutes: the amber dot starts to
+  // breathe (one soft ring every 6s) — a nudge, not an alarm.
+  const [dirtyIdle, setDirtyIdle] = useState(false)
+  useEffect(() => {
+    if (!isDirty) {
+      setDirtyIdle(false)
+      return
+    }
+    const t = window.setTimeout(() => setDirtyIdle(true), 3 * 60_000)
+    return () => window.clearTimeout(t)
+  }, [isDirty])
+
   // Fields a rule / autofill / cross-record default wrote for the user get a
   // one-shot cyan glow (FieldRow keys its wrapper on the tick, so a repeat
   // write on the same field glows again). Purely presentational.
@@ -3999,6 +4011,24 @@ export function ItemEditForm({
     })()
     return new Set([initial])
   })
+  // Sliding active-tab underline: measured off the active button so it
+  // glides between tabs of different widths (and re-measures on resize).
+  const tabStripRef = useRef<HTMLDivElement | null>(null)
+  const [tabIndicator, setTabIndicator] = useState<{ left: number; width: number } | null>(null)
+  useEffect(() => {
+    const strip = tabStripRef.current
+    if (!strip) return
+    const measure = () => {
+      const el = strip.querySelector<HTMLElement>(`[data-tab-key="${CSS.escape(activeTab)}"]`)
+      if (!el) return setTabIndicator(null)
+      setTabIndicator({ left: el.offsetLeft, width: el.offsetWidth })
+    }
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    ro?.observe(strip)
+    return () => ro?.disconnect()
+  }, [activeTab])
+
   const setActiveTab = (k: string) => {
     setActiveTabRaw(k)
     setVisitedSteps((prev) => {
@@ -6591,7 +6621,10 @@ export function ItemEditForm({
     return (
       <div className='space-y-4'>
         {ungroupedFields.length > 0 && renderUngrouped()}
-        <div className='flex border-b border-slate-200 overflow-x-auto gap-1 px-1'>
+        <div
+          ref={tabStripRef}
+          className='relative flex border-b border-slate-200 overflow-x-auto gap-1 px-1'
+        >
           {tabStripItems.map((t) => {
             const hasErr = Object.keys(validationErrors).some((f) => {
               const fc = allFields.find((field) => field.field === f)
@@ -6601,12 +6634,13 @@ export function ItemEditForm({
               <button
                 key={t.key}
                 type='button'
+                data-tab-key={t.key}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
-                  'whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5',
+                  'whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent transition-colors flex items-center gap-1.5',
                   activeTab === t.key
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
                 )}
               >
                 {t.label}
@@ -6614,6 +6648,13 @@ export function ItemEditForm({
               </button>
             )
           })}
+          {tabIndicator && (
+            <span
+              aria-hidden
+              className='nvr-tab-indicator pointer-events-none absolute bottom-0 h-0.5 rounded-full bg-primary'
+              style={{ left: tabIndicator.left, width: tabIndicator.width }}
+            />
+          )}
         </div>
         {renderTabContent(activeTab)}
         {sectionOrder
@@ -7095,9 +7136,12 @@ export function ItemEditForm({
                                       type='button'
                                       onClick={onBack}
                                       aria-label='Back'
-                                      className='shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                                      className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
                                     >
-                                      <ArrowLeft aria-hidden className='h-4 w-4' />
+                                      <ArrowLeft
+                                        aria-hidden
+                                        className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
+                                      />
                                     </button>
                                   )}
                                   {/* min-width floor: without it flex crushes this block to
@@ -7910,7 +7954,12 @@ export function ItemEditForm({
                                             className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
                                             data-unsaved-dot
                                           >
-                                            <span className='nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                                            <span
+                                              className={cn(
+                                                'nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card',
+                                                dirtyIdle && 'nvr-idle-breathe'
+                                              )}
+                                            />
                                           </button>
                                         )}
                                         <UnsavedInspector

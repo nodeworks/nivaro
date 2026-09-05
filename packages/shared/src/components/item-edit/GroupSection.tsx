@@ -1213,7 +1213,7 @@ function StripRelationCell({
 // Used by ItemEditForm header strip — same rendering logic as SummaryStrip
 
 /** Class that pulses once whenever `value` changes AFTER the first render. */
-function useChangePulse(value: unknown): string {
+export function useChangePulse(value: unknown): string {
   const [flash, setFlash] = useState(false)
   const first = useRef(true)
   const prev = useRef(JSON.stringify(value ?? null))
