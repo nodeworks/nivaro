@@ -16,11 +16,11 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { RelatedItemLabel } from '../item-edit/RelationCombobox'
+import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
-import { RelatedItemLabel } from '../item-edit/RelationCombobox'
-import { UserAvatar } from '../UserAvatar'
 
 export interface O2MFieldInfo {
   field: string
@@ -534,8 +534,7 @@ function FieldChangeRow({
   /** On a CREATE revision every field is 'set' — the chips say nothing. */
   hideStatusChips?: boolean
 }) {
-  const richPair =
-    row.status === 'changed' && (isRichText(row.before) || isRichText(row.after))
+  const richPair = row.status === 'changed' && (isRichText(row.before) || isRichText(row.after))
   const jsonPair =
     row.status === 'changed' && parseJsonObject(row.before) && parseJsonObject(row.after)
   return (
@@ -654,8 +653,8 @@ function FieldChangeList({
           className='w-full border-t border-slate-100 px-3 py-2 text-left text-[11.5px] text-slate-400 hover:text-slate-600 dark:border-border/60 dark:hover:text-slate-300'
           data-show-system
         >
-          Show {hiddenSystem} system field{hiddenSystem === 1 ? '' : 's'} (ids, timestamps,
-          machine columns)
+          Show {hiddenSystem} system field{hiddenSystem === 1 ? '' : 's'} (ids, timestamps, machine
+          columns)
         </button>
       )}
       {hiddenSystem === 0 && showSystem && scoped.some((r) => r.system) && (
@@ -945,12 +944,12 @@ function RevisionRow({
 
           {rolledBackAt && inlineTableFields && inlineTableFields.length > 0 && (
             <div className='space-y-1.5 rounded-md border border-slate-100 bg-slate-50 p-2 dark:border-border dark:bg-muted/30'>
-              <p className='text-[10.5px] font-medium text-slate-500'>
-                Also restore related rows?
-              </p>
+              <p className='text-[10.5px] font-medium text-slate-500'>Also restore related rows?</p>
               {inlineTableFields.map((f) => (
                 <div key={f.field} className='flex items-center justify-between gap-2'>
-                  <span className='text-[11.5px] text-slate-600 dark:text-slate-300'>{f.label}</span>
+                  <span className='text-[11.5px] text-slate-600 dark:text-slate-300'>
+                    {f.label}
+                  </span>
                   <button
                     type='button'
                     disabled={o2mRestoring === f.field}
@@ -971,13 +970,7 @@ function RevisionRow({
 
 // ─── Time-travel tools (as-of + between-dates), one collapsible strip ───────
 
-function TimeTravelTools({
-  data,
-  meta
-}: {
-  data: Revision[]
-  meta: FieldMetaMap
-}) {
+function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap }) {
   const [openTool, setOpenTool] = useState<'asof' | 'compare' | null>(null)
   const [asOf, setAsOf] = useState('')
   const [diffFrom, setDiffFrom] = useState('')
@@ -1103,15 +1096,16 @@ function TimeTravelTools({
               <div className='max-h-80 overflow-y-auto'>
                 {Object.entries(asOfRevision.data ?? {})
                   .filter(([, v]) => v !== null && v !== undefined && v !== '')
-                  .sort(([a], [b]) =>
-                    metaFor(meta, a).label.localeCompare(metaFor(meta, b).label)
-                  )
+                  .sort(([a], [b]) => metaFor(meta, a).label.localeCompare(metaFor(meta, b).label))
                   .map(([k, v]) => (
                     <div
                       key={k}
                       className='flex items-start gap-3 border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
                     >
-                      <span className='w-[200px] shrink-0 text-[11.5px] font-medium text-slate-600 dark:text-slate-300' title={k}>
+                      <span
+                        className='w-[200px] shrink-0 text-[11.5px] font-medium text-slate-600 dark:text-slate-300'
+                        title={k}
+                      >
                         {metaFor(meta, k).label}
                       </span>
                       <span className='break-words text-[11.5px] text-slate-700 dark:text-slate-300'>
@@ -1190,7 +1184,10 @@ function TimeTravelTools({
                       className='border-b border-slate-100 px-2.5 py-1.5 last:border-0 dark:border-border/60'
                     >
                       <div className='flex items-baseline justify-between gap-2'>
-                        <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300' title={f.field}>
+                        <span
+                          className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'
+                          title={f.field}
+                        >
                           {metaFor(meta, f.field).label}
                         </span>
                         {f.by && (
@@ -1278,9 +1275,7 @@ function RevisionsList({
     return (
       <div className='flex flex-col items-center py-16 text-center'>
         <Clock className='mb-2 h-8 w-8 text-slate-300 dark:text-slate-600' />
-        <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>
-          No history yet
-        </p>
+        <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>No history yet</p>
         <p className='mt-1 max-w-[38ch] text-[12px] text-slate-400'>
           Every save records who changed what — the trail will appear here.
         </p>
@@ -1302,15 +1297,16 @@ function RevisionsList({
             {g.revisions.map((rev) => {
               const globalIdx = (data ?? []).indexOf(rev)
               return (
-                <RevisionRow
-                  key={rev.id}
-                  revision={rev}
-                  previousData={data?.[globalIdx + 1]?.data ?? null}
-                  meta={meta}
-                  onRollback={onRollback}
-                  inlineTableFields={inlineTableFields}
-                  isLast={globalIdx === (data?.length ?? 1) - 1}
-                />
+                <div key={rev.id} className='nvr-fade-in'>
+                  <RevisionRow
+                    revision={rev}
+                    previousData={data?.[globalIdx + 1]?.data ?? null}
+                    meta={meta}
+                    onRollback={onRollback}
+                    inlineTableFields={inlineTableFields}
+                    isLast={globalIdx === (data?.length ?? 1) - 1}
+                  />
+                </div>
               )
             })}
           </div>

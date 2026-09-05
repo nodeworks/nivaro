@@ -3,7 +3,6 @@ import { Check, ChevronDown, ChevronsUpDown, ClipboardList, Plus, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { SimpleSelect } from '../ui/SimpleSelect'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDate, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -19,6 +18,7 @@ import {
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { SimpleSelect } from '../ui/SimpleSelect'
 
 interface Task {
   id: number
@@ -235,7 +235,12 @@ export function TaskPanel({
   function handleCreate() {
     if (!newTitle.trim()) return
     if (isNew && onQueueTask) {
-      onQueueTask({ title: newTitle.trim(), assignee: newAssignee, due_date: newDueDate, priority: newPriority })
+      onQueueTask({
+        title: newTitle.trim(),
+        assignee: newAssignee,
+        due_date: newDueDate,
+        priority: newPriority
+      })
       setAdding(false)
       setNewTitle('')
       setNewAssignee(null)
@@ -254,7 +259,9 @@ export function TaskPanel({
       >
         <span className='flex w-full items-center gap-2.5'>
           <ClipboardList className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-          <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>{title || 'Tasks'}</span>
+          <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
+            {title || 'Tasks'}
+          </span>
           {openTasks.length > 0 && (
             <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
               {openTasks.length} open
@@ -271,7 +278,8 @@ export function TaskPanel({
             {openTasks[openTasks.length - 1].due_date && (
               <span className='text-slate-400/80'>
                 {' '}
-                · due {new Date(openTasks[openTasks.length - 1].due_date as string).toLocaleDateString()}
+                · due{' '}
+                {new Date(openTasks[openTasks.length - 1].due_date as string).toLocaleDateString()}
               </span>
             )}
           </span>
@@ -281,7 +289,11 @@ export function TaskPanel({
         <div className='border-t border-slate-100 dark:border-border/60'>
           <div className='space-y-3 px-5 py-3'>
             {!adding && (
-              <button type='button' onClick={() => setAdding(true)} className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'>
+              <button
+                type='button'
+                onClick={() => setAdding(true)}
+                className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'
+              >
                 <Plus className='h-3.5 w-3.5' />
                 Add task
               </button>
@@ -307,11 +319,13 @@ export function TaskPanel({
                       // say so (with return date + delegate) before the task lands.
                       const a = users.find((u) => u.id === newAssignee)
                       if (!a?.is_out_of_office) return null
-                      const delegate = a.delegate_id ? users.find((u) => u.id === a.delegate_id) : null
+                      const delegate = a.delegate_id
+                        ? users.find((u) => u.id === a.delegate_id)
+                        : null
                       return (
                         <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
-                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out of
-                          office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
+                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out
+                          of office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
                           {delegate
                             ? ` — their delegate is ${[delegate.first_name, delegate.last_name].filter(Boolean).join(' ') || delegate.email}`
                             : ' — open tasks route to their delegate if one is set'}
@@ -322,7 +336,12 @@ export function TaskPanel({
                   </div>
                   <div>
                     <Label className='mb-1 block text-[11px]'>Due date</Label>
-                    <Input type='date' value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} className='h-8 bg-white text-[12px]' />
+                    <Input
+                      type='date'
+                      value={newDueDate}
+                      onChange={(e) => setNewDueDate(e.target.value)}
+                      className='h-8 bg-white text-[12px]'
+                    />
                   </div>
                   <div>
                     <Label className='mb-1 block text-[11px]'>Priority</Label>
@@ -338,8 +357,22 @@ export function TaskPanel({
                   </div>
                 </div>
                 <div className='flex justify-end gap-2'>
-                  <Button type='button' variant='outline' size='sm' className='h-7 text-[12px]' onClick={() => setAdding(false)}>Cancel</Button>
-                  <Button type='button' size='sm' className='h-7 text-[12px]' disabled={!newTitle.trim()} onClick={handleCreate}>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    className='h-7 text-[12px]'
+                    onClick={() => setAdding(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    className='h-7 text-[12px]'
+                    disabled={!newTitle.trim()}
+                    onClick={handleCreate}
+                  >
                     Queue Task
                   </Button>
                 </div>
@@ -349,7 +382,9 @@ export function TaskPanel({
               <div className='divide-y divide-slate-100 dark:divide-border/60'>
                 {(queuedTasks ?? []).map((t, i) => (
                   <div key={i} className='flex items-start gap-2.5 py-2'>
-                    <span className='mt-0.5 inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:bg-amber-500/15 dark:text-amber-400'>Pending</span>
+                    <span className='mt-0.5 inline-flex shrink-0 items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:bg-amber-500/15 dark:text-amber-400'>
+                      Pending
+                    </span>
                     <div className='min-w-0 flex-1'>
                       <p className='text-[13px] font-medium text-slate-800'>{t.title}</p>
                       <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
@@ -373,7 +408,9 @@ export function TaskPanel({
               </div>
             )}
             {(queuedTasks ?? []).length === 0 && !adding && (
-              <p className='py-1 text-[12px] text-slate-400'>Tasks will be created after the record is saved.</p>
+              <p className='py-1 text-[12px] text-slate-400'>
+                Tasks will be created after the record is saved.
+              </p>
             )}
           </div>
         </div>
@@ -389,7 +426,7 @@ export function TaskPanel({
                 {openTasks.map((t) => {
                   const overdue = t.due_date ? new Date(t.due_date).getTime() < now : false
                   return (
-                    <div key={t.id} className='flex items-start gap-2.5 py-2'>
+                    <div key={t.id} className='nvr-rise-in flex items-start gap-2.5 py-2'>
                       <Checkbox
                         className='mt-0.5'
                         checked={false}
@@ -406,17 +443,17 @@ export function TaskPanel({
                         )}
                         <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
                           {t.priority && t.priority !== 'normal' && (
-                          <span
-                            className={
-                              t.priority === 'urgent'
-                                ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
-                                : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
-                            }
-                          >
-                            {t.priority}
-                          </span>
-                        )}
-                        {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
+                            <span
+                              className={
+                                t.priority === 'urgent'
+                                  ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                                  : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
+                              }
+                            >
+                              {t.priority}
+                            </span>
+                          )}
+                          {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
                           {t.due_date && (
                             <span className={cn(overdue && 'font-medium text-red-500')}>
                               Due {formatDate(t.due_date)}
@@ -439,7 +476,11 @@ export function TaskPanel({
               </div>
             )}
             {!adding && (
-              <button type='button' onClick={() => setAdding(true)} className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'>
+              <button
+                type='button'
+                onClick={() => setAdding(true)}
+                className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'
+              >
                 <Plus className='h-3.5 w-3.5' />
                 Add task
               </button>
@@ -465,11 +506,13 @@ export function TaskPanel({
                       // say so (with return date + delegate) before the task lands.
                       const a = users.find((u) => u.id === newAssignee)
                       if (!a?.is_out_of_office) return null
-                      const delegate = a.delegate_id ? users.find((u) => u.id === a.delegate_id) : null
+                      const delegate = a.delegate_id
+                        ? users.find((u) => u.id === a.delegate_id)
+                        : null
                       return (
                         <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
-                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out of
-                          office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
+                          {[a.first_name, a.last_name].filter(Boolean).join(' ') || a.email} is out
+                          of office{a.ooo_end ? ` until ${String(a.ooo_end).slice(0, 10)}` : ''}
                           {delegate
                             ? ` — their delegate is ${[delegate.first_name, delegate.last_name].filter(Boolean).join(' ') || delegate.email}`
                             : ' — open tasks route to their delegate if one is set'}
@@ -540,23 +583,26 @@ export function TaskPanel({
                 {showCompleted && (
                   <div className='mt-1 divide-y divide-slate-100'>
                     {completedTasks.map((t) => (
-                      <div key={t.id} className='flex items-start gap-2.5 py-2 opacity-60'>
+                      <div
+                        key={t.id}
+                        className='nvr-rise-in flex items-start gap-2.5 py-2 opacity-60 transition-opacity duration-300'
+                      >
                         <Checkbox className='mt-0.5' checked disabled aria-label='Completed' />
                         <div className='min-w-0 flex-1'>
                           <p className='text-[13px] text-slate-600 line-through'>{t.title}</p>
                           <div className='mt-0.5 flex items-center gap-3 text-[11px] text-slate-400'>
                             {t.priority && t.priority !== 'normal' && (
-                          <span
-                            className={
-                              t.priority === 'urgent'
-                                ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
-                                : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
-                            }
-                          >
-                            {t.priority}
-                          </span>
-                        )}
-                        {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
+                              <span
+                                className={
+                                  t.priority === 'urgent'
+                                    ? 'rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'
+                                    : 'rounded bg-slate-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'
+                                }
+                              >
+                                {t.priority}
+                              </span>
+                            )}
+                            {t.assignee && <span>{userName(usersById.get(t.assignee))}</span>}
                             {t.completed_at && <span>Done {formatRelative(t.completed_at)}</span>}
                           </div>
                         </div>

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Link2, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient, useItemNavigation } from '../../context'
+import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -64,9 +64,9 @@ export function RelatedRecordsPanel({
     queryKey: ['record-links-collections'],
     queryFn: () =>
       client
-        .request<{ data: Array<{ collection: string; display_name?: string | null; hidden?: boolean }> }>(
-          get('/collections')
-        )
+        .request<{
+          data: Array<{ collection: string; display_name?: string | null; hidden?: boolean }>
+        }>(get('/collections'))
         .then((r) =>
           (r.data ?? []).filter(
             (c) => !c.hidden && !c.collection.toLowerCase().startsWith('nivaro_')
@@ -94,9 +94,7 @@ export function RelatedRecordsPanel({
       toast.success('Records linked')
     },
     onError: (err) =>
-      toast.error(
-        ((err as { response?: { error?: string } }).response?.error) ?? 'Could not link'
-      )
+      toast.error((err as { response?: { error?: string } }).response?.error ?? 'Could not link')
   })
 
   const remove = useMutation({
@@ -134,9 +132,12 @@ export function RelatedRecordsPanel({
               Nothing linked yet — connect this record to the ones it relates to.
             </p>
           )}
-          <div className='space-y-1'>
+          <div className='nvr-stagger-direct space-y-1'>
             {links.map((l) => (
-              <div key={`${l.direction}-${l.id}`} className='group/link flex items-center gap-1.5'>
+              <div
+                key={`${l.direction}-${l.id}`}
+                className='nvr-section-enter group/link flex items-center gap-1.5'
+              >
                 <span className='shrink-0 text-[10.5px] italic text-slate-400'>{l.type}</span>
                 <button
                   type='button'
@@ -174,7 +175,11 @@ export function RelatedRecordsPanel({
                     <span className='truncate'>
                       {(() => {
                         const c = collections.find((x) => x.collection === targetCollection)
-                        return c?.display_name || targetCollection.replace(/_/g, ' ') || 'Pick a collection…'
+                        return (
+                          c?.display_name ||
+                          targetCollection.replace(/_/g, ' ') ||
+                          'Pick a collection…'
+                        )
                       })()}
                     </span>
                     <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
@@ -187,7 +192,9 @@ export function RelatedRecordsPanel({
                       <CommandEmpty>No collection found.</CommandEmpty>
                       {[...collections]
                         .sort((a, b) =>
-                          (a.display_name || a.collection).localeCompare(b.display_name || b.collection)
+                          (a.display_name || a.collection).localeCompare(
+                            b.display_name || b.collection
+                          )
                         )
                         .map((c) => (
                           <CommandItem

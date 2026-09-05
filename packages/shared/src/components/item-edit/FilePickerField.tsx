@@ -177,7 +177,7 @@ function FileBrowserPanel({
                   type='button'
                   onClick={() => onSelect(f.id)}
                   className={cn(
-                    'group flex flex-col items-center gap-1 rounded-lg p-1.5 text-left transition-colors border',
+                    'nvr-rise-in group flex flex-col items-center gap-1 rounded-lg p-1.5 text-left transition-colors border',
                     isSel
                       ? 'border-[#00ceff] bg-[#00ceff]/5'
                       : 'border-transparent hover:border-slate-200 hover:bg-slate-50'

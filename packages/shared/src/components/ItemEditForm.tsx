@@ -6941,7 +6941,7 @@ export function ItemEditForm({
   // explain WHY (role permission, RLS, or which User Scope excludes it).
   if (itemLoadDenied) {
     return (
-      <div className={cn('flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
+      <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
         <AccessDeniedPanel
           collection={collection}
           itemId={String(itemId)}
