@@ -1161,6 +1161,19 @@ export function ItemEditForm({
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
+  // Fields a rule / autofill / cross-record default wrote for the user get a
+  // one-shot cyan glow (FieldRow keys its wrapper on the tick, so a repeat
+  // write on the same field glows again). Purely presentational.
+  const [autoFillTicks, setAutoFillTicks] = useState<Record<string, number>>({})
+  const markAutoFilled = useCallback((fields: string[]) => {
+    if (fields.length === 0) return
+    setAutoFillTicks((prev) => {
+      const next = { ...prev }
+      for (const f of fields) next[f] = (next[f] ?? 0) + 1
+      return next
+    })
+  }, [])
+
   const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const top = (e.target as HTMLDivElement).scrollTop
     setHeaderCondensed((prev) => (prev ? top > 40 : top > 110))
@@ -2664,6 +2677,7 @@ export function ItemEditForm({
             }
             draftRef.current = { ...draftRef.current, ...patch }
             setDraft((prev) => ({ ...prev, ...patch }))
+            markAutoFilled(Object.keys(patch))
             setIsDirty(true)
             // Chain: a target that is itself a watched FK cascades its own
             // defaults (billing location → shipping location → address copy)
@@ -2717,6 +2731,7 @@ export function ItemEditForm({
         const merged = mergeRuleResults(draftRef.current, scalar)
         draftRef.current = merged
         setDraft(merged)
+        markAutoFilled(Object.keys(scalar))
         // Rule-set FKs cascade their own cross-record defaults.
         for (const [field, value] of Object.entries(scalar)) runCrossDefaults(field, value)
       }
@@ -5839,6 +5854,7 @@ export function ItemEditForm({
                     collection={collection}
                     itemId={itemId}
                     error={validationErrors[f.field]}
+                    autoFillTick={autoFillTicks[f.field]}
                     visible={true}
                     locked={isReadOnly || addendumViewId !== 'original'}
                     layoutAiEnabled={layoutAiEnabled}
@@ -6064,6 +6080,7 @@ export function ItemEditForm({
                                 collection={collection}
                                 itemId={itemId}
                                 error={validationErrors[af.field]}
+                                autoFillTick={autoFillTicks[af.field]}
                                 visible={true}
                                 forceVisible={true}
                                 locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
@@ -6090,6 +6107,7 @@ export function ItemEditForm({
                       collection={collection}
                       itemId={itemId}
                       error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
                       visible={visibleFields.has(f.field) || !visibleFields.size}
                       locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
                       layoutAiEnabled={layoutAiEnabled}
@@ -6541,6 +6559,7 @@ export function ItemEditForm({
                     collection={collection}
                     itemId={itemId}
                     error={validationErrors[f.field]}
+                    autoFillTick={autoFillTicks[f.field]}
                     visible={true}
                     locked={isReadOnly || addendumViewId !== 'original'}
                     layoutAiEnabled={layoutAiEnabled}
@@ -7913,7 +7932,11 @@ export function ItemEditForm({
                                           size='sm'
                                           onClick={() => handleSave()}
                                           disabled={saveMut.isPending || isReadOnly}
-                                          className='gap-1.5'
+                                          className={cn(
+                                            'gap-1.5 transition-colors duration-300',
+                                            justSaved &&
+                                              'bg-emerald-500 hover:bg-emerald-500 text-white'
+                                          )}
                                         >
                                           {saveMut.isPending ? (
                                             <Loader2 className='h-3.5 w-3.5 animate-spin' />

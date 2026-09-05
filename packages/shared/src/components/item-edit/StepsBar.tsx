@@ -6,7 +6,7 @@ type StepState = 'active' | 'done' | 'error' | 'inactive'
 
 const ARROW_DEPTH = 10
 const SEP = 2 // separator strip width px
-const R = 12  // bar corner radius px (matches rounded-xl = 0.75rem)
+const R = 12 // bar corner radius px (matches rounded-xl = 0.75rem)
 
 function resolveState(
   key: string,
@@ -23,7 +23,8 @@ function resolveState(
 function getOuterClip(isFirst: boolean, isLast: boolean): string {
   if (isFirst && isLast) return 'none'
   const d = ARROW_DEPTH
-  if (isFirst) return `polygon(0 0, calc(100% - ${d}px) 0, 100% 50%, calc(100% - ${d}px) 100%, 0 100%)`
+  if (isFirst)
+    return `polygon(0 0, calc(100% - ${d}px) 0, 100% 50%, calc(100% - ${d}px) 100%, 0 100%)`
   if (isLast) return `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${d}px 50%)`
   return `polygon(0 0, calc(100% - ${d}px) 0, 100% 50%, calc(100% - ${d}px) 100%, 0 100%, ${d}px 50%)`
 }
@@ -33,7 +34,8 @@ function getInnerClip(isFirst: boolean, isLast: boolean): string {
   const d = ARROW_DEPTH
   const s = SEP
   if (isLast) return `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${d}px 50%)`
-  if (isFirst) return `polygon(0 0, calc(100% - ${d + s}px) 0, calc(100% - ${s}px) 50%, calc(100% - ${d + s}px) 100%, 0 100%)`
+  if (isFirst)
+    return `polygon(0 0, calc(100% - ${d + s}px) 0, calc(100% - ${s}px) 50%, calc(100% - ${d + s}px) 100%, 0 100%)`
   return `polygon(0 0, calc(100% - ${d + s}px) 0, calc(100% - ${s}px) 50%, calc(100% - ${d + s}px) 100%, 0 100%, ${d}px 50%)`
 }
 
@@ -93,7 +95,7 @@ export function StepsBar({
               // Chrome properly clips clip-path'd children to border-radius
               overflow: 'hidden',
               transform: 'translateZ(0)',
-              borderRadius,
+              borderRadius
             }}
           >
             {/* Separator — fills wrapper in border color; button's inner clip leaves SEP px visible at arrow edge */}
@@ -111,7 +113,7 @@ export function StepsBar({
                 clipPath: getInnerClip(isFirst, isLast),
                 paddingLeft: isFirst ? 12 : 12 + ARROW_DEPTH,
                 paddingRight: 12,
-                borderRadius,
+                borderRadius
               }}
               className={cn(
                 'group absolute inset-0 flex items-center gap-2 py-0 text-left transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00ceff]',
@@ -131,6 +133,7 @@ export function StepsBar({
               <span
                 className={cn(
                   'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold leading-none transition-colors duration-100',
+                  isActive && 'nvr-state-pulse',
                   isActive
                     ? 'bg-[#00ceff] text-[#172940]'
                     : isDone
@@ -141,7 +144,7 @@ export function StepsBar({
                 )}
               >
                 {isDone ? (
-                  <Check className='h-[7px] w-[7px]' strokeWidth={3} />
+                  <Check className='nvr-pop h-[7px] w-[7px]' strokeWidth={3} />
                 ) : hasError ? (
                   '!'
                 ) : (

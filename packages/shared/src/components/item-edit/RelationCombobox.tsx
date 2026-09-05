@@ -5,8 +5,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get } from '../../lib/commands'
-import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { useOnlineUsers } from '../../lib/use-online-users'
+import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 
 /**
@@ -139,8 +139,7 @@ export function RelationCombobox({
       const anchor = rootRef.current
       if (!anchor) return
       const r = anchor.getBoundingClientRect()
-      const container =
-        (anchor.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+      const container = (anchor.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
       setPortalEl(container)
       const flipUp = window.innerHeight - r.bottom < 340 && r.top > window.innerHeight - r.bottom
       const x = r.left
@@ -396,111 +395,111 @@ export function RelationCombobox({
         panelStyle &&
         portalEl &&
         createPortal(
-        <div
-          data-nvr-combobox-panel=''
-          style={panelStyle}
-          className={cn(
-            'rounded-md border border-border bg-popover shadow-md',
-            facets?.length ? 'w-[560px] max-w-[92vw]' : 'min-w-[240px] w-max max-w-[360px]'
-          )}
-        >
-          {!!facets?.length && (
-            <div className='grid grid-cols-2 gap-2 border-b border-border bg-slate-50/60 p-2 dark:bg-muted/40'>
-              {facets.map((f) => {
-                const target = facetTargets[f.field]
-                if (!target) return null
-                return (
-                  <div key={f.field}>
-                    <p className='mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400'>
-                      {f.label ?? f.field}
-                    </p>
-                    <RelationCombobox
-                      collection={target}
-                      value={facetSel[f.field] ?? null}
-                      onChange={(v) => setFacetSel((prev) => ({ ...prev, [f.field]: v }))}
-                      placeholder='Any'
-                      optionSort={f.sort}
-                      extraFilter={f.filter}
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          <div className='flex items-center border-b px-3'>
-            <Search className='mr-2 h-4 w-4 shrink-0 opacity-50' />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder='Search…'
-              className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
-            />
-          </div>
-          <div className='max-h-52 overflow-y-auto py-1'>
-            {!!value && !disabled && (
-              <button
-                type='button'
-                onClick={() => {
-                  onChange(null)
-                  setOpen(false)
-                }}
-                className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
-              >
-                <X className='h-3.5 w-3.5 text-slate-400' />
-                Clear selection
-              </button>
+          <div
+            data-nvr-combobox-panel=''
+            style={panelStyle}
+            className={cn(
+              'nvr-pop-in rounded-md border border-border bg-popover shadow-md',
+              facets?.length ? 'w-[560px] max-w-[92vw]' : 'min-w-[240px] w-max max-w-[360px]'
             )}
-            {isLoadingOptions ? (
-              <div className='flex items-center justify-center py-4'>
-                <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
-              </div>
-            ) : (data ?? []).length === 0 ? (
-              <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
-            ) : (
-              (serverSort
-                ? [...(data ?? [])]
-                : [...(data ?? [])].sort((a, b) =>
-                    optionSort === '-label'
-                      ? applyDisplayTemplate(tmpl, b).localeCompare(applyDisplayTemplate(tmpl, a))
-                      : applyDisplayTemplate(tmpl, a).localeCompare(applyDisplayTemplate(tmpl, b))
-                  )
-              ).map((item) => {
-                const label = applyDisplayTemplate(tmpl, item) || `#${item.id}`
-                const sel = String(item.id) === String(value)
-                return (
-                  <button
-                    key={String(item.id)}
-                    type='button'
-                    onClick={() => {
-                      onChange(item.id)
-                      setOpen(false)
-                    }}
-                    className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
-                  >
-                    <div
-                      className={cn(
-                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                        sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
-                      )}
-                    >
-                      {sel && <Check className='h-2.5 w-2.5 text-white' />}
-                    </div>
-                    {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
-                      <span
-                        className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
-                        data-tip='Online now'
+          >
+            {!!facets?.length && (
+              <div className='grid grid-cols-2 gap-2 border-b border-border bg-slate-50/60 p-2 dark:bg-muted/40'>
+                {facets.map((f) => {
+                  const target = facetTargets[f.field]
+                  if (!target) return null
+                  return (
+                    <div key={f.field}>
+                      <p className='mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                        {f.label ?? f.field}
+                      </p>
+                      <RelationCombobox
+                        collection={target}
+                        value={facetSel[f.field] ?? null}
+                        onChange={(v) => setFacetSel((prev) => ({ ...prev, [f.field]: v }))}
+                        placeholder='Any'
+                        optionSort={f.sort}
+                        extraFilter={f.filter}
                       />
-                    )}
-                    {label}
-                  </button>
-                )
-              })
+                    </div>
+                  )
+                })}
+              </div>
             )}
-          </div>
-        </div>,
-        portalEl
-      )}
+            <div className='flex items-center border-b px-3'>
+              <Search className='mr-2 h-4 w-4 shrink-0 opacity-50' />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder='Search…'
+                className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
+              />
+            </div>
+            <div className='max-h-52 overflow-y-auto py-1'>
+              {!!value && !disabled && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    onChange(null)
+                    setOpen(false)
+                  }}
+                  className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
+                >
+                  <X className='h-3.5 w-3.5 text-slate-400' />
+                  Clear selection
+                </button>
+              )}
+              {isLoadingOptions ? (
+                <div className='flex items-center justify-center py-4'>
+                  <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
+                </div>
+              ) : (data ?? []).length === 0 ? (
+                <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
+              ) : (
+                (serverSort
+                  ? [...(data ?? [])]
+                  : [...(data ?? [])].sort((a, b) =>
+                      optionSort === '-label'
+                        ? applyDisplayTemplate(tmpl, b).localeCompare(applyDisplayTemplate(tmpl, a))
+                        : applyDisplayTemplate(tmpl, a).localeCompare(applyDisplayTemplate(tmpl, b))
+                    )
+                ).map((item) => {
+                  const label = applyDisplayTemplate(tmpl, item) || `#${item.id}`
+                  const sel = String(item.id) === String(value)
+                  return (
+                    <button
+                      key={String(item.id)}
+                      type='button'
+                      onClick={() => {
+                        onChange(item.id)
+                        setOpen(false)
+                      }}
+                      className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
+                    >
+                      <div
+                        className={cn(
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                          sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                        )}
+                      >
+                        {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                      </div>
+                      {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
+                        <span
+                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                          data-tip='Online now'
+                        />
+                      )}
+                      {label}
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </div>,
+          portalEl
+        )}
     </div>
   )
 }

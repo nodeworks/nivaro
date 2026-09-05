@@ -589,7 +589,8 @@ export function FieldRow({
   onCountChange,
   swapButton,
   swapContent,
-  forceVisible
+  forceVisible,
+  autoFillTick
 }: {
   field: CMSField
   draft: Record<string, unknown>
@@ -598,6 +599,8 @@ export function FieldRow({
   collection: string
   itemId: string
   error?: string
+  /** Bumped by the form when a rule / autofill wrote this field — glows once per bump. */
+  autoFillTick?: number
   visible: boolean
   locked: boolean
   layoutAiEnabled?: boolean
@@ -1027,11 +1030,13 @@ export function FieldRow({
       {swapContent ?? (
         <div className={cn(locked && 'cursor-not-allowed')}>
           <div
+            key={autoFillTick ?? 0}
             className={cn(
               locked && 'pointer-events-none opacity-60',
               // The ring lands with a 2px shake so the eye finds the field;
               // the animation runs once when the class is added.
-              error && 'nvr-shake ring-1 ring-red-400 rounded-md'
+              error && 'nvr-shake ring-1 ring-red-400 rounded-md',
+              autoFillTick && 'nvr-autofill-glow'
             )}
           >
             {autoIdPattern ? (

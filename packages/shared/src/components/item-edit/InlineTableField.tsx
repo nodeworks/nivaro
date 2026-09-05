@@ -1,8 +1,12 @@
-import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './ChangeReasonDialog'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import {
+  type ChangeReasonChallenge,
+  ChangeReasonDialog,
+  changeReasonChallenge
+} from './ChangeReasonDialog'
 
 export interface RowRule {
   trigger_field?: string | null
@@ -56,27 +60,35 @@ export type AutoAllocateConfig = {
     min_capacity?: number
   }
 }
-import { useNivaroClient, useParentDraft, useDrilldown, useReimportHandler, fieldDrilldownConfig } from '../../context'
+
+import { toast } from 'sonner'
+import {
+  fieldDrilldownConfig,
+  useDrilldown,
+  useNivaroClient,
+  useParentDraft,
+  useReimportHandler
+} from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle
-} from '../ui/sheet'
-import { type LiveRowsCtx, type StagedRelOps, useLiveRows, useO2MStaging, useStagedRelations } from './O2MStagingContext'
+import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
-import { ImportFromFileButton } from '../import/ImportFromFileButton'
-import { RowCommentButton, useRowCommentCounts } from './RowComments'
-import { NestedRelationEditor } from './NestedRelationEditor'
-import { RelationCombobox } from './RelationCombobox'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
+import { NestedRelationEditor } from './NestedRelationEditor'
+import {
+  type LiveRowsCtx,
+  type StagedRelOps,
+  useLiveRows,
+  useO2MStaging,
+  useStagedRelations
+} from './O2MStagingContext'
+import { RelationCombobox } from './RelationCombobox'
+import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import type { CMSField, CMSRelation, NestedOps } from './types'
-import { toast } from 'sonner'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
 // Oracle/Fusion wrap a JSON fragment ("o:errorDetails": [{ detail: … }]) in an
@@ -123,7 +135,10 @@ function StaleValueFlag({ children }: { children: React.ReactNode }) {
 
 function mineErpDetails(raw: unknown): string[] {
   if (typeof raw !== 'string' || !raw.trim()) return []
-  const decoded = raw.replace(/&(lt|gt|quot|amp|#39);/g, (_, e: string) => ERP_XML_ENTITIES[e] ?? '')
+  const decoded = raw.replace(
+    /&(lt|gt|quot|amp|#39);/g,
+    (_, e: string) => ERP_XML_ENTITIES[e] ?? ''
+  )
   const out: string[] = []
   const re = /"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/g
   let m: RegExpExecArray | null = re.exec(decoded)
@@ -166,7 +181,15 @@ interface O2MRevisionEntry {
   data: Record<string, unknown>
 }
 
-const NON_DISPLAY_TYPES = new Set(['alias', 'o2m', 'm2m', 'm2a', 'presentation', 'group', 'divider'])
+const NON_DISPLAY_TYPES = new Set([
+  'alias',
+  'o2m',
+  'm2m',
+  'm2a',
+  'presentation',
+  'group',
+  'divider'
+])
 // Built-in preset sentinel: shows every displayCols entry, no relation summary columns.
 // Not a real ColumnPreset — never appears in columnPresets, only in activePreset/default_preset.
 const ALL_PRESET_SENTINEL = '__all__'
@@ -237,16 +260,18 @@ type CascadeResolution =
   | { type: 'm2m_junction'; table: string; self_fk: string; filter_fk: string }
 
 function getUniqueKey(row: Record<string, unknown>, fields: string[]): string {
-  return fields.map(f => {
-    const staged = row[`__m2m_${f}`]
-    return String(staged !== undefined ? staged ?? '' : row[f] ?? '')
-  }).join('\x00')
+  return fields
+    .map((f) => {
+      const staged = row[`__m2m_${f}`]
+      return String(staged !== undefined ? (staged ?? '') : (row[f] ?? ''))
+    })
+    .join('\x00')
 }
 
 function DeletedRowsSection({
   deletedRows,
   displayCols,
-  onOpenHistory,
+  onOpenHistory
 }: {
   deletedRows: Array<{ id: string; data: Record<string, unknown> }>
   displayCols: CMSField[]
@@ -257,27 +282,43 @@ function DeletedRowsSection({
     <div className='border-t border-slate-100 mt-1'>
       <button
         type='button'
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen((o) => !o)}
         className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-muted'
       >
-        <ChevronRight className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', open && 'rotate-90')} />
-        <span className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>Deleted rows</span>
-        <span className='ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>{deletedRows.length}</span>
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+            open && 'rotate-90'
+          )}
+        />
+        <span className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
+          Deleted rows
+        </span>
+        <span className='ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>
+          {deletedRows.length}
+        </span>
       </button>
-      {open && deletedRows.map((dr) => {
-        const firstCol = displayCols[0]
-        const label = firstCol ? String(dr.data[firstCol.field] ?? dr.id) : dr.id
-        return (
-          <div key={dr.id} className='flex items-center gap-2 px-3 py-1 text-[11px] text-slate-400'>
-            <span className='flex-1 truncate line-through'>{label}</span>
-            <button type='button' title='Row history'
-              onClick={() => onOpenHistory(dr.id, dr.data)}
-              className='shrink-0 rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
-              <History className='h-3 w-3' />
-            </button>
-          </div>
-        )
-      })}
+      {open &&
+        deletedRows.map((dr) => {
+          const firstCol = displayCols[0]
+          const label = firstCol ? String(dr.data[firstCol.field] ?? dr.id) : dr.id
+          return (
+            <div
+              key={dr.id}
+              className='flex items-center gap-2 px-3 py-1 text-[11px] text-slate-400'
+            >
+              <span className='flex-1 truncate line-through'>{label}</span>
+              <button
+                type='button'
+                title='Row history'
+                onClick={() => onOpenHistory(dr.id, dr.data)}
+                className='shrink-0 rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+              >
+                <History className='h-3 w-3' />
+              </button>
+            </div>
+          )
+        })}
     </div>
   )
 }
@@ -345,7 +386,9 @@ export type AllocateDrawerConfig = {
   filter?: Record<string, unknown>
   /** Display columns over the option rows: dotted paths resolve via nested
    *  field expansion; formula entries compute from the option row's values. */
-  columns?: Array<string | { path?: string; label?: string; format?: string; formula?: string; width?: number }>
+  columns?: Array<
+    string | { path?: string; label?: string; format?: string; formula?: string; width?: number }
+  >
   /** Group option rows under collapsible headers by this (dotted) path —
    *  EFP grouped allocation lines by workflow. Groups start collapsed;
    *  groups containing an existing allocation start expanded. */
@@ -357,14 +400,18 @@ export type AllocateDrawerConfig = {
 }
 
 function walkPath(obj: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>(
-    (cur, seg) => (cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined),
-    obj
-  )
+  return path
+    .split('.')
+    .reduce<unknown>(
+      (cur, seg) =>
+        cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined,
+      obj
+    )
 }
 
 function fmtDrawerVal(v: unknown, format?: string, colOptions?: unknown): string {
-  if (format === 'presence') return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
+  if (format === 'presence')
+    return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
   if (v === null || v === undefined || v === '') return '—'
   if (format === 'currency' && Number.isFinite(Number(v)))
     return Number(v).toLocaleString('en-US', numericIntlOptions(colOptions, 'currency'))
@@ -415,7 +462,13 @@ function AllocateDrawer({
     () =>
       (config.columns ?? []).map((c) =>
         typeof c === 'string'
-          ? { path: c, label: undefined as string | undefined, format: undefined as string | undefined, formula: undefined as string | undefined, width: undefined as number | undefined }
+          ? {
+              path: c,
+              label: undefined as string | undefined,
+              format: undefined as string | undefined,
+              formula: undefined as string | undefined,
+              width: undefined as number | undefined
+            }
           : c
       ),
     [config.columns]
@@ -440,7 +493,12 @@ function AllocateDrawer({
   }, [columns, config.group_by])
 
   const { data: options = [], isFetching } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['allocate-options', config.collection, JSON.stringify(resolvedFilter ?? null), fetchFields],
+    queryKey: [
+      'allocate-options',
+      config.collection,
+      JSON.stringify(resolvedFilter ?? null),
+      fetchFields
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -483,7 +541,11 @@ function AllocateDrawer({
     else if (savedRow && !deleted) {
       const edit = savedId ? pendingEdits?.get(savedId) : undefined
       amount =
-        Number(edit && config.value_field in edit ? edit[config.value_field] : savedRow[config.value_field]) || 0
+        Number(
+          edit && config.value_field in edit
+            ? edit[config.value_field]
+            : savedRow[config.value_field]
+        ) || 0
     }
     return { savedRow, pendingIdx, amount, deleted }
   }
@@ -531,10 +593,13 @@ function AllocateDrawer({
     setSavingId(optionId)
     try {
       if (amount === null || amount === 0) {
-        if (existing?.id != null) await client.request(del(`/items/${relatedCollection}/${existing.id}`))
+        if (existing?.id != null)
+          await client.request(del(`/items/${relatedCollection}/${existing.id}`))
       } else if (existing?.id != null) {
         if (Number(existing[config.value_field]) !== amount)
-          await client.request(patch(`/items/${relatedCollection}/${existing.id}`, { [config.value_field]: amount }))
+          await client.request(
+            patch(`/items/${relatedCollection}/${existing.id}`, { [config.value_field]: amount })
+          )
       } else {
         await client.request(
           post(`/items/${relatedCollection}`, {
@@ -546,8 +611,11 @@ function AllocateDrawer({
         )
       }
       invalidate()
-    } catch { /* row save errors surface via grid refresh */ }
-    finally { setSavingId(null) }
+    } catch {
+      /* row save errors surface via grid refresh */
+    } finally {
+      setSavingId(null)
+    }
   }
 
   function evalFormulaNumeric(
@@ -558,9 +626,7 @@ function AllocateDrawer({
     // `extras` (__input__ / __saved__ / __agg__) are resolved ahead of the
     // option's own fields, which is what makes an Available-style column react
     // as the user types.
-    return evaluateNumeric(formula, (ref) =>
-      ref in extras ? extras[ref] : walkPath(option, ref)
-    )
+    return evaluateNumeric(formula, (ref) => (ref in extras ? extras[ref] : walkPath(option, ref)))
   }
 
   // {{__input__}} = the row's live input (draft, else saved); {{__saved__}} =
@@ -606,7 +672,9 @@ function AllocateDrawer({
               Enter an amount to allocate a line — clearing it removes the allocation.
             </p>
             {isFetching ? (
-              <div className='py-10 text-center'><Loader2 className='inline h-4 w-4 animate-spin text-slate-400' /></div>
+              <div className='py-10 text-center'>
+                <Loader2 className='inline h-4 w-4 animate-spin text-slate-400' />
+              </div>
             ) : options.length === 0 ? (
               <p className='py-10 text-center text-[12px] text-slate-400'>
                 No eligible rows for the current record's filters.
@@ -617,7 +685,10 @@ function AllocateDrawer({
                   <thead>
                     <tr className='border-b border-slate-200 bg-slate-50'>
                       {columns.map((c, i) => (
-                        <th key={i} className='whitespace-nowrap px-2.5 py-1.5 text-[11px] font-medium text-slate-500'>
+                        <th
+                          key={i}
+                          className='whitespace-nowrap px-2.5 py-1.5 text-[11px] font-medium text-slate-500'
+                        >
                           {c.label ?? titleCase((c.path ?? '').split('.').pop() ?? '')}
                         </th>
                       ))}
@@ -636,14 +707,14 @@ function AllocateDrawer({
                       let groupsInOrder: string[] = []
                       if (config.group_by) {
                         groupsInOrder = [...new Set(options.map(groupOf))]
-                        orderedOptions = groupsInOrder.flatMap((g) => options.filter((o) => groupOf(o) === g))
+                        orderedOptions = groupsInOrder.flatMap((g) =>
+                          options.filter((o) => groupOf(o) === g)
+                        )
                       }
                       const expanded =
                         expandedGroups ??
                         new Set(
-                          options
-                            .filter((o) => effectiveFor(String(o.id)).amount > 0)
-                            .map(groupOf)
+                          options.filter((o) => effectiveFor(String(o.id)).amount > 0).map(groupOf)
                         )
                       const toggle = (g: string) =>
                         setExpandedGroups((prev) => {
@@ -660,11 +731,15 @@ function AllocateDrawer({
                         if (config.group_by && g !== lastGroup) {
                           lastGroup = g
                           const members = options.filter((o) => groupOf(o) === g)
-                          const allocatedIn = members.filter((o) => effectiveFor(String(o.id)).amount > 0).length
+                          const allocatedIn = members.filter(
+                            (o) => effectiveFor(String(o.id)).amount > 0
+                          ).length
                           // Per-column numeric sums in the header row: currency
                           // path columns and formula columns sum across members;
                           // the input column sums live drafts/saved amounts.
-                          const summable = columns.map((c) => !!c.formula || c.format === 'currency')
+                          const summable = columns.map(
+                            (c) => !!c.formula || c.format === 'currency'
+                          )
                           const firstSum = summable.indexOf(true)
                           const labelSpan = firstSum === -1 ? columns.length : Math.max(1, firstSum)
                           const sumFor = (ci: number): string => {
@@ -676,11 +751,20 @@ function AllocateDrawer({
                                 : Number(walkPath(m, c.path ?? ''))
                               if (v !== null && Number.isFinite(v)) total += v
                             }
-                            return total.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+                            return total.toLocaleString('en-US', {
+                              style: 'currency',
+                              currency: 'USD'
+                            })
                           }
-                          const inputSum = members.reduce((t, m) => t + rowExtras(String(m.id)).__input__, 0)
+                          const inputSum = members.reduce(
+                            (t, m) => t + rowExtras(String(m.id)).__input__,
+                            0
+                          )
                           out.push(
-                            <tr key={`__group_${g}`} className='border-b border-slate-200 bg-slate-100/80'>
+                            <tr
+                              key={`__group_${g}`}
+                              className='border-b border-slate-200 bg-slate-100/80'
+                            >
                               <td colSpan={labelSpan} className='px-2 py-1'>
                                 <button
                                   type='button'
@@ -693,7 +777,9 @@ function AllocateDrawer({
                                       expanded.has(g) && 'rotate-90'
                                     )}
                                   />
-                                  <span className='text-[11.5px] font-semibold text-slate-600'>{g}</span>
+                                  <span className='text-[11.5px] font-semibold text-slate-600'>
+                                    {g}
+                                  </span>
                                   <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>
                                     {members.length} line{members.length !== 1 ? 's' : ''}
                                   </span>
@@ -705,12 +791,20 @@ function AllocateDrawer({
                                 </button>
                               </td>
                               {columns.slice(labelSpan).map((c, i) => (
-                                <td key={i} className='whitespace-nowrap px-2.5 py-1 text-[11px] font-semibold tabular-nums text-slate-600'>
+                                <td
+                                  key={i}
+                                  className='whitespace-nowrap px-2.5 py-1 text-[11px] font-semibold tabular-nums text-slate-600'
+                                >
                                   {summable[labelSpan + i] ? sumFor(labelSpan + i) : ''}
                                 </td>
                               ))}
                               <td className='whitespace-nowrap px-2.5 py-1 text-[11px] font-semibold tabular-nums text-[#0891b2]'>
-                                {inputSum > 0 ? inputSum.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : ''}
+                                {inputSum > 0
+                                  ? inputSum.toLocaleString('en-US', {
+                                      style: 'currency',
+                                      currency: 'USD'
+                                    })
+                                  : ''}
                               </td>
                             </tr>
                           )
@@ -718,56 +812,70 @@ function AllocateDrawer({
                         if (config.group_by && !expanded.has(g)) continue
                         const eff = effectiveFor(optId)
                         const existing = eff.amount > 0 ? (eff.savedRow ?? {}) : undefined
-                        const current =
-                          drafts[optId] ?? (eff.amount > 0 ? String(eff.amount) : '')
+                        const current = drafts[optId] ?? (eff.amount > 0 ? String(eff.amount) : '')
                         out.push(
                           <tr key={optId} className={cn(existing && 'bg-[#00ceff]/5')}>
-                          {columns.map((c, i) => {
-                            const text = c.formula
-                              ? evalFormula(c.formula, opt)
-                              : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format)
-                            return (
-                              <td
-                                key={i}
-                                title={c.width ? text : undefined}
-                                style={c.width ? { maxWidth: c.width } : undefined}
-                                className={cn('px-2.5 py-1.5 text-slate-700', c.width ? 'truncate' : 'whitespace-nowrap')}
-                              >
-                                {text}
-                              </td>
-                            )
-                          })}
-                          <td className='px-2.5 py-1'>
-                            <div className='flex items-center gap-1.5'>
-                              {(() => {
-                                const max = rowMax(opt)
-                                const exceeds =
-                                  max !== null && current !== '' && Number(current) > max
-                                return (
-                                  <input
-                                    type='number'
-                                    min={0}
-                                    value={current}
-                                    title={max !== null ? `Max ${max.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}` : undefined}
-                                    onChange={(e) => setDrafts((d) => ({ ...d, [optId]: e.target.value }))}
-                                    onBlur={() => { if (drafts[optId] !== undefined) commit(optId, drafts[optId], opt) }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter' && drafts[optId] !== undefined) commit(optId, drafts[optId], opt)
-                                    }}
-                                    placeholder='0'
-                                    className={cn(
-                                      'h-7 w-28 rounded border px-2 text-[12px] tabular-nums focus:outline-none focus:ring-1',
-                                      exceeds
-                                        ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400 dark:border-red-700 dark:bg-red-950/30 dark:text-red-300'
-                                        : 'border-slate-200 focus:ring-[#00ceff]'
-                                    )}
-                                  />
-                                )
-                              })()}
-                              {savingId === optId && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
-                            </div>
-                          </td>
-                        </tr>
+                            {columns.map((c, i) => {
+                              const text = c.formula
+                                ? evalFormula(c.formula, opt)
+                                : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format)
+                              return (
+                                <td
+                                  key={i}
+                                  title={c.width ? text : undefined}
+                                  style={c.width ? { maxWidth: c.width } : undefined}
+                                  className={cn(
+                                    'px-2.5 py-1.5 text-slate-700',
+                                    c.width ? 'truncate' : 'whitespace-nowrap'
+                                  )}
+                                >
+                                  {text}
+                                </td>
+                              )
+                            })}
+                            <td className='px-2.5 py-1'>
+                              <div className='flex items-center gap-1.5'>
+                                {(() => {
+                                  const max = rowMax(opt)
+                                  const exceeds =
+                                    max !== null && current !== '' && Number(current) > max
+                                  return (
+                                    <input
+                                      type='number'
+                                      min={0}
+                                      value={current}
+                                      title={
+                                        max !== null
+                                          ? `Max ${max.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}`
+                                          : undefined
+                                      }
+                                      onChange={(e) =>
+                                        setDrafts((d) => ({ ...d, [optId]: e.target.value }))
+                                      }
+                                      onBlur={() => {
+                                        if (drafts[optId] !== undefined)
+                                          commit(optId, drafts[optId], opt)
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && drafts[optId] !== undefined)
+                                          commit(optId, drafts[optId], opt)
+                                      }}
+                                      placeholder='0'
+                                      className={cn(
+                                        'h-7 w-28 rounded border px-2 text-[12px] tabular-nums focus:outline-none focus:ring-1',
+                                        exceeds
+                                          ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400 dark:border-red-700 dark:bg-red-950/30 dark:text-red-300'
+                                          : 'border-slate-200 focus:ring-[#00ceff]'
+                                      )}
+                                    />
+                                  )
+                                })()}
+                                {savingId === optId && (
+                                  <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                                )}
+                              </div>
+                            </td>
+                          </tr>
                         )
                       }
                       return out
@@ -782,7 +890,6 @@ function AllocateDrawer({
     </>
   )
 }
-
 
 /** Greedy FIFO auto-allocation: for each grid row still short of its required
  *  quantity, walk candidate records in sort order and create/increment
@@ -837,7 +944,9 @@ function RowBulkActionButton({
         (r) => r.one_collection === relatedCollection && r.one_field === config.relation
       )
       if (!rel?.many_collection || !rel?.many_field) {
-        toast.error(`${config.label}: "${config.relation}" is not a relation on ${relatedCollection}`)
+        toast.error(
+          `${config.label}: "${config.relation}" is not a relation on ${relatedCollection}`
+        )
         return
       }
 
@@ -916,7 +1025,9 @@ function RowBulkActionButton({
   if (confirming) {
     return (
       <span className='inline-flex items-center gap-1.5 text-[11px]'>
-        <span className='text-slate-600 dark:text-slate-300'>{config.confirm ?? 'Apply to all rows?'}</span>
+        <span className='text-slate-600 dark:text-slate-300'>
+          {config.confirm ?? 'Apply to all rows?'}
+        </span>
         <button
           type='button'
           onClick={() => void run()}
@@ -1010,7 +1121,11 @@ function AutoAllocateButton({
         let left = rowQty - already
         if (left <= 0) continue
         const candQ = buildMatchedDrawer(
-          { collection: config.candidates.collection, filters: config.candidates.filters, defaults: {} },
+          {
+            collection: config.candidates.collection,
+            filters: config.candidates.filters,
+            defaults: {}
+          },
           row,
           parentId,
           parentDraft
@@ -1079,7 +1194,8 @@ function AutoAllocateButton({
           ? `Allocated ${totalAllocated.toLocaleString('en-US', { maximumFractionDigits: 2 })} across ${rowsTouched} row${rowsTouched === 1 ? '' : 's'}`
           : 'Nothing to allocate'
       )
-      if (short.length > 0) parts.push(`short on row${short.length === 1 ? '' : 's'} ${short.join(', ')}`)
+      if (short.length > 0)
+        parts.push(`short on row${short.length === 1 ? '' : 's'} ${short.join(', ')}`)
       setSummary(parts.join(' — '))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({ queryKey: ['match-agg'] })
@@ -1091,16 +1207,16 @@ function AutoAllocateButton({
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className='inline-flex items-center gap-2'>
       <button
-        type="button"
+        type='button'
         disabled={running}
         onClick={() => void run()}
-        className="h-6 px-2.5 rounded border border-[#00ceff] text-[#00ceff] hover:bg-[#00ceff]/10 transition-colors disabled:opacity-50"
+        className='h-6 px-2.5 rounded border border-[#00ceff] text-[#00ceff] hover:bg-[#00ceff]/10 transition-colors disabled:opacity-50'
       >
         {running ? 'Allocating…' : (config.label ?? 'Auto allocate')}
       </button>
-      {summary && <span className="text-[11px] text-slate-500">{summary}</span>}
+      {summary && <span className='text-[11px] text-slate-500'>{summary}</span>}
     </span>
   )
 }
@@ -1268,18 +1384,25 @@ export function InlineTableField({
   useEffect(() => {
     // hasPrefilled guard: already fetching/fetched — don't touch isPrefilling, let the in-flight fetch resolve it
     if (hasPrefilled.current) return
-    if (!isNew || !prefillParentId || !staging) { setIsPrefilling(false); return }
-    hasPrefilled.current = true
-    client.request<{ data: Record<string, unknown>[] }>(
-      get(`/items/${relatedCollection}`, {
-        filter: JSON.stringify({ [manyField]: { _eq: prefillParentId } }),
-        limit: O2M_ROW_LIMIT
-      })
-    ).then((r) => {
-      for (const row of r.data ?? []) staging.queueRow(relatedCollection, manyField, { __prefilled: true, ...row })
+    if (!isNew || !prefillParentId || !staging) {
       setIsPrefilling(false)
-    }).catch(() => setIsPrefilling(false))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      return
+    }
+    hasPrefilled.current = true
+    client
+      .request<{ data: Record<string, unknown>[] }>(
+        get(`/items/${relatedCollection}`, {
+          filter: JSON.stringify({ [manyField]: { _eq: prefillParentId } }),
+          limit: O2M_ROW_LIMIT
+        })
+      )
+      .then((r) => {
+        for (const row of r.data ?? [])
+          staging.queueRow(relatedCollection, manyField, { __prefilled: true, ...row })
+        setIsPrefilling(false)
+      })
+      .catch(() => setIsPrefilling(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Copy lines from another record (#91): pick a sibling parent record, its
@@ -1330,9 +1453,10 @@ export function InlineTableField({
   }
 
   // appended to mutation URLs so the API can log activity on the parent record
-  const pCtx = parentCollection && !isNew
-    ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
-    : ''
+  const pCtx =
+    parentCollection && !isNew
+      ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
+      : ''
 
   // Row revision history sheet — holds the saved row whose history is open
   const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
@@ -1343,12 +1467,32 @@ export function InlineTableField({
   const [deletedRows, setDeletedRows] = useState<Array<Record<string, unknown>>>([])
 
   // Persistent deleted-row query — survives page reload
-  const { data: serverDeletedRows = [], refetch: refetchDeleted } = useQuery<Array<{ item: string; data: Record<string, unknown>; timestamp: string; first_name?: string | null; last_name?: string | null }>>({
+  const { data: serverDeletedRows = [], refetch: refetchDeleted } = useQuery<
+    Array<{
+      item: string
+      data: Record<string, unknown>
+      timestamp: string
+      first_name?: string | null
+      last_name?: string | null
+    }>
+  >({
     queryKey: ['o2m-deleted-rows', relatedCollection, manyField, parentId],
     queryFn: () =>
       client
-        .request<{ data: Array<{ item: string; data: Record<string, unknown>; timestamp: string; first_name?: string | null; last_name?: string | null }> }>(
-          get('/revisions/deleted-o2m', { collection: relatedCollection, many_field: manyField, parent_id: parentId })
+        .request<{
+          data: Array<{
+            item: string
+            data: Record<string, unknown>
+            timestamp: string
+            first_name?: string | null
+            last_name?: string | null
+          }>
+        }>(
+          get('/revisions/deleted-o2m', {
+            collection: relatedCollection,
+            many_field: manyField,
+            parent_id: parentId
+          })
         )
         .then((r) => r.data ?? []),
     enabled: !!showRowRevisions && !isNew,
@@ -1367,12 +1511,18 @@ export function InlineTableField({
     staleTime: 15_000
   })
 
-  const { data: fieldSnapshots = [], isLoading: fieldSnapshotsLoading } = useQuery<O2MRevisionEntry[]>({
+  const { data: fieldSnapshots = [], isLoading: fieldSnapshotsLoading } = useQuery<
+    O2MRevisionEntry[]
+  >({
     queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId],
     queryFn: () =>
       client
         .request<{ data: O2MRevisionEntry[] }>(
-          get('/revisions/o2m-snapshots', { collection: relatedCollection, many_field: manyField, parent_id: parentId })
+          get('/revisions/o2m-snapshots', {
+            collection: relatedCollection,
+            many_field: manyField,
+            parent_id: parentId
+          })
         )
         .then((r) => r.data ?? []),
     enabled: fieldRestoreOpen && !isNew,
@@ -1387,7 +1537,10 @@ export function InlineTableField({
     for (const entry of fieldSnapshots) {
       const ts = new Date(entry.timestamp).getTime()
       if (!cur || ts - new Date(cur.timestamp).getTime() > 5_000) {
-        const user = [entry.first_name, entry.last_name].filter(Boolean).join(' ') || entry.user_email || 'System'
+        const user =
+          [entry.first_name, entry.last_name].filter(Boolean).join(' ') ||
+          entry.user_email ||
+          'System'
         cur = { timestamp: entry.timestamp, user, entries: [entry] }
         groups.push(cur)
       } else {
@@ -1401,10 +1554,17 @@ export function InlineTableField({
     setFieldRestoring(true)
     try {
       await client.request(
-        post('/revisions/o2m-restore', { collection: relatedCollection, many_field: manyField, parent_id: parentId, target_timestamp: timestamp })
+        post('/revisions/o2m-restore', {
+          collection: relatedCollection,
+          many_field: manyField,
+          parent_id: parentId,
+          target_timestamp: timestamp
+        })
       )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
-      qc.invalidateQueries({ queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId] })
+      qc.invalidateQueries({
+        queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]
+      })
       setFieldRestoreOpen(false)
     } finally {
       setFieldRestoring(false)
@@ -1427,7 +1587,9 @@ export function InlineTableField({
   }
   const [editState, setEditState] = useState<GridEditState | null>(null)
   const editStateRef = useRef<GridEditState | null>(null)
-  useEffect(() => { editStateRef.current = editState }, [editState])
+  useEffect(() => {
+    editStateRef.current = editState
+  }, [editState])
   // Clicking anywhere outside the row editor commits it — same as Save.
   // Portaled layers (combobox panels, Radix poppers, dialogs, overlays) are
   // part of the interaction even though they live outside the table's DOM.
@@ -1474,14 +1636,17 @@ export function InlineTableField({
   }, [editState, readOnly])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
-  const [crChallenge, setCrChallenge] = useState<{ challenge: ChangeReasonChallenge; retry: (reason: string) => Promise<void> } | null>(null)
+  const [crChallenge, setCrChallenge] = useState<{
+    challenge: ChangeReasonChallenge
+    retry: (reason: string) => Promise<void>
+  } | null>(null)
   const activeView = useAddendumView()
   // Column view preset selection — session-only. Always initializes to the
   // configured default view (then first preset); a clicked preset must NOT
   // stick across reloads.
   const [activePreset, setActivePreset] = useState<string | undefined>(() => {
     if (defaultPreset === ALL_PRESET_SENTINEL) return ALL_PRESET_SENTINEL
-    if (defaultPreset && columnPresets?.some(p => p.name === defaultPreset)) return defaultPreset
+    if (defaultPreset && columnPresets?.some((p) => p.name === defaultPreset)) return defaultPreset
     return columnPresets?.[0]?.name
   })
   function selectPreset(name: string) {
@@ -1529,7 +1694,10 @@ export function InlineTableField({
     queryFn: () =>
       client
         .request<{ data: CMSField[] }>(
-          get(`/field-config/${relatedCollection}`, effectiveLayoutId ? { layout_id: String(effectiveLayoutId) } : undefined)
+          get(
+            `/field-config/${relatedCollection}`,
+            effectiveLayoutId ? { layout_id: String(effectiveLayoutId) } : undefined
+          )
         )
         .then((r) => r.data ?? []),
     staleTime: 60_000
@@ -1539,12 +1707,10 @@ export function InlineTableField({
   const { data: childRelations = [] } = useQuery<CMSRelation[]>({
     queryKey: ['collection-meta', relatedCollection],
     queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
-        .then((r) => {
-          const d = r.data as { relations?: CMSRelation[] }
-          return d?.relations ?? []
-        }),
+      client.request<{ data: unknown }>(get(`/collections/${relatedCollection}`)).then((r) => {
+        const d = r.data as { relations?: CMSRelation[] }
+        return d?.relations ?? []
+      }),
     staleTime: 10 * 60_000
   })
 
@@ -1553,7 +1719,9 @@ export function InlineTableField({
     queryKey: ['layout-meta', effectiveLayoutId],
     queryFn: () =>
       client
-        .request<{ data: { row_order_field?: string | null } }>(get(`/collection-layouts/${effectiveLayoutId}`))
+        .request<{ data: { row_order_field?: string | null } }>(
+          get(`/collection-layouts/${effectiveLayoutId}`)
+        )
         .then((r) => r.data ?? {}),
     enabled: !!effectiveLayoutId,
     staleTime: 5 * 60_000
@@ -1580,8 +1748,18 @@ export function InlineTableField({
     [rowDefaults]
   )
 
-  const { data: rawRows = [], isLoading: rowsLoading, dataUpdatedAt: rowsUpdatedAt } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['o2m-rows', relatedCollection, manyField, parentId, rowFilterClause ? JSON.stringify(rowFilterClause) : ''],
+  const {
+    data: rawRows = [],
+    isLoading: rowsLoading,
+    dataUpdatedAt: rowsUpdatedAt
+  } = useQuery<Record<string, unknown>[]>({
+    queryKey: [
+      'o2m-rows',
+      relatedCollection,
+      manyField,
+      parentId,
+      rowFilterClause ? JSON.stringify(rowFilterClause) : ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -1603,7 +1781,13 @@ export function InlineTableField({
   const cascadeRules = parentCascades ?? []
   const cascadeResolutions = useQueries({
     queries: cascadeRules.map((rule) => ({
-      queryKey: ['resolve-cascade', parentDraftCtx?.collection, rule.parent_field, relatedCollection, rule.child_field],
+      queryKey: [
+        'resolve-cascade',
+        parentDraftCtx?.collection,
+        rule.parent_field,
+        relatedCollection,
+        rule.child_field
+      ],
       queryFn: () =>
         client
           .request<{ data: CascadeResolution }>(
@@ -1632,7 +1816,12 @@ export function InlineTableField({
         filters[rule.child_field] = { [resolution.filter_column]: { _eq: parentValue } }
       } else if (resolution.type === 'm2m_junction') {
         filters[rule.child_field] = {
-          _exists_junction: { table: resolution.table, self_fk: resolution.self_fk, filter_fk: resolution.filter_fk, value: parentValue }
+          _exists_junction: {
+            table: resolution.table,
+            self_fk: resolution.self_fk,
+            filter_fk: resolution.filter_fk,
+            value: parentValue
+          }
         }
       }
     })
@@ -1642,12 +1831,17 @@ export function InlineTableField({
   const isPendingMode = saveMode === 'pending'
   const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
 
-  const pendingEdits = isPendingMode && staging ? staging.getPendingEdits(relatedCollection, manyField) : new Map<string, Record<string, unknown>>()
+  const pendingEdits =
+    isPendingMode && staging
+      ? staging.getPendingEdits(relatedCollection, manyField)
+      : new Map<string, Record<string, unknown>>()
 
   /** Live drawer snapshots, keyed `${rowKey}|${relationField}` — the full
    *  member list a row's nested editor last reported (staged overlay
    *  included). Feeds rollup/formula overlays and summary columns. */
-  const [drawerLiveRows, setDrawerLiveRows] = useState<Record<string, Array<Record<string, unknown>>>>({})
+  const [drawerLiveRows, setDrawerLiveRows] = useState<
+    Record<string, Array<Record<string, unknown>>>
+  >({})
   // A fresh rows fetch means stored rollups are current again (queued edits
   // flushed / drawer writes recalced) — retire the snapshots so external
   // changes can't be shadowed. Never mid-edit: the open panel's live sums
@@ -1656,7 +1850,10 @@ export function InlineTableField({
     if (!editStateRef.current) setDrawerLiveRows({})
   }, [rowsUpdatedAt])
 
-  const pendingDeletes = isPendingMode && staging ? staging.getPendingDeletes(relatedCollection, manyField) : new Set<string>()
+  const pendingDeletes =
+    isPendingMode && staging
+      ? staging.getPendingDeletes(relatedCollection, manyField)
+      : new Set<string>()
 
   // Relation-path columns ('purchase_order.workflow.workflow_id'): read-only
   // values resolved server-side in one bulk call and merged into each row for
@@ -1672,7 +1869,10 @@ export function InlineTableField({
     [cols]
   )
   const relationPathCols = useMemo(
-    () => cols.filter((c) => c.interface === 'relation-path' && c.field.includes('.')).map((c) => c.field),
+    () =>
+      cols
+        .filter((c) => c.interface === 'relation-path' && c.field.includes('.'))
+        .map((c) => c.field),
     [cols]
   )
   // Matched-aggregate columns ('match-agg-column'): aggregate rows of another
@@ -1681,17 +1881,25 @@ export function InlineTableField({
   // "Allocated qty per material by cifa" pattern). options:
   // { match: {collection, filters}, aggregate?: 'sum'|'count', value_field,
   //   formula?: '{{quantity}} - {{__agg__}}', format?: 'currency' }
-  const matchAggCols = useMemo(
-    () => cols.filter((c) => c.interface === 'match-agg-column'),
-    [cols]
-  )
+  const matchAggCols = useMemo(() => cols.filter((c) => c.interface === 'match-agg-column'), [cols])
   const matchAggConfigs = useMemo(
     () =>
       matchAggCols.map((c) => {
         const opts = c.options
-          ? ((typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown>)
+          ? ((typeof c.options === 'string'
+              ? (() => {
+                  try {
+                    return JSON.parse(c.options as string)
+                  } catch {
+                    return {}
+                  }
+                })()
+              : c.options) as Record<string, unknown>)
           : {}
-        const match = (opts.match ?? {}) as { collection?: string; filters?: Record<string, unknown> }
+        const match = (opts.match ?? {}) as {
+          collection?: string
+          filters?: Record<string, unknown>
+        }
         const parentClauses: Record<string, unknown> = {}
         const rowKeys: Array<[string, string]> = []
         let unresolved = false
@@ -1701,12 +1909,16 @@ export function InlineTableField({
             continue
           }
           const v = resolveMatchToken(token, {}, parentId, parentDraftCtx?.draft)
-          if (v === null || v === undefined || v === '') { unresolved = true; continue }
+          if (v === null || v === undefined || v === '') {
+            unresolved = true
+            continue
+          }
           if (path.startsWith('_')) {
             parentClauses[path] = v
             continue
           }
-          const clause = typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : { _eq: v }
+          const clause =
+            typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : { _eq: v }
           if (path.includes('.')) {
             const segs = path.split('.')
             let nested: Record<string, unknown> = clause
@@ -1733,15 +1945,22 @@ export function InlineTableField({
   const matchAggResults = useQueries({
     queries: matchAggConfigs.map((cfg) => ({
       queryKey: [
-        'match-agg', cfg.collection, JSON.stringify(cfg.parentClauses),
-        cfg.valueField, cfg.rowKeys.map(([p]) => p).join('|')
+        'match-agg',
+        cfg.collection,
+        JSON.stringify(cfg.parentClauses),
+        cfg.valueField,
+        cfg.rowKeys.map(([p]) => p).join('|')
       ],
       queryFn: () =>
         client
           .request<{ data: Record<string, unknown>[] }>(
             get(`/items/${cfg.collection}`, {
               filter: JSON.stringify(cfg.parentClauses),
-              fields: ['id', ...(cfg.valueField ? [cfg.valueField] : []), ...cfg.rowKeys.map(([p]) => p)].join(','),
+              fields: [
+                'id',
+                ...(cfg.valueField ? [cfg.valueField] : []),
+                ...cfg.rowKeys.map(([p]) => p)
+              ].join(','),
               limit: 1000
             })
           )
@@ -1751,23 +1970,34 @@ export function InlineTableField({
     }))
   })
   const matchAggData = useMemo(() => {
-    const map = new Map<string, { cfg: (typeof matchAggConfigs)[number]; rows: Record<string, unknown>[] }>()
+    const map = new Map<
+      string,
+      { cfg: (typeof matchAggConfigs)[number]; rows: Record<string, unknown>[] }
+    >()
     matchAggConfigs.forEach((cfg, i) => {
-      map.set(cfg.field, { cfg, rows: (matchAggResults[i]?.data as Record<string, unknown>[] | undefined) ?? [] })
+      map.set(cfg.field, {
+        cfg,
+        rows: (matchAggResults[i]?.data as Record<string, unknown>[] | undefined) ?? []
+      })
     })
     return map
   }, [matchAggConfigs, matchAggResults])
 
   // Formula columns ({{a.b.c}} refs) piggyback the same bulk resolve-paths call
-  const formulaCols = useMemo(
-    () => cols.filter((c) => c.interface === 'formula-column'),
-    [cols]
-  )
+  const formulaCols = useMemo(() => cols.filter((c) => c.interface === 'formula-column'), [cols])
   const formulaPathRefs = useMemo(() => {
     const out = new Set<string>()
     for (const c of formulaCols) {
       const opts = c.options
-        ? ((typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown>)
+        ? ((typeof c.options === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(c.options as string)
+                } catch {
+                  return {}
+                }
+              })()
+            : c.options) as Record<string, unknown>)
         : {}
       const formula = typeof opts.column_formula === 'string' ? opts.column_formula : ''
       for (const m of formula.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
@@ -1863,7 +2093,16 @@ export function InlineTableField({
       })
     }
     return sorted
-  }, [rawRows, resolvedPathRows, rowOrderField, isPendingMode, pendingEdits, sortField, sortDir, sectionGroupBy])
+  }, [
+    rawRows,
+    resolvedPathRows,
+    rowOrderField,
+    isPendingMode,
+    pendingEdits,
+    sortField,
+    sortDir,
+    sectionGroupBy
+  ])
 
   // Section grouping (sectionGroupBy): active once resolved values are in
   const sectionsActive = !!sectionGroupBy && !!resolvedPathRows
@@ -1881,7 +2120,13 @@ export function InlineTableField({
     })
 
   const computedWriteCols = useMemo(
-    () => cols.filter(c => c.computed_type === 'write' && typeof c.computed_formula === 'string' && c.computed_formula.trim()),
+    () =>
+      cols.filter(
+        (c) =>
+          c.computed_type === 'write' &&
+          typeof c.computed_formula === 'string' &&
+          c.computed_formula.trim()
+      ),
     [cols]
   )
 
@@ -1899,14 +2144,24 @@ export function InlineTableField({
   const isM2MIface = (iface: string | null | undefined) =>
     iface === 'select-multiple-m2m' || (iface ?? '').endsWith('-m2m')
 
-  function resolveM2MTarget(c: CMSField): { targetCollection: string; junctionCollection: string; junctionManyField: string; junctionOtherField: string } | null {
+  function resolveM2MTarget(c: CMSField): {
+    targetCollection: string
+    junctionCollection: string
+    junctionManyField: string
+    junctionOtherField: string
+  } | null {
     const r = childRelations.find(
-      rel => rel.one_collection === relatedCollection &&
-        (rel.one_field === c.field || (rel.junction_field != null && rel.many_collection === c.field))
+      (rel) =>
+        rel.one_collection === relatedCollection &&
+        (rel.one_field === c.field ||
+          (rel.junction_field != null && rel.many_collection === c.field))
     )
     if (!r) return null
-    const companion = childRelations.find(cr => cr.many_collection === r.many_collection && cr.id !== r.id)
-    if (!companion?.one_collection || !r.many_collection || !r.many_field || !companion.many_field) return null
+    const companion = childRelations.find(
+      (cr) => cr.many_collection === r.many_collection && cr.id !== r.id
+    )
+    if (!companion?.one_collection || !r.many_collection || !r.many_field || !companion.many_field)
+      return null
     return {
       targetCollection: companion.one_collection,
       junctionCollection: r.many_collection,
@@ -1972,7 +2227,14 @@ export function InlineTableField({
       return
     }
     reportLiveRows(relatedCollection, manyField, effectiveRowsForRollup)
-  }, [reportLiveRows, relatedCollection, manyField, effectiveRowsForRollup, rowsTruncated, rowsLoading])
+  }, [
+    reportLiveRows,
+    relatedCollection,
+    manyField,
+    effectiveRowsForRollup,
+    rowsTruncated,
+    rowsLoading
+  ])
 
   // Unmount only (a tab closed, the field hidden): stop contributing, so a
   // rollup falls back to the stored value instead of a stale snapshot.
@@ -1997,16 +2259,17 @@ export function InlineTableField({
   // undefined for it, same as the existing stale-name fallback — both end up showing
   // full displayCols below, but the switcher highlight distinguishes the two (see
   // presetSwitcher: stale names still highlight columnPresets[0], unchanged).
-  const resolvedPreset = columnPresets && columnPresets.length >= 2 && activePreset !== ALL_PRESET_SENTINEL
-    ? columnPresets.find(p => p.name === activePreset)
-    : undefined
+  const resolvedPreset =
+    columnPresets && columnPresets.length >= 2 && activePreset !== ALL_PRESET_SENTINEL
+      ? columnPresets.find((p) => p.name === activePreset)
+      : undefined
   // Membership filter in LAYOUT order — stored preset column order is ignored for
   // child columns; unknown/stale names in preset.columns are silently skipped.
   const presetChildFieldSet = resolvedPreset
-    ? new Set(resolvedPreset.columns.filter(token => !token.includes('.')))
+    ? new Set(resolvedPreset.columns.filter((token) => !token.includes('.')))
     : null
   const presetCols = presetChildFieldSet
-    ? displayCols.filter(c => presetChildFieldSet.has(c.field))
+    ? displayCols.filter((c) => presetChildFieldSet.has(c.field))
     : []
 
   // Relation summary columns: dot tokens ("relationField.memberField") in the ACTIVE
@@ -2019,14 +2282,16 @@ export function InlineTableField({
       if (dot < 0) continue
       const relationField = token.slice(0, dot)
       const memberField = token.slice(dot + 1)
-      const inDrawer = drawerRelations?.some(dr => (typeof dr === 'string' ? dr : dr.field) === relationField)
+      const inDrawer = drawerRelations?.some(
+        (dr) => (typeof dr === 'string' ? dr : dr.field) === relationField
+      )
       if (inDrawer) tokens.push({ relationField, memberField })
     }
     return tokens
   }, [resolvedPreset, drawerRelations])
 
   const summaryRelationFields = useMemo(
-    () => [...new Set(activePresetDotTokens.map(t => t.relationField))],
+    () => [...new Set(activePresetDotTokens.map((t) => t.relationField))],
     [activePresetDotTokens]
   )
 
@@ -2035,47 +2300,62 @@ export function InlineTableField({
   const summaryGrandRels = useMemo(() => {
     const map = new Map<string, { grandCollection: string; fkField: string } | null>()
     for (const relationField of summaryRelationFields) {
-      const rel = childRelations.find(r => r.one_collection === relatedCollection && r.one_field === relationField)
-      map.set(relationField, rel?.many_collection && rel?.many_field
-        ? { grandCollection: rel.many_collection, fkField: rel.many_field }
-        : null)
+      const rel = childRelations.find(
+        (r) => r.one_collection === relatedCollection && r.one_field === relationField
+      )
+      map.set(
+        relationField,
+        rel?.many_collection && rel?.many_field
+          ? { grandCollection: rel.many_collection, fkField: rel.many_field }
+          : null
+      )
     }
     return map
   }, [summaryRelationFields, childRelations, relatedCollection])
 
   const summaryGrandCollections = useMemo(
-    () => [...new Set(
-      [...summaryGrandRels.values()]
-        .filter((v): v is { grandCollection: string; fkField: string } => !!v)
-        .map(v => v.grandCollection)
-    )],
+    () => [
+      ...new Set(
+        [...summaryGrandRels.values()]
+          .filter((v): v is { grandCollection: string; fkField: string } => !!v)
+          .map((v) => v.grandCollection)
+      )
+    ],
     [summaryGrandRels]
   )
 
   // Grandchild field-config + relations, batched per distinct grandchild collection.
   // Same query key shape as NestedRelationEditor — shares its cache when a drawer is open.
   const summaryFieldConfigQueries = useQueries({
-    queries: summaryGrandCollections.map(gc => ({
+    queries: summaryGrandCollections.map((gc) => ({
       queryKey: ['field-config', gc, null],
-      queryFn: () => client.request<{ data: CMSField[] }>(get(`/field-config/${gc}`)).then(r => r.data ?? []),
+      queryFn: () =>
+        client.request<{ data: CMSField[] }>(get(`/field-config/${gc}`)).then((r) => r.data ?? []),
       staleTime: 60_000
     }))
   })
   const summaryRelationsQueries = useQueries({
-    queries: summaryGrandCollections.map(gc => ({
+    queries: summaryGrandCollections.map((gc) => ({
       queryKey: ['collection-meta', gc],
-      queryFn: () => client.request<{ data: unknown }>(get(`/collections/${gc}`)).then(r => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+      queryFn: () =>
+        client
+          .request<{ data: unknown }>(get(`/collections/${gc}`))
+          .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
       staleTime: 10 * 60_000
     }))
   })
   const summaryFieldsByCollection = useMemo(() => {
     const map = new Map<string, CMSField[]>()
-    summaryGrandCollections.forEach((gc, i) => { map.set(gc, summaryFieldConfigQueries[i]?.data ?? []) })
+    summaryGrandCollections.forEach((gc, i) => {
+      map.set(gc, summaryFieldConfigQueries[i]?.data ?? [])
+    })
     return map
   }, [summaryGrandCollections, summaryFieldConfigQueries])
   const summaryRelationsByCollection = useMemo(() => {
     const map = new Map<string, CMSRelation[]>()
-    summaryGrandCollections.forEach((gc, i) => { map.set(gc, summaryRelationsQueries[i]?.data ?? []) })
+    summaryGrandCollections.forEach((gc, i) => {
+      map.set(gc, summaryRelationsQueries[i]?.data ?? [])
+    })
     return map
   }, [summaryGrandCollections, summaryRelationsQueries])
 
@@ -2089,7 +2369,12 @@ export function InlineTableField({
       const fieldMap = new Map<string, CMSRelation>()
       for (const t of activePresetDotTokens) {
         if (t.relationField !== relationField) continue
-        const rel = grelations.find(r => r.many_collection === grandInfo.grandCollection && r.many_field === t.memberField && !r.junction_field)
+        const rel = grelations.find(
+          (r) =>
+            r.many_collection === grandInfo.grandCollection &&
+            r.many_field === t.memberField &&
+            !r.junction_field
+        )
         if (rel?.one_collection) fieldMap.set(t.memberField, rel)
       }
       map.set(relationField, fieldMap)
@@ -2101,7 +2386,7 @@ export function InlineTableField({
   // matches a visible SAVED row. Nested under the ['o2m-rows', ...] prefix so every
   // existing invalidation call site (incl. NestedRelationEditor's outerGridInvalidateKey)
   // refreshes it for free — staleness matches the grid's own o2m-rows refetch behavior.
-  const visibleRowIds = useMemo(() => rows.map(r => String(r.id)), [rows])
+  const visibleRowIds = useMemo(() => rows.map((r) => String(r.id)), [rows])
   // Grid virtualization (#205): grids past 150 rows render incrementally — a
   // sentinel row extends the window as it scrolls into view, so a 1,000-row
   // child set never mounts 1,000 rows of inputs at once. Editing/summing are
@@ -2112,7 +2397,11 @@ export function InlineTableField({
   // nth-child CSS — one style block instead of touching every row renderer.
   // Pinned cells get an OPAQUE background (the documented pinned-bleed rule);
   // tinted rows lose their tint on pinned cells, a deliberate v1 trade.
-  const frozenClass = useMemo(() => `nvr-gf-${Math.abs(hashString(`${relatedCollection}:${parentFieldKey ?? manyField}`)) % 100000}`, [relatedCollection, parentFieldKey, manyField])
+  const frozenClass = useMemo(
+    () =>
+      `nvr-gf-${Math.abs(hashString(`${relatedCollection}:${parentFieldKey ?? manyField}`)) % 100000}`,
+    [relatedCollection, parentFieldKey, manyField]
+  )
   const frozenCss = useMemo(() => {
     if (!freezeFirstColumn) return null
     const widths: number[] = []
@@ -2129,10 +2418,20 @@ export function InlineTableField({
       left += w
     })
     rules.push(`.${frozenClass} thead tr > *:nth-child(-n+${widths.length}){z-index:3}`)
-    rules.push(`.${frozenClass} tr > *:nth-child(${widths.length}){box-shadow:2px 0 0 0 rgba(100,116,139,0.18)}`)
+    rules.push(
+      `.${frozenClass} tr > *:nth-child(${widths.length}){box-shadow:2px 0 0 0 rgba(100,116,139,0.18)}`
+    )
     return rules.join('\n')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freezeFirstColumn, frozenClass, enableReorder, rowOrderField, isNew, isPendingMode, showLineNumbers])
+  }, [
+    freezeFirstColumn,
+    frozenClass,
+    enableReorder,
+    rowOrderField,
+    isNew,
+    isPendingMode,
+    showLineNumbers
+  ])
 
   const [renderCap, setRenderCap] = useState(150)
   const renderSentinelRef = useRef<HTMLTableRowElement | null>(null)
@@ -2149,12 +2448,24 @@ export function InlineTableField({
     return () => obs.disconnect()
   }, [rows.length, renderCap])
   const rowIdsHash = visibleRowIds.join(',')
-  const rowCommentCounts = useRowCommentCounts(relatedCollection, visibleRowIds, !!rowComments && !isNew)
+  const rowCommentCounts = useRowCommentCounts(
+    relatedCollection,
+    visibleRowIds,
+    !!rowComments && !isNew
+  )
   const summaryMembersQueries = useQueries({
-    queries: summaryRelationFields.map(relationField => {
+    queries: summaryRelationFields.map((relationField) => {
       const grandInfo = summaryGrandRels.get(relationField)
       return {
-        queryKey: ['o2m-rows', relatedCollection, manyField, parentId, 'summary-members', relationField, rowIdsHash],
+        queryKey: [
+          'o2m-rows',
+          relatedCollection,
+          manyField,
+          parentId,
+          'summary-members',
+          relationField,
+          rowIdsHash
+        ],
         queryFn: () => {
           if (!grandInfo) return Promise.resolve([] as Record<string, unknown>[])
           return client
@@ -2164,7 +2475,7 @@ export function InlineTableField({
                 limit: 1000
               })
             )
-            .then(r => r.data ?? [])
+            .then((r) => r.data ?? [])
         },
         enabled: !!grandInfo && visibleRowIds.length > 0,
         staleTime: 30_000
@@ -2197,7 +2508,10 @@ export function InlineTableField({
   useEffect(() => {
     if (!reportStagedRels || !drawerRelations || drawerRelations.length === 0) return
     const gridKey = `${relatedCollection}.${manyField}`
-    const primitiveEntries = (row: Record<string, unknown>, fk: string): Record<string, unknown> => {
+    const primitiveEntries = (
+      row: Record<string, unknown>,
+      fk: string
+    ): Record<string, unknown> => {
       const out: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(row)) {
         if (k.startsWith('__') || k === 'id') continue
@@ -2293,7 +2607,8 @@ export function InlineTableField({
         if (!ops) continue
         for (const m of [...(ops.created ?? []), ...(ops.updated ?? []).map((u) => u.changes)]) {
           for (const [memberField, rel] of fieldMap) {
-            if (rel.one_collection) push(rel.one_collection, (m as Record<string, unknown>)[memberField])
+            if (rel.one_collection)
+              push(rel.one_collection, (m as Record<string, unknown>)[memberField])
           }
         }
       }
@@ -2311,20 +2626,32 @@ export function InlineTableField({
   }, [summaryMembersByRelation, grandM2oRelMaps, pendingRows, pendingEdits, drawerLiveRows])
 
   const { data: summaryM2oDisplays = {} } = useQuery<Record<string, Record<string, string>>>({
-    queryKey: ['summary-m2o-display', relatedCollection, ...Array.from(summaryM2oLookupIds.entries()).flat(2)],
+    queryKey: [
+      'summary-m2o-display',
+      relatedCollection,
+      ...Array.from(summaryM2oLookupIds.entries()).flat(2)
+    ],
     queryFn: async () => {
       const result: Record<string, Record<string, string>> = {}
       await Promise.all(
         [...summaryM2oLookupIds.entries()].map(async ([oneCollection, ids]) => {
           const [metaRes, itemsRes] = await Promise.all([
-            client.request<{ data: { display_template?: string | null } }>(get(`/collections/${oneCollection}`)),
+            client.request<{ data: { display_template?: string | null } }>(
+              get(`/collections/${oneCollection}`)
+            ),
             client.request<{ data: Record<string, unknown>[] }>(
-              get(`/items/${oneCollection}`, { filter: JSON.stringify({ id: { _in: ids } }), limit: ids.length })
+              get(`/items/${oneCollection}`, {
+                filter: JSON.stringify({ id: { _in: ids } }),
+                limit: ids.length
+              })
             )
           ])
           result[oneCollection] = {}
           for (const item of itemsRes.data ?? []) {
-            result[oneCollection][String(item.id)] = applyDisplayTemplate(metaRes.data?.display_template, item)
+            result[oneCollection][String(item.id)] = applyDisplayTemplate(
+              metaRes.data?.display_template,
+              item
+            )
           }
         })
       )
@@ -2337,29 +2664,35 @@ export function InlineTableField({
   // Synthetic read-only columns appended AFTER child columns. field = "relationField.memberField"
   // (the dot is the discriminator effectiveCols.map() sites use to detect a summary column —
   // real CMSField.field values are plain identifiers and never contain one).
-  const summaryCols = useMemo<CMSField[]>(() => activePresetDotTokens.map(({ relationField, memberField }) => {
-    const grandInfo = summaryGrandRels.get(relationField)
-    const grandFields = grandInfo ? summaryFieldsByCollection.get(grandInfo.grandCollection) ?? [] : []
-    const grandField = grandFields.find(f => f.field === memberField)
-    return {
-      field: `${relationField}.${memberField}`,
-      type: 'presentation',
-      interface: null,
-      label: grandField?.label ?? titleCase(memberField),
-      required: false,
-      hidden: false,
-      readonly: true,
-      sort: 0,
-      group_key: null,
-      options: null,
-      computed_formula: null,
-      computed_type: null,
-      note: null,
-      placeholder: null,
-      repeater_schema: null,
-      dependency_config: null
-    }
-  }), [activePresetDotTokens, summaryGrandRels, summaryFieldsByCollection])
+  const summaryCols = useMemo<CMSField[]>(
+    () =>
+      activePresetDotTokens.map(({ relationField, memberField }) => {
+        const grandInfo = summaryGrandRels.get(relationField)
+        const grandFields = grandInfo
+          ? (summaryFieldsByCollection.get(grandInfo.grandCollection) ?? [])
+          : []
+        const grandField = grandFields.find((f) => f.field === memberField)
+        return {
+          field: `${relationField}.${memberField}`,
+          type: 'presentation',
+          interface: null,
+          label: grandField?.label ?? titleCase(memberField),
+          required: false,
+          hidden: false,
+          readonly: true,
+          sort: 0,
+          group_key: null,
+          options: null,
+          computed_formula: null,
+          computed_type: null,
+          note: null,
+          placeholder: null,
+          repeater_schema: null,
+          dependency_config: null
+        }
+      }),
+    [activePresetDotTokens, summaryGrandRels, summaryFieldsByCollection]
+  )
 
   // Synthetic preset summary columns only (type 'presentation') — relation-path
   // layout columns also carry dotted fields but render through renderCell.
@@ -2392,14 +2725,20 @@ export function InlineTableField({
     return [
       ...base
         .filter((m) => !deleted.has(String(m.id)))
-        .map((m) => (updatedById.has(String(m.id)) ? { ...m, ...updatedById.get(String(m.id)) } : m)),
+        .map((m) =>
+          updatedById.has(String(m.id)) ? { ...m, ...updatedById.get(String(m.id)) } : m
+        ),
       ...(ops.created ?? [])
     ]
   }
 
   // Joined ', ' display for a summary column against one row. Saved rows read the batched
   // members query; pending (unsaved) rows read their staged `__o2m_<relationField>` draft.
-  function summaryCellValue(c: CMSField, sourceRow: Record<string, unknown>, isPendingRow: boolean): string {
+  function summaryCellValue(
+    c: CMSField,
+    sourceRow: Record<string, unknown>,
+    isPendingRow: boolean
+  ): string {
     const dot = c.field.indexOf('.')
     if (dot < 0) return '—'
     const relationField = c.field.slice(0, dot)
@@ -2408,10 +2747,11 @@ export function InlineTableField({
     if (members.length === 0) return '—'
     const rel = grandM2oRelMaps.get(relationField)?.get(memberField)
     const parts = members
-      .map(m => {
+      .map((m) => {
         const v = m[memberField]
         if (v == null || v === '') return null
-        if (rel?.one_collection) return summaryM2oDisplays[rel.one_collection]?.[String(v)] ?? String(v)
+        if (rel?.one_collection)
+          return summaryM2oDisplays[rel.one_collection]?.[String(v)] ?? String(v)
         return String(v)
       })
       .filter((v): v is string => !!v)
@@ -2469,15 +2809,27 @@ export function InlineTableField({
       : displayCols
 
   // Fields configured for the apply values form (group_key === '__apply_values__')
-  const applyValuesCols = useMemo(() =>
-    cols.filter(c => c.group_key === '__apply_values__' && !NON_DISPLAY_TYPES.has(c.type ?? '') && !SENTINEL_FIELDS.has(c.field)),
+  const applyValuesCols = useMemo(
+    () =>
+      cols.filter(
+        (c) =>
+          c.group_key === '__apply_values__' &&
+          !NON_DISPLAY_TYPES.has(c.type ?? '') &&
+          !SENTINEL_FIELDS.has(c.field)
+      ),
     [cols]
   )
 
   // Fields configured for the create-with-defaults form (group_key === '__create_with_defaults__')
   // Falls back to displayCols if none configured
   const defaultsCols = useMemo(
-    () => cols.filter(c => c.group_key === '__create_with_defaults__' && !NON_DISPLAY_TYPES.has(c.type ?? '') && !SENTINEL_FIELDS.has(c.field)),
+    () =>
+      cols.filter(
+        (c) =>
+          c.group_key === '__create_with_defaults__' &&
+          !NON_DISPLAY_TYPES.has(c.type ?? '') &&
+          !SENTINEL_FIELDS.has(c.field)
+      ),
     [cols]
   )
 
@@ -2486,7 +2838,8 @@ export function InlineTableField({
     const map = new Map<string, CMSRelation>()
     for (const c of displayCols) {
       const rel = childRelations.find(
-        (r) => r.many_collection === relatedCollection && r.many_field === c.field && !r.junction_field
+        (r) =>
+          r.many_collection === relatedCollection && r.many_field === c.field && !r.junction_field
       )
       if (rel?.one_collection) map.set(c.field, rel)
     }
@@ -2560,12 +2913,21 @@ export function InlineTableField({
     const result = new Map<string, string[]>()
     const allRows = [...rows, ...pendingRows]
     const pendingEditRows = [...pendingEdits.values()]
-    const addendumRows = addendumO2MEntries.flatMap(e => e.rows)
+    const addendumRows = addendumO2MEntries.flatMap((e) => e.rows)
     for (const [field, rel] of m2oRelMap) {
       if (!rel.one_collection) continue
-      const rowIds = allRows.map((r) => r[field]).filter((v) => v != null).map(String)
-      const editIds = pendingEditRows.map((r) => r[field]).filter((v) => v != null).map(String)
-      const addIds = addendumRows.map((r) => r[field]).filter((v) => v != null).map(String)
+      const rowIds = allRows
+        .map((r) => r[field])
+        .filter((v) => v != null)
+        .map(String)
+      const editIds = pendingEditRows
+        .map((r) => r[field])
+        .filter((v) => v != null)
+        .map(String)
+      const addIds = addendumRows
+        .map((r) => r[field])
+        .filter((v) => v != null)
+        .map(String)
       const ids = [...new Set([...rowIds, ...editIds, ...addIds])].sort()
       if (ids.length) result.set(rel.one_collection, ids)
     }
@@ -2581,7 +2943,10 @@ export function InlineTableField({
       if (c.interface === 'relation-grouped') {
         const opts = parseJson<{ group_field?: string; option_field?: string }>(c.options)
         if (opts?.group_field && opts?.option_field) {
-          map.set(rel.one_collection, { groupField: opts.group_field, optionField: opts.option_field })
+          map.set(rel.one_collection, {
+            groupField: opts.group_field,
+            optionField: opts.option_field
+          })
         }
       }
     }
@@ -2594,7 +2959,9 @@ export function InlineTableField({
   )
 
   // Batch-fetch display values: { oneCollection: { id: displayString } }
-  const { data: m2oDisplays = {}, isFetching: m2oFetching } = useQuery<Record<string, Record<string, string>>>({
+  const { data: m2oDisplays = {}, isFetching: m2oFetching } = useQuery<
+    Record<string, Record<string, string>>
+  >({
     queryKey: m2oQueryKey,
     queryFn: async () => {
       const result: Record<string, Record<string, string>> = {}
@@ -2602,7 +2969,9 @@ export function InlineTableField({
       const colMetas = await Promise.all(
         [...m2oLookupIds.keys()].map((oneCollection) =>
           client
-            .request<{ data: { display_template?: string | null } }>(get(`/collections/${oneCollection}`))
+            .request<{ data: { display_template?: string | null } }>(
+              get(`/collections/${oneCollection}`)
+            )
             .then((r) => ({ collection: oneCollection, meta: r.data }))
         )
       )
@@ -2638,7 +3007,8 @@ export function InlineTableField({
               const oSub = item[grouped.optionField] as Record<string, unknown> | null
               const gLabel = gSub ? applyDisplayTemplate(null, gSub) : null
               const oLabel = oSub ? applyDisplayTemplate(null, oSub) : null
-              result[oneCollection][String(item.id)] = [gLabel, oLabel].filter(Boolean).join(' — ') || String(item.id)
+              result[oneCollection][String(item.id)] =
+                [gLabel, oLabel].filter(Boolean).join(' — ') || String(item.id)
             } else {
               const tmpl = colMeta?.display_template ?? undefined
               result[oneCollection][String(item.id)] = applyDisplayTemplate(tmpl, item)
@@ -2672,7 +3042,8 @@ export function InlineTableField({
   /** Ask the server which fields the layout's lock rules make read-only for
    *  this row right now (lock rules only — no value changes on open). */
   function refreshLocks(rowId: string, draft: Record<string, unknown>) {
-    if (!client || !rowRules?.some((r) => (r as { target_type?: string }).target_type === 'lock')) return
+    if (!client || !rowRules?.some((r) => (r as { target_type?: string }).target_type === 'lock'))
+      return
     client
       .request<{ locks?: string[] }>(
         post('/field-rules/evaluate', {
@@ -2733,7 +3104,9 @@ export function InlineTableField({
 
   function setDraftField(k: string, v: unknown) {
     const cur = editStateRef.current
-    const nextDraft = cur ? applyComputedFields({ ...cur.draft, [k]: v }) : applyComputedFields({ [k]: v })
+    const nextDraft = cur
+      ? applyComputedFields({ ...cur.draft, [k]: v })
+      : applyComputedFields({ [k]: v })
     const filled = v !== null && v !== undefined && v !== ''
     setEditState((s) =>
       s
@@ -2747,25 +3120,28 @@ export function InlineTableField({
 
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
-      client.request<{ updates: Record<string, unknown>; locks?: string[] }>(
-        post('/field-rules/evaluate', {
-          collection: relatedCollection,
-          data: nextDraft,
-          changed_field: k,
-          parent_context: parentCtx,
-          row_rules: rowRules
+      client
+        .request<{ updates: Record<string, unknown>; locks?: string[] }>(
+          post('/field-rules/evaluate', {
+            collection: relatedCollection,
+            data: nextDraft,
+            changed_field: k,
+            parent_context: parentCtx,
+            row_rules: rowRules
+          })
+        )
+        .then((res) => {
+          const hasUpdates = res.updates && Object.keys(res.updates).length > 0
+          setEditState((s) => {
+            if (!s) return s
+            return {
+              ...s,
+              draft: hasUpdates ? applyComputedFields({ ...s.draft, ...res.updates }) : s.draft,
+              locks: res.locks ?? s.locks
+            }
+          })
         })
-      ).then((res) => {
-        const hasUpdates = res.updates && Object.keys(res.updates).length > 0
-        setEditState((s) => {
-          if (!s) return s
-          return {
-            ...s,
-            draft: hasUpdates ? applyComputedFields({ ...s.draft, ...res.updates }) : s.draft,
-            locks: res.locks ?? s.locks
-          }
-        })
-      }).catch(() => {})
+        .catch(() => {})
     }
   }
 
@@ -2789,10 +3165,11 @@ export function InlineTableField({
         rows.some((r) => {
           if (String(r.id) === editingId) return false
           if (pendingDeletes.has(String(r.id))) return false
-          const merged = pendingEdits.has(String(r.id)) ? { ...r, ...pendingEdits.get(String(r.id)) } : r
+          const merged = pendingEdits.has(String(r.id))
+            ? { ...r, ...pendingEdits.get(String(r.id)) }
+            : r
           return getUniqueKey(merged, uniqueBy) === draftKey
-        }) ||
-        pendingRows.some((r, i) => i !== pendingIdx && getUniqueKey(r, uniqueBy) === draftKey)
+        }) || pendingRows.some((r, i) => i !== pendingIdx && getUniqueKey(r, uniqueBy) === draftKey)
 
       if (conflict) {
         setUniqueError(`A row with the same ${uniqueBy.join(' + ')} already exists.`)
@@ -2825,7 +3202,7 @@ export function InlineTableField({
         const existingRow = pendingRows[ri]
         staging?.updateRow(relatedCollection, manyField, ri, editState.draft)
         if (existingRow?.__prefilled && existingRow?.id != null) {
-          setEditedPendingIds(prev => new Set([...prev, existingRow.id as string | number]))
+          setEditedPendingIds((prev) => new Set([...prev, existingRow.id as string | number]))
         }
         clearIfStillEditing()
         setSaving(false)
@@ -2841,27 +3218,48 @@ export function InlineTableField({
         const m2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__m2m_'))
         const o2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__o2m_'))
         const cleanDraft = Object.fromEntries(
-          Object.entries(editState.draft).filter(([k]) => !k.startsWith('__m2m_') && !k.startsWith('__o2m_'))
+          Object.entries(editState.draft).filter(
+            ([k]) => !k.startsWith('__m2m_') && !k.startsWith('__o2m_')
+          )
         )
-        const newRowRes = await client.request<{ data: { id: unknown } }>(post(`/items/${relatedCollection}${pCtx}`, { ...cleanDraft, [manyField]: parentId }))
+        const newRowRes = await client.request<{ data: { id: unknown } }>(
+          post(`/items/${relatedCollection}${pCtx}`, { ...cleanDraft, [manyField]: parentId })
+        )
         const newRowId = newRowRes?.data?.id
         if (newRowId != null && m2mEntries.length) {
-          await Promise.all(m2mEntries.map(([key, relatedId]) => {
-            if (relatedId == null) return Promise.resolve()
-            const fieldName = key.slice('__m2m_'.length)
-            const target = resolveM2MTarget({ field: fieldName, interface: 'select-multiple-m2m' } as CMSField)
-            if (!target) return Promise.resolve()
-            return client.request(post(`/items/${target.junctionCollection}`, { [target.junctionManyField]: newRowId, [target.junctionOtherField]: relatedId }))
-          }))
+          await Promise.all(
+            m2mEntries.map(([key, relatedId]) => {
+              if (relatedId == null) return Promise.resolve()
+              const fieldName = key.slice('__m2m_'.length)
+              const target = resolveM2MTarget({
+                field: fieldName,
+                interface: 'select-multiple-m2m'
+              } as CMSField)
+              if (!target) return Promise.resolve()
+              return client.request(
+                post(`/items/${target.junctionCollection}`, {
+                  [target.junctionManyField]: newRowId,
+                  [target.junctionOtherField]: relatedId
+                })
+              )
+            })
+          )
         }
         if (newRowId != null && o2mEntries.length) {
           for (const [key, members] of o2mEntries) {
             const fieldName = key.slice('__o2m_'.length)
-            const grandRel = childRelations.find(r => r.one_collection === relatedCollection && r.one_field === fieldName)
+            const grandRel = childRelations.find(
+              (r) => r.one_collection === relatedCollection && r.one_field === fieldName
+            )
             if (!grandRel?.many_collection || !grandRel.many_field) continue
-            const memberList = Array.isArray(members) ? members as Record<string, unknown>[] : []
+            const memberList = Array.isArray(members) ? (members as Record<string, unknown>[]) : []
             for (const member of memberList) {
-              await client.request(post(`/items/${grandRel.many_collection}`, { ...member, [grandRel.many_field]: newRowId }))
+              await client.request(
+                post(`/items/${grandRel.many_collection}`, {
+                  ...member,
+                  [grandRel.many_field]: newRowId
+                })
+              )
             }
           }
         }
@@ -2870,27 +3268,42 @@ export function InlineTableField({
         // Filter to display columns — draft includes full API row (id, system fields, etc.).
         // Deliberately the FULL layout-gated set, not preset-effective: row rules may autofill
         // preset-hidden fields, and a mid-edit preset switch must not drop typed values.
-        const writableKeys = new Set(displayCols.map(c => c.field).filter(k => !k.startsWith('__m2m_')))
-        const rowPayload = Object.fromEntries(Object.entries(editState.draft).filter(([k]) => writableKeys.has(k)))
+        const writableKeys = new Set(
+          displayCols.map((c) => c.field).filter((k) => !k.startsWith('__m2m_'))
+        )
+        const rowPayload = Object.fromEntries(
+          Object.entries(editState.draft).filter(([k]) => writableKeys.has(k))
+        )
         if (isPendingMode && staging) {
           // __nested_ops_* keys ride along here (exempt from the writableKeys filter) so the
           // batch flush can apply them — the immediate PATCH branch below still strips them.
-          const nestedOpsEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__nested_ops_'))
+          const nestedOpsEntries = Object.entries(editState.draft).filter(([k]) =>
+            k.startsWith('__nested_ops_')
+          )
           // Queue only values that actually CHANGED vs the saved row — the full
           // draft would make every column look edited (change-reason preflight
           // would then name all of them, and the flush PATCH would re-write
           // untouched columns).
-          const baseRow = rows.find(r => String(r.id) === editState.rowId)
+          const baseRow = rows.find((r) => String(r.id) === editState.rowId)
           const queuedPayload = baseRow
-            ? Object.fromEntries(Object.entries(rowPayload).filter(([k, v]) =>
-                String(v ?? '') !== String((baseRow as Record<string, unknown>)[k] ?? '')))
+            ? Object.fromEntries(
+                Object.entries(rowPayload).filter(
+                  ([k, v]) =>
+                    String(v ?? '') !== String((baseRow as Record<string, unknown>)[k] ?? '')
+                )
+              )
             : rowPayload
-          staging.queueEdit(relatedCollection, manyField, editState.rowId, { ...queuedPayload, ...Object.fromEntries(nestedOpsEntries) })
+          staging.queueEdit(relatedCollection, manyField, editState.rowId, {
+            ...queuedPayload,
+            ...Object.fromEntries(nestedOpsEntries)
+          })
           clearIfStillEditing()
           return
         }
         try {
-          await client.request(patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload))
+          await client.request(
+            patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload)
+          )
         } catch (err) {
           const challenge = changeReasonChallenge(err)
           if (challenge) {
@@ -2899,7 +3312,9 @@ export function InlineTableField({
               challenge,
               retry: async (reason: string) => {
                 await client.request(patch(url, { ...rowPayload, _change_reason: reason }))
-                qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+                qc.invalidateQueries({
+                  queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+                })
                 clearIfStillEditing()
               }
             })
@@ -2931,22 +3346,26 @@ export function InlineTableField({
   const [applying, setApplying] = useState(false)
 
   function setDefaultField(k: string, v: unknown) {
-    setDefaultValues(prev => ({ ...prev, [k]: v }))
+    setDefaultValues((prev) => ({ ...prev, [k]: v }))
   }
 
   async function applyValuesToAllRows() {
-    const hasValues = Object.keys(applyValues).some(k => applyValues[k] !== null && applyValues[k] !== undefined)
+    const hasValues = Object.keys(applyValues).some(
+      (k) => applyValues[k] !== null && applyValues[k] !== undefined
+    )
     if (!hasValues) return
     setApplying(true)
     try {
       if (rows.length) {
         if (isPendingMode && staging) {
           rows
-            .filter(r => !pendingDeletes.has(String(r.id)))
-            .forEach(row => staging.queueEdit(relatedCollection, manyField, String(row.id), applyValues))
+            .filter((r) => !pendingDeletes.has(String(r.id)))
+            .forEach((row) =>
+              staging.queueEdit(relatedCollection, manyField, String(row.id), applyValues)
+            )
         } else {
           await Promise.all(
-            rows.map(row =>
+            rows.map((row) =>
               client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, applyValues))
             )
           )
@@ -2960,8 +3379,11 @@ export function InlineTableField({
       }
       setApplyOpen(false)
       setApplyValues({})
-    } catch { /* ignore */ }
-    finally { setApplying(false) }
+    } catch {
+      /* ignore */
+    } finally {
+      setApplying(false)
+    }
   }
 
   // Line generators (#336): N rows with a date column advancing one month per
@@ -2982,7 +3404,9 @@ export function InlineTableField({
     try {
       await Promise.all(
         rowsData.map((rd) =>
-          client.request(post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId }))
+          client.request(
+            post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
+          )
         )
       )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -3004,17 +3428,30 @@ export function InlineTableField({
     try {
       await Promise.all(
         Array.from({ length: n }, () =>
-          client.request(post(`/items/${relatedCollection}${pCtx}`, { ...rowData, [manyField]: parentId }))
+          client.request(
+            post(`/items/${relatedCollection}${pCtx}`, { ...rowData, [manyField]: parentId })
+          )
         )
       )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
-    } catch { /* ignore */ }
-    finally { setBulkAdding(false) }
+    } catch {
+      /* ignore */
+    } finally {
+      setBulkAdding(false)
+    }
   }
 
-  function handleDragStart(ri: number) { setDragIdx(ri) }
-  function handleDragOver(e: React.DragEvent, ri: number) { e.preventDefault(); setDropIdx(ri) }
-  function handleDragEnd() { setDragIdx(null); setDropIdx(null) }
+  function handleDragStart(ri: number) {
+    setDragIdx(ri)
+  }
+  function handleDragOver(e: React.DragEvent, ri: number) {
+    e.preventDefault()
+    setDropIdx(ri)
+  }
+  function handleDragEnd() {
+    setDragIdx(null)
+    setDropIdx(null)
+  }
 
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault()
@@ -3035,7 +3472,9 @@ export function InlineTableField({
 
     if (isPendingMode && staging) {
       changed.forEach(({ row, newOrder }) =>
-        staging.queueEdit(relatedCollection, manyField, String(row.id), { [rowOrderField!]: newOrder })
+        staging.queueEdit(relatedCollection, manyField, String(row.id), {
+          [rowOrderField!]: newOrder
+        })
       )
       handleDragEnd()
       return
@@ -3043,9 +3482,13 @@ export function InlineTableField({
 
     setReordering(true)
     try {
-      await Promise.all(changed.map(({ row, newOrder }) =>
-        client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, { [rowOrderField!]: newOrder }))
-      ))
+      await Promise.all(
+        changed.map(({ row, newOrder }) =>
+          client.request(
+            patch(`/items/${relatedCollection}/${row.id}${pCtx}`, { [rowOrderField!]: newOrder })
+          )
+        )
+      )
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* reorder failed; rows stay unchanged */
@@ -3064,7 +3507,8 @@ export function InlineTableField({
         setEditState(null)
       }
       // Capture now — hidden while still in pendingDeletes, visible after parent save flushes the delete
-      if (showRowRevisions) setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
+      if (showRowRevisions)
+        setDeletedRows((prev) => (prev.some((r) => r.id === id) ? prev : [...prev, row]))
       return
     }
     try {
@@ -3074,7 +3518,7 @@ export function InlineTableField({
         setEditState(null)
       }
       if (showRowRevisions) {
-        setDeletedRows(prev => prev.some(r => r.id === id) ? prev : [...prev, row])
+        setDeletedRows((prev) => (prev.some((r) => r.id === id) ? prev : [...prev, row]))
         void refetchDeleted()
       }
     } catch {
@@ -3082,9 +3526,22 @@ export function InlineTableField({
     }
   }
 
-  function renderCell(col: CMSField, val: unknown, rowId?: string, rowData?: Record<string, unknown>) {
+  function renderCell(
+    col: CMSField,
+    val: unknown,
+    rowId?: string,
+    rowData?: Record<string, unknown>
+  ) {
     const colOpts = col.options
-      ? ((typeof col.options === 'string' ? (() => { try { return JSON.parse(col.options as string) } catch { return {} } })() : col.options) as Record<string, unknown>)
+      ? ((typeof col.options === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(col.options as string)
+              } catch {
+                return {}
+              }
+            })()
+          : col.options) as Record<string, unknown>)
       : {}
 
     // Formula column: arithmetic over {{col}} (row values) + {{dotted.path}}
@@ -3099,7 +3556,9 @@ export function InlineTableField({
       // one is a plain column on the row.
       const result = evaluateNumeric(formula, (ref) =>
         ref.includes('.')
-          ? (rowId ? resolvedPathData?.rows[rowId]?.[ref]?.value : undefined)
+          ? rowId
+            ? resolvedPathData?.rows[rowId]?.[ref]?.value
+            : undefined
           : (row as Record<string, unknown>)[ref]
       )
       if (result === null) return <span className='text-slate-300'>—</span>
@@ -3111,7 +3570,9 @@ export function InlineTableField({
       // current value, so the reader can check the math without hunting.
       const substituted = formula.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_m, ref: string) => {
         const v = ref.includes('.')
-          ? (rowId ? resolvedPathData?.rows[rowId]?.[ref]?.value : undefined)
+          ? rowId
+            ? resolvedPathData?.rows[rowId]?.[ref]?.value
+            : undefined
           : (row as Record<string, unknown>)[ref]
         return v == null || v === '' ? '0' : String(v)
       })
@@ -3128,10 +3589,13 @@ export function InlineTableField({
       if (!entry || !rowId) return <span className='text-slate-300'>—</span>
       const gridRow = rows.find((r) => String(r.id) === rowId) ?? {}
       const walk = (obj: unknown, path: string): unknown =>
-        path.split('.').reduce<unknown>(
-          (cur, seg) => (cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined),
-          obj
-        )
+        path
+          .split('.')
+          .reduce<unknown>(
+            (cur, seg) =>
+              cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined,
+            obj
+          )
       const matched = entry.rows.filter((r) =>
         entry.cfg.rowKeys.every(([path, rowField]) => {
           const a = walk(r, path)
@@ -3156,8 +3620,10 @@ export function InlineTableField({
         if (v === null) return <span className='text-slate-300'>—</span>
         agg = v
       }
-      const formatted =
-        agg.toLocaleString('en-US', numericIntlOptions(colOpts, entry.cfg.format as string | undefined))
+      const formatted = agg.toLocaleString(
+        'en-US',
+        numericIntlOptions(colOpts, entry.cfg.format as string | undefined)
+      )
       return <span className='tabular-nums'>{formatted}</span>
     }
 
@@ -3226,7 +3692,8 @@ export function InlineTableField({
     const m2oRel = m2oRelMap.get(col.field)
     if (m2oRel?.one_collection) {
       const display = m2oDisplays[m2oRel.one_collection]?.[String(val)]
-      if (!display && m2oFetching) return <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
+      if (!display && m2oFetching)
+        return <Loader2 className='h-3 w-3 animate-spin text-slate-300' />
       const cfg = drill ? fieldDrilldownConfig(col) : null
       const isStaleVal = val != null && staleCellValues.get(col.field)?.has(String(val)) === true
       let inner: React.ReactNode
@@ -3255,23 +3722,60 @@ export function InlineTableField({
       return isStaleVal ? <StaleValueFlag>{inner}</StaleValueFlag> : inner
     }
     if (col.type === 'boolean')
-      return <span className={val ? 'text-emerald-600' : 'text-slate-400'}>{val ? 'Yes' : 'No'}</span>
+      return (
+        <span className={val ? 'text-emerald-600' : 'text-slate-400'}>{val ? 'Yes' : 'No'}</span>
+      )
     if (col.type === 'datetime' || col.type === 'date') {
-      try { return <span className='block truncate'>{new Date(String(val)).toLocaleDateString()}</span> } catch { /* fall */ }
+      try {
+        return <span className='block truncate'>{new Date(String(val)).toLocaleDateString()}</span>
+      } catch {
+        /* fall */
+      }
     }
-    const NUMERIC_TYPES = ['integer', 'bigInteger', 'decimal', 'float', 'money', 'smallmoney', 'tinyint', 'smallint', 'bigint', 'int', 'numeric', 'real', 'double', 'number']
+    const NUMERIC_TYPES = [
+      'integer',
+      'bigInteger',
+      'decimal',
+      'float',
+      'money',
+      'smallmoney',
+      'tinyint',
+      'smallint',
+      'bigint',
+      'int',
+      'numeric',
+      'real',
+      'double',
+      'number'
+    ]
     if (NUMERIC_TYPES.includes(col.type ?? '')) {
       const num = Number(val)
       if (!Number.isNaN(num)) {
         try {
-          const opts = col.options ? (typeof col.options === 'string' ? JSON.parse(col.options) : col.options) as Record<string, unknown> : {}
+          const opts = col.options
+            ? ((typeof col.options === 'string' ? JSON.parse(col.options) : col.options) as Record<
+                string,
+                unknown
+              >)
+            : {}
           const fmt = opts.format as string | undefined
           if (fmt === 'int') {
-            return <span className='block truncate tabular-nums'>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(num)}</span>
+            return (
+              <span className='block truncate tabular-nums'>
+                {new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(num)}
+              </span>
+            )
           }
           if (fmt === 'decimal') {
             const prec = typeof opts.precision === 'number' ? opts.precision : 2
-            return <span className='block truncate tabular-nums'>{new Intl.NumberFormat(undefined, { minimumFractionDigits: prec, maximumFractionDigits: prec }).format(num)}</span>
+            return (
+              <span className='block truncate tabular-nums'>
+                {new Intl.NumberFormat(undefined, {
+                  minimumFractionDigits: prec,
+                  maximumFractionDigits: prec
+                }).format(num)}
+              </span>
+            )
           }
           if (fmt === 'currency') {
             const curr = (opts.currency as string) || 'USD'
@@ -3284,7 +3788,9 @@ export function InlineTableField({
               </span>
             )
           }
-        } catch { /* fall through to default */ }
+        } catch {
+          /* fall through to default */
+        }
       }
     }
     return <span className='block truncate'>{String(val)}</span>
@@ -3296,7 +3802,11 @@ export function InlineTableField({
   // data arrives.
 
   if (colsLoading || (!isNew && rowsLoading))
-    return <div className='py-3 text-center text-[12px] text-slate-400'><Loader2 className='h-4 w-4 animate-spin inline' /></div>
+    return (
+      <div className='py-3 text-center text-[12px] text-slate-400'>
+        <Loader2 className='h-4 w-4 animate-spin inline' />
+      </div>
+    )
 
   const isEditingNew = editState?.rowId === 'new'
 
@@ -3310,7 +3820,7 @@ export function InlineTableField({
   const nestedColSpan =
     (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0) +
     (showLineNumbers ? 1 : 0) +
-    ((isNew || isPendingMode) ? 1 : 0) +
+    (isNew || isPendingMode ? 1 : 0) +
     effectiveCols.length +
     1
 
@@ -3366,7 +3876,9 @@ export function InlineTableField({
     const overlay = { ...draft }
     for (const c of effectiveCols) {
       if (c.computed_type !== 'rollup' || !c.computed_formula) continue
-      let cfg: { sources?: Array<{ related_collection?: string; aggregate?: string; value_field?: string }> } | null = null
+      let cfg: {
+        sources?: Array<{ related_collection?: string; aggregate?: string; value_field?: string }>
+      } | null = null
       try {
         const parsed = JSON.parse(String(c.computed_formula))
         cfg = parsed?.sources ? parsed : { sources: [parsed] }
@@ -3381,15 +3893,20 @@ export function InlineTableField({
         const relField =
           relFields.find((f) => f === src.related_collection) ??
           (relFields.length === 1 ? relFields[0] : undefined)
-        const staged = relField ? (draft[`__o2m_${relField}`] as Array<Record<string, unknown>> | undefined) : undefined
+        const staged = relField
+          ? (draft[`__o2m_${relField}`] as Array<Record<string, unknown>> | undefined)
+          : undefined
         const liveRows = (relField ? drawerLiveRows[`${rowKey}|${relField}`] : undefined) ?? staged
         if (!liveRows) continue
         const agg = src.aggregate ?? 'sum'
         if (agg === 'count') total = (total ?? 0) + liveRows.length
         else {
-          const vals = liveRows.map((r) => Number(r[src.value_field ?? ''] ?? 0)).filter(Number.isFinite)
+          const vals = liveRows
+            .map((r) => Number(r[src.value_field ?? ''] ?? 0))
+            .filter(Number.isFinite)
           if (agg === 'sum') total = (total ?? 0) + vals.reduce((a, b) => a + b, 0)
-          else if (agg === 'avg') total = (total ?? 0) + (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0)
+          else if (agg === 'avg')
+            total = (total ?? 0) + (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0)
           else if (agg === 'min') total = (total ?? 0) + (vals.length ? Math.min(...vals) : 0)
           else if (agg === 'max') total = (total ?? 0) + (vals.length ? Math.max(...vals) : 0)
         }
@@ -3427,7 +3944,10 @@ export function InlineTableField({
               parentDraft={draft}
               hint={relHint}
               onRowsChange={(liveRows) =>
-                setDrawerLiveRows((prev) => ({ ...prev, [`${rowId ?? '__new__'}|${relField}`]: liveRows }))
+                setDrawerLiveRows((prev) => ({
+                  ...prev,
+                  [`${rowId ?? '__new__'}|${relField}`]: liveRows
+                }))
               }
               outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
               {...(relMatch
@@ -3453,8 +3973,10 @@ export function InlineTableField({
                     ? {
                         deferred: true,
                         stagedOps:
-                          (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
-                        onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
+                          (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ??
+                          EMPTY_NESTED_OPS,
+                        onStagedOpsChange: (ops: NestedOps) =>
+                          setDraftField(`__nested_ops_${relField}`, ops)
                       }
                     : {})}
             />
@@ -3532,58 +4054,67 @@ export function InlineTableField({
             ...displayCols.filter(isPanelReadOnly),
             ...effectiveCols.filter((c) => isSummaryCol(c))
           ]
-          return stripCols.length > 0 && (() => {
-          const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
           return (
-          <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
-            {stripCols.map((c) => {
-              const label = c.label || titleCase(c.field)
-              const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-              // options may arrive as a JSON string — parse like renderCell does
-              const colOpts = c.options
-                ? ((typeof c.options === 'string'
-                    ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })()
-                    : c.options) as Record<string, unknown>)
-                : {}
-              const colFormula =
-                typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
-              const liveFormulaVal =
-                c.interface === 'formula-column' && colFormula
-                  ? evaluateNumeric(colFormula, (ref) =>
-                      ref.includes('.')
-                        ? resolvedPathData?.rows[args.rowId ?? '']?.[ref]?.value
-                        : overlay[ref]
-                    )
-                  : null
+            stripCols.length > 0 &&
+            (() => {
+              const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
               return (
-                <div key={c.field} className='flex min-w-0 flex-col justify-start'>
-                  <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
-                    {label}
-                  </span>
-                  <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-                    {isComputedWrite
-                      ? renderCell(c, overlay[c.field] ?? args.draft[c.field])
-                      : liveFormulaVal != null
-                        ? (
+                <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
+                  {stripCols.map((c) => {
+                    const label = c.label || titleCase(c.field)
+                    const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                    // options may arrive as a JSON string — parse like renderCell does
+                    const colOpts = c.options
+                      ? ((typeof c.options === 'string'
+                          ? (() => {
+                              try {
+                                return JSON.parse(c.options as string)
+                              } catch {
+                                return {}
+                              }
+                            })()
+                          : c.options) as Record<string, unknown>)
+                      : {}
+                    const colFormula =
+                      typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
+                    const liveFormulaVal =
+                      c.interface === 'formula-column' && colFormula
+                        ? evaluateNumeric(colFormula, (ref) =>
+                            ref.includes('.')
+                              ? resolvedPathData?.rows[args.rowId ?? '']?.[ref]?.value
+                              : overlay[ref]
+                          )
+                        : null
+                    return (
+                      <div key={c.field} className='flex min-w-0 flex-col justify-start'>
+                        <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                          {label}
+                        </span>
+                        <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                          {isComputedWrite ? (
+                            renderCell(c, overlay[c.field] ?? args.draft[c.field])
+                          ) : liveFormulaVal != null ? (
                             <span className='tabular-nums'>
                               {liveFormulaVal.toLocaleString(
                                 'en-US',
                                 numericIntlOptions(colOpts, colOpts.format as string | undefined)
                               )}
                             </span>
-                          )
-                        : c.computed_type === 'rollup'
-                          ? renderCell(c, overlay[c.field] ?? args.draft[c.field], args.rowId)
-                          : isSummaryCol(c)
-                            ? summaryCellValue(c, args.draft, true)
-                            : renderCell(c, args.draft[c.field], args.rowId)}
-                  </span>
+                          ) : c.computed_type === 'rollup' ? (
+                            renderCell(c, overlay[c.field] ?? args.draft[c.field], args.rowId)
+                          ) : isSummaryCol(c) ? (
+                            summaryCellValue(c, args.draft, true)
+                          ) : (
+                            renderCell(c, args.draft[c.field], args.rowId)
+                          )}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               )
-            })}
-          </div>
+            })()
           )
-        })()
         })()}
         <div
           className='grid items-start gap-x-4 gap-y-3'
@@ -3592,68 +4123,84 @@ export function InlineTableField({
           {effectiveCols
             .filter((c) => !isPanelReadOnly(c))
             .map((c) => {
-            const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-            // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
-            // shorthand; a labelled form should read like prose.
-            const label = c.label || titleCase(c.field)
-            // Interfaces that only ever DISPLAY a derived value: rendering an
-            // input for them offers an edit that goes nowhere.
-            const displayOnlyIface =
-              c.interface === 'formula-column' ||
-              c.interface === 'match-agg-column' ||
-              c.interface === 'relation-path'
-            if (isSummaryCol(c)) {
+              const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+              // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
+              // shorthand; a labelled form should read like prose.
+              const label = c.label || titleCase(c.field)
+              // Interfaces that only ever DISPLAY a derived value: rendering an
+              // input for them offers an edit that goes nowhere.
+              const displayOnlyIface =
+                c.interface === 'formula-column' ||
+                c.interface === 'match-agg-column' ||
+                c.interface === 'relation-path'
+              if (isSummaryCol(c)) {
+                return (
+                  <div key={c.field} className='flex min-w-0 flex-col gap-1'>
+                    <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                      {label}
+                    </span>
+                    <div className='text-[12px] text-slate-500'>
+                      {summaryCellValue(c, args.draft, true)}
+                    </div>
+                  </div>
+                )
+              }
+              const isMissing = !!editState?.missing?.includes(c.field)
               return (
-                <div key={c.field} className='flex min-w-0 flex-col gap-1'>
-                  <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>{label}</span>
-                  <div className='text-[12px] text-slate-500'>{summaryCellValue(c, args.draft, true)}</div>
-                </div>
-              )
-            }
-            const isMissing = !!editState?.missing?.includes(c.field)
-            return (
-              <div
-                key={c.field}
-                className={cn(
-                  'flex min-w-0 flex-col gap-1',
-                  isMissing &&
-                    'rounded-md [&_input]:border-red-400 [&_input]:ring-1 [&_input]:ring-red-300 [&_button]:border-red-400 [&_button]:ring-1 [&_button]:ring-red-300 dark:[&_input]:border-red-600 dark:[&_input]:ring-red-800 dark:[&_button]:border-red-600 dark:[&_button]:ring-red-800'
-                )}
-              >
-                <span
+                <div
+                  key={c.field}
                   className={cn(
-                    'text-[10px] font-medium uppercase tracking-wide',
-                    isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
+                    'flex min-w-0 flex-col gap-1',
+                    isMissing &&
+                      'rounded-md [&_input]:border-red-400 [&_input]:ring-1 [&_input]:ring-red-300 [&_button]:border-red-400 [&_button]:ring-1 [&_button]:ring-red-300 dark:[&_input]:border-red-600 dark:[&_input]:ring-red-800 dark:[&_button]:border-red-600 dark:[&_button]:ring-red-800'
                   )}
                 >
-                  {label}
-                  {isMissing && <span className='ml-1 normal-case tracking-normal'>· required</span>}
-                </span>
-                {isComputedWrite ? (
-                  <div className='text-[12px] italic text-slate-500'>
-                    {renderCell(c, evalClientFormula(c.computed_formula as string, args.draft) ?? args.draft[c.field])}
-                  </div>
-                ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
-                  <div
-                    className='text-[12px] text-slate-500'
-                    title={editState?.locks?.includes(c.field) ? 'Set automatically for this row' : undefined}
+                  <span
+                    className={cn(
+                      'text-[10px] font-medium uppercase tracking-wide',
+                      isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
+                    )}
                   >
-                    {renderCell(c, args.draft[c.field], args.rowId)}
-                  </div>
-                ) : (
-                  <FieldRenderer
-                    field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                    value={args.draft[c.field] ?? null}
-                    onChange={(v) => setDraftField(c.field, v)}
-                    relations={childRelations}
-                    collection={relatedCollection}
-                    itemId={args.rowId ?? 'new'}
-                    cascadeFilter={fieldCascadeFilters[c.field]}
-                  />
-                )}
-              </div>
-            )
-          })}
+                    {label}
+                    {isMissing && (
+                      <span className='ml-1 normal-case tracking-normal'>· required</span>
+                    )}
+                  </span>
+                  {isComputedWrite ? (
+                    <div className='text-[12px] italic text-slate-500'>
+                      {renderCell(
+                        c,
+                        evalClientFormula(c.computed_formula as string, args.draft) ??
+                          args.draft[c.field]
+                      )}
+                    </div>
+                  ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
+                    <div
+                      className='text-[12px] text-slate-500'
+                      title={
+                        editState?.locks?.includes(c.field)
+                          ? 'Set automatically for this row'
+                          : undefined
+                      }
+                    >
+                      {renderCell(c, args.draft[c.field], args.rowId)}
+                    </div>
+                  ) : (
+                    <FieldRenderer
+                      field={
+                        { ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']
+                      }
+                      value={args.draft[c.field] ?? null}
+                      onChange={(v) => setDraftField(c.field, v)}
+                      relations={childRelations}
+                      collection={relatedCollection}
+                      itemId={args.rowId ?? 'new'}
+                      cascadeFilter={fieldCascadeFilters[c.field]}
+                    />
+                  )}
+                </div>
+              )
+            })}
         </div>
         {args.drawer}
       </div>
@@ -3663,7 +4210,9 @@ export function InlineTableField({
   const isAllPresetActive = activePreset === ALL_PRESET_SENTINEL
   // Stale stored names keep highlighting columnPresets[0] (unchanged prior behavior);
   // the All chip only highlights on the explicit sentinel, never as a fallback.
-  const activePresetHighlightName = isAllPresetActive ? null : (resolvedPreset?.name ?? columnPresets?.[0]?.name)
+  const activePresetHighlightName = isAllPresetActive
+    ? null
+    : (resolvedPreset?.name ?? columnPresets?.[0]?.name)
   const presetSwitcher = columnPresets && columnPresets.length >= 2 && (
     <div className='flex items-center gap-1 text-[11px]'>
       <button
@@ -3678,7 +4227,7 @@ export function InlineTableField({
       >
         All
       </button>
-      {columnPresets.map(p => (
+      {columnPresets.map((p) => (
         <button
           key={p.name}
           type='button'
@@ -3710,196 +4259,206 @@ export function InlineTableField({
           void pending?.retry(reason)
         }}
       />
-      {!readOnly && <div className='flex items-center gap-2 text-[11px]'>
-        <span className='text-slate-400'>Add</span>
-        <input
-          type='number'
-          min={1}
-          max={100}
-          value={bulkCount}
-          onChange={e => setBulkCount(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
-          className='w-14 h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-700 text-center focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
-        />
-        <button
-          type='button'
-          disabled={bulkAdding}
-          onClick={() => addBulkRows(false)}
-          className='h-6 px-2.5 rounded border border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 disabled:opacity-40 transition-colors'
-        >
-          blank {bulkCount === 1 ? 'row' : 'rows'}
-        </button>
-        {/* Line generators (#336): patterned rows — monthly dates, {n} labels. */}
-        {(() => {
-          const dateCols = displayCols.filter(
-            (c) => !c.field.includes('.') && (c.type === 'date' || c.type === 'datetime')
-          )
-          if (dateCols.length === 0) return null
-          return (
-            <button
-              type='button'
-              disabled={bulkAdding}
-              onClick={() => addPatternedRows(dateCols[0].field)}
-              data-tip={`Generate ${bulkCount} rows with ${dateCols[0].field} advancing one month per row (starting next month)`}
-              className='h-6 px-2.5 rounded border border-dashed border-slate-300 text-slate-500 hover:border-nvr-cyan/60 hover:text-slate-700 disabled:opacity-40 transition-colors'
-            >
-              monthly {bulkCount === 1 ? 'row' : 'rows'}
-            </button>
-          )
-        })()}
-        {allocateDrawer && (!isNew || staging) && (
-          <AllocateDrawer
-            config={allocateDrawer}
-            relatedCollection={relatedCollection}
-            manyField={manyField}
-            parentId={parentId}
-            rows={isNew ? [] : rows}
-            rowDefaults={rowDefaultSeed}
-            parentDraft={parentDraftCtx?.draft}
-            invalidate={() => qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })}
-            staging={staging}
-            stagingActive={(isNew || isPendingMode) && !!staging}
-            pendingRows={pendingRows}
-            pendingEdits={pendingEdits}
-            pendingDeletes={pendingDeletes}
+      {!readOnly && (
+        <div className='flex items-center gap-2 text-[11px]'>
+          <span className='text-slate-400'>Add</span>
+          <input
+            type='number'
+            min={1}
+            max={100}
+            value={bulkCount}
+            onChange={(e) =>
+              setBulkCount(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))
+            }
+            className='w-14 h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-700 text-center focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
           />
-        )}
-        {autoAllocate && !isNew && !readOnly && (() => {
-          const entry = (drawerRelations ?? []).find(
-            (d): d is { field: string; match?: MatchedDrawerConfig } =>
-              typeof d === 'object' && d.field === autoAllocate.relation && !!d.match
-          )
-          if (!entry?.match) return null
-          return (
-            <AutoAllocateButton
-              config={autoAllocate}
-              matchCfg={entry.match}
-              rows={rows}
-              parentId={parentId}
-              parentDraft={parentDraftCtx?.draft}
+          <button
+            type='button'
+            disabled={bulkAdding}
+            onClick={() => addBulkRows(false)}
+            className='h-6 px-2.5 rounded border border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 disabled:opacity-40 transition-colors'
+          >
+            blank {bulkCount === 1 ? 'row' : 'rows'}
+          </button>
+          {/* Line generators (#336): patterned rows — monthly dates, {n} labels. */}
+          {(() => {
+            const dateCols = displayCols.filter(
+              (c) => !c.field.includes('.') && (c.type === 'date' || c.type === 'datetime')
+            )
+            if (dateCols.length === 0) return null
+            return (
+              <button
+                type='button'
+                disabled={bulkAdding}
+                onClick={() => addPatternedRows(dateCols[0].field)}
+                data-tip={`Generate ${bulkCount} rows with ${dateCols[0].field} advancing one month per row (starting next month)`}
+                className='h-6 px-2.5 rounded border border-dashed border-slate-300 text-slate-500 hover:border-nvr-cyan/60 hover:text-slate-700 disabled:opacity-40 transition-colors'
+              >
+                monthly {bulkCount === 1 ? 'row' : 'rows'}
+              </button>
+            )
+          })()}
+          {allocateDrawer && (!isNew || staging) && (
+            <AllocateDrawer
+              config={allocateDrawer}
               relatedCollection={relatedCollection}
               manyField={manyField}
+              parentId={parentId}
+              rows={isNew ? [] : rows}
+              rowDefaults={rowDefaultSeed}
+              parentDraft={parentDraftCtx?.draft}
+              invalidate={() =>
+                qc.invalidateQueries({
+                  queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+                })
+              }
+              staging={staging}
+              stagingActive={(isNew || isPendingMode) && !!staging}
+              pendingRows={pendingRows}
+              pendingEdits={pendingEdits}
+              pendingDeletes={pendingDeletes}
             />
-          )
-        })()}
-        {(rowBulkActions ?? []).map((action) => (
-          <RowBulkActionButton
-            key={action.label}
-            config={action}
-            // Staged rows count: an addendum's grid is entirely PREFILLED
-            // pending rows (they keep their source id), and those are exactly
-            // the rows the action is meant to rewrite.
-            rows={[
-              ...rows,
-              ...pendingRows.map((r, i) => ({ ...r, __pendingIndex: i }))
-            ]}
-            relatedCollection={relatedCollection}
-            computedWriteFields={computedWriteFields}
-            applyRow={async (row, changes) => {
-              const pendingIndex = (row as Record<string, unknown>).__pendingIndex
-              if (typeof pendingIndex === 'number' && staging) {
-                staging.updateRow(relatedCollection, manyField, pendingIndex, changes)
-                return
-              }
-              const rowId = String(row.id)
-              // Otherwise reuse the grid's own write paths: a pending-mode grid
-              // queues the edit for the parent save, an immediate grid PATCHes.
-              if (isPendingMode && staging) {
-                staging.queueEdit(relatedCollection, manyField, rowId, changes)
-                return
-              }
-              await client.request(patch(`/items/${relatedCollection}/${rowId}`, changes))
-              await qc.invalidateQueries({
-                queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
-              })
-            }}
-          />
-        ))}
-        {uploadTemplate && !isNew && !readOnly && reimportHandler && parentCollection && (
-          <ImportFromFileButton
-            collection={parentCollection}
-            templateFilter={(t) => t.name === uploadTemplate && t.reimport?.enabled === true}
-            getLabel={(t) => t.reimport?.button_label ?? t.button_label}
-            onParsed={(result, template) => reimportHandler(result, template)}
-            compact
-          />
-        )}
-        {parentCollection && staging && !readOnly && (
-          <span className='relative inline-flex'>
+          )}
+          {autoAllocate &&
+            !isNew &&
+            !readOnly &&
+            (() => {
+              const entry = (drawerRelations ?? []).find(
+                (d): d is { field: string; match?: MatchedDrawerConfig } =>
+                  typeof d === 'object' && d.field === autoAllocate.relation && !!d.match
+              )
+              if (!entry?.match) return null
+              return (
+                <AutoAllocateButton
+                  config={autoAllocate}
+                  matchCfg={entry.match}
+                  rows={rows}
+                  parentId={parentId}
+                  parentDraft={parentDraftCtx?.draft}
+                  relatedCollection={relatedCollection}
+                  manyField={manyField}
+                />
+              )
+            })()}
+          {(rowBulkActions ?? []).map((action) => (
+            <RowBulkActionButton
+              key={action.label}
+              config={action}
+              // Staged rows count: an addendum's grid is entirely PREFILLED
+              // pending rows (they keep their source id), and those are exactly
+              // the rows the action is meant to rewrite.
+              rows={[...rows, ...pendingRows.map((r, i) => ({ ...r, __pendingIndex: i }))]}
+              relatedCollection={relatedCollection}
+              computedWriteFields={computedWriteFields}
+              applyRow={async (row, changes) => {
+                const pendingIndex = (row as Record<string, unknown>).__pendingIndex
+                if (typeof pendingIndex === 'number' && staging) {
+                  staging.updateRow(relatedCollection, manyField, pendingIndex, changes)
+                  return
+                }
+                const rowId = String(row.id)
+                // Otherwise reuse the grid's own write paths: a pending-mode grid
+                // queues the edit for the parent save, an immediate grid PATCHes.
+                if (isPendingMode && staging) {
+                  staging.queueEdit(relatedCollection, manyField, rowId, changes)
+                  return
+                }
+                await client.request(patch(`/items/${relatedCollection}/${rowId}`, changes))
+                await qc.invalidateQueries({
+                  queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+                })
+              }}
+            />
+          ))}
+          {uploadTemplate && !isNew && !readOnly && reimportHandler && parentCollection && (
+            <ImportFromFileButton
+              collection={parentCollection}
+              templateFilter={(t) => t.name === uploadTemplate && t.reimport?.enabled === true}
+              getLabel={(t) => t.reimport?.button_label ?? t.button_label}
+              onParsed={(result, template) => reimportHandler(result, template)}
+              compact
+            />
+          )}
+          {parentCollection && staging && !readOnly && (
+            <span className='relative inline-flex'>
+              <button
+                type='button'
+                onClick={() => setCopyFromOpen((v) => !v)}
+                title='Copy this table’s lines from another record'
+                className='h-6 rounded border border-slate-200 px-2.5 text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
+              >
+                Copy from…
+              </button>
+              {copyFromOpen && (
+                <span className='absolute left-0 top-full z-[70] mt-1 w-[300px] rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'>
+                  <RelationCombobox
+                    collection={parentCollection}
+                    value={null}
+                    onChange={(id) => {
+                      if (id != null) void copyLinesFrom(String(id))
+                    }}
+                    placeholder='Pick the record to copy from…'
+                  />
+                </span>
+              )}
+            </span>
+          )}
+          {defaultsCols.length > 0 && (
             <button
               type='button'
-              onClick={() => setCopyFromOpen((v) => !v)}
-              title='Copy this table’s lines from another record'
-              className='h-6 rounded border border-slate-200 px-2.5 text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
+              onClick={() => setDefaultsOpen((v) => !v)}
+              className={cn(
+                'h-6 px-2.5 rounded border transition-colors',
+                defaultsOpen
+                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+              )}
             >
-              Copy from…
+              with defaults…
             </button>
-            {copyFromOpen && (
-              <span className='absolute left-0 top-full z-[70] mt-1 w-[300px] rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'>
-                <RelationCombobox
-                  collection={parentCollection}
-                  value={null}
-                  onChange={(id) => {
-                    if (id != null) void copyLinesFrom(String(id))
-                  }}
-                  placeholder='Pick the record to copy from…'
-                />
-              </span>
-            )}
-          </span>
-        )}
-        {defaultsCols.length > 0 && (
-          <button
-            type='button'
-            onClick={() => setDefaultsOpen(v => !v)}
-            className={cn(
-              'h-6 px-2.5 rounded border transition-colors',
-              defaultsOpen
-                ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
-                : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
-            )}
-          >
-            with defaults…
-          </button>
-        )}
-        {applyValuesCols.length > 0 && (
-          <button
-            type='button'
-            onClick={() => setApplyOpen(v => !v)}
-            className={cn(
-              'h-6 px-2.5 rounded border transition-colors',
-              applyOpen
-                ? 'border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-300'
-                : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
-            )}
-          >
-            apply values…
-          </button>
-        )}
-        {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
-        {presetSwitcher}
-        {showRowRevisions && allowRevisionRestore && !isNew && (
-          <button
-            type='button'
-            title='Restore field from history'
-            onClick={() => setFieldRestoreOpen(true)}
-            className='ml-auto rounded p-1 text-slate-300 hover:text-[#00ceff]'
-          >
-            <History className='h-3.5 w-3.5' />
-          </button>
-        )}
-      </div>}
+          )}
+          {applyValuesCols.length > 0 && (
+            <button
+              type='button'
+              onClick={() => setApplyOpen((v) => !v)}
+              className={cn(
+                'h-6 px-2.5 rounded border transition-colors',
+                applyOpen
+                  ? 'border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-300'
+                  : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+              )}
+            >
+              apply values…
+            </button>
+          )}
+          {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+          {presetSwitcher}
+          {showRowRevisions && allowRevisionRestore && !isNew && (
+            <button
+              type='button'
+              title='Restore field from history'
+              onClick={() => setFieldRestoreOpen(true)}
+              className='ml-auto rounded p-1 text-slate-300 hover:text-[#00ceff]'
+            >
+              <History className='h-3.5 w-3.5' />
+            </button>
+          )}
+        </div>
+      )}
 
       {applyOpen && applyValuesCols.length > 0 && (
         <div className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2'>
-          <p className='text-[11px] font-medium text-amber-700'>Apply values to all {rows.length + pendingRows.length} rows</p>
+          <p className='text-[11px] font-medium text-amber-700'>
+            Apply values to all {rows.length + pendingRows.length} rows
+          </p>
           <div className='flex flex-wrap gap-2 items-end'>
-            {applyValuesCols.map(c => (
+            {applyValuesCols.map((c) => (
               <div key={c.field} className='min-w-[160px]'>
                 <p className='text-[10px] text-slate-500 mb-0.5'>{c.label ?? titleCase(c.field)}</p>
                 <FieldRenderer
                   field={c}
                   value={applyValues[c.field] ?? null}
-                  onChange={v => setApplyValues(prev => ({ ...prev, [c.field]: v }))}
+                  onChange={(v) => setApplyValues((prev) => ({ ...prev, [c.field]: v }))}
                   relations={childRelations}
                   collection={relatedCollection}
                   itemId='new'
@@ -3918,948 +4477,1324 @@ export function InlineTableField({
         </div>
       )}
 
-    {isPrefilling && (
-      <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>
-        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
-        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
-        <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
-      </div>
-    )}
-    {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
-    {readOnly && presetSwitcher}
-    <div className={isPrefilling ? 'hidden' : `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ''}`}>
-      {reordering && (
-        <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px] dark:bg-black/40'>
-          <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
-            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-            Saving order…
-          </div>
+      {isPrefilling && (
+        <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>
+          <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
+          <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
+          <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
         </div>
       )}
-      {frozenCss && <style>{frozenCss}</style>}
-      <table className={freezeFirstColumn ? `w-full min-w-max ${frozenClass}` : 'w-full table-fixed'}>
-        <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
-          <tr>
-            {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}
-            {showLineNumbers && <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>#</th>}
-            {(isNew || isPendingMode) && <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>Status</th>}
-            {effectiveCols.map((c) => (
-              <th key={c.field} className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'>
-                {c.label ?? titleCase(c.field)}
-              </th>
-            ))}
-            <th className='w-20' />
-          </tr>
-        </thead>
-        <tbody>
-          {/* Defaults row */}
-          {defaultsOpen && (
-            <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
-              {enableReorder && (rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
-              {showLineNumbers && <td className='w-8' />}
-              {(isNew || isPendingMode) && <td className='px-3 py-1 align-middle w-20'>
-                <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
-              </td>}
-              {defaultsCols.map(c => (
-                <td key={c.field} className='px-2 py-1 align-top'>
-                  <FieldRenderer
-                    field={c}
-                    value={defaultValues[c.field] ?? null}
-                    onChange={v => setDefaultField(c.field, v)}
-                    relations={childRelations}
-                    collection={relatedCollection}
-                    itemId='new'
-                  />
-                </td>
-              ))}
-              <td className='px-1 py-1 align-top'>
-                <button
-                  type='button'
-                  disabled={bulkAdding}
-                  onClick={() => addBulkRows(true)}
-                  className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
+      {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
+      {readOnly && presetSwitcher}
+      <div
+        className={
+          isPrefilling
+            ? 'hidden'
+            : `relative rounded-lg border border-slate-200 text-[12px]${freezeFirstColumn ? ' overflow-x-auto' : ''}`
+        }
+      >
+        {reordering && (
+          <div className='absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-[1px] dark:bg-black/40'>
+            <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 shadow-sm text-[12px] text-slate-500'>
+              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              Saving order…
+            </div>
+          </div>
+        )}
+        {frozenCss && <style>{frozenCss}</style>}
+        <table
+          className={freezeFirstColumn ? `w-full min-w-max ${frozenClass}` : 'w-full table-fixed'}
+        >
+          <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
+            <tr>
+              {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}
+              {showLineNumbers && (
+                <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>
+                  #
+                </th>
+              )}
+              {(isNew || isPendingMode) && (
+                <th className='px-3 py-2 text-left font-medium text-slate-400 text-[11px] w-20'>
+                  Status
+                </th>
+              )}
+              {effectiveCols.map((c) => (
+                <th
+                  key={c.field}
+                  className='px-3 py-2 text-left font-medium text-slate-500 text-[11px]'
                 >
-                  {bulkAdding ? '…' : `Add ${bulkCount}`}
-                </button>
-              </td>
+                  {c.label ?? titleCase(c.field)}
+                </th>
+              ))}
+              <th className='w-20' />
             </tr>
-          )}
-
-          {/* Saved rows */}
-          {!isNew && activeView === 'original' && rows.slice(0, renderCap).map((row, ri) => {
-            const id = String(row.id)
-            const section = sectionsActive ? sectionOf(row) : null
-            const isSectionStart = section !== null && (ri === 0 || sectionOf(rows[ri - 1]) !== section)
-            const sectionCollapsed = section !== null && collapsedSections.has(section)
-            const sectionHeader = isSectionStart && section !== null ? (
-              <tr className='border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'>
-                <td colSpan={nestedColSpan} className='px-2 py-1'>
+          </thead>
+          <tbody>
+            {/* Defaults row */}
+            {defaultsOpen && (
+              <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
+                {enableReorder && (rowOrderField || isNew || isPendingMode) && (
+                  <td className='w-6' />
+                )}
+                {showLineNumbers && <td className='w-8' />}
+                {(isNew || isPendingMode) && (
+                  <td className='px-3 py-1 align-middle w-20'>
+                    <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
+                  </td>
+                )}
+                {defaultsCols.map((c) => (
+                  <td key={c.field} className='px-2 py-1 align-top'>
+                    <FieldRenderer
+                      field={c}
+                      value={defaultValues[c.field] ?? null}
+                      onChange={(v) => setDefaultField(c.field, v)}
+                      relations={childRelations}
+                      collection={relatedCollection}
+                      itemId='new'
+                    />
+                  </td>
+                ))}
+                <td className='px-1 py-1 align-top'>
                   <button
                     type='button'
-                    onClick={(e) => { e.stopPropagation(); toggleSection(section) }}
-                    className='flex w-full items-center gap-1.5 text-left'
+                    disabled={bulkAdding}
+                    onClick={() => addBulkRows(true)}
+                    className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
                   >
-                    <ChevronRight className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', !sectionCollapsed && 'rotate-90')} />
-                    <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>{section}</span>
-                    <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                      {rows.reduce((n, r) => n + (sectionOf(r) === section ? 1 : 0), 0)}
-                    </span>
+                    {bulkAdding ? '…' : `Add ${bulkCount}`}
                   </button>
                 </td>
               </tr>
-            ) : null
-            if (sectionCollapsed) return <Fragment key={id}>{sectionHeader}</Fragment>
-            const isEditing = editState?.rowId === id
-            const isDragging = dragIdx === ri
-            const isDropTarget = dropIdx === ri && dragIdx !== ri
-            const isPendingEdit = pendingEdits.has(id)
-            const isPendingDelete = pendingDeletes.has(id)
-            // Merge pending edit changes into display values
-            const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
-            const lineError =
-              subErrLineField && !isPendingDelete
-                ? (submissionErrorByLine.get(String(displayRow[subErrLineField] ?? '')) ?? null)
-                : null
-            return (
-              <Fragment key={id}>
-              {sectionHeader}
-              <tr
-                data-o2m-row={`${relatedCollection}:${id}`}
-                data-o2m-editing={isEditing ? '' : undefined}
-                draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
-                onDragStart={() => handleDragStart(ri)}
-                onDragOver={(e) => handleDragOver(e, ri)}
-                onDrop={handleDrop}
-                onDragEnd={handleDragEnd}
-                onClick={() => !isEditing && !isPendingDelete && startEdit(displayRow)}
-                onBlur={(e) => {
-                  if (!isEditing || saving || isPendingDelete) return
-                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  // Focus moving into a PORTALED editor layer (picker panel,
-                  // dialog) is still the same interaction; and a null
-                  // relatedTarget (clicking non-focusable row chrome — the
-                  // Windows report) defers to the pointer handler, which
-                  // already knows whether the press was inside.
-                  if (isEditorNode(e.relatedTarget as Node | null)) return
-                  blurTimerRef.current = setTimeout(() => {
-                    if (lastDownInsideRef.current) return
-                    if (isEditorNode(document.activeElement)) return
-                    void saveEdit()
-                  }, 150)
-                }}
-                onFocus={() => {
-                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
-                }}
-                className={cn('border-b border-slate-100 transition-colors',
-                  isDragging ? 'opacity-40' : '',
-                  isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
-                  isPendingDelete ? 'opacity-50 bg-red-50/40 cursor-default line-through' : '',
-                  !isPendingDelete && isEditing ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default' : '',
-                  !isPendingDelete && !isEditing
-                    ? lineError
-                      ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
-                      : ri % 2 === 0
-                        ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
-                        : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
-                    : ''
-                )}>
-                {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
-                  <>
-                    {enableReorder && (rowOrderField || isPendingMode) && (
-                      <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                        {rowOrderField && <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />}
-                      </td>
-                    )}
-                    {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{ri + 1}</td>}
-                    {isPendingMode && (
-                      <td className='px-3 py-1 align-middle w-20'>
-                        {isPendingDelete
-                          ? <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>Delete</span>
-                          : isPendingEdit
-                            ? <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Edited</span>
-                            : null
-                        }
-                      </td>
-                    )}
-                  </>
-                )}
-                {isEditing && !isPendingDelete && rowEditorMode === 'panel'
-                  ? renderRowEditorPanel({
-                      identity: `${showLineNumbers ? `Line ${ri + 1} · ` : ''}${rowIdentityLabel(displayRow)}`,
-                      draft: editState?.draft ?? displayRow,
-                      rowId: id,
-                      saveLabel: 'Save',
-                      onDelete: (e) => deleteRow(row, e),
-                      drawer: renderDrawerRelations(id, editState?.draft ?? displayRow)
-                    })
-                  : (() => {
-                  // Staged drawer edits (pending mode) haven't reached the
-                  // stored rollup yet — overlay this row's live drawer
-                  // snapshot so Allocated / Available read true.
-                  const rowOverlay = liveOverlayDraft(displayRow, { rowKey: id })
-                  return effectiveCols.map((c) => {
-                  if (isSummaryCol(c)) {
-                    return (
-                      <td key={c.field} className='px-2 py-1 align-top'>
-                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellContent(c, displayRow)}</div>
-                      </td>
-                    )
-                  }
-                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-                  const computedDisplayVal = isComputedWrite
-                    ? (evalClientFormula(c.computed_formula as string, isEditing ? (editState?.draft ?? displayRow) : displayRow) ?? displayRow[c.field])
-                    : null
-                  return (
-                    <td key={c.field} className='px-2 py-1 align-top'>
-                      {isComputedWrite ? (
-                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, computedDisplayVal)}</div>
-                      ) : (isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <FieldRenderer
-                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                            value={editState?.draft[c.field] ?? null}
-                            onChange={(v) => setDraftField(c.field, v)}
-                            relations={childRelations}
-                            collection={relatedCollection}
-                            itemId={id}
-                            cascadeFilter={fieldCascadeFilters[c.field]}
-                            displayOnly={!isEditing || isPendingDelete}
+            )}
+
+            {/* Saved rows */}
+            {!isNew &&
+              activeView === 'original' &&
+              rows.slice(0, renderCap).map((row, ri) => {
+                const id = String(row.id)
+                const section = sectionsActive ? sectionOf(row) : null
+                const isSectionStart =
+                  section !== null && (ri === 0 || sectionOf(rows[ri - 1]) !== section)
+                const sectionCollapsed = section !== null && collapsedSections.has(section)
+                const sectionHeader =
+                  isSectionStart && section !== null ? (
+                    <tr className='border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'>
+                      <td colSpan={nestedColSpan} className='px-2 py-1'>
+                        <button
+                          type='button'
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleSection(section)
+                          }}
+                          className='flex w-full items-center gap-1.5 text-left'
+                        >
+                          <ChevronRight
+                            className={cn(
+                              'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                              !sectionCollapsed && 'rotate-90'
+                            )}
                           />
-                        </div>
-                      ) : c.interface === 'formula-column' ? (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field], row.id != null ? String(row.id) : undefined, rowOverlay)}</div>
-                      ) : c.computed_type === 'rollup' ? (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field] ?? displayRow[c.field], row.id != null ? String(row.id) : undefined)}</div>
-                      ) : (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, displayRow[c.field], row.id != null ? String(row.id) : undefined)}</div>
-                      )}
-                    </td>
-                  )
-                })
-                })()}
-                {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
-                <td className='px-1 py-1 align-middle'>
-                  {isEditing && !isPendingDelete ? (
-                    <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
-                      <button type='button' disabled={saving} onClick={saveEdit}
-                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : 'Save'}
-                      </button>
-                      <button type='button' onClick={cancelEdit}
-                        className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
-                        ✕
-                      </button>
-                    </div>
-                  ) : (
-                    <div className='flex items-center justify-end gap-0.5'>
-                      {isPendingDelete ? (
-                        <button type='button' title='Undo delete'
-                          onClick={(e) => { e.stopPropagation(); staging?.cancelPendingDelete(relatedCollection, manyField, id) }}
-                          className='rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400'>
-                          Undo
+                          <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                            {section}
+                          </span>
+                          <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                            {rows.reduce((n, r) => n + (sectionOf(r) === section ? 1 : 0), 0)}
+                          </span>
                         </button>
-                      ) : (
+                      </td>
+                    </tr>
+                  ) : null
+                if (sectionCollapsed) return <Fragment key={id}>{sectionHeader}</Fragment>
+                const isEditing = editState?.rowId === id
+                const isDragging = dragIdx === ri
+                const isDropTarget = dropIdx === ri && dragIdx !== ri
+                const isPendingEdit = pendingEdits.has(id)
+                const isPendingDelete = pendingDeletes.has(id)
+                // Merge pending edit changes into display values
+                const displayRow = isPendingEdit ? { ...row, ...pendingEdits.get(id) } : row
+                const lineError =
+                  subErrLineField && !isPendingDelete
+                    ? (submissionErrorByLine.get(String(displayRow[subErrLineField] ?? '')) ?? null)
+                    : null
+                return (
+                  <Fragment key={id}>
+                    {sectionHeader}
+                    <tr
+                      data-o2m-row={`${relatedCollection}:${id}`}
+                      data-o2m-editing={isEditing ? '' : undefined}
+                      draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
+                      onDragStart={() => handleDragStart(ri)}
+                      onDragOver={(e) => handleDragOver(e, ri)}
+                      onDrop={handleDrop}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => !isEditing && !isPendingDelete && startEdit(displayRow)}
+                      onBlur={(e) => {
+                        if (!isEditing || saving || isPendingDelete) return
+                        if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))
+                          return
+                        // Focus moving into a PORTALED editor layer (picker panel,
+                        // dialog) is still the same interaction; and a null
+                        // relatedTarget (clicking non-focusable row chrome — the
+                        // Windows report) defers to the pointer handler, which
+                        // already knows whether the press was inside.
+                        if (isEditorNode(e.relatedTarget as Node | null)) return
+                        blurTimerRef.current = setTimeout(() => {
+                          if (lastDownInsideRef.current) return
+                          if (isEditorNode(document.activeElement)) return
+                          void saveEdit()
+                        }, 150)
+                      }}
+                      onFocus={() => {
+                        if (blurTimerRef.current) {
+                          clearTimeout(blurTimerRef.current)
+                          blurTimerRef.current = null
+                        }
+                      }}
+                      className={cn(
+                        'nvr-rise-in border-b border-slate-100 transition-colors',
+                        isDragging ? 'opacity-40' : '',
+                        isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
+                        isPendingDelete
+                          ? 'opacity-50 bg-red-50/40 cursor-default line-through'
+                          : '',
+                        !isPendingDelete && isEditing
+                          ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                          : '',
+                        !isPendingDelete && !isEditing
+                          ? lineError
+                            ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
+                            : ri % 2 === 0
+                              ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
+                              : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
+                          : ''
+                      )}
+                    >
+                      {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
                         <>
-                          {isPendingEdit && (
-                            <button type='button' title='Undo edit'
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                staging?.cancelPendingEdit(relatedCollection, manyField, id)
-                                // The queued edit carried this row's staged unit/allocation
-                                // ops — undoing it must revert those overlays too.
-                                setDrawerLiveRows((prev) => {
-                                  const next: typeof prev = {}
-                                  for (const [k, v] of Object.entries(prev)) if (!k.startsWith(`${id}|`)) next[k] = v
-                                  return next
-                                })
-                              }}
-                              className='rounded p-0.5 text-amber-400 hover:text-amber-600 text-[10px]'>
-                              ↩
-                            </button>
+                          {enableReorder && (rowOrderField || isPendingMode) && (
+                            <td
+                              className='w-6 px-1 align-middle'
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {rowOrderField && (
+                                <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                              )}
+                            </td>
                           )}
-                          {rowComments && id != null && (
-                            <RowCommentButton
-                              collection={relatedCollection}
-                              rowId={String(id)}
-                              count={rowCommentCounts[String(id)] ?? 0}
-                            />
+                          {showLineNumbers && (
+                            <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                              {ri + 1}
+                            </td>
                           )}
-                          {showRowRevisions && (
-                            <button type='button' title='Row history'
-                              onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
-                              className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
-                              <History className='h-3 w-3' />
-                            </button>
-                          )}
-                          {!readOnly && (
-                            <button type='button' onClick={(e) => deleteRow(row, e)}
-                              className='rounded p-0.5 text-slate-300 hover:text-red-500'>
-                              <X className='h-3 w-3' />
-                            </button>
+                          {isPendingMode && (
+                            <td className='px-3 py-1 align-middle w-20'>
+                              {isPendingDelete ? (
+                                <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
+                                  Delete
+                                </span>
+                              ) : isPendingEdit ? (
+                                <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
+                                  Edited
+                                </span>
+                              ) : null}
+                            </td>
                           )}
                         </>
                       )}
-                    </div>
-                  )}
-                </td>
-                )}
-              </tr>
-              {lineError && (
-                <tr>
-                  <td
-                    colSpan={nestedColSpan}
-                    className='border-b border-red-100 bg-red-50/60 px-3 py-1 text-[11px] leading-snug text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-400'
-                  >
-                    ⚠ {lineError}
-                  </td>
-                </tr>
-              )}
-              {isEditing && !isPendingDelete && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
-                <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
-                  <td colSpan={nestedColSpan} className='px-3 py-2'>
-                    <div className='space-y-2'>
-                      {drawerRelations.map((dr) => {
-                        const relField = typeof dr === 'string' ? dr : dr.field
-                        const relHint = typeof dr === 'string' ? undefined : dr.hint
-                        const relMatch = typeof dr === 'string' ? undefined : dr.match
-                        const rowData = (editState?.draft ?? displayRow) as Record<string, unknown>
-                        const matched = relMatch
-                          ? buildMatchedDrawer(relMatch, rowData, parentId, parentDraftCtx?.draft)
-                          : null
-                        return (
-                          <NestedRelationEditor
-                            key={relField}
-                            parentCollection={relatedCollection}
-                            relationField={relField}
-                            parentRowId={id}
-                            parentDraft={editState?.draft ?? displayRow}
-                            hint={relHint}
-                            outerGridInvalidateKey={['o2m-rows', relatedCollection, manyField, parentId]}
-                            {...(relMatch
-                              ? {
-                                  matchCollection: relMatch.collection,
-                                  matchQuery: matched?.query ?? null,
-                                  matchSeed: matched?.seed ?? {}
-                                }
-                              : isPendingMode ? {
-                                  deferred: true,
-                                  stagedOps: (editState?.draft[`__nested_ops_${relField}`] as NestedOps | undefined) ?? EMPTY_NESTED_OPS,
-                                  onStagedOpsChange: (ops: NestedOps) => setDraftField(`__nested_ops_${relField}`, ops)
-                                } : {})}
-                          />
-                        )
-                      })}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </Fragment>
-            )
-          })}
+                      {isEditing && !isPendingDelete && rowEditorMode === 'panel'
+                        ? renderRowEditorPanel({
+                            identity: `${showLineNumbers ? `Line ${ri + 1} · ` : ''}${rowIdentityLabel(displayRow)}`,
+                            draft: editState?.draft ?? displayRow,
+                            rowId: id,
+                            saveLabel: 'Save',
+                            onDelete: (e) => deleteRow(row, e),
+                            drawer: renderDrawerRelations(id, editState?.draft ?? displayRow)
+                          })
+                        : (() => {
+                            // Staged drawer edits (pending mode) haven't reached the
+                            // stored rollup yet — overlay this row's live drawer
+                            // snapshot so Allocated / Available read true.
+                            const rowOverlay = liveOverlayDraft(displayRow, { rowKey: id })
+                            return effectiveCols.map((c) => {
+                              if (isSummaryCol(c)) {
+                                return (
+                                  <td key={c.field} className='px-2 py-1 align-top'>
+                                    <div className='py-0.5 overflow-hidden text-slate-500'>
+                                      {summaryCellContent(c, displayRow)}
+                                    </div>
+                                  </td>
+                                )
+                              }
+                              const isComputedWrite =
+                                c.computed_type === 'write' && !!c.computed_formula
+                              const computedDisplayVal = isComputedWrite
+                                ? (evalClientFormula(
+                                    c.computed_formula as string,
+                                    isEditing ? (editState?.draft ?? displayRow) : displayRow
+                                  ) ?? displayRow[c.field])
+                                : null
+                              return (
+                                <td key={c.field} className='px-2 py-1 align-top'>
+                                  {isComputedWrite ? (
+                                    <div className='py-0.5 overflow-hidden text-slate-500 italic'>
+                                      {renderCell(c, computedDisplayVal)}
+                                    </div>
+                                  ) : (isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
+                                    <div onClick={(e) => e.stopPropagation()}>
+                                      <FieldRenderer
+                                        field={
+                                          { ...c, sort: c.sort ?? 0 } as Parameters<
+                                            typeof FieldRenderer
+                                          >[0]['field']
+                                        }
+                                        value={editState?.draft[c.field] ?? null}
+                                        onChange={(v) => setDraftField(c.field, v)}
+                                        relations={childRelations}
+                                        collection={relatedCollection}
+                                        itemId={id}
+                                        cascadeFilter={fieldCascadeFilters[c.field]}
+                                        displayOnly={!isEditing || isPendingDelete}
+                                      />
+                                    </div>
+                                  ) : c.interface === 'formula-column' ? (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(
+                                        c,
+                                        rowOverlay[c.field],
+                                        row.id != null ? String(row.id) : undefined,
+                                        rowOverlay
+                                      )}
+                                    </div>
+                                  ) : c.computed_type === 'rollup' ? (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(
+                                        c,
+                                        rowOverlay[c.field] ?? displayRow[c.field],
+                                        row.id != null ? String(row.id) : undefined
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(
+                                        c,
+                                        displayRow[c.field],
+                                        row.id != null ? String(row.id) : undefined
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              )
+                            })
+                          })()}
+                      {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
+                        <td className='px-1 py-1 align-middle'>
+                          {isEditing && !isPendingDelete ? (
+                            <div
+                              className='flex items-stretch gap-1'
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type='button'
+                                disabled={saving}
+                                onClick={saveEdit}
+                                className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                              >
+                                {saving ? '…' : 'Save'}
+                              </button>
+                              <button
+                                type='button'
+                                onClick={cancelEdit}
+                                className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <div className='flex items-center justify-end gap-0.5'>
+                              {isPendingDelete ? (
+                                <button
+                                  type='button'
+                                  title='Undo delete'
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    staging?.cancelPendingDelete(relatedCollection, manyField, id)
+                                  }}
+                                  className='rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400'
+                                >
+                                  Undo
+                                </button>
+                              ) : (
+                                <>
+                                  {isPendingEdit && (
+                                    <button
+                                      type='button'
+                                      title='Undo edit'
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        staging?.cancelPendingEdit(relatedCollection, manyField, id)
+                                        // The queued edit carried this row's staged unit/allocation
+                                        // ops — undoing it must revert those overlays too.
+                                        setDrawerLiveRows((prev) => {
+                                          const next: typeof prev = {}
+                                          for (const [k, v] of Object.entries(prev))
+                                            if (!k.startsWith(`${id}|`)) next[k] = v
+                                          return next
+                                        })
+                                      }}
+                                      className='rounded p-0.5 text-amber-400 hover:text-amber-600 text-[10px]'
+                                    >
+                                      ↩
+                                    </button>
+                                  )}
+                                  {rowComments && id != null && (
+                                    <RowCommentButton
+                                      collection={relatedCollection}
+                                      rowId={String(id)}
+                                      count={rowCommentCounts[String(id)] ?? 0}
+                                    />
+                                  )}
+                                  {showRowRevisions && (
+                                    <button
+                                      type='button'
+                                      title='Row history'
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setHistoryRow(row)
+                                      }}
+                                      className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                                    >
+                                      <History className='h-3 w-3' />
+                                    </button>
+                                  )}
+                                  {!readOnly && (
+                                    <button
+                                      type='button'
+                                      onClick={(e) => deleteRow(row, e)}
+                                      className='rounded p-0.5 text-slate-300 hover:text-red-500'
+                                    >
+                                      <X className='h-3 w-3' />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                    {lineError && (
+                      <tr>
+                        <td
+                          colSpan={nestedColSpan}
+                          className='border-b border-red-100 bg-red-50/60 px-3 py-1 text-[11px] leading-snug text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-400'
+                        >
+                          ⚠ {lineError}
+                        </td>
+                      </tr>
+                    )}
+                    {isEditing &&
+                      !isPendingDelete &&
+                      rowEditorMode !== 'panel' &&
+                      drawerRelations &&
+                      drawerRelations.length > 0 && (
+                        <tr
+                          data-o2m-editing
+                          className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'
+                        >
+                          <td colSpan={nestedColSpan} className='px-3 py-2'>
+                            <div className='space-y-2'>
+                              {drawerRelations.map((dr) => {
+                                const relField = typeof dr === 'string' ? dr : dr.field
+                                const relHint = typeof dr === 'string' ? undefined : dr.hint
+                                const relMatch = typeof dr === 'string' ? undefined : dr.match
+                                const rowData = (editState?.draft ?? displayRow) as Record<
+                                  string,
+                                  unknown
+                                >
+                                const matched = relMatch
+                                  ? buildMatchedDrawer(
+                                      relMatch,
+                                      rowData,
+                                      parentId,
+                                      parentDraftCtx?.draft
+                                    )
+                                  : null
+                                return (
+                                  <NestedRelationEditor
+                                    key={relField}
+                                    parentCollection={relatedCollection}
+                                    relationField={relField}
+                                    parentRowId={id}
+                                    parentDraft={editState?.draft ?? displayRow}
+                                    hint={relHint}
+                                    outerGridInvalidateKey={[
+                                      'o2m-rows',
+                                      relatedCollection,
+                                      manyField,
+                                      parentId
+                                    ]}
+                                    {...(relMatch
+                                      ? {
+                                          matchCollection: relMatch.collection,
+                                          matchQuery: matched?.query ?? null,
+                                          matchSeed: matched?.seed ?? {}
+                                        }
+                                      : isPendingMode
+                                        ? {
+                                            deferred: true,
+                                            stagedOps:
+                                              (editState?.draft[`__nested_ops_${relField}`] as
+                                                | NestedOps
+                                                | undefined) ?? EMPTY_NESTED_OPS,
+                                            onStagedOpsChange: (ops: NestedOps) =>
+                                              setDraftField(`__nested_ops_${relField}`, ops)
+                                          }
+                                        : {})}
+                                  />
+                                )
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                  </Fragment>
+                )
+              })}
 
-          {/* New row being entered. Distinct from both the saved rows and the
+            {/* New row being entered. Distinct from both the saved rows and the
               staged pending ones: this is the row currently being typed. */}
-          {isEditingNew && (
-            <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'>
-              {rowEditorMode !== 'panel' && (
-                <>
-                  {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
-                  {/* This row had no number cell at all, so every column after it
+            {isEditingNew && (
+              <tr
+                data-o2m-editing
+                className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'
+              >
+                {rowEditorMode !== 'panel' && (
+                  <>
+                    {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
+                    {/* This row had no number cell at all, so every column after it
                       sat one place left of its header. It also shows the number the
                       row is about to take, continuing past the saved and staged
                       rows, rather than nothing. */}
-                  {showLineNumbers && (
-                    <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
-                      {rows.length + pendingRows.length + 1}
-                    </td>
-                  )}
-                  {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
-                </>
-              )}
-              {rowEditorMode === 'panel'
-                ? renderRowEditorPanel({
-                    identity: `${showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}New line`,
-                    draft: editState!.draft,
-                    rowId: undefined,
-                    saveLabel: 'Save',
-                    drawer: renderDrawerRelations(undefined, editState!.draft)
-                  })
-                : effectiveCols.map((c) => {
-                if (isSummaryCol(c)) {
-                  return (
-                    <td key={c.field} className='px-2 py-1 align-top'>
-                      <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, editState!.draft, true)}</div>
-                    </td>
-                  )
-                }
-                const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-                const isMM = isM2MIface(c.interface)
-                const m2mKey = `__m2m_${c.field}`
-                const m2mTarget = isMM ? resolveM2MTarget(c) : null
-                return (
-                  <td key={c.field} className='px-2 py-1 align-top'>
-                    {isComputedWrite ? (
-                      <div className='py-0.5 overflow-hidden text-slate-500 italic'>
-                        {renderCell(c, evalClientFormula(c.computed_formula as string, editState!.draft) ?? null)}
-                      </div>
-                    ) : isMM && m2mTarget ? (
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <RelationCombobox
-                          collection={m2mTarget.targetCollection}
-                          value={editState!.draft[m2mKey] ?? null}
-                          onChange={(v) => setDraftField(m2mKey, v)}
-                          extraFilter={fieldCascadeFilters[c.field]}
-                        />
-                      </div>
-                    ) : (
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <FieldRenderer
-                          field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                          value={editState!.draft[c.field] ?? null}
-                          onChange={(v) => setDraftField(c.field, v)}
-                          relations={childRelations}
-                          collection={relatedCollection}
-                          itemId='new'
-                          cascadeFilter={fieldCascadeFilters[c.field]}
-                        />
-                      </div>
-                    )}
-                  </td>
-                )
-              })}
-              {rowEditorMode !== 'panel' && (
-              <td className='px-1 py-1 align-middle'>
-                <div className='flex items-stretch gap-1'>
-                  <button type='button' disabled={saving} onClick={saveEdit}
-                    className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                    {saving ? '…' : 'Add'}
-                  </button>
-                  <button type='button' onClick={cancelEdit}
-                    className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
-                    ✕
-                  </button>
-                </div>
-              </td>
-              )}
-            </tr>
-          )}
-
-          {rows.length === 0 && pendingRows.length === 0 && !isEditingNew && (
-            <tr>
-              <td colSpan={nestedColSpan} className='px-3 py-14 text-center text-slate-400'>
-                {emptyLabel
-                  ? `No ${emptyLabel.toLowerCase()} yet`
-                  : isNew
-                    ? 'No pending rows'
-                    : 'No rows yet'}
-              </td>
-            </tr>
-          )}
-
-          {/* Addendum view rows */}
-          {!isNew && activeView !== 'original' && (() => {
-            const entry = addendumO2MEntries.find(e => e.addendumId === activeView)
-            const colCount =
-              (enableReorder && (rowOrderField || isPendingMode) ? 1 : 0) +
-              (showLineNumbers ? 1 : 0) +
-              (isPendingMode ? 1 : 0) +
-              effectiveCols.length + 1
-            // Field untouched by this addendum → show the record's CURRENT rows
-            // read-only, so the form stays complete in addendum view. Only an
-            // entry that exists but is EMPTY means "addendum proposes no rows".
-            if (!entry) {
-              if (rows.length === 0) return (
-                <tr>
-                  <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-slate-400'>
-                    {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'No rows'}
-                  </td>
-                </tr>
-              )
-              return rows.map((row, ri) => (
-                <tr key={ri} className='border-b border-slate-100'>
-                  {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
-                  {showLineNumbers && <td className='w-8 px-2 align-middle text-[11px] text-slate-400 select-none'>{ri + 1}</td>}
-                  {isPendingMode && <td className='w-20' />}
-                  {effectiveCols.map((c) => (
-                    <td key={c.field} className='px-2 py-1.5 text-[11px] text-slate-700'>
-                      {isSummaryCol(c) ? summaryCellContent(c, row) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
-                    </td>
-                  ))}
-                  <td className='w-20' />
-                </tr>
-              ))
-            }
-            if (entry.rows.length === 0) return (
-              <tr>
-                <td colSpan={colCount} className='px-3 py-8 text-center text-[11px] text-amber-500'>
-                  No proposed rows in this addendum
-                </td>
-              </tr>
-            )
-            return entry.rows.map((rawRow, ri) => {
-              // Derived columns must be recomputed on BOTH sides before the
-              // diff. An addendum that changes a quantity changes the line's
-              // money too, and a reviewer reading a stale stored total would
-              // approve a figure the save then recalculates to something else.
-              const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
-              const rawOrig = rows.find(r => String(r.id) === String(row.id))
-              const origRow = rawOrig
-                ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
-                : undefined
-              const isNewRow = !origRow
-              const changedFields = new Set(
-                isNewRow ? displayCols.map(c => c.field) :
-                displayCols.filter(c => String(row[c.field] ?? '') !== String(origRow![c.field] ?? '')).map(c => c.field)
-              )
-              const rowChanged = isNewRow || changedFields.size > 0
-              return (
-                <tr key={ri} className={rowChanged ? 'border-b border-amber-100 bg-amber-50/40 dark:border-amber-500/25 dark:bg-amber-400/10' : 'border-b border-slate-100'}>
-                  {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
-                  {showLineNumbers && <td className={`w-8 px-2 align-middle text-[11px] select-none ${rowChanged ? 'text-amber-400' : 'text-slate-400'}`}>{ri + 1}</td>}
-                  {isPendingMode && <td className='w-20' />}
-                  {effectiveCols.map((c) => (
-                    <td key={c.field} className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900 dark:bg-amber-400/15 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'}`}>
-                      {isSummaryCol(c) ? summaryCellContent(c, row) : renderCell(c, row[c.field], row.id != null ? String(row.id) : undefined)}
-                    </td>
-                  ))}
-                  <td className='w-20 px-2 py-1.5 text-right'>
-                    {rowChanged && (
-                      <span className='text-[10px] font-medium uppercase tracking-wide text-amber-400'>
-                        {isNewRow ? 'New' : 'Modified'}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              )
-            })
-          })()}
-          {/* Pending rows render AFTER saved ones: a row added to an
-              existing record belongs at the end of the list, not above
-              lines that already exist. */}
-          {/* Pending rows (new parent OR pending-save mode) */}
-          {!isNew && activeView === 'original' && rows.length > renderCap && (
-            <tr ref={renderSentinelRef}>
-              <td colSpan={99} className='px-3 py-2 text-center text-[11px] text-slate-400'>
-                Showing {renderCap} of {rows.length} rows — scroll to load more
-              </td>
-            </tr>
-          )}
-          {pendingRows.length > 0 && pendingRows.map((row, ri) => {
-            const pendingRowId = `pending:${ri}`
-            const isEditing = editState?.rowId === pendingRowId
-            const isPDragging = dragIdx === ri
-            const isPDropTarget = dropIdx === ri && dragIdx !== ri
-            const isPrefilled = !!row.__prefilled
-            return (
-              <Fragment key={ri}>
-              <tr
-                // THE pending-row close bug: without this attribute the
-                // outside-click classifier can't recognize its own editor, so
-                // every click INSIDE an open pending-row form classified as
-                // outside and committed it shut. Saved rows always had it.
-                data-o2m-editing={isEditing ? '' : undefined}
-                draggable={enableReorder && !isEditing}
-                onDragStart={() => handleDragStart(ri)}
-                onDragOver={(e) => handleDragOver(e, ri)}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  if (dragIdx !== null && dropIdx !== null && dragIdx !== dropIdx) {
-                    staging?.reorderRows(relatedCollection, manyField, dragIdx, dropIdx)
-                  }
-                  handleDragEnd()
-                }}
-                onDragEnd={handleDragEnd}
-                onClick={() => !isEditing && startPendingEdit(row, ri)}
-                onBlur={(e) => {
-                  if (!isEditing || saving) return
-                  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return
-                  if (isEditorNode(e.relatedTarget as Node | null)) return
-                  blurTimerRef.current = setTimeout(() => {
-                    if (lastDownInsideRef.current) return
-                    if (isEditorNode(document.activeElement)) return
-                    void saveEdit()
-                  }, 150)
-                }}
-                onFocus={() => {
-                  if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null }
-                }}
-                className={cn('border-b border-slate-100 transition-colors',
-                  isPDragging ? 'opacity-40' : '',
-                  isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
-                  isEditing
-                    ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
-                    : isPrefilled ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer' : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
-                )}>
-                {!(isEditing && rowEditorMode === 'panel') && (
-                  <>
-                    {enableReorder && (
-                      <td className='w-6 px-1 align-middle' onClick={(e) => e.stopPropagation()}>
-                        <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                    {showLineNumbers && (
+                      <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                        {rows.length + pendingRows.length + 1}
                       </td>
                     )}
-                    {/* Continue the sequence rather than restarting: a new row
-                        showed "1" beside the saved row already numbered 1. */}
-                    {showLineNumbers && <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>{rows.length + ri + 1}</td>}
-                    <td className='px-3 py-1 align-middle w-16'>
-                      {!isEditing && !isPrefilled && (
-                        <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>Pending</span>
-                      )}
-                      {!isEditing && isPrefilled && row.id != null && editedPendingIds.has(row.id as string | number) && (
-                        <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>Edited</span>
-                      )}
-                    </td>
+                    {(isNew || isPendingMode) && <td className='px-3 py-1.5' />}
                   </>
                 )}
-                {isEditing && rowEditorMode === 'panel'
+                {rowEditorMode === 'panel'
                   ? renderRowEditorPanel({
-                      identity: `${showLineNumbers ? `Line ${rows.length + ri + 1} · ` : ''}${rowIdentityLabel(isEditing ? editState!.draft : row)}`,
-                      draft: editState?.draft ?? row,
-                      rowId: pendingRowId,
+                      identity: `${showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}New line`,
+                      draft: editState!.draft,
+                      rowId: undefined,
                       saveLabel: 'Save',
-                      onDelete: (e) => {
-                        e.stopPropagation()
-                        staging?.removeRow(relatedCollection, manyField, ri)
-                      },
-                      // Grandchild rows for an unsaved row stage against the
-                      // draft, so there is no row id to pass yet.
-                      drawer: renderDrawerRelations(undefined, editState?.draft ?? row)
+                      drawer: renderDrawerRelations(undefined, editState!.draft)
                     })
-                  : (() => {
-                  // Collapsed pending row: rollups/formulas have no stored
-                  // value yet — derive them from the row's own staged data so
-                  // Allocated / Available read true before the parent saves.
-                  const rowOverlay = liveOverlayDraft(isEditing ? editState!.draft : row, { rowKey: pendingRowId })
-                  return effectiveCols.map((c) => {
-                  if (isSummaryCol(c)) {
-                    return (
-                      <td key={c.field} className='px-2 py-1 align-top'>
-                        <div className='py-0.5 overflow-hidden text-slate-500'>{summaryCellValue(c, isEditing ? editState!.draft : row, true)}</div>
-                      </td>
-                    )
-                  }
-                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-                  const isMM = isM2MIface(c.interface)
-                  const m2mKey = `__m2m_${c.field}`
-                  const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
-                  const displayVal = isComputedWrite
-                    ? (evalClientFormula(c.computed_formula as string, isEditing ? editState!.draft : row) ?? row[c.field])
-                    : (isEditing ? editState!.draft[c.field] : row[c.field])
-                  return (
-                    <td key={c.field} className='px-2 py-1 align-top'>
-                      {isComputedWrite ? (
-                        <div className='py-0.5 overflow-hidden text-slate-500 italic'>{renderCell(c, displayVal)}</div>
-                      ) : isMM && isEditing && m2mTarget ? (
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <RelationCombobox
-                            collection={m2mTarget.targetCollection}
-                            value={editState!.draft[m2mKey] ?? null}
-                            onChange={(v) => setDraftField(m2mKey, v)}
-                            extraFilter={fieldCascadeFilters[c.field]}
-                          />
-                        </div>
-                      ) : isMM ? (
-                        <span className='text-slate-300 text-[11px]'>—</span>
-                      ) : isEditing ? (
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <FieldRenderer
-                            field={{ ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']}
-                            value={editState!.draft[c.field] ?? null}
-                            onChange={(v) => setDraftField(c.field, v)}
-                            relations={childRelations}
-                            collection={relatedCollection}
-                            itemId='new'
-                            cascadeFilter={fieldCascadeFilters[c.field]}
-                          />
-                        </div>
-                      ) : c.interface === 'formula-column' ? (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field], undefined, rowOverlay)}</div>
-                      ) : c.computed_type === 'rollup' ? (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, rowOverlay[c.field] ?? row[c.field], String(row.id))}</div>
-                      ) : (
-                        <div className='py-0.5 overflow-hidden'>{renderCell(c, row[c.field], String(row.id))}</div>
-                      )}
-                    </td>
-                  )
-                })
-                })()}
-                {!(isEditing && rowEditorMode === 'panel') && (
-                <td className='px-1 py-1 align-middle'>
-                  {isEditing ? (
-                    <div className='flex items-stretch gap-1' onClick={(e) => e.stopPropagation()}>
-                      <button type='button' disabled={saving} onClick={saveEdit}
-                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'>
-                        {saving ? '…' : 'Save'}
+                  : effectiveCols.map((c) => {
+                      if (isSummaryCol(c)) {
+                        return (
+                          <td key={c.field} className='px-2 py-1 align-top'>
+                            <div className='py-0.5 overflow-hidden text-slate-500'>
+                              {summaryCellValue(c, editState!.draft, true)}
+                            </div>
+                          </td>
+                        )
+                      }
+                      const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                      const isMM = isM2MIface(c.interface)
+                      const m2mKey = `__m2m_${c.field}`
+                      const m2mTarget = isMM ? resolveM2MTarget(c) : null
+                      return (
+                        <td key={c.field} className='px-2 py-1 align-top'>
+                          {isComputedWrite ? (
+                            <div className='py-0.5 overflow-hidden text-slate-500 italic'>
+                              {renderCell(
+                                c,
+                                evalClientFormula(c.computed_formula as string, editState!.draft) ??
+                                  null
+                              )}
+                            </div>
+                          ) : isMM && m2mTarget ? (
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <RelationCombobox
+                                collection={m2mTarget.targetCollection}
+                                value={editState!.draft[m2mKey] ?? null}
+                                onChange={(v) => setDraftField(m2mKey, v)}
+                                extraFilter={fieldCascadeFilters[c.field]}
+                              />
+                            </div>
+                          ) : (
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <FieldRenderer
+                                field={
+                                  { ...c, sort: c.sort ?? 0 } as Parameters<
+                                    typeof FieldRenderer
+                                  >[0]['field']
+                                }
+                                value={editState!.draft[c.field] ?? null}
+                                onChange={(v) => setDraftField(c.field, v)}
+                                relations={childRelations}
+                                collection={relatedCollection}
+                                itemId='new'
+                                cascadeFilter={fieldCascadeFilters[c.field]}
+                              />
+                            </div>
+                          )}
+                        </td>
+                      )
+                    })}
+                {rowEditorMode !== 'panel' && (
+                  <td className='px-1 py-1 align-middle'>
+                    <div className='flex items-stretch gap-1'>
+                      <button
+                        type='button'
+                        disabled={saving}
+                        onClick={saveEdit}
+                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                      >
+                        {saving ? '…' : 'Add'}
                       </button>
-                      <button type='button' onClick={cancelEdit}
-                        className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'>
+                      <button
+                        type='button'
+                        onClick={cancelEdit}
+                        className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'
+                      >
                         ✕
                       </button>
                     </div>
-                  ) : (
-                    <div className='flex items-center justify-end gap-0.5'>
-                      {showRowRevisions && isPrefilled && row.id != null && (
-                        <button type='button' title='Row history'
-                          onClick={(e) => { e.stopPropagation(); setHistoryRow(row) }}
-                          className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'>
-                          <History className='h-3 w-3' />
-                        </button>
-                      )}
-                      <button type='button'
-                        onClick={(e) => { e.stopPropagation(); staging?.removeRow(relatedCollection, manyField, ri) }}
-                        className='rounded p-0.5 text-slate-400 hover:text-red-500'>
-                        <X className='h-3 w-3' />
-                      </button>
-                    </div>
-                  )}
-                </td>
+                  </td>
                 )}
               </tr>
-              {/* Panel mode renders the drawer INSIDE the panel — this strip is
-                  the inline-mode placement only, or the editors double up. */}
-              {isEditing && rowEditorMode !== 'panel' && drawerRelations && drawerRelations.length > 0 && (
-                <tr data-o2m-editing className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'>
-                  <td colSpan={nestedColSpan} className='px-3 py-2'>
-                    <div className='space-y-2'>
-                      {drawerRelations.map((dr) => {
-                        const relField = typeof dr === 'string' ? dr : dr.field
-                        const relHint = typeof dr === 'string' ? undefined : dr.hint
-                        return (
-                          <NestedRelationEditor
-                            key={relField}
-                            parentCollection={relatedCollection}
-                            relationField={relField}
-                            parentRowId={null}
-                            stagedMembers={
-                              (editState!.draft[`__o2m_${relField}`] as Record<string, unknown>[] | undefined) ?? []
-                            }
-                            onStagedChange={(next) => setDraftField(`__o2m_${relField}`, next)}
-                            parentDraft={editState!.draft}
-                            hint={relHint}
-                          />
-                        )
-                      })}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </Fragment>
-            )
-          })}
+            )}
 
-        </tbody>
-        {activeView === 'original' && (() => {
-          const aggCols = effectiveCols.filter(c => {
-            const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
-            return !!opts.aggregate
-          })
-          if (aggCols.length === 0) return null
-          const allRows = [
-            ...(rows ?? []).filter(r => !pendingDeletes.has(String(r.id))).map(r => {
-              const rid = String(r.id)
-              const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
-              return liveOverlayDraft(applyComputedFields(merged as Record<string, unknown>), { rowKey: rid })
-            }),
-            // Pending rows have no stored rollup values — derive them from
-            // their staged members so Allocated sums true before save.
-            ...pendingRows.map((r, i) => liveOverlayDraft(applyComputedFields(r as Record<string, unknown>), { rowKey: `pending:${i}` }))
-          ]
-          return (
-            <tfoot>
-              <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
-                {/* Leading cells must mirror the header exactly: reorder, line #, status */}
-                {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
-                {showLineNumbers && <td />}
-                {(isNew || isPendingMode) && <td />}
-                {effectiveCols.map(c => {
-                  const opts = c.options ? (typeof c.options === 'string' ? (() => { try { return JSON.parse(c.options as string) } catch { return {} } })() : c.options) as Record<string, unknown> : {}
-                  const agg = opts.aggregate as string | undefined
-                  if (!agg) return <td key={c.field} className='px-3 py-1.5' />
-                  // A formula column has no stored value — evaluate it per row
-                  // (bare refs off the row, dotted refs off resolve-paths).
-                  const colFormula =
-                    c.interface === 'formula-column' && typeof opts.column_formula === 'string'
-                      ? opts.column_formula
-                      : null
-                  const nums = allRows
-                    .map(r => {
-                      if (colFormula) {
-                        const v = evaluateNumeric(colFormula, (ref) =>
-                          ref.includes('.')
-                            ? resolvedPathData?.rows[String(r.id)]?.[ref]?.value
-                            : r[ref]
-                        )
-                        return v == null ? NaN : v
-                      }
-                      return Number(r[c.field])
-                    })
-                    .filter(n => !Number.isNaN(n))
-                  let result: number | null = null
-                  if (agg === 'count') result = allRows.length
-                  else if (nums.length > 0) {
-                    if (agg === 'sum') result = nums.reduce((a, b) => a + b, 0)
-                    else if (agg === 'avg') result = nums.reduce((a, b) => a + b, 0) / nums.length
-                    else if (agg === 'min') result = Math.min(...nums)
-                    else if (agg === 'max') result = Math.max(...nums)
-                  }
-                  const fmt = opts.format as string | undefined
-                  let display = result === null ? '—' : (() => {
-                    try {
-                      if (fmt === 'currency')
-                        return new Intl.NumberFormat(undefined, {
-                          ...numericIntlOptions(opts, 'currency'),
-                          currency: (opts.currency as string) || 'USD'
-                        }).format(result)
-                      if (fmt === 'decimal') { const p = typeof opts.precision === 'number' ? opts.precision : 2; return new Intl.NumberFormat(undefined, { minimumFractionDigits: p, maximumFractionDigits: p }).format(result) }
-                      if (fmt === 'int' || agg === 'count') return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(result)
-                      return agg === 'avg' ? result.toFixed(2) : String(result)
-                    } catch { return String(result) }
-                  })()
-                  return (
-                    <td key={c.field} className='px-3 py-1.5'>
-                      <span className='text-slate-400 text-[10px] font-mono mr-1'>{agg.toUpperCase()}</span>
-                      <span className='tabular-nums'>{display}</span>
-                    </td>
-                  )
-                })}
-                <td />
+            {rows.length === 0 && pendingRows.length === 0 && !isEditingNew && (
+              <tr>
+                <td colSpan={nestedColSpan} className='px-3 py-14 text-center text-slate-400'>
+                  {emptyLabel
+                    ? `No ${emptyLabel.toLowerCase()} yet`
+                    : isNew
+                      ? 'No pending rows'
+                      : 'No rows yet'}
+                </td>
               </tr>
-            </tfoot>
-          )
-        })()}
-      </table>
+            )}
 
-      {uniqueError && (
-        <div className='border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
-          {uniqueError}
-        </div>
-      )}
-      {activeView === 'original' && !isEditingNew && !readOnly && (
-        <div className='border-t border-slate-100 px-3 py-1.5'>
-          <button type='button' onClick={startNew}
-            className='text-[11px] font-medium text-[#00ceff] hover:underline'>
-            + Add row
-          </button>
-        </div>
-      )}
-
-      {showRowRevisions && (() => {
-        // Merge server results + local state; local fills the gap before server catches up
-        const serverIds = new Set(serverDeletedRows.map(r => String(r.item)))
-        const localOnly = deletedRows.filter(dr => !pendingDeletes.has(String(dr.id)) && !serverIds.has(String(dr.id)))
-        const allDeleted: Array<{ id: string; data: Record<string, unknown> }> = [
-          ...serverDeletedRows.map(r => ({ id: r.item, data: r.data })),
-          ...localOnly.map(dr => ({ id: String(dr.id), data: dr }))
-        ]
-        if (allDeleted.length === 0) return null
-        return (
-          <DeletedRowsSection
-            deletedRows={allDeleted}
-            displayCols={displayCols}
-            onOpenHistory={(id, data) => setHistoryRow({ id, ...data })}
-          />
-        )
-      })()}
-    </div>
-
-    <Sheet open={fieldRestoreOpen} onOpenChange={setFieldRestoreOpen}>
-      <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
-        <SheetHeader>
-          <SheetTitle className='text-[14px]'>Field history</SheetTitle>
-        </SheetHeader>
-        <div className='mt-4 space-y-3'>
-          {fieldSnapshotsLoading ? (
-            <div className='py-6 text-center'><Loader2 className='h-4 w-4 animate-spin inline text-slate-400' /></div>
-          ) : fieldSnapshotGroups.length === 0 ? (
-            <p className='py-6 text-center text-[12px] text-slate-400'>No history for this field</p>
-          ) : (
-            fieldSnapshotGroups.map((group, i) => {
-              const creates = group.entries.filter(e => e.action === 'create').length
-              const updates = group.entries.filter(e => e.action === 'update').length
-              const deletes = group.entries.filter(e => e.action === 'delete').length
-              const parts: string[] = []
-              if (creates) parts.push(`${creates} added`)
-              if (updates) parts.push(`${updates} updated`)
-              if (deletes) parts.push(`${deletes} removed`)
+            {/* Addendum view rows */}
+            {!isNew &&
+              activeView !== 'original' &&
+              (() => {
+                const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
+                const colCount =
+                  (enableReorder && (rowOrderField || isPendingMode) ? 1 : 0) +
+                  (showLineNumbers ? 1 : 0) +
+                  (isPendingMode ? 1 : 0) +
+                  effectiveCols.length +
+                  1
+                // Field untouched by this addendum → show the record's CURRENT rows
+                // read-only, so the form stays complete in addendum view. Only an
+                // entry that exists but is EMPTY means "addendum proposes no rows".
+                if (!entry) {
+                  if (rows.length === 0)
+                    return (
+                      <tr>
+                        <td
+                          colSpan={colCount}
+                          className='px-3 py-8 text-center text-[11px] text-slate-400'
+                        >
+                          {emptyLabel ? `No ${emptyLabel.toLowerCase()} yet` : 'No rows'}
+                        </td>
+                      </tr>
+                    )
+                  return rows.map((row, ri) => (
+                    <tr key={ri} className='border-b border-slate-100'>
+                      {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
+                      {showLineNumbers && (
+                        <td className='w-8 px-2 align-middle text-[11px] text-slate-400 select-none'>
+                          {ri + 1}
+                        </td>
+                      )}
+                      {isPendingMode && <td className='w-20' />}
+                      {effectiveCols.map((c) => (
+                        <td key={c.field} className='px-2 py-1.5 text-[11px] text-slate-700'>
+                          {isSummaryCol(c)
+                            ? summaryCellContent(c, row)
+                            : renderCell(
+                                c,
+                                row[c.field],
+                                row.id != null ? String(row.id) : undefined
+                              )}
+                        </td>
+                      ))}
+                      <td className='w-20' />
+                    </tr>
+                  ))
+                }
+                if (entry.rows.length === 0)
+                  return (
+                    <tr>
+                      <td
+                        colSpan={colCount}
+                        className='px-3 py-8 text-center text-[11px] text-amber-500'
+                      >
+                        No proposed rows in this addendum
+                      </td>
+                    </tr>
+                  )
+                return entry.rows.map((rawRow, ri) => {
+                  // Derived columns must be recomputed on BOTH sides before the
+                  // diff. An addendum that changes a quantity changes the line's
+                  // money too, and a reviewer reading a stale stored total would
+                  // approve a figure the save then recalculates to something else.
+                  const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
+                  const rawOrig = rows.find((r) => String(r.id) === String(row.id))
+                  const origRow = rawOrig
+                    ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
+                    : undefined
+                  const isNewRow = !origRow
+                  const changedFields = new Set(
+                    isNewRow
+                      ? displayCols.map((c) => c.field)
+                      : displayCols
+                          .filter(
+                            (c) => String(row[c.field] ?? '') !== String(origRow![c.field] ?? '')
+                          )
+                          .map((c) => c.field)
+                  )
+                  const rowChanged = isNewRow || changedFields.size > 0
+                  return (
+                    <tr
+                      key={ri}
+                      className={
+                        rowChanged
+                          ? 'border-b border-amber-100 bg-amber-50/40 dark:border-amber-500/25 dark:bg-amber-400/10'
+                          : 'border-b border-slate-100'
+                      }
+                    >
+                      {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
+                      {showLineNumbers && (
+                        <td
+                          className={`w-8 px-2 align-middle text-[11px] select-none ${rowChanged ? 'text-amber-400' : 'text-slate-400'}`}
+                        >
+                          {ri + 1}
+                        </td>
+                      )}
+                      {isPendingMode && <td className='w-20' />}
+                      {effectiveCols.map((c) => (
+                        <td
+                          key={c.field}
+                          className={`px-2 py-1.5 text-[11px] ${changedFields.has(c.field) ? 'bg-amber-50 text-amber-900 dark:bg-amber-400/15 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'}`}
+                        >
+                          {isSummaryCol(c)
+                            ? summaryCellContent(c, row)
+                            : renderCell(
+                                c,
+                                row[c.field],
+                                row.id != null ? String(row.id) : undefined
+                              )}
+                        </td>
+                      ))}
+                      <td className='w-20 px-2 py-1.5 text-right'>
+                        {rowChanged && (
+                          <span className='text-[10px] font-medium uppercase tracking-wide text-amber-400'>
+                            {isNewRow ? 'New' : 'Modified'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
+              })()}
+            {/* Pending rows render AFTER saved ones: a row added to an
+              existing record belongs at the end of the list, not above
+              lines that already exist. */}
+            {/* Pending rows (new parent OR pending-save mode) */}
+            {!isNew && activeView === 'original' && rows.length > renderCap && (
+              <tr ref={renderSentinelRef}>
+                <td colSpan={99} className='px-3 py-2 text-center text-[11px] text-slate-400'>
+                  Showing {renderCap} of {rows.length} rows — scroll to load more
+                </td>
+              </tr>
+            )}
+            {pendingRows.length > 0 &&
+              pendingRows.map((row, ri) => {
+                const pendingRowId = `pending:${ri}`
+                const isEditing = editState?.rowId === pendingRowId
+                const isPDragging = dragIdx === ri
+                const isPDropTarget = dropIdx === ri && dragIdx !== ri
+                const isPrefilled = !!row.__prefilled
+                return (
+                  <Fragment key={ri}>
+                    <tr
+                      // THE pending-row close bug: without this attribute the
+                      // outside-click classifier can't recognize its own editor, so
+                      // every click INSIDE an open pending-row form classified as
+                      // outside and committed it shut. Saved rows always had it.
+                      data-o2m-editing={isEditing ? '' : undefined}
+                      draggable={enableReorder && !isEditing}
+                      onDragStart={() => handleDragStart(ri)}
+                      onDragOver={(e) => handleDragOver(e, ri)}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        if (dragIdx !== null && dropIdx !== null && dragIdx !== dropIdx) {
+                          staging?.reorderRows(relatedCollection, manyField, dragIdx, dropIdx)
+                        }
+                        handleDragEnd()
+                      }}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => !isEditing && startPendingEdit(row, ri)}
+                      onBlur={(e) => {
+                        if (!isEditing || saving) return
+                        if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))
+                          return
+                        if (isEditorNode(e.relatedTarget as Node | null)) return
+                        blurTimerRef.current = setTimeout(() => {
+                          if (lastDownInsideRef.current) return
+                          if (isEditorNode(document.activeElement)) return
+                          void saveEdit()
+                        }, 150)
+                      }}
+                      onFocus={() => {
+                        if (blurTimerRef.current) {
+                          clearTimeout(blurTimerRef.current)
+                          blurTimerRef.current = null
+                        }
+                      }}
+                      className={cn(
+                        'border-b border-slate-100 transition-colors',
+                        isPDragging ? 'opacity-40' : '',
+                        isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
+                        isEditing
+                          ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                          : isPrefilled
+                            ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer'
+                            : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
+                      )}
+                    >
+                      {!(isEditing && rowEditorMode === 'panel') && (
+                        <>
+                          {enableReorder && (
+                            <td
+                              className='w-6 px-1 align-middle'
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
+                            </td>
+                          )}
+                          {/* Continue the sequence rather than restarting: a new row
+                        showed "1" beside the saved row already numbered 1. */}
+                          {showLineNumbers && (
+                            <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                              {rows.length + ri + 1}
+                            </td>
+                          )}
+                          <td className='px-3 py-1 align-middle w-16'>
+                            {!isEditing && !isPrefilled && (
+                              <span className='inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>
+                                Pending
+                              </span>
+                            )}
+                            {!isEditing &&
+                              isPrefilled &&
+                              row.id != null &&
+                              editedPendingIds.has(row.id as string | number) && (
+                                <span className='inline-flex text-[10px] font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5'>
+                                  Edited
+                                </span>
+                              )}
+                          </td>
+                        </>
+                      )}
+                      {isEditing && rowEditorMode === 'panel'
+                        ? renderRowEditorPanel({
+                            identity: `${showLineNumbers ? `Line ${rows.length + ri + 1} · ` : ''}${rowIdentityLabel(isEditing ? editState!.draft : row)}`,
+                            draft: editState?.draft ?? row,
+                            rowId: pendingRowId,
+                            saveLabel: 'Save',
+                            onDelete: (e) => {
+                              e.stopPropagation()
+                              staging?.removeRow(relatedCollection, manyField, ri)
+                            },
+                            // Grandchild rows for an unsaved row stage against the
+                            // draft, so there is no row id to pass yet.
+                            drawer: renderDrawerRelations(undefined, editState?.draft ?? row)
+                          })
+                        : (() => {
+                            // Collapsed pending row: rollups/formulas have no stored
+                            // value yet — derive them from the row's own staged data so
+                            // Allocated / Available read true before the parent saves.
+                            const rowOverlay = liveOverlayDraft(
+                              isEditing ? editState!.draft : row,
+                              { rowKey: pendingRowId }
+                            )
+                            return effectiveCols.map((c) => {
+                              if (isSummaryCol(c)) {
+                                return (
+                                  <td key={c.field} className='px-2 py-1 align-top'>
+                                    <div className='py-0.5 overflow-hidden text-slate-500'>
+                                      {summaryCellValue(
+                                        c,
+                                        isEditing ? editState!.draft : row,
+                                        true
+                                      )}
+                                    </div>
+                                  </td>
+                                )
+                              }
+                              const isComputedWrite =
+                                c.computed_type === 'write' && !!c.computed_formula
+                              const isMM = isM2MIface(c.interface)
+                              const m2mKey = `__m2m_${c.field}`
+                              const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
+                              const displayVal = isComputedWrite
+                                ? (evalClientFormula(
+                                    c.computed_formula as string,
+                                    isEditing ? editState!.draft : row
+                                  ) ?? row[c.field])
+                                : isEditing
+                                  ? editState!.draft[c.field]
+                                  : row[c.field]
+                              return (
+                                <td key={c.field} className='px-2 py-1 align-top'>
+                                  {isComputedWrite ? (
+                                    <div className='py-0.5 overflow-hidden text-slate-500 italic'>
+                                      {renderCell(c, displayVal)}
+                                    </div>
+                                  ) : isMM && isEditing && m2mTarget ? (
+                                    <div onClick={(e) => e.stopPropagation()}>
+                                      <RelationCombobox
+                                        collection={m2mTarget.targetCollection}
+                                        value={editState!.draft[m2mKey] ?? null}
+                                        onChange={(v) => setDraftField(m2mKey, v)}
+                                        extraFilter={fieldCascadeFilters[c.field]}
+                                      />
+                                    </div>
+                                  ) : isMM ? (
+                                    <span className='text-slate-300 text-[11px]'>—</span>
+                                  ) : isEditing ? (
+                                    <div onClick={(e) => e.stopPropagation()}>
+                                      <FieldRenderer
+                                        field={
+                                          { ...c, sort: c.sort ?? 0 } as Parameters<
+                                            typeof FieldRenderer
+                                          >[0]['field']
+                                        }
+                                        value={editState!.draft[c.field] ?? null}
+                                        onChange={(v) => setDraftField(c.field, v)}
+                                        relations={childRelations}
+                                        collection={relatedCollection}
+                                        itemId='new'
+                                        cascadeFilter={fieldCascadeFilters[c.field]}
+                                      />
+                                    </div>
+                                  ) : c.interface === 'formula-column' ? (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(c, rowOverlay[c.field], undefined, rowOverlay)}
+                                    </div>
+                                  ) : c.computed_type === 'rollup' ? (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(
+                                        c,
+                                        rowOverlay[c.field] ?? row[c.field],
+                                        String(row.id)
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className='py-0.5 overflow-hidden'>
+                                      {renderCell(c, row[c.field], String(row.id))}
+                                    </div>
+                                  )}
+                                </td>
+                              )
+                            })
+                          })()}
+                      {!(isEditing && rowEditorMode === 'panel') && (
+                        <td className='px-1 py-1 align-middle'>
+                          {isEditing ? (
+                            <div
+                              className='flex items-stretch gap-1'
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type='button'
+                                disabled={saving}
+                                onClick={saveEdit}
+                                className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                              >
+                                {saving ? '…' : 'Save'}
+                              </button>
+                              <button
+                                type='button'
+                                onClick={cancelEdit}
+                                className='rounded px-1.5 h-9 text-slate-400 hover:text-slate-700 text-[11px]'
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <div className='flex items-center justify-end gap-0.5'>
+                              {showRowRevisions && isPrefilled && row.id != null && (
+                                <button
+                                  type='button'
+                                  title='Row history'
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setHistoryRow(row)
+                                  }}
+                                  className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                                >
+                                  <History className='h-3 w-3' />
+                                </button>
+                              )}
+                              <button
+                                type='button'
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  staging?.removeRow(relatedCollection, manyField, ri)
+                                }}
+                                className='rounded p-0.5 text-slate-400 hover:text-red-500'
+                              >
+                                <X className='h-3 w-3' />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                    {/* Panel mode renders the drawer INSIDE the panel — this strip is
+                  the inline-mode placement only, or the editors double up. */}
+                    {isEditing &&
+                      rowEditorMode !== 'panel' &&
+                      drawerRelations &&
+                      drawerRelations.length > 0 && (
+                        <tr
+                          data-o2m-editing
+                          className='border-b border-slate-100 bg-[#f0fbff]/60 dark:bg-nvr-cyan/5'
+                        >
+                          <td colSpan={nestedColSpan} className='px-3 py-2'>
+                            <div className='space-y-2'>
+                              {drawerRelations.map((dr) => {
+                                const relField = typeof dr === 'string' ? dr : dr.field
+                                const relHint = typeof dr === 'string' ? undefined : dr.hint
+                                return (
+                                  <NestedRelationEditor
+                                    key={relField}
+                                    parentCollection={relatedCollection}
+                                    relationField={relField}
+                                    parentRowId={null}
+                                    stagedMembers={
+                                      (editState!.draft[`__o2m_${relField}`] as
+                                        | Record<string, unknown>[]
+                                        | undefined) ?? []
+                                    }
+                                    onStagedChange={(next) =>
+                                      setDraftField(`__o2m_${relField}`, next)
+                                    }
+                                    parentDraft={editState!.draft}
+                                    hint={relHint}
+                                  />
+                                )
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                  </Fragment>
+                )
+              })}
+          </tbody>
+          {activeView === 'original' &&
+            (() => {
+              const aggCols = effectiveCols.filter((c) => {
+                const opts = c.options
+                  ? ((typeof c.options === 'string'
+                      ? (() => {
+                          try {
+                            return JSON.parse(c.options as string)
+                          } catch {
+                            return {}
+                          }
+                        })()
+                      : c.options) as Record<string, unknown>)
+                  : {}
+                return !!opts.aggregate
+              })
+              if (aggCols.length === 0) return null
+              const allRows = [
+                ...(rows ?? [])
+                  .filter((r) => !pendingDeletes.has(String(r.id)))
+                  .map((r) => {
+                    const rid = String(r.id)
+                    const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+                    return liveOverlayDraft(
+                      applyComputedFields(merged as Record<string, unknown>),
+                      { rowKey: rid }
+                    )
+                  }),
+                // Pending rows have no stored rollup values — derive them from
+                // their staged members so Allocated sums true before save.
+                ...pendingRows.map((r, i) =>
+                  liveOverlayDraft(applyComputedFields(r as Record<string, unknown>), {
+                    rowKey: `pending:${i}`
+                  })
+                )
+              ]
               return (
-                <div key={i} className='rounded-lg border border-slate-200 p-3'>
-                  <div className='flex items-center justify-between gap-2'>
-                    <span className='text-[11px] font-medium text-slate-600'>{group.user}</span>
-                    <span className='text-[10px] text-slate-400'>{formatRelative(group.timestamp)}</span>
-                  </div>
-                  {parts.length > 0 && (
-                    <p className='mt-1 text-[10px] text-slate-500'>{parts.join(', ')}</p>
-                  )}
-                  <button
-                    type='button'
-                    disabled={fieldRestoring}
-                    onClick={() => restoreFieldAt(group.timestamp)}
-                    className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
-                  >
-                    {fieldRestoring ? 'Restoring…' : 'Restore to this state'}
-                  </button>
-                </div>
+                <tfoot>
+                  <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
+                    {/* Leading cells must mirror the header exactly: reorder, line #, status */}
+                    {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
+                    {showLineNumbers && <td />}
+                    {(isNew || isPendingMode) && <td />}
+                    {effectiveCols.map((c) => {
+                      const opts = c.options
+                        ? ((typeof c.options === 'string'
+                            ? (() => {
+                                try {
+                                  return JSON.parse(c.options as string)
+                                } catch {
+                                  return {}
+                                }
+                              })()
+                            : c.options) as Record<string, unknown>)
+                        : {}
+                      const agg = opts.aggregate as string | undefined
+                      if (!agg) return <td key={c.field} className='px-3 py-1.5' />
+                      // A formula column has no stored value — evaluate it per row
+                      // (bare refs off the row, dotted refs off resolve-paths).
+                      const colFormula =
+                        c.interface === 'formula-column' && typeof opts.column_formula === 'string'
+                          ? opts.column_formula
+                          : null
+                      const nums = allRows
+                        .map((r) => {
+                          if (colFormula) {
+                            const v = evaluateNumeric(colFormula, (ref) =>
+                              ref.includes('.')
+                                ? resolvedPathData?.rows[String(r.id)]?.[ref]?.value
+                                : r[ref]
+                            )
+                            return v == null ? NaN : v
+                          }
+                          return Number(r[c.field])
+                        })
+                        .filter((n) => !Number.isNaN(n))
+                      let result: number | null = null
+                      if (agg === 'count') result = allRows.length
+                      else if (nums.length > 0) {
+                        if (agg === 'sum') result = nums.reduce((a, b) => a + b, 0)
+                        else if (agg === 'avg')
+                          result = nums.reduce((a, b) => a + b, 0) / nums.length
+                        else if (agg === 'min') result = Math.min(...nums)
+                        else if (agg === 'max') result = Math.max(...nums)
+                      }
+                      const fmt = opts.format as string | undefined
+                      const display =
+                        result === null
+                          ? '—'
+                          : (() => {
+                              try {
+                                if (fmt === 'currency')
+                                  return new Intl.NumberFormat(undefined, {
+                                    ...numericIntlOptions(opts, 'currency'),
+                                    currency: (opts.currency as string) || 'USD'
+                                  }).format(result)
+                                if (fmt === 'decimal') {
+                                  const p = typeof opts.precision === 'number' ? opts.precision : 2
+                                  return new Intl.NumberFormat(undefined, {
+                                    minimumFractionDigits: p,
+                                    maximumFractionDigits: p
+                                  }).format(result)
+                                }
+                                if (fmt === 'int' || agg === 'count')
+                                  return new Intl.NumberFormat(undefined, {
+                                    maximumFractionDigits: 0
+                                  }).format(result)
+                                return agg === 'avg' ? result.toFixed(2) : String(result)
+                              } catch {
+                                return String(result)
+                              }
+                            })()
+                      return (
+                        <td key={c.field} className='px-3 py-1.5'>
+                          <span className='text-slate-400 text-[10px] font-mono mr-1'>
+                            {agg.toUpperCase()}
+                          </span>
+                          <span className='tabular-nums'>{display}</span>
+                        </td>
+                      )
+                    })}
+                    <td />
+                  </tr>
+                </tfoot>
               )
-            })
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+            })()}
+        </table>
 
-    <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
-      <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
-        <SheetHeader>
-          <SheetTitle className='text-[14px]'>Row history</SheetTitle>
-        </SheetHeader>
-        <div className='mt-4 space-y-3'>
-          {revLoading ? (
-            <div className='py-6 text-center'><Loader2 className='h-4 w-4 animate-spin inline text-slate-400' /></div>
-          ) : rowRevisions.length === 0 ? (
-            <p className='py-6 text-center text-[12px] text-slate-400'>No history for this row</p>
-          ) : (
-            rowRevisions.map((rev) => {
-              const who = [rev.first_name, rev.last_name].filter(Boolean).join(' ') || rev.user_email || 'System'
-              const changes = rev.delta ?? rev.data ?? {}
-              return (
-                <div key={rev.id} className='rounded-lg border border-slate-200 p-3'>
-                  <div className='flex items-center justify-between gap-2'>
-                    <span className='text-[11px] font-medium text-slate-600'>{who}</span>
-                    <span className='text-[10px] text-slate-400'>{rev.timestamp ? formatRelative(rev.timestamp) : ''}</span>
-                  </div>
-                  {rev.action && <span className='mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-slate-400'>{rev.action}</span>}
-                  {(rev as { comment?: string | null }).comment && (
-                    <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-300'>
-                      Reason: {(rev as { comment?: string | null }).comment}
-                    </p>
-                  )}
-                  <div className='mt-2 space-y-1'>
-                    {Object.entries(changes).map(([k, v]) => (
-                      <div key={k} className='flex items-start gap-2 text-[11px]'>
-                        <span className='shrink-0 font-medium text-slate-500'>{titleCase(k)}:</span>
-                        <span className='break-words text-slate-700'>
-                          {v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {allowRevisionRestore && rev.data && (
+        {uniqueError && (
+          <div className='border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
+            {uniqueError}
+          </div>
+        )}
+        {activeView === 'original' && !isEditingNew && !readOnly && (
+          <div className='border-t border-slate-100 px-3 py-1.5'>
+            <button
+              type='button'
+              onClick={startNew}
+              className='text-[11px] font-medium text-[#00ceff] hover:underline'
+            >
+              + Add row
+            </button>
+          </div>
+        )}
+
+        {showRowRevisions &&
+          (() => {
+            // Merge server results + local state; local fills the gap before server catches up
+            const serverIds = new Set(serverDeletedRows.map((r) => String(r.item)))
+            const localOnly = deletedRows.filter(
+              (dr) => !pendingDeletes.has(String(dr.id)) && !serverIds.has(String(dr.id))
+            )
+            const allDeleted: Array<{ id: string; data: Record<string, unknown> }> = [
+              ...serverDeletedRows.map((r) => ({ id: r.item, data: r.data })),
+              ...localOnly.map((dr) => ({ id: String(dr.id), data: dr }))
+            ]
+            if (allDeleted.length === 0) return null
+            return (
+              <DeletedRowsSection
+                deletedRows={allDeleted}
+                displayCols={displayCols}
+                onOpenHistory={(id, data) => setHistoryRow({ id, ...data })}
+              />
+            )
+          })()}
+      </div>
+
+      <Sheet open={fieldRestoreOpen} onOpenChange={setFieldRestoreOpen}>
+        <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
+          <SheetHeader>
+            <SheetTitle className='text-[14px]'>Field history</SheetTitle>
+          </SheetHeader>
+          <div className='mt-4 space-y-3'>
+            {fieldSnapshotsLoading ? (
+              <div className='py-6 text-center'>
+                <Loader2 className='h-4 w-4 animate-spin inline text-slate-400' />
+              </div>
+            ) : fieldSnapshotGroups.length === 0 ? (
+              <p className='py-6 text-center text-[12px] text-slate-400'>
+                No history for this field
+              </p>
+            ) : (
+              fieldSnapshotGroups.map((group, i) => {
+                const creates = group.entries.filter((e) => e.action === 'create').length
+                const updates = group.entries.filter((e) => e.action === 'update').length
+                const deletes = group.entries.filter((e) => e.action === 'delete').length
+                const parts: string[] = []
+                if (creates) parts.push(`${creates} added`)
+                if (updates) parts.push(`${updates} updated`)
+                if (deletes) parts.push(`${deletes} removed`)
+                return (
+                  <div key={i} className='rounded-lg border border-slate-200 p-3'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <span className='text-[11px] font-medium text-slate-600'>{group.user}</span>
+                      <span className='text-[10px] text-slate-400'>
+                        {formatRelative(group.timestamp)}
+                      </span>
+                    </div>
+                    {parts.length > 0 && (
+                      <p className='mt-1 text-[10px] text-slate-500'>{parts.join(', ')}</p>
+                    )}
                     <button
                       type='button'
-                      onClick={() => {
-                        setEditState({ rowId: String(historyRow!.id), draft: { ...(rev.data as Record<string, unknown>) } })
-                        setHistoryRow(null)
-                      }}
-                      className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10'
+                      disabled={fieldRestoring}
+                      onClick={() => restoreFieldAt(group.timestamp)}
+                      className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
                     >
-                      Restore to this version
+                      {fieldRestoring ? 'Restoring…' : 'Restore to this state'}
                     </button>
-                  )}
-                </div>
-              )
-            })
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
+        <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
+          <SheetHeader>
+            <SheetTitle className='text-[14px]'>Row history</SheetTitle>
+          </SheetHeader>
+          <div className='mt-4 space-y-3'>
+            {revLoading ? (
+              <div className='py-6 text-center'>
+                <Loader2 className='h-4 w-4 animate-spin inline text-slate-400' />
+              </div>
+            ) : rowRevisions.length === 0 ? (
+              <p className='py-6 text-center text-[12px] text-slate-400'>No history for this row</p>
+            ) : (
+              rowRevisions.map((rev) => {
+                const who =
+                  [rev.first_name, rev.last_name].filter(Boolean).join(' ') ||
+                  rev.user_email ||
+                  'System'
+                const changes = rev.delta ?? rev.data ?? {}
+                return (
+                  <div key={rev.id} className='rounded-lg border border-slate-200 p-3'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <span className='text-[11px] font-medium text-slate-600'>{who}</span>
+                      <span className='text-[10px] text-slate-400'>
+                        {rev.timestamp ? formatRelative(rev.timestamp) : ''}
+                      </span>
+                    </div>
+                    {rev.action && (
+                      <span className='mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                        {rev.action}
+                      </span>
+                    )}
+                    {(rev as { comment?: string | null }).comment && (
+                      <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-300'>
+                        Reason: {(rev as { comment?: string | null }).comment}
+                      </p>
+                    )}
+                    <div className='mt-2 space-y-1'>
+                      {Object.entries(changes).map(([k, v]) => (
+                        <div key={k} className='flex items-start gap-2 text-[11px]'>
+                          <span className='shrink-0 font-medium text-slate-500'>
+                            {titleCase(k)}:
+                          </span>
+                          <span className='break-words text-slate-700'>
+                            {v === null || v === undefined
+                              ? '—'
+                              : typeof v === 'object'
+                                ? JSON.stringify(v)
+                                : String(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {allowRevisionRestore && rev.data && (
+                      <button
+                        type='button'
+                        onClick={() => {
+                          setEditState({
+                            rowId: String(historyRow!.id),
+                            draft: { ...(rev.data as Record<string, unknown>) }
+                          })
+                          setHistoryRow(null)
+                        }}
+                        className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10'
+                      >
+                        Restore to this version
+                      </button>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }

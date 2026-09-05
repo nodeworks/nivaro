@@ -352,6 +352,32 @@ tr.nvr-row-flash > td {
 @keyframes nvr-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .nvr-fade-in { animation: nvr-fade-in 160ms ease-out both; }
 
+/* Item editor polish, round 2 */
+/* Pinned header lifts once the body has scrolled under it. */
+[data-nvr-header-row] { transition: box-shadow 220ms var(--nvr-ease-out), padding 200ms var(--nvr-ease-out); }
+[data-nvr-header-row][data-nvr-condensed] { box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 8px 18px -14px rgba(15, 23, 42, 0.45); }
+.dark [data-nvr-header-row][data-nvr-condensed] { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 18px -14px rgba(0, 0, 0, 0.8); }
+/* A field a rule / autofill just wrote for the user: one cyan sweep. */
+@keyframes nvr-autofill-glow {
+  0% { box-shadow: 0 0 0 0 rgba(0, 206, 255, 0.55); }
+  55% { box-shadow: 0 0 0 4px rgba(0, 206, 255, 0.16); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 206, 255, 0); }
+}
+.nvr-autofill-glow { animation: nvr-autofill-glow 900ms var(--nvr-ease-out) 1; border-radius: 6px; }
+/* Floating panels (relation dropdowns) scale in from their anchor. */
+@keyframes nvr-pop-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.nvr-pop-in { animation: nvr-pop-in 130ms var(--nvr-ease-out) both; transform-origin: top center; }
+/* A header-strip value that changed while the record is open. */
+@keyframes nvr-value-pulse {
+  0% { color: #00b8e0; }
+  100% { color: inherit; }
+}
+.nvr-value-pulse { animation: nvr-value-pulse 1100ms ease-out 1; }
+
+
 @media (prefers-reduced-motion: reduce) {
   .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in { animation: none; }
 }

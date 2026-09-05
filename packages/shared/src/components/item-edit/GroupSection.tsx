@@ -13,7 +13,7 @@ import {
   User,
   UserCheck
 } from 'lucide-react'
-import React, { type ReactNode, useRef, useState } from 'react'
+import React, { type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   type FieldDrilldownConfig,
@@ -1212,6 +1212,32 @@ function StripRelationCell({
 // ─── StripFieldValue ──────────────────────────────────────────────────────────
 // Used by ItemEditForm header strip — same rendering logic as SummaryStrip
 
+/** Class that pulses once whenever `value` changes AFTER the first render. */
+function useChangePulse(value: unknown): string {
+  const [flash, setFlash] = useState(false)
+  const first = useRef(true)
+  const prev = useRef(JSON.stringify(value ?? null))
+  useEffect(() => {
+    const now = JSON.stringify(value ?? null)
+    if (first.current) {
+      first.current = false
+      prev.current = now
+      return
+    }
+    if (now === prev.current) return
+    prev.current = now
+    // Drop and re-add the class so a second change re-runs the animation.
+    setFlash(false)
+    const raise = window.setTimeout(() => setFlash(true), 0)
+    const clear = window.setTimeout(() => setFlash(false), 1200)
+    return () => {
+      window.clearTimeout(raise)
+      window.clearTimeout(clear)
+    }
+  }, [value])
+  return flash ? 'nvr-value-pulse' : ''
+}
+
 export function StripFieldValue({
   field,
   val,
@@ -1227,7 +1253,8 @@ export function StripFieldValue({
   displayFormat?: string
   textClassName?: string
 }) {
-  const base = textClassName ?? 'text-slate-900 dark:text-slate-100'
+  const pulse = useChangePulse(val)
+  const base = cn(textClassName ?? 'text-slate-900 dark:text-slate-100', pulse)
   // Header relations drill by default (the strip is read-only — clicking a
   // related record to inspect it is the only sensible interaction); an explicit
   // drilldown override still supplies the layout/width.
