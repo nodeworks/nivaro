@@ -1,10 +1,47 @@
 {
-  "generated_at": "2026-09-05T19:10:30.772Z",
+  "generated_at": "2026-09-05T19:46:39.749Z",
   "releases": [
+    {
+      "version": "0.1.218",
+      "tag": "v0.1.218",
+      "date": "2026-09-05T15:46:30-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "item-edit",
+              "text": "motion polish round 5 — sliding tab underline, summary value wash, idle unsaved dot, back-button hover",
+              "hash": "d5e86063"
+            },
+            {
+              "section": "Other",
+              "scope": "item-edit",
+              "text": "motion polish round 4 — input focus ease, button press, tasks/links/revisions/files entry, load crossfade",
+              "hash": "15e9753a"
+            },
+            {
+              "section": "Other",
+              "scope": "item-edit",
+              "text": "motion polish round 3 — banners, comments, validation rows, drill sheet, grid badges",
+              "hash": "4c597b52"
+            },
+            {
+              "section": "Other",
+              "scope": "item-edit",
+              "text": "motion polish round 2 — header lift, step pulse, save tint, autofill glow, row/dropdown entry, strip value pulse",
+              "hash": "2e2a3587"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.217",
       "tag": "v0.1.217",
-      "date": "2026-09-05T15:10:23-04:00",
+      "date": "2026-09-05T15:10:30-04:00",
       "sections": [
         {
           "label": "Other",
