@@ -1029,7 +1029,9 @@ export function FieldRow({
           <div
             className={cn(
               locked && 'pointer-events-none opacity-60',
-              error && 'ring-1 ring-red-400 rounded-md'
+              // The ring lands with a 2px shake so the eye finds the field;
+              // the animation runs once when the class is added.
+              error && 'nvr-shake ring-1 ring-red-400 rounded-md'
             )}
           >
             {autoIdPattern ? (

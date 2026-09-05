@@ -1,4 +1,3 @@
-import { UserAvatar } from '../UserAvatar'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as LucideIcons from 'lucide-react'
 import {
@@ -9,9 +8,11 @@ import {
   ExternalLink,
   Loader2,
   Mail,
+  MessageCircle,
   Phone,
   User,
-  UserCheck , MessageCircle } from 'lucide-react'
+  UserCheck
+} from 'lucide-react'
 import React, { type ReactNode, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -24,6 +25,7 @@ import {
 import { get, post } from '../../lib/commands'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
+import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -232,7 +234,9 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
   // or a compact date ('date'/'datetime').
   const df = (() => {
     try {
-      const o = field?.options ? (JSON.parse(String(field.options)) as { display_format?: string }) : null
+      const o = field?.options
+        ? (JSON.parse(String(field.options)) as { display_format?: string })
+        : null
       return o?.display_format ?? null
     } catch {
       return null
@@ -259,12 +263,12 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
     const mins = Number(value)
     return `${Math.floor(mins / 60)}:${String(Math.round(mins % 60)).padStart(2, '0')}`
   }
-  if (iface === 'rating' && Number.isFinite(Number(value))) return `${'★'.repeat(Number(value))} (${value}/5)`
+  if (iface === 'rating' && Number.isFinite(Number(value)))
+    return `${'★'.repeat(Number(value))} (${value}/5)`
   if (iface === 'checklist' && typeof value === 'string') {
     try {
       const items = JSON.parse(value) as Array<{ done?: boolean }>
-      if (Array.isArray(items))
-        return `${items.filter((x) => x?.done).length}/${items.length} done`
+      if (Array.isArray(items)) return `${items.filter((x) => x?.done).length}/${items.length} done`
     } catch {
       /* fall through */
     }
@@ -350,7 +354,9 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
       const n = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)
       if (unit === '$') {
         try {
-          return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(num)
+          return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(
+            num
+          )
         } catch {
           return `$${n}`
         }
@@ -1724,7 +1730,7 @@ export function GroupSection({
   return (
     <div
       className={cn(
-        'rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
+        'nvr-section-enter rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
         displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20',
         hiddenWhenEmpty && 'hidden'
       )}
@@ -1747,7 +1753,7 @@ export function GroupSection({
           {group.label}
         </span>
         <span className='flex-1' />
-        {hasErrors && <span className='h-2 w-2 rounded-full bg-destructive shrink-0' />}
+        {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
         <ChevronDown
           className={cn(
             'h-4 w-4 text-slate-400 dark:text-slate-500 transition-transform duration-200',
@@ -1798,7 +1804,7 @@ export function GroupSection({
         </div>
       )}
       {!collapsed && (
-        <div className='border-t border-slate-100 px-5 py-4'>
+        <div className='nvr-expand-in border-t border-slate-100 px-5 py-4'>
           {(() => {
             // Merge fields + optional inline owners/pdf/widgets into a sorted render list
             type RenderItem = { _k: string; sort: number } & (

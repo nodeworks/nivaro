@@ -243,7 +243,9 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
     return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
   if (status === 'done') return <Check className='h-4 w-4 text-green-500 shrink-0' />
   if (status === 'error') return <AlertCircle className='h-4 w-4 text-red-500 shrink-0' />
-  return <div className='h-4 w-4 rounded-full border-2 border-slate-200 dark:border-slate-600 shrink-0' />
+  return (
+    <div className='h-4 w-4 rounded-full border-2 border-slate-200 dark:border-slate-600 shrink-0' />
+  )
 }
 
 function SaveProgressDialog({
@@ -315,8 +317,10 @@ function SaveProgressDialog({
                     step.status === 'running' && 'border-[#00ceff]/30 bg-[#00ceff]/5',
                     step.status === 'done' &&
                       'border-green-100 bg-green-50/40 dark:border-green-500/25 dark:bg-green-500/10',
-                    step.status === 'error' && 'border-red-200 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10',
-                    step.status === 'pending' && 'border-slate-100 bg-slate-50/60 dark:border-border dark:bg-muted/30'
+                    step.status === 'error' &&
+                      'border-red-200 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10',
+                    step.status === 'pending' &&
+                      'border-slate-100 bg-slate-50/60 dark:border-border dark:bg-muted/30'
                   )}
                 >
                   <div className='flex items-start gap-2.5'>
@@ -5804,7 +5808,10 @@ export function ItemEditForm({
     const visible = ungroupedFields.filter((f) => !f.hidden)
     if (visible.length === 0) return null
     return (
-      <div key='__ungrouped__' className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
+      <div
+        key='__ungrouped__'
+        className='nvr-section-enter rounded-xl border border-slate-200 bg-white px-5 py-5'
+      >
         <GridContainer>
           {(cw) =>
             visible.map((f) => {
@@ -5922,7 +5929,7 @@ export function ItemEditForm({
     }
 
     return (
-      <div key={c.key} className='rounded-xl border border-slate-200 bg-white'>
+      <div key={c.key} className='nvr-section-enter rounded-xl border border-slate-200 bg-white'>
         {isSteps ? (
           <StepsBar
             steps={children.map((g) => ({ key: g.key, label: g.label }))}
@@ -6333,7 +6340,7 @@ export function ItemEditForm({
   // ── Section mode ───────────────────────────────────────────────────────────
   function renderSectionMode() {
     return (
-      <div className='space-y-4'>
+      <div className='nvr-stagger space-y-4'>
         {sectionOrder.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return <div key={key ?? i}>{renderSectionItem(item)}</div>
@@ -6441,7 +6448,10 @@ export function ItemEditForm({
     }
     tabItems.sort((a, b) => a.sort - b.sort)
     return (
-      <div className='rounded-xl border border-slate-200 bg-white px-5 py-5'>
+      <div
+        key={activeTab}
+        className='nvr-tab-enter rounded-xl border border-slate-200 bg-white px-5 py-5'
+      >
         <GridContainer>
           {(cw) =>
             tabItems.map((item) => {
@@ -6749,7 +6759,7 @@ export function ItemEditForm({
     })
 
     return (
-      <div className='space-y-4 min-w-0 flex-1'>
+      <div className='nvr-stagger space-y-4 min-w-0 flex-1'>
         {preTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
@@ -7879,7 +7889,7 @@ export function ItemEditForm({
                                             className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
                                             data-unsaved-dot
                                           >
-                                            <span className='absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
+                                            <span className='nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card' />
                                           </button>
                                         )}
                                         <UnsavedInspector

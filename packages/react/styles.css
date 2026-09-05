@@ -190,6 +190,41 @@ tr.nvr-row-flash > td {
   to { opacity: 1; transform: none; }
 }
 .nvr-rise-in { animation: nvr-rise-in var(--nvr-dur-base) var(--nvr-ease-out) 1; }
+
+/* ─── Item editor polish (subtle, state-clarifying only) ─────────────────── */
+@keyframes nvr-section-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+/* Section cards rise in with a short stagger (first eight children). */
+.nvr-section-enter { animation: nvr-section-enter 260ms var(--nvr-ease-out) both; }
+.nvr-stagger > :nth-child(2) > .nvr-section-enter { animation-delay: 35ms; }
+.nvr-stagger > :nth-child(3) > .nvr-section-enter { animation-delay: 70ms; }
+.nvr-stagger > :nth-child(4) > .nvr-section-enter { animation-delay: 105ms; }
+.nvr-stagger > :nth-child(5) > .nvr-section-enter { animation-delay: 140ms; }
+.nvr-stagger > :nth-child(6) > .nvr-section-enter { animation-delay: 175ms; }
+.nvr-stagger > :nth-child(7) > .nvr-section-enter { animation-delay: 210ms; }
+.nvr-stagger > :nth-child(n+8) > .nvr-section-enter { animation-delay: 245ms; }
+@keyframes nvr-tab-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.nvr-tab-enter { animation: nvr-tab-enter 180ms var(--nvr-ease-out) both; }
+@keyframes nvr-expand-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+.nvr-expand-in { animation: nvr-expand-in 180ms var(--nvr-ease-out) both; }
+@keyframes nvr-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  50% { transform: translateX(2px); }
+  75% { transform: translateX(-1px); }
+}
+.nvr-shake { animation: nvr-shake 260ms ease-out 1; }
+@keyframes nvr-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.nvr-fade-in { animation: nvr-fade-in 160ms ease-out both; }
+
 @media (prefers-reduced-motion: reduce) {
-  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in { animation: none; }
+  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in { animation: none; }
 }
