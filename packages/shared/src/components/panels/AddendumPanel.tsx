@@ -7,7 +7,13 @@ import { del, get, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
-import { computeLiveRollup, parseRollupSources } from '../item-edit/live-rollups'
+import { evalClientFormula } from '../item-edit/InlineTableField'
+import {
+  computeLiveRollup,
+  matchesRollupFilter,
+  parseRollupParentFilter,
+  parseRollupSources
+} from '../item-edit/live-rollups'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import { O2MStagingContext, useLiveRows } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
@@ -607,7 +613,7 @@ function AddendumCreateSheet({
   relations: CMSRelation[]
   parentData: Record<string, unknown>
   onClose: () => void
-  onCreated: () => void
+  onCreated: (addendumId: string | null) => void
 }) {
   const client = useNivaroClient()
 
@@ -761,8 +767,20 @@ function AddendumCreateSheet({
 
   const createMut = useMutation({
     mutationFn: () => {
+      // Only REAL proposals are stored: a value equal to the parent's is not a
+      // change (the form pre-fills every field), and a derived column
+      // (rollup / write-computed) is never proposed — the server re-derives it
+      // from the proposed rows, and storing the pre-filled figure showed the
+      // OLD total as if it were the amendment.
+      const mergedData: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(formData)) {
+        const meta = fieldMap[key]
+        if (meta?.computed_type === 'rollup' || meta?.computed_type === 'write') continue
+        if (value === undefined) continue
+        if (String(value ?? '') === String(parentData[key] ?? '')) continue
+        mergedData[key] = value
+      }
       // Merge O2M staging rows into formData before submit
-      const mergedData = { ...formData }
       for (const a of configuredFields) {
         const rel = relations.find(
           (r) =>
@@ -777,7 +795,7 @@ function AddendumCreateSheet({
           if (rows.length > 0) mergedData[a.field] = rows
         }
       }
-      return client.request(
+      return client.request<{ data?: { id?: string } }>(
         post('/addendums', {
           parent_collection: collection,
           parent_id: itemId,
@@ -791,9 +809,9 @@ function AddendumCreateSheet({
         })
       )
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success('Addendum created')
-      onCreated()
+      onCreated(res?.data?.id != null ? String(res.data.id) : null)
       onClose()
     },
     onError: () => toast.error('Failed to create addendum')
@@ -1250,11 +1268,60 @@ function AddendumCard({
 
   const changedFields = configuredFields.filter((a) => proposedData[a.field] !== undefined)
 
+  // ── Derived rollups: a proposed line set moves the parent's rollups
+  // (Requisition Amount) even though no stored column holds the new total
+  // until approval — compute it from the proposed rows, exactly as the
+  // header's live figure does.
+  const rollupSourcesOf = (f: CMSField) =>
+    f.computed_type === 'rollup' ? parseRollupSources(f.computed_formula) : []
+  const aliasForSource = (src: { related_collection: string; fk_field: string }) => {
+    const rel = relations.find(
+      (r) =>
+        r.one_collection === parentCollection &&
+        r.many_collection === src.related_collection &&
+        r.many_field === src.fk_field &&
+        !r.junction_field
+    )
+    return rel ? (rel.one_field ?? rel.many_collection) : null
+  }
+  const derivedRollupFields = useMemo(
+    () =>
+      Object.values(fieldMap).filter((f) => {
+        const srcs = rollupSourcesOf(f)
+        return (
+          srcs.length > 0 &&
+          !srcs.some((s) => s.recursive) &&
+          srcs.every((s) => {
+            const alias = aliasForSource(s)
+            return !!alias && Array.isArray(proposedData[alias])
+          })
+        )
+      }),
+    // biome-ignore lint/correctness/useExhaustiveDependencies: helpers close over relations/parentCollection
+    [fieldMap, proposedData, relations, parentCollection]
+  )
+  const derivedChildCollections = useMemo(
+    () => [
+      ...new Set(derivedRollupFields.flatMap((f) => rollupSourcesOf(f).map((s) => s.related_collection)))
+    ],
+    [derivedRollupFields]
+  )
+  const derivedChildCfgs = useQueries({
+    queries: derivedChildCollections.map((c) => ({
+      queryKey: ['field-config', c, null],
+      queryFn: () =>
+        client.request<{ data: CMSField[] }>(get(`/field-config/${c}`)).then((r) => r.data ?? []),
+      staleTime: 60_000
+    }))
+  })
+  const derivedCfgStamp = derivedChildCfgs.map((q) => q.dataUpdatedAt).join(',')
+
   // Current parent values for the changed SCALAR fields — lets the proposed
   // list render "current → proposed" with a +/- delta instead of a bare value.
   const scalarChanged = changedFields.filter((a) => {
     const v = proposedData[a.field]
     if (v != null && typeof v === 'object') return false
+    if (v == null) return false
     // Alias fields (O2M/M2M) have no physical column — naming one in an
     // explicit readOne fields= is a 500, not an empty value. Covers both the
     // named-alias form (one_field) and the child-table-name form
@@ -1270,20 +1337,108 @@ function AddendumCard({
       'addendum-current',
       parentCollection,
       parentId,
-      scalarChanged.map((a) => a.field).join(',')
+      scalarChanged.map((a) => a.field).join(','),
+      derivedRollupFields.map((f) => f.field).join(',')
     ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown> }>(
           get(`/items/${parentCollection}/${parentId}`, {
-            fields: ['id', ...scalarChanged.map((a) => a.field)].join(',')
+            fields: [
+              ...new Set([
+                'id',
+                ...scalarChanged.map((a) => a.field),
+                // The rollups themselves (current figure) plus any parent_filter
+                // columns that decide whether the rollup applies to this record.
+                ...derivedRollupFields.flatMap((f) => [
+                  f.field,
+                  ...Object.keys(parseRollupParentFilter(f.computed_formula) ?? {})
+                ])
+              ])
+            ].join(',')
           })
         )
         .then((r) => r.data ?? null)
         .catch(() => null),
-    enabled: !!parentCollection && !!parentId && scalarChanged.length > 0,
+    enabled:
+      !!parentCollection && !!parentId && (scalarChanged.length > 0 || derivedRollupFields.length > 0),
     staleTime: 15_000
   })
+  const derivedRollupValues = useMemo(() => {
+    const out = new Map<string, number>()
+    const cfgByCollection = new Map(
+      derivedChildCollections.map((c, i) => [c, derivedChildCfgs[i]?.data as CMSField[] | undefined])
+    )
+    for (const f of derivedRollupFields) {
+      const pf = parseRollupParentFilter(f.computed_formula)
+      if (pf && currentRecord && !matchesRollupFilter(currentRecord, pf)) continue
+      const rowsByRelation = new Map<string, Record<string, unknown>[]>()
+      let ready = true
+      for (const s of rollupSourcesOf(f)) {
+        const alias = aliasForSource(s)
+        const cfg = cfgByCollection.get(s.related_collection)
+        if (!alias || !cfg) {
+          ready = false
+          break
+        }
+        const writes = cfg.filter((x) => x.computed_type === 'write' && !!x.computed_formula)
+        const rows = (proposedData[alias] as Record<string, unknown>[]).map((row) => {
+          const next = { ...row }
+          for (const w of writes) {
+            const v = evalClientFormula(String(w.computed_formula), next)
+            if (v !== null) next[w.field] = v
+          }
+          return next
+        })
+        rowsByRelation.set(`${s.related_collection}.${s.fk_field}`, rows)
+      }
+      if (!ready) continue
+      const v = computeLiveRollup(rollupSourcesOf(f), rowsByRelation)
+      if (v !== null) out.set(f.field, Math.round(v * 100) / 100)
+    }
+    return out
+    // biome-ignore lint/correctness/useExhaustiveDependencies: child configs ride in via derivedCfgStamp
+  }, [derivedRollupFields, derivedChildCollections, derivedCfgStamp, proposedData, currentRecord])
+
+  // What the card LISTS: real proposals only. A pre-filled value equal to the
+  // parent's is not a change, an empty alias is nothing, and a derived column
+  // shows as its recomputed figure instead of the stale stored one.
+  const modifiedRowCount = (
+    rawVal: Record<string, unknown>[],
+    origArr: Record<string, unknown>[] | null | undefined
+  ) =>
+    !origArr
+      ? rawVal.length
+      : rawVal.filter((row) => {
+          const orig = origArr.find((o) => String(o.id) === String(row.id))
+          if (!orig) return true
+          return Object.keys(row).some(
+            (k) => k !== 'id' && String(row[k] ?? '') !== String(orig[k] ?? '')
+          )
+        }).length
+  const visibleChanges = changedFields.filter((a) => {
+    const v = proposedData[a.field]
+    if (v == null || v === '') return false
+    if (Array.isArray(v)) return modifiedRowCount(v as Record<string, unknown>[], originalO2MMap[a.field]) > 0
+    const meta = fieldMap[a.field]
+    if (meta?.computed_type === 'rollup' || meta?.computed_type === 'write') return false
+    if (currentRecord && a.field in currentRecord && String(currentRecord[a.field] ?? '') === String(v))
+      return false
+    return true
+  })
+  const changeEntries: Array<{ field: string; label_override: string | null; value: unknown }> = [
+    ...visibleChanges.map((a) => ({
+      field: a.field,
+      label_override: a.label_override ?? null,
+      value: proposedData[a.field]
+    })),
+    ...derivedRollupFields.flatMap((f) =>
+      derivedRollupValues.has(f.field)
+        ? [{ field: f.field, label_override: f.label ?? null, value: derivedRollupValues.get(f.field) }]
+        : []
+    )
+  ]
+  const changeCount = changeEntries.length
 
   const isNumericField = (field: string, v: unknown) => {
     const t = fieldMap[field]?.type
@@ -1343,9 +1498,9 @@ function AddendumCard({
             >
               {displayStatus}
             </span>
-            {changedFields.length > 0 && (
+            {changeCount > 0 && (
               <span className='text-[11px] text-slate-400 dark:text-slate-500'>
-                {changedFields.length} field{changedFields.length !== 1 ? 's' : ''} changed
+                {changeCount} field{changeCount !== 1 ? 's' : ''} changed
               </span>
             )}
             {costImpactChip(addendum.cost_impact) ?? costImpactChip(barDelta)}
@@ -1369,7 +1524,7 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
-          {(changedFields.length > 0 ||
+          {(changeCount > 0 ||
             addendum.previous_amount != null ||
             addendum.new_amount != null) && (
             <div className='px-4 py-3'>
@@ -1377,7 +1532,7 @@ function AddendumCard({
                 Proposed changes
               </p>
               <div className='space-y-1.5'>
-                {changedFields.length === 0 &&
+                {changeCount === 0 &&
                   (addendum.previous_amount != null || addendum.new_amount != null) &&
                   (() => {
                     const prev =
@@ -1420,8 +1575,8 @@ function AddendumCard({
                       </div>
                     )
                   })()}
-                {changedFields.map((a) => {
-                  const rawVal = proposedData[a.field]
+                {changeEntries.map((a) => {
+                  const rawVal = a.value
                   let displayVal: ReactNode
                   if (rawVal == null) {
                     displayVal = '—'
@@ -1680,6 +1835,7 @@ export function AddendumPanel({
   canCreate = true,
   onActiveCountChange,
   onApplied,
+  onCreated,
   defaultExpanded = true
 }: {
   collection: string
@@ -1687,6 +1843,10 @@ export function AddendumPanel({
   addendumLayoutId?: number | null
   canCreate?: boolean
   onActiveCountChange?: (count: number) => void
+  /** Fired after a NEW addendum lands, with the addendum layout's `__pdf__`
+   *  slot overrides (if any) — ItemEditForm renders the amended document
+   *  from them. Deliberately not onApplied: the record has not changed yet. */
+  onCreated?: (created: { id: string | null; pdfSlot: Record<string, unknown> | null }) => void
   /** Fired after an addendum is approved/rejected/submitted — i.e. whenever the
    *  parent record may now read differently. ItemEditForm uses it to refresh a
    *  generated PDF so the attached document matches the amended record. */
@@ -1781,6 +1941,23 @@ export function AddendumPanel({
     qc.invalidateQueries({ queryKey: ['addendums', collection, item] })
     refetch()
     onApplied?.()
+  }
+  const handleCreated = (id: string | null) => {
+    qc.invalidateQueries({ queryKey: ['addendums', collection, item] })
+    refetch()
+    const slot = assignments.find((a) => String(a.field) === '__pdf__')
+    let pdfSlot: Record<string, unknown> | null = null
+    if (slot?.overrides) {
+      try {
+        pdfSlot =
+          typeof slot.overrides === 'string'
+            ? (JSON.parse(slot.overrides) as Record<string, unknown>)
+            : (slot.overrides as Record<string, unknown>)
+      } catch {
+        pdfSlot = null
+      }
+    }
+    onCreated?.({ id, pdfSlot })
   }
 
   const configuredFields = assignments.filter(
@@ -1920,7 +2097,7 @@ export function AddendumPanel({
               relations={relations}
               parentData={parentItem}
               onClose={() => setSheetOpen(false)}
-              onCreated={handleRefresh}
+              onCreated={handleCreated}
             />
           ) : null}
         </SheetContent>

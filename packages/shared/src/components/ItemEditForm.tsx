@@ -4375,13 +4375,25 @@ export function ItemEditForm({
   const pdfAutoGenerate = !!pdfSlotOverrides?.auto_generate_on_save
   const pdfOverwrite = pdfSlotOverrides?.overwrite_generated !== false
 
-  const handleGenerateAndAttach = async (opts?: { itemId?: string; silent?: boolean }) => {
+  const handleGenerateAndAttach = async (opts?: {
+    itemId?: string
+    silent?: boolean
+    /** Render the record AS AMENDED by this addendum (server overlays its
+     *  proposed values + rows and recomputes rollups) — used right after an
+     *  addendum is created, driven by the ADDENDUM layout's own PDF slot. */
+    addendumId?: string
+    attachField?: string
+    sourceLayoutId?: number | null
+    replaceGenerated?: boolean
+    filenameTemplate?: string | null
+  }) => {
     const targetItem = opts?.itemId ?? itemId
+    const attachField = opts?.attachField ?? pdfAttachField
     // source_layout_id names a dedicated PDF (file-type) layout to render —
     // the document's design is rarely the edit form's design. Falls back to
     // the layout being edited.
-    const renderLayoutId = pdfSourceLayoutId ?? layoutId
-    if (pdfAttaching || !pdfAttachField || !renderLayoutId || !targetItem) return
+    const renderLayoutId = (opts?.sourceLayoutId ?? pdfSourceLayoutId) ?? layoutId
+    if (pdfAttaching || !attachField || !renderLayoutId || !targetItem) return
     setPdfAttaching(true)
     try {
       const workspace =
@@ -4399,9 +4411,10 @@ export function ItemEditForm({
           body: JSON.stringify({
             collection,
             item_id: targetItem,
-            attach_field: pdfAttachField,
-            filename_template: pdfFilenameTemplate,
-            replace_generated: pdfOverwrite
+            attach_field: attachField,
+            filename_template: opts?.filenameTemplate ?? pdfFilenameTemplate,
+            replace_generated: opts?.replaceGenerated ?? pdfOverwrite,
+            addendum_id: opts?.addendumId ?? undefined
           })
         }
       )
@@ -4411,6 +4424,7 @@ export function ItemEditForm({
       if (!opts?.silent) toast.success('PDF generated and attached')
       qc.invalidateQueries({ queryKey: ['m2m-items'] })
       qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+      if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] })
     } catch {
       // A failed regeneration must not read as a failed SAVE — the record is
       // already persisted at this point.
@@ -4419,6 +4433,28 @@ export function ItemEditForm({
     } finally {
       setPdfAttaching(false)
     }
+  }
+  // A new addendum renders the AMENDED document when its own layout's PDF slot
+  // says so (attach_to_field / source_layout_id / overwrite_generated) — the
+  // record's PDF slot is not consulted: the record itself has not changed.
+  const handleAddendumCreated = ({
+    id,
+    pdfSlot
+  }: {
+    id: string | null
+    pdfSlot: Record<string, unknown> | null
+  }) => {
+    if (!id || !pdfSlot?.auto_generate_on_save) return
+    const attachField = pdfSlot.attach_to_field as string | null | undefined
+    if (!attachField) return
+    void handleGenerateAndAttach({
+      silent: true,
+      addendumId: id,
+      attachField,
+      sourceLayoutId: (pdfSlot.source_layout_id as number | null | undefined) ?? null,
+      replaceGenerated: pdfSlot.overwrite_generated !== false,
+      filenameTemplate: (pdfSlot.filename_template as string | null | undefined) ?? null
+    })
   }
   // Owners is a draggable field chip: when assigned to a group it renders inside
   // that group's card (footer slot); otherwise it renders as a standalone panel at
@@ -5811,6 +5847,7 @@ export function ItemEditForm({
           addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
           canCreate={addendumCanCreate}
           onActiveCountChange={setActiveAddendumCount}
+          onCreated={handleAddendumCreated}
           defaultExpanded={addendumSlot ? !!addendumSlot.default_expanded : true}
         />
       )
@@ -6507,6 +6544,7 @@ export function ItemEditForm({
               addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
               canCreate={addendumCanCreate}
               onActiveCountChange={setActiveAddendumCount}
+              onCreated={handleAddendumCreated}
               onApplied={() => {
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.
@@ -6774,6 +6812,7 @@ export function ItemEditForm({
               addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
               canCreate={addendumCanCreate}
               onActiveCountChange={setActiveAddendumCount}
+              onCreated={handleAddendumCreated}
               onApplied={() => {
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.
@@ -6950,6 +6989,7 @@ export function ItemEditForm({
               addendumLayoutId={activeLayoutData?.layout?.addendum_layout_id ?? null}
               canCreate={addendumCanCreate}
               onActiveCountChange={setActiveAddendumCount}
+              onCreated={handleAddendumCreated}
               onApplied={() => {
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.

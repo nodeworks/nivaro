@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { restoreLayoutVersion, snapshotLayoutVersion } from '../services/layout-versions.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
@@ -1029,7 +1030,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
   app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { collection, item_id, attach_field, filename_template, replace_generated } =
+    const { collection, item_id, attach_field, filename_template, replace_generated, addendum_id } =
       req.body as {
         collection: string
         item_id: string | number
@@ -1040,6 +1041,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
          *  copy every time. Only ever removes files THIS endpoint created — a
          *  user-uploaded attachment is never touched. */
         replace_generated?: boolean
+        /** Render the record AS AMENDED by this addendum (proposed scalars,
+         *  proposed child rows, rollups recomputed from them) and also list
+         *  the file on the addendum's attachments. */
+        addendum_id?: string | null
       }
 
     if (!collection || item_id == null || !attach_field) {
@@ -1070,6 +1075,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
       if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Item not found' })
       throw err
+    }
+
+    let childRowsOverride: Record<string, Record<string, unknown>[]> | undefined
+    let addendumTitle: string | null = null
+    if (addendum_id) {
+      const overlay = await buildAddendumRenderOverlay(collection, item, String(addendum_id))
+      if (!overlay) return reply.code(404).send({ error: 'Addendum not found for this record' })
+      item = overlay.item
+      childRowsOverride = overlay.childRowsOverride
+      addendumTitle = overlay.title
     }
 
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
@@ -1150,7 +1165,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       fieldMeta,
       relations,
       logoUrl,
-      generatedBy
+      generatedBy,
+      childRowsOverride
     })
 
     // Save PDF to file storage
@@ -1161,7 +1177,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
           return v != null && v !== '' ? String(v).replace(/[^a-zA-Z0-9_-]/g, '_') : key
         })
       : null
-    const safeBase = (resolvedName ?? `${collection}-${item_id}`).replace(/[^a-zA-Z0-9_-]/g, '_')
+    const addendumSuffix = addendum_id
+      ? `-addendum-${(addendumTitle ?? String(addendum_id).slice(0, 8)).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)}`
+      : ''
+    const safeBase =
+      (resolvedName ?? `${collection}-${item_id}`).replace(/[^a-zA-Z0-9_-]/g, '_') + addendumSuffix
     const diskName = `${fileId}.pdf`
     const provider = getStorageProviderName()
     await getStorage().put(diskName, pdfBuffer, 'application/pdf')
@@ -1256,6 +1276,37 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       attached = true
     } catch {
       /* duplicate/constraint — file already attached */
+    }
+
+    // The addendum keeps its own pointer to the document rendered for it, so
+    // reviewers open the amended version from the addendum card.
+    if (addendum_id) {
+      try {
+        const row = (await db('nivaro_addendums')
+          .where({ id: String(addendum_id) })
+          .first('attachments')) as { attachments: string | null } | undefined
+        let list: string[] = []
+        try {
+          const parsed = row?.attachments ? JSON.parse(row.attachments) : []
+          list = Array.isArray(parsed) ? parsed.map(String) : []
+        } catch {
+          list = []
+        }
+        if (replace_generated && list.length > 0) {
+          const prior = (await db('nivaro_files')
+            .whereIn('id', list)
+            .where({ generated_by_layout: Number(id) })
+            .select('id')) as Array<{ id: string }>
+          const priorIds = new Set(prior.map((p) => String(p.id).toUpperCase()))
+          list = list.filter((x) => !priorIds.has(String(x).toUpperCase()))
+        }
+        if (!list.some((x) => String(x).toUpperCase() === fileId.toUpperCase())) list.push(fileId)
+        await db('nivaro_addendums')
+          .where({ id: String(addendum_id) })
+          .update({ attachments: JSON.stringify(list.slice(0, 50)) })
+      } catch {
+        /* best effort — the record attachment already landed */
+      }
     }
 
     await logActivity({

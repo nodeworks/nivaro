@@ -67,7 +67,10 @@ async function enrichRelationValues(
   relations: RelationRow[],
   fieldMeta: Array<{ field: string; type: string; options: string | null }>,
   visibleFields: string[],
-  effectiveOptsMap?: Map<string, Record<string, unknown>>
+  effectiveOptsMap?: Map<string, Record<string, unknown>>,
+  /** alias → rows to render INSTEAD of the stored child rows (an addendum's
+   *  proposed lines). Absent aliases still read from the database. */
+  childRowsOverride?: Record<string, Record<string, unknown>[]>
 ): Promise<{ enrichedItem: Record<string, unknown>; o2mHtml: Record<string, string> }> {
   const enrichedItem = { ...item }
   const o2mHtml: Record<string, string> = {}
@@ -257,10 +260,12 @@ async function enrichRelationValues(
           })
       }
 
-      const childRows = await db(o2mRel.many_collection)
-        .where({ [o2mRel.many_field]: itemId })
-        .select('*')
-        .limit(200)
+      const childRows =
+        childRowsOverride?.[f] ??
+        (await db(o2mRel.many_collection)
+          .where({ [o2mRel.many_field]: itemId })
+          .select('*')
+          .limit(200))
 
       if (childRows.length === 0) {
         enrichedItem[f] = '—'
@@ -513,6 +518,7 @@ export async function generatePdfFromLayout(params: {
   relations: RelationRow[]
   logoUrl: string | null
   generatedBy: string
+  childRowsOverride?: Record<string, Record<string, unknown>[]>
 }): Promise<Buffer> {
   const {
     layout,
@@ -524,7 +530,8 @@ export async function generatePdfFromLayout(params: {
     fieldMeta,
     relations,
     logoUrl,
-    generatedBy
+    generatedBy,
+    childRowsOverride
   } = params
 
   const safeLogoUrl = logoUrl && /^https?:\/\//i.test(logoUrl) ? logoUrl : null
@@ -569,7 +576,8 @@ export async function generatePdfFromLayout(params: {
     relations,
     fieldMeta,
     visibleFields,
-    effectiveOptsMap
+    effectiveOptsMap,
+    childRowsOverride
   )
 
   const sections = groups
