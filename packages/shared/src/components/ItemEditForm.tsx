@@ -399,6 +399,9 @@ export interface ItemEditFormProps {
   collection: string
   itemId?: string
   layoutSlug?: string
+  /** Open with this addendum's view selected (the `?addendum=` deep link that
+   *  My Work rows, digest lines and notifications carry). */
+  initialAddendumViewId?: string | null
   onBack?: () => void
   onSaved?: (id: string) => void
   onDeleted?: () => void
@@ -847,6 +850,7 @@ export function ItemEditForm({
   collection,
   itemId: itemIdProp,
   layoutSlug,
+  initialAddendumViewId,
   onBack,
   onSaved,
   onDeleted,
@@ -1002,7 +1006,7 @@ export function ItemEditForm({
   const [showPdfDropdown, setShowPdfDropdown] = useState(false)
   const [pdfAttaching, setPdfAttaching] = useState(false)
   const [activeAddendumCount, setActiveAddendumCount] = useState(0)
-  const [addendumViewId, setAddendumViewId] = useState<string>('original')
+  const [addendumViewId, setAddendumViewId] = useState<string>(initialAddendumViewId || 'original')
   const [addendumViewDropdownOpen, setAddendumViewDropdownOpen] = useState(false)
 
   const downloadPdf = useCallback(
@@ -3252,9 +3256,36 @@ export function ItemEditForm({
   // here. (A SAVED record needs no fallback — its stored value is the server's
   // own rollup and is already correct.)
   const stagedRollupRelations = useMemo(() => {
-    if (!isNew)
-      return [] as Array<{ key: string; collection: string; rows: Record<string, unknown>[] }>
-    const out: Array<{ key: string; collection: string; rows: Record<string, unknown>[] }> = []
+    const out: Array<{
+      key: string
+      collection: string
+      rows: Record<string, unknown>[]
+      addendum?: boolean
+    }> = []
+    // Addendum view: the addendum's PROPOSED child rows are the rollup's input
+    // on every step, not only while the lines grid is mounted and publishing
+    // them — otherwise the header read the stored (current) total everywhere
+    // except the lines step. An entry that exists but is empty means the
+    // addendum proposes no rows, so it contributes an empty set, not nothing.
+    if (addendumViewId !== 'original') {
+      const a = addendumData.find((x) => x.id === addendumViewId)
+      for (const [alias, val] of Object.entries(a?.data ?? {})) {
+        if (!Array.isArray(val)) continue
+        const rel = (relations ?? []).find(
+          (r) => r.one_collection === collection && r.one_field === alias && !r.junction_field
+        )
+        if (!rel?.many_collection || !rel.many_field) continue
+        const key = `${rel.many_collection}.${rel.many_field}`
+        if (!rollupFieldsByRelation.has(key)) continue
+        out.push({
+          key,
+          collection: rel.many_collection,
+          rows: val as Record<string, unknown>[],
+          addendum: true
+        })
+      }
+    }
+    if (!isNew) return out
     for (const key of rollupFieldsByRelation.keys()) {
       if (liveRowsByRelation.has(key)) continue
       const rows = pendingO2MRows.get(key) ?? []
@@ -3262,7 +3293,20 @@ export function ItemEditForm({
       out.push({ key, collection: key.split('.')[0], rows })
     }
     return out
-  }, [isNew, rollupFieldsByRelation, liveRowsByRelation, pendingO2MRows])
+  }, [
+    isNew,
+    rollupFieldsByRelation,
+    liveRowsByRelation,
+    pendingO2MRows,
+    addendumViewId,
+    addendumData,
+    relations,
+    collection
+  ])
+  const addendumRollupKeys = useMemo(
+    () => new Set(stagedRollupRelations.filter((r) => r.addendum).map((r) => r.key)),
+    [stagedRollupRelations]
+  )
 
   // Child field config, only for those relations — a staged row carries what
   // the user entered, not what the server derives from it (amount = price x
@@ -3277,6 +3321,13 @@ export function ItemEditForm({
       staleTime: 60_000
     }))
   })
+
+  // True while an addendum relation's child field config is still loading —
+  // until then the live total cannot be computed, and showing the stored
+  // (current-record) figure in its place read as the wrong number popping in.
+  const addendumRollupLoading = stagedRollupRelations.some(
+    (r, idx) => r.addendum && !stagedChildConfigs[idx]?.data
+  )
 
   const stagedRowsByRelation = useMemo(() => {
     const out = new Map<string, Record<string, unknown>[]>()
@@ -3326,12 +3377,16 @@ export function ItemEditForm({
       const parentFilter = parseRollupParentFilter(f.computed_formula)
       if (parentFilter && !matchesRollupFilter(draft, parentFilter)) continue
       const merged = new Map(liveRowsByRelation)
-      for (const [k, v] of stagedRowsByRelation) if (!merged.has(k)) merged.set(k, v)
+      // Addendum rows win over whatever a grid published — in addendum view
+      // the grid publishes the same set, and when it is unmounted there is
+      // nothing else to read.
+      for (const [k, v] of stagedRowsByRelation)
+        if (!merged.has(k) || addendumRollupKeys.has(k)) merged.set(k, v)
       const value = computeLiveRollup(parseRollupSources(f.computed_formula), merged)
       if (value !== null) out.set(f.field, value)
     }
     return out
-  }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation, draft])
+  }, [fieldConfig, liveRowsByRelation, stagedRowsByRelation, addendumRollupKeys, draft])
 
   const effectiveDraft = useMemo(
     () => (addendumViewData ? { ...draft, ...addendumViewData } : draft),
@@ -4363,8 +4418,8 @@ export function ItemEditForm({
   const ownersInGroup = !!(ownersGroupKey && groups.some((g) => g.key === ownersGroupKey))
   const renderOwnersPanel = () => (
     <OwnersSlot
-      collection={collection}
-      item={itemId}
+      collection={pipelineCollection}
+      item={pipelineItem}
       title={ownersSlot?.label_override ?? undefined}
       defaultExpanded={ownersSlot?.default_expanded ?? false}
     />
@@ -6327,6 +6382,8 @@ export function ItemEditForm({
         group={g}
         fields={groupFields}
         ownersAssignment={ownersHere ? ownersSlot : undefined}
+        ownersCollection={pipelineCollection}
+        ownersItemId={pipelineItem}
         pdfAssignment={pdfHere ? pdfSlot : undefined}
         pdfAttachField={pdfHere ? pdfAttachField : undefined}
         pdfFilenameTemplate={pdfHere ? pdfFilenameTemplate : undefined}
@@ -8209,8 +8266,8 @@ export function ItemEditForm({
                                               </span>
                                               <div className='mt-1'>
                                                 <OwnersInlineCompact
-                                                  collection={collection}
-                                                  itemId={itemId}
+                                                  collection={pipelineCollection}
+                                                  itemId={pipelineItem}
                                                 />
                                               </div>
                                               {copiedHeaderField === '__owners__' ? (
@@ -8248,13 +8305,18 @@ export function ItemEditForm({
                                           : (liveRollup ?? effectiveDraft[f.field])
                                         // Addendum view: a header value the addendum CHANGES reads amber,
                                         // matching the proposed-change styling everywhere else.
+                                        // A rollup the addendum's proposed rows move counts too — the
+                                        // addendum never stores the total itself.
                                         const changedByAddendum =
                                           viewingAddendum &&
                                           !aliasState &&
-                                          addendumViewData != null &&
-                                          f.field in addendumViewData &&
-                                          String(draft[f.field] ?? '') !==
-                                            String(addendumViewData[f.field] ?? '')
+                                          ((addendumViewData != null &&
+                                            f.field in addendumViewData &&
+                                            String(draft[f.field] ?? '') !==
+                                              String(addendumViewData[f.field] ?? '')) ||
+                                            (liveRollup !== undefined &&
+                                              Math.round(Number(draft[f.field] ?? 0) * 100) !==
+                                                Math.round(liveRollup * 100)))
                                         const hColorClass = changedByAddendum
                                           ? 'text-amber-600 dark:text-amber-400'
                                           : f.color === 'cyan'
@@ -8308,6 +8370,18 @@ export function ItemEditForm({
                                                 .join(' ')}
                                             >
                                               {(() => {
+                                                if (
+                                                  addendumRollupLoading &&
+                                                  f.cmsField?.computed_type === 'rollup' &&
+                                                  !aliasState
+                                                ) {
+                                                  return (
+                                                    <span
+                                                      aria-label='Loading'
+                                                      className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
+                                                    />
+                                                  )
+                                                }
                                                 const inner = f.cmsField ? (
                                                   <StripFieldValue
                                                     field={f.cmsField}

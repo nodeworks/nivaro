@@ -2210,6 +2210,18 @@ export function InlineTableField({
     // biome-ignore lint/correctness/useExhaustiveDependencies: staged state rides in via stagedSignature; the getters return fresh objects each render
   }, [rows, stagedSignature, editState])
 
+  // Addendum view: the rows on screen are the addendum's PROPOSED set, so the
+  // live total must sum those — publishing the record's current rows here made
+  // a header rollup (Requisition Amount) read the same in every view. A field
+  // the addendum does not touch keeps the current rows, matching what renders.
+  const rowsForRollup = useMemo(() => {
+    if (activeView === 'original') return effectiveRowsForRollup
+    const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
+    if (!entry) return effectiveRowsForRollup
+    return entry.rows.map((r) => applyComputedFields({ ...r } as Record<string, unknown>))
+    // biome-ignore lint/correctness/useExhaustiveDependencies: applyComputedFields is a stable closure over field config
+  }, [activeView, addendumO2MEntries, effectiveRowsForRollup])
+
   // The grid fetches at most O2M_ROW_LIMIT rows. Past that it holds a PARTIAL
   // set, and a total summed from it would be confidently wrong — worse than the
   // stored figure it would replace. Withhold rows instead.
@@ -2226,15 +2238,8 @@ export function InlineTableField({
       reportLiveRows(relatedCollection, manyField, null)
       return
     }
-    reportLiveRows(relatedCollection, manyField, effectiveRowsForRollup)
-  }, [
-    reportLiveRows,
-    relatedCollection,
-    manyField,
-    effectiveRowsForRollup,
-    rowsTruncated,
-    rowsLoading
-  ])
+    reportLiveRows(relatedCollection, manyField, rowsForRollup)
+  }, [reportLiveRows, relatedCollection, manyField, rowsForRollup, rowsTruncated, rowsLoading])
 
   // Unmount only (a tab closed, the field hidden): stop contributing, so a
   // rollup falls back to the stored value instead of a stale snapshot.

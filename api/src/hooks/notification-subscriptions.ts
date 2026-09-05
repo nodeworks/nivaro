@@ -209,6 +209,13 @@ export async function fireWorkflowStateSubscriptions(opts: {
   actorUserId?: string | null
 }): Promise<void> {
   try {
+    // An addendum's transition notifies the PARENT record's subscribers: the
+    // subscription rows, the record the filters read, and the notification's
+    // link all point at the parent (pipeline-subject.ts). The friendly id
+    // already names the addendum.
+    const { resolvePipelineSubject } = await import('../services/pipeline-subject.js')
+    const subject = await resolvePipelineSubject(opts.collection, opts.item)
+    opts = { ...opts, collection: subject.collection, item: subject.itemId }
     const subs = await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
       .where({

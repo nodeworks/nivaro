@@ -14,6 +14,7 @@ import {
 import { can } from '../services/permissions.js'
 import {
   bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
+import { fetchPipelineRecord } from '../services/pipeline-subject.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 import {
   evaluateTransitionRequirements,
@@ -3122,13 +3123,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // Skip prediction needs the record row (field_compare/lookup_compare
       // criteria) — one fetch shared across states. Best-effort: an unreadable
       // record just means no skip flags, never a failed response.
-      let record: Record<string, unknown> = {}
-      try {
-        const r = await db(collection).where({ id: item }).first()
-        if (r) record = r as Record<string, unknown>
-      } catch {
-        record = {}
-      }
+      // Subject record — an addendum's rules read its PARENT (pipeline-subject.ts).
+      const record = await fetchPipelineRecord(collection, item)
 
       // ── Path relevance ──────────────────────────────────────────────────
       // A template can hold branch states (Oracle vs Beeline submission, CAR

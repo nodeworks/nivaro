@@ -385,6 +385,7 @@ export function ItemEditPage() {
   // layout resolution, exactly as before.
   const layoutSlug = searchParams.get('layout') || undefined
   const focusField = searchParams.get('focus') || undefined
+  const addendumParam = searchParams.get('addendum') || undefined
   const location = useLocation()
 
   // Back returns to wherever the user came from (queue worklist, browser, etc).
@@ -1063,6 +1064,7 @@ export function ItemEditPage() {
                 collection={collection!}
                 itemId={isNew ? undefined : id}
                 layoutSlug={layoutSlug}
+                initialAddendumViewId={addendumParam}
           focusField={focusField}
                 showHeader={true}
                 onBack={undefined}

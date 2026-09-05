@@ -3,6 +3,12 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { sendRawMail } from './mail.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import {
+  ADDENDUM_COLLECTION,
+  addendumLabel,
+  addendumRecordPath,
+  loadAddendums
+} from './pipeline-subject.js'
 
 /**
  * Daily action digest — one summary email per user who opted into
@@ -71,9 +77,12 @@ function sectionHtml(section: DigestSection): string {
 
 /** Open workflow-engine items where the user is a resolved current-state owner. */
 async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
+  // Bound collections' instances PLUS addendum instances (never bound —
+  // pipeline-subject.ts); an addendum awaiting your approval is an action.
   const instances = (await db('nivaro_workflow_instances as wi')
-    .join('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
+    .leftJoin('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
     .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+    .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
     .whereNotNull('wi.current_state')
     .whereNull('wi.completed_at')
     .where((qb) => qb.where('s.is_terminal', false).orWhereNull('s.is_terminal'))
@@ -126,14 +135,26 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
       itemId: inst.item
     }))
   )
+  const addendumInfos = await loadAddendums(
+    instances.filter((i) => i.collection === ADDENDUM_COLLECTION).map((i) => String(i.item))
+  )
   for (const inst of instances) {
     const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
+    const info =
+      inst.collection === ADDENDUM_COLLECTION ? addendumInfos.get(String(inst.item)) : undefined
+    const addendumPath = info ? addendumRecordPath(info) : null
+    const text = info
+      ? addendumLabel(
+          info,
+          info.parentCollection ? `${labelFor(info.parentCollection)} ${info.parentId}` : null
+        )
+      : `${labelFor(inst.collection)} ${inst.item}`
     for (const o of owners) {
       if (!buckets.has(o.id)) buckets.set(o.id, [])
       buckets.get(o.id)!.push({
-        text: `${labelFor(inst.collection)} ${inst.item}`,
+        text,
         sub: inst.state_label,
-        url: `${config.ADMIN_URL}/collections/${inst.collection}/${inst.item}`
+        url: `${config.ADMIN_URL}${addendumPath ?? `/collections/${inst.collection}/${inst.item}`}`
       })
     }
   }

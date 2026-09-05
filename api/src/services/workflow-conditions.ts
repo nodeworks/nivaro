@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { resolvePipelineSubject } from './pipeline-subject.js'
 
 // ─── Workflow transition condition rules ─────────────────────────────────────
 // Shared evaluator used by the pipelines routes (available-transition listing +
@@ -393,6 +394,11 @@ export async function fetchRecordForConditions(
   itemId: string,
   ruleSets: Array<string | null | undefined> = []
 ): Promise<Record<string, unknown>> {
+  // Conditions read the subject record — an addendum's parent, whose lines
+  // and columns the rules actually name (pipeline-subject.ts).
+  const subject = await resolvePipelineSubject(collection, itemId)
+  collection = subject.collection
+  itemId = subject.itemId
   let record: Record<string, unknown> = {}
   try {
     const row = (await db(collection).where({ id: itemId }).first()) as

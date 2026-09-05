@@ -1406,6 +1406,8 @@ function SummaryStrip({
   relations,
   collection,
   itemId,
+  ownersCollection,
+  ownersItemId,
   ownersAssignment,
   m2mCounts,
   o2mCounts,
@@ -1420,6 +1422,10 @@ function SummaryStrip({
   relations: CMSRelation[]
   collection: string
   itemId: string
+  /** The pipeline instance the owners slot reads — an addendum's own instance
+   *  while its view is selected; defaults to the record. */
+  ownersCollection?: string
+  ownersItemId?: string
   ownersAssignment?: SlotAssignment | null
   m2mCounts?: Record<string, number>
   o2mCounts?: Record<string, number>
@@ -1454,7 +1460,10 @@ function SummaryStrip({
       return (
         <div className='flex items-center gap-1.5'>
           <span className={LBL}>{ownersLabel}</span>
-          <OwnersInlineCompact collection={collection} itemId={itemId} />
+          <OwnersInlineCompact
+            collection={ownersCollection ?? collection}
+            itemId={ownersItemId ?? itemId}
+          />
         </div>
       )
     }
@@ -1648,6 +1657,8 @@ export function GroupSection({
   summaryAggConfigs,
   o2mLoading,
   footerSlot,
+  ownersCollection,
+  ownersItemId,
   ownersAssignment,
   pdfAssignment,
   pdfAttachField,
@@ -1688,6 +1699,8 @@ export function GroupSection({
   summaryAggConfigs?: Record<string, SummaryAggConfig>
   o2mLoading?: Set<string>
   footerSlot?: ReactNode
+  ownersCollection?: string
+  ownersItemId?: string
   ownersAssignment?: SlotAssignment | null
   pdfAssignment?: SlotAssignment | null
   pdfAttachField?: string | null
@@ -1796,6 +1809,8 @@ export function GroupSection({
           relations={relations}
           collection={collection}
           itemId={itemId}
+          ownersCollection={ownersCollection}
+          ownersItemId={ownersItemId}
           ownersAssignment={ownersAssignment}
           m2mCounts={m2mCounts}
           o2mCounts={o2mCounts}

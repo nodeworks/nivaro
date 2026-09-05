@@ -1,5 +1,11 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import {
+  ADDENDUM_COLLECTION,
+  fetchPipelineRecord,
+  resolvePipelineSubject,
+  resolvePipelineSubjectsBatch
+} from './pipeline-subject.js'
 import { span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -632,6 +638,21 @@ export async function resolveStateOwnersBatch(
   const result = new Map<string, ResolvedOwner[]>()
   if (requests.length === 0) return result
 
+  // Addendum instances resolve owners against their PARENT record (see
+  // pipeline-subject.ts). The request key and instance id stay the caller's;
+  // only the row the group filters read is swapped.
+  const addendumIds = requests
+    .filter((r) => r.collection === ADDENDUM_COLLECTION)
+    .map((r) => String(r.itemId))
+  if (addendumIds.length > 0) {
+    const subjects = await resolvePipelineSubjectsBatch(ADDENDUM_COLLECTION, addendumIds, database)
+    requests = requests.map((r) => {
+      if (r.collection !== ADDENDUM_COLLECTION) return r
+      const s = subjects.get(String(r.itemId))
+      return s ? { ...r, collection: s.collection, itemId: s.itemId } : r
+    })
+  }
+
   const stateIds = [...new Set(requests.map((r) => r.stateId))]
   const groupData = await getOwnerGroupsForStates(stateIds, database)
   const groupsByState = new Map<string, OwnerGroup[]>()
@@ -1087,20 +1108,17 @@ export async function resolveTransitionTarget(
 
   if (coerceBool(state.is_terminal) || coerceBool(state.is_initial)) return state
 
-  let record: Record<string, unknown> = {}
-  try {
-    const r = await database(collection).where({ id: itemId }).first()
-    if (r) record = r as Record<string, unknown>
-  } catch {
-    record = {}
-  }
+  // Rules read the subject record (an addendum's parent), never the
+  // nivaro_addendums row — see pipeline-subject.ts.
+  const subject = await resolvePipelineSubject(collection, itemId, database)
+  const record = await fetchPipelineRecord(collection, itemId, database)
 
   const shouldSkip = await evaluateSkipCriteria(
     toStateId,
     record,
     instanceId,
-    collection,
-    itemId,
+    subject.collection,
+    subject.itemId,
     database
   )
 

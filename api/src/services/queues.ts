@@ -14,6 +14,12 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
+import {
+  ADDENDUM_COLLECTION,
+  addendumLabel,
+  addendumRecordPath,
+  loadAddendums
+} from './pipeline-subject.js'
 import { span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1108,6 +1114,25 @@ export async function getLabels(
   const labels: Record<string, string> = {}
   for (const [collection, ids] of itemsByCollection) {
     try {
+      // Addendums are not a registered collection: label = title · parent label.
+      if (collection === ADDENDUM_COLLECTION) {
+        const infos = await loadAddendums([...ids])
+        const parents = new Map<string, Set<string>>()
+        for (const info of infos.values()) {
+          if (!info.parentCollection || !info.parentId) continue
+          if (!parents.has(info.parentCollection)) parents.set(info.parentCollection, new Set())
+          parents.get(info.parentCollection)!.add(info.parentId)
+        }
+        const parentLabels = parents.size > 0 ? await getLabels(parents) : {}
+        for (const [id, info] of infos) {
+          const parentLabel =
+            info.parentCollection && info.parentId
+              ? (parentLabels[`${info.parentCollection}:${info.parentId}`] ?? info.parentId)
+              : null
+          labels[`${collection}:${id}`] = addendumLabel(info, parentLabel)
+        }
+        continue
+      }
       const colMeta = (await db('nivaro_collections')
         .where({ collection })
         .first('display_template')) as { display_template: string | null } | undefined
@@ -1985,9 +2010,12 @@ export async function resolveOwnedByMeSource(
   userId: string,
   ceiling: number = QUEUE_SANITY_CEILING
 ): Promise<SourceResult> {
+  // Bound collections' instances PLUS addendum instances (an addendum runs its
+  // own instance on a collection that is never bound — pipeline-subject.ts).
   const instances = (await db('nivaro_workflow_instances as wi')
-    .join('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
+    .leftJoin('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
     .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+    .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
     .whereNotNull('wi.current_state')
     .whereNull('wi.completed_at')
     .select(
@@ -2030,10 +2058,23 @@ export async function resolveOwnedByMeSource(
   }))
   const ownersByKey = await resolveStateOwnersBatch(ownerRequests)
 
+  // Addendum rows open their PARENT record with the addendum view pinned.
+  const addendumIds = scoped
+    .filter((i) => i.collection === ADDENDUM_COLLECTION)
+    .map((i) => String(i.item))
+  const addendumInfos = addendumIds.length > 0 ? await loadAddendums(addendumIds) : new Map()
+
   const items: QueueItem[] = []
   for (const inst of scoped) {
     const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
     if (!owners.some((o) => o.id === userId)) continue
+    const addendumPath =
+      inst.collection === ADDENDUM_COLLECTION
+        ? (() => {
+            const info = addendumInfos.get(String(inst.item))
+            return info ? addendumRecordPath(info) : null
+          })()
+        : null
     items.push({
       collection: inst.collection,
       item_id: inst.item,
@@ -2045,7 +2086,7 @@ export async function resolveOwnedByMeSource(
       at_risk: false,
       aging_hours: null,
       claimed_by: null,
-      url: `/collections/${inst.collection}/${inst.item}`
+      url: addendumPath ?? `/collections/${inst.collection}/${inst.item}`
     })
   }
   return {

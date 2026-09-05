@@ -3,6 +3,13 @@ import { emitTrigger } from '../flows/registry.js'
 import { logActivity } from './activity.js'
 import { ensureAutoWatch } from './auto-watch.js'
 import { resolveStateOwners } from './pipeline-engine.js'
+import {
+  ADDENDUM_COLLECTION,
+  addendumLabel,
+  fetchPipelineRecord,
+  loadAddendums,
+  resolvePipelineSubject
+} from './pipeline-subject.js'
 import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -283,6 +290,14 @@ export async function evaluateSkipCriteriaDetailed(
       .first()
     if (!state) return { skipped: false, reasons: [] }
 
+    // lookup_compare / field_compare read the SUBJECT record's relations —
+    // an addendum's criteria are judged on its parent (pipeline-subject.ts).
+    // The instance id stays the addendum's own, so skip-if-no-owners still
+    // sees its manually-assigned owners.
+    const subject = await resolvePipelineSubject(collection, itemId, database)
+    collection = subject.collection
+    itemId = subject.itemId
+
     // Standalone skip-if-no-owners flag: skip the state when THIS RECORD resolves
     // zero owners for it — owner groups may exist but match other dimensions
     // (EFP getRealOwners semantics; includes manually-assigned instance owners).
@@ -411,13 +426,11 @@ export async function resolveTransitionTarget(
 
   if (coerceBool(state.is_terminal) || coerceBool(state.is_initial)) return state
 
-  let record: Record<string, unknown> = {}
-  try {
-    const r = await database(collection).where({ id: itemId }).first()
-    if (r) record = r as Record<string, unknown>
-  } catch {
-    record = {}
-  }
+  // Rules read the subject record (an addendum's parent) — pipeline-subject.ts.
+  const subject = await resolvePipelineSubject(collection, itemId, database)
+  const record = await fetchPipelineRecord(collection, itemId, database)
+  collection = subject.collection
+  itemId = subject.itemId
 
   const shouldSkip = await evaluateSkipCriteria(
     toStateId,
@@ -502,6 +515,19 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
  * missing value) fall back to the internal id. Never throws.
  */
 export async function resolveFriendlyId(collection: string, item: string): Promise<string> {
+  // An addendum is named by its PARENT's friendly id plus its own title —
+  // a bare addendum uuid in a mail subject means nothing to anyone.
+  if (collection === ADDENDUM_COLLECTION) {
+    try {
+      const info = (await loadAddendums([String(item)])).get(String(item))
+      if (info?.parentCollection && info.parentId) {
+        const parent = await resolveFriendlyId(info.parentCollection, info.parentId)
+        return addendumLabel(info, parent)
+      }
+    } catch {
+      /* fall through */
+    }
+  }
   try {
     const rt = (await db('nivaro_chat_room_types')
       .where({ collection, is_active: true })
@@ -636,6 +662,14 @@ export async function applyTransition(opts: {
       ? await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
       : []
     const friendlyId = await resolveFriendlyId(instance.collection, instance.item)
+    // The SUBJECT record — an addendum's parent — so flows can read creator /
+    // contacts off the workflow and match on `subject_collection` while the
+    // instance itself stays the addendum's (pipeline-subject.ts).
+    const subject = await resolvePipelineSubject(instance.collection, instance.item)
+    const addendumInfo =
+      instance.collection === ADDENDUM_COLLECTION
+        ? ((await loadAddendums([String(instance.item)])).get(String(instance.item)) ?? null)
+        : null
     // State timing tokens (#393): when the record ENTERED the state it just
     // left, and how long it sat there — templated as {{entered_previous_state_at}}
     // / {{hours_in_previous_state}} in flow mail/notification ops.
@@ -656,6 +690,10 @@ export async function applyTransition(opts: {
       {
         collection: instance.collection,
         item: instance.item,
+        subject_collection: subject.collection,
+        subject_item: subject.itemId,
+        is_addendum: instance.collection === ADDENDUM_COLLECTION,
+        addendum: addendumInfo ? { id: addendumInfo.id, title: addendumInfo.title } : null,
         friendly_id: friendlyId,
         template: instance.template,
         transition_id: transition.id,
