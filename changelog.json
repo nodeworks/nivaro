@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-05T21:24:02.786Z",
+  "generated_at": "2026-09-05T21:33:45.494Z",
   "releases": [
+    {
+      "version": "0.1.222",
+      "tag": "v0.1.222",
+      "date": "2026-09-05T17:33:38-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "locked file fields keep their download and preview actions",
+              "hash": "f79eb3ba"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.221",
       "tag": "v0.1.221",
-      "date": "2026-09-05T17:23:56-04:00",
+      "date": "2026-09-05T17:24:02-04:00",
       "sections": [
         {
           "label": "Added",
