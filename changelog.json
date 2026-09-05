@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-05T21:42:29.593Z",
+  "generated_at": "2026-09-05T22:11:19.059Z",
   "releases": [
+    {
+      "version": "0.1.224",
+      "tag": "v0.1.224",
+      "date": "2026-09-05T18:11:11-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "notify owners and subscribers when an addendum is created",
+              "hash": "c291d9f3"
+            },
+            {
+              "section": "Added",
+              "scope": "workflows",
+              "text": "transition payload carries record_url for mail and notification links",
+              "hash": "03407ef0"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.223",
       "tag": "v0.1.223",
-      "date": "2026-09-05T17:42:23-04:00",
+      "date": "2026-09-05T17:42:29-04:00",
       "sections": [
         {
           "label": "Added",
