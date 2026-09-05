@@ -8593,8 +8593,8 @@ export function ItemEditForm({
                                     !activeLayoutData?.layout?.hide_sla_banner && (
                                       <div className='nvr-expand-in'>
                                         <SlaBreachBanner
-                                          collection={collection}
-                                          itemId={String(itemId)}
+                                          collection={pipelineCollection}
+                                          itemId={String(pipelineItem)}
                                         />
                                       </div>
                                     )}

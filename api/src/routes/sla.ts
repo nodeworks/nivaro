@@ -107,11 +107,15 @@ async function computeStatus(collection: string, item: string) {
     .orderBy('timestamp', 'desc')
     .first()
 
-  if (!historyEntry) {
+  // No history row = the instance STARTED in this state (addendums start in a
+  // configured approval state; auto-started bindings likewise) — the clock
+  // runs from the instance start, not never.
+  const enteredRaw = historyEntry?.timestamp ?? instance.started_at
+  if (!enteredRaw) {
     return { status: 'none' }
   }
 
-  const enteredAt = new Date(historyEntry.timestamp)
+  const enteredAt = new Date(enteredRaw)
   const now = new Date()
 
   // Per-region clock: a mapped zone on the record's own region overrides the
@@ -269,7 +273,11 @@ export async function computeStatusBatch(
   for (const inst of candidates) {
     const stateKey = keyOf(inst.current_state)
     const rule = ruleFor(inst.template, stateKey)
-    const entered = enteredAt.get(`${inst.id}::${inst.current_state}`)
+    // Started-in-state instances (addendums) have no history row for their
+    // current state — the instance start is when the clock began.
+    const entered =
+      enteredAt.get(`${inst.id}::${inst.current_state}`) ??
+      (inst.started_at ? new Date(inst.started_at as string | Date) : undefined)
     if (!entered) continue
 
     const recordZone = zoneMap.get(String(inst.item)) ?? null

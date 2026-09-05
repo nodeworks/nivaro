@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { ADDENDUM_COLLECTION, resolvePipelineSubjectsBatch } from './pipeline-subject.js'
 
 /**
  * Per-region SLA clocks.
@@ -166,6 +167,28 @@ export async function resolveRecordZones(
   try {
     const cfg = await getSlaZoneConfig()
     if (!cfg) return out
+    // An addendum's clock is its PARENT record's region (pipeline-subject.ts):
+    // resolve the parents' zones, then hand them back under the addendum ids.
+    if (collection === ADDENDUM_COLLECTION) {
+      const subjects = await resolvePipelineSubjectsBatch(collection, ids)
+      const byParent = new Map<string, string[]>()
+      const parentOf = new Map<string, { collection: string; itemId: string }>()
+      for (const id of ids) {
+        const s = subjects.get(String(id))
+        if (!s || s.collection === ADDENDUM_COLLECTION) continue
+        parentOf.set(String(id), s)
+        byParent.set(s.collection, [...(byParent.get(s.collection) ?? []), s.itemId])
+      }
+      for (const [parentCollection, parentIds] of byParent) {
+        const zones = await resolveRecordZones(parentCollection, [...new Set(parentIds)])
+        for (const [id, s] of parentOf) {
+          if (s.collection !== parentCollection) continue
+          const tz = zones.get(s.itemId)
+          if (tz) out.set(id, tz)
+        }
+      }
+      return out
+    }
     const route = await routeFor(collection, cfg.source_collection)
     if (route.kind === 'none') return out
 

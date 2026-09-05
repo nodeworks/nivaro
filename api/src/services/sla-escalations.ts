@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { notifyUser } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import { ADDENDUM_COLLECTION, loadAddendums } from './pipeline-subject.js'
+import { resolveFriendlyId } from './workflow-transitions.js'
 
 /**
  * SLA escalation ladders. A rule's ladder is tiers past the BREACH moment:
@@ -82,8 +84,14 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
     const bindings = (await db('nivaro_workflow_bindings')
       .where({ template: rule.workflow_template })
       .select('collection')) as Array<{ collection: string }>
+    // Addendum instances run on the same template without a binding
+    // (pipeline-subject.ts) — their SLA rules, acks and ladders are the
+    // template's, keyed on the addendum's own collection/item.
+    const sweepCollections = [
+      ...new Set([...bindings.map((b) => b.collection), ADDENDUM_COLLECTION])
+    ].map((collection) => ({ collection }))
 
-    for (const b of bindings) {
+    for (const b of sweepCollections) {
       const instances = (await db('nivaro_workflow_instances')
         .where({ template: rule.workflow_template, collection: b.collection, current_state: state.id })
         .whereNull('completed_at')
@@ -142,12 +150,26 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
               inserted = false
             })
           if (inserted && app) {
+            // Name the record (an addendum reads "<parent id> · Addendum "…"")
+            // and link an addendum's notification to its PARENT record —
+            // opening the parent selects the addendum view, whose banner
+            // carries the acknowledge action.
+            const friendly = await resolveFriendlyId(b.collection, item).catch(() => item)
+            let linkCollection = b.collection
+            let linkItem = item
+            if (b.collection === ADDENDUM_COLLECTION) {
+              const info = (await loadAddendums([item])).get(item)
+              if (info?.parentCollection && info.parentId) {
+                linkCollection = info.parentCollection
+                linkItem = info.parentId
+              }
+            }
             for (const uid of recipients) {
               await notifyUser(app, uid, {
                 subject: `SLA escalation (tier ${tier + 1}): ${rule.name}`,
-                message: `A ${b.collection} record has been breached for ${Math.round(hoursPast)}h in "${rule.state_key}" with no acknowledgment. Open it and acknowledge to stop further escalation.`,
-                collection: b.collection,
-                item
+                message: `${friendly} has been breached for ${Math.round(hoursPast)}h in "${rule.state_key}" with no acknowledgment. Open it and acknowledge to stop further escalation.`,
+                collection: linkCollection,
+                item: linkItem
               }).catch(() => {})
             }
           }
