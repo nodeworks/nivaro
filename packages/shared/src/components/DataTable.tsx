@@ -3,7 +3,6 @@ import {
   Check,
   Inbox,
   ChevronDown,
-  ChevronRight,
   ChevronsUpDown,
   ChevronUp,
   Pin,
@@ -122,6 +121,9 @@ export interface DataTableProps<T = Record<string, unknown>> {
   rowGroups?: Array<{ key: string; header: React.ReactNode; rows: T[] }>
   collapsedGroups?: Set<string>
   onToggleGroup?: (key: string) => void
+  /** Changes whenever a fresh result set lands (e.g. the query's dataUpdatedAt);
+   *  the body remounts so rows replay their staggered enter animation. */
+  enterKey?: string | number
 }
 
 // ─── Sort helpers ─────────────────────────────────────────────────────────────
@@ -151,10 +153,15 @@ function SortIcon({ field, sort }: { field: string; sort: string }) {
   if (currentField !== field || !sort) {
     return <ChevronsUpDown className='ml-1 inline h-3 w-3 shrink-0 text-slate-300' />
   }
-  if (dir === 'asc') {
-    return <ChevronUp className='ml-1 inline h-3 w-3 shrink-0 text-nvr-cyan' />
-  }
-  return <ChevronDown className='ml-1 inline h-3 w-3 shrink-0 text-nvr-cyan' />
+  // One glyph that rotates between asc/desc, instead of swapping icons.
+  return (
+    <ChevronUp
+      className={cn(
+        'ml-1 inline h-3 w-3 shrink-0 text-nvr-cyan transition-transform duration-200',
+        dir === 'desc' && 'rotate-180'
+      )}
+    />
+  )
 }
 
 // ─── Filter combobox ──────────────────────────────────────────────────────────
@@ -488,6 +495,7 @@ export function DataTable<T = Record<string, unknown>>({
   selectedIds,
   onSelectionChange,
   rowClassName,
+  enterKey,
   rowGroups,
   collapsedGroups,
   onToggleGroup
@@ -592,7 +600,7 @@ export function DataTable<T = Record<string, unknown>>({
           // NAMED group: queue cells already use bare `group-hover:` against
           // their own local group, and claiming the unnamed one here would
           // make those reveal on row hover instead.
-          'group/row border-slate-100',
+          'group/row nvr-row-enter border-slate-100 transition-colors duration-150',
           (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
           onRowClick &&
             (pinFirstColumn || pinsActive
@@ -606,6 +614,7 @@ export function DataTable<T = Record<string, unknown>>({
           isSelected &&
             (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
         )}
+        style={{ animationDelay: `${Math.min(i, 14) * 16}ms` }}
         onClick={() => onRowClick?.(row)}
         onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(row, e) : undefined}
       >
@@ -868,14 +877,14 @@ export function DataTable<T = Record<string, unknown>>({
               </TableHeader>
               {/* Tabular figures: DM Sans is proportional by default, which
                   leaves numeric columns visibly ragged. Letters are unaffected. */}
-              <TableBody className='tabular-nums'>
+              <TableBody key={enterKey} className='tabular-nums'>
                 {rowGroups
                   ? rowGroups.map((group) => {
                       const collapsed = collapsedGroups?.has(group.key) ?? false
                       return (
                         <React.Fragment key={group.key}>
                           <TableRow
-                            className='cursor-pointer border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 dark:bg-muted/40'
+                            className='nvr-row-enter cursor-pointer border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:bg-muted/40'
                             onClick={() => onToggleGroup?.(group.key)}
                           >
                             <TableCell
@@ -883,11 +892,12 @@ export function DataTable<T = Record<string, unknown>>({
                               className='px-3 py-1.5'
                             >
                               <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-foreground'>
-                                {collapsed ? (
-                                  <ChevronRight className='h-3.5 w-3.5 text-slate-400' />
-                                ) : (
-                                  <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
-                                )}
+                                <ChevronDown
+                                  className={cn(
+                                    'h-3.5 w-3.5 text-slate-400 transition-transform duration-200',
+                                    collapsed && '-rotate-90'
+                                  )}
+                                />
                                 {group.header}
                               </span>
                             </TableCell>
@@ -902,7 +912,7 @@ export function DataTable<T = Record<string, unknown>>({
                   <TableRow>
                     <TableCell
                       colSpan={columns.length + (onSelectionChange ? 1 : 0)}
-                      className='py-12 text-center align-middle text-[13px] text-slate-400'
+                      className='nvr-fade-in py-12 text-center align-middle text-[13px] text-slate-400'
                       style={minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined}
                     >
                       {typeof emptyMessage === 'string' ? (

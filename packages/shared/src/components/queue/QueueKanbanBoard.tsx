@@ -66,7 +66,7 @@ function KanbanCard({
       {...listeners}
       {...attributes}
       className={cn(
-        'w-full rounded-md border border-slate-200 bg-white p-2.5 text-left shadow-sm dark:border-border dark:bg-card',
+        'nvr-section-enter w-full rounded-md border border-slate-200 bg-white p-2.5 text-left shadow-sm transition-[opacity,box-shadow,border-color] duration-150 hover:border-slate-300 hover:shadow dark:border-border dark:bg-card dark:hover:border-slate-600',
         isDragging && 'opacity-40'
       )}
     >
@@ -142,7 +142,7 @@ function KanbanColumn({
           {formatNumber(items.length)}
         </span>
       </div>
-      <div className='flex-1 space-y-2 overflow-y-auto p-2' style={{ maxHeight: '70vh' }}>
+      <div className='nvr-stagger-direct flex-1 space-y-2 overflow-y-auto p-2' style={{ maxHeight: '70vh' }}>
         {items.map((item) => (
           <KanbanCard
             key={`${item.collection}:${item.item_id}`}

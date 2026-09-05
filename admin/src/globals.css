@@ -412,13 +412,20 @@ tr.nvr-row-flash > td {
   to { opacity: 1; transform: none; }
 }
 .nvr-slide-up { animation: nvr-slide-up 200ms var(--nvr-ease-out) both; }
+/* Queue worklist polish, round 1 */
+/* Centered fixed bars (queue bulk bar) — keeps the -50% x-translate while sliding up. */
+@keyframes nvr-slide-up-centered {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.nvr-slide-up-centered { animation: nvr-slide-up-centered 200ms var(--nvr-ease-out) both; }
 
 
 
 
 
 @media (prefers-reduced-motion: reduce) {
-  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up { animation: none; }
+  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered { animation: none; }
 }
 
 /* View transitions (#316): quick cross-fade on sidebar navigation. */

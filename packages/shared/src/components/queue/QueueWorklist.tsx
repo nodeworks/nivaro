@@ -292,7 +292,7 @@ function StatTile({
       type='button'
       onClick={onClick}
       className={cn(
-        'flex items-center gap-1.5 bg-white px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
+        'nvr-section-enter flex items-center gap-1.5 bg-white px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
         active && 'bg-nvr-cyan/5 ring-1 ring-inset ring-nvr-cyan dark:bg-nvr-cyan/10',
         !active && !isLoading && count === 0 && 'opacity-50'
       )}
@@ -813,7 +813,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Label failed'))
   }
 
-  const { data, isLoading, isFetching, isPlaceholderData } = useQuery<{
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt } = useQuery<{
     data: QueueItemRow[]
     stats: QueueStats
     filtered_stats: QueueStats | null
@@ -2108,7 +2108,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           className='mb-2'
         />
         <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
-          <div className='flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+          <div className='nvr-stagger-direct flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
             <StatTile
               label='Total'
               count={stats?.total ?? 0}
@@ -2435,7 +2435,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             <button
               type='button'
               onClick={refreshPendingUpdates}
-              className='flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+              className='nvr-pop-in flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-3 py-1 text-[12px] font-medium transition-colors text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
             >
               <RefreshCw className='h-3 w-3' />
               {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
@@ -2916,12 +2916,13 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 aria-busy={isRefetching || undefined}
               >
                 {loadElapsed != null && (
-                  <span className='absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
+                  <span className='nvr-slide-up-centered absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
                     Still working — {loadElapsed}s
                   </span>
                 )}
                 <DataTable<QueueItemRow>
                   fillHeight
+                  enterKey={dataUpdatedAt}
                   density={density}
                   minBodyHeight={360}
                   columns={columns}

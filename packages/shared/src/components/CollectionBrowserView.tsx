@@ -6589,7 +6589,7 @@ export function CollectionBrowserView({
         !groupBy &&
         total > rows.length &&
         selectedIds.length < Math.min(total, SELECT_ALL_CAP) && (
-          <div className='nvr-fade-in fixed bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[12.5px] shadow-lg dark:border-border dark:bg-card'>
+          <div className='nvr-slide-up-centered fixed bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[12.5px] shadow-lg dark:border-border dark:bg-card'>
             <span className='text-slate-600 dark:text-muted-foreground'>
               All {rows.length} rows on this page are selected.
             </span>{' '}

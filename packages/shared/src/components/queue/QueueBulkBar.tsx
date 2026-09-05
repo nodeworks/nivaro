@@ -27,7 +27,7 @@ export function QueueBulkBar({
   if (count === 0) return null
 
   return (
-    <div className='fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card'>
+    <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card'>
       <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
         {count} selected
       </span>
