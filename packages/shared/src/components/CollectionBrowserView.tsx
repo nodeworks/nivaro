@@ -644,7 +644,7 @@ export function RowActionsMenu({
           <div
             ref={panelRef}
             style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 60 }}
-            className={`${confirm ? 'w-64' : 'w-44'} rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900`}
+            className={`nvr-pop-in ${confirm ? 'w-64' : 'w-44'} rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900`}
           >
             {confirm ? (
               <div className='px-2 pb-2'>
@@ -979,7 +979,7 @@ function MultiPick({
         <ChevronDown aria-hidden className='h-3 w-3 shrink-0 text-slate-400' />
       </button>
       {open && (
-        <div className='absolute left-0 top-full z-50 mt-1 flex max-h-72 w-52 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+        <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 flex max-h-72 w-52 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
           <input
             autoFocus
             value={q}
@@ -1238,7 +1238,7 @@ function DateColFilter({
         <ChevronDown aria-hidden className='h-3 w-3 shrink-0 text-slate-400' />
       </button>
       {open && (
-        <div className='absolute left-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+        <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
           <div className='p-1'>
             {DATE_PRESETS.map((d) => (
               <button
@@ -2138,7 +2138,7 @@ function FilterBar({
         return (
           <span
             key={f.id}
-            className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-[#00ceff66] dark:border-slate-700 dark:bg-slate-900'
+            className='nvr-pop-in inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-[#00ceff66] dark:border-slate-700 dark:bg-slate-900'
           >
             <button
               type='button'
@@ -2181,7 +2181,7 @@ function FilterBar({
           + Add Filter
         </button>
         {open && (
-          <div className='absolute left-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900'>
+          <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900'>
             {picked == null ? (
               <>
                 {level.path.length > 0 && (
@@ -2856,7 +2856,7 @@ function BulkBar({
   return (
     <div
       data-cbv-bulkbar
-      className='flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white shadow-[0_-2px_12px_rgba(0,0,0,0.25)]'
+      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white shadow-[0_-2px_12px_rgba(0,0,0,0.25)]'
     >
       <button type='button' onClick={onClear} aria-label='Clear selection' className='text-slate-400 hover:text-white'>
         ✕
@@ -3733,6 +3733,7 @@ export function CollectionBrowserView({
     data: itemsRes,
     isLoading,
     isFetching,
+    dataUpdatedAt,
     refetch,
     error
   } = useQuery({
@@ -4884,7 +4885,7 @@ export function CollectionBrowserView({
             top: Math.min(cellMenu.y, window.innerHeight - 380),
             zIndex: 125
           }}
-          className='w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
+          className='nvr-pop-in w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
           onMouseDown={(e) => e.stopPropagation()}
         >
           {(cellMenu.key === '__state__' || classifyColFilter(cellMenu.key)) && cellMenu.cellText && cellMenu.cellText !== '—' && (
@@ -5154,7 +5155,7 @@ export function CollectionBrowserView({
               : 'Group'}
           </button>
           {groupOpen && (
-            <div className='absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+            <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 max-h-[360px] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900'>
               <button
                 type='button'
                 onClick={() => pickGroupBy(null)}
@@ -5202,7 +5203,7 @@ export function CollectionBrowserView({
             Columns
           </button>
           {colsOpen && (
-            <div className='absolute right-0 top-full z-50 mt-1 flex max-h-[440px] w-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+            <div className='nvr-pop-in absolute right-0 top-full z-50 mt-1 flex max-h-[440px] w-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900'>
               <div className='flex-1 overflow-y-auto p-1.5'>
                 <p className='px-1.5 pb-1 pt-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
                   Visible columns
@@ -5562,7 +5563,7 @@ export function CollectionBrowserView({
             {exporting ? 'Exporting…' : 'Export'}
           </button>
           {exportMenuOpen && (
-            <div className='absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
+            <div className='nvr-pop-in absolute right-0 top-full z-[60] mt-1 w-[240px] rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-border dark:bg-card'>
               <button
                 type='button'
                 onClick={() => {
@@ -5657,7 +5658,7 @@ export function CollectionBrowserView({
                 <ChevronDown className='h-3.5 w-3.5' />
               </button>
               {newItemMenuOpen && (
-                <div className='absolute right-0 top-9 z-[60] w-60 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
+                <div className='nvr-pop-in absolute right-0 top-9 z-[60] w-60 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
                   <button
                     type='button'
                     onClick={() => {
@@ -5910,14 +5911,14 @@ export function CollectionBrowserView({
       {/* Table card — fills the remaining page height; the table scrolls
           inside it with sticky headers, pagination pinned at the bottom */}
       <div className={mapMode && geo ? 'hidden' : 'flex min-h-0 flex-1 flex-col p-4 pt-3'}>
-        <div className='relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
+        <div className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something */}
           {isFetching && !isLoading && (
             <>
               <div className='cbv-progress pointer-events-none absolute inset-x-0 top-0 z-[6] h-[3px] overflow-hidden' />
-              <div className='cbv-overlay pointer-events-none absolute inset-0 z-[5] flex items-start justify-center bg-white/40 pt-24 dark:bg-slate-950/35'>
-                <span className='flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'>
+              <div className='cbv-overlay nvr-fade-in pointer-events-none absolute inset-0 z-[5] flex items-start justify-center bg-white/40 pt-24 dark:bg-slate-950/35'>
+                <span className='nvr-pop-in flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'>
                   <RotateCw aria-hidden className='h-3.5 w-3.5 animate-spin text-[#00a5cc]' />
                   {loadElapsed != null ? `Still working — ${loadElapsed}s` : 'Loading…'}
                 </span>
@@ -6015,8 +6016,12 @@ export function CollectionBrowserView({
                           </span>
                         )}
                         {!resolved && (
-                          <span className={active ? 'ml-1 text-[#00a5cc]' : 'ml-1 text-slate-300'}>
-                            {active ? (desc ? '▼' : '▲') : '⇅'}
+                          <span
+                            className={`ml-1 inline-block transition-[transform,color] duration-200 ${
+                              active ? 'text-[#00a5cc]' : 'text-slate-300'
+                            } ${active && desc ? 'rotate-180' : ''}`}
+                          >
+                            {active ? '▲' : '⇅'}
                           </span>
                         )}
                         {pinButton(key)}
@@ -6080,7 +6085,7 @@ export function CollectionBrowserView({
               {/* Tabular figures (proportional ones leave numeric columns ragged)
                   and an explicit 12px base — cells with no size of their own were
                   inheriting the table's 13px and reading a step larger than the rest. */}
-              <tbody className='text-[12px] tabular-nums'>
+              <tbody key={dataUpdatedAt} className='text-[12px] tabular-nums'>
                 {isLoading ? (
                   Array.from({ length: 12 }, (_, i) => (
                     <tr key={i} className='border-b border-slate-100 dark:border-slate-800'>
@@ -6094,7 +6099,7 @@ export function CollectionBrowserView({
                   ))
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={effectiveColumns.length + extraCols} className='py-16'>
+                    <td colSpan={effectiveColumns.length + extraCols} className='nvr-fade-in py-16'>
                       {(() => {
                         // #620 — a collection with zero rows and no active
                         // narrowing shows its configured empty state (what this
@@ -6168,7 +6173,8 @@ export function CollectionBrowserView({
                     </td>
                   </tr>
                 ) : (
-                  renderList.map((entry) => {
+                  renderList.map((entry, rowIdx) => {
+                    const enterStyle = { animationDelay: `${Math.min(rowIdx, 14) * 16}ms` }
                     if (entry.kind === 'header') {
                       return (
                         <tr
@@ -6181,15 +6187,16 @@ export function CollectionBrowserView({
                               return next
                             })
                           }
-                          className='cursor-pointer border-b border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 dark:border-slate-700 dark:bg-muted/40'
+                          style={enterStyle}
+                          className='nvr-row-enter cursor-pointer border-b border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:border-slate-700 dark:bg-muted/40'
                         >
                           <td className='px-3 py-1.5' colSpan={effectiveColumns.length + extraCols}>
                             <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-200'>
-                              {collapsedGroups.has(entry.gkey) ? (
-                                <ChevronDown className='h-3.5 w-3.5 -rotate-90 text-slate-400' />
-                              ) : (
-                                <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
-                              )}
+                              <ChevronDown
+                                className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+                                  collapsedGroups.has(entry.gkey) ? '-rotate-90' : ''
+                                }`}
+                              />
                               {entry.label}
                               <span className='rounded-full bg-slate-200/70 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
                                 {entry.count}
@@ -6217,7 +6224,8 @@ export function CollectionBrowserView({
                         onClick={() => openRow(id)}
                         onMouseEnter={() => prefetchRecord(id)}
                         title={risk ? `At risk — ${risk.rule}` : undefined}
-                        className={`group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-75 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
+                        style={enterStyle}
+                        className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
                           isSelected ? 'bg-[#00ceff14]' : (riskTint ?? '')
                         }`}
                       >
@@ -6497,7 +6505,11 @@ export function CollectionBrowserView({
                 <span className='font-semibold text-slate-700 dark:text-slate-200'>
                   {fmtNum(start)}–{fmtNum(end)}
                 </span>{' '}
-                of {fmtNum(total)} records
+                of{' '}
+                <span key={total} className='nvr-value-pulse-bg rounded-sm'>
+                  {fmtNum(total)}
+                </span>{' '}
+                records
               </p>
               <span className='flex items-center gap-0.5'>
                 <button
@@ -6577,7 +6589,7 @@ export function CollectionBrowserView({
         !groupBy &&
         total > rows.length &&
         selectedIds.length < Math.min(total, SELECT_ALL_CAP) && (
-          <div className='fixed bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[12.5px] shadow-lg dark:border-border dark:bg-card'>
+          <div className='nvr-fade-in fixed bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[12.5px] shadow-lg dark:border-border dark:bg-card'>
             <span className='text-slate-600 dark:text-muted-foreground'>
               All {rows.length} rows on this page are selected.
             </span>{' '}
@@ -6700,7 +6712,7 @@ function RecordCompareDialog({
 
   return createPortal(
     <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6' onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className='flex max-h-[85vh] w-full max-w-[980px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
+      <div className='nvr-pop-in flex max-h-[85vh] w-full max-w-[980px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
         <div className='flex shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-border'>
           <span className='text-[13.5px] font-semibold text-slate-800 dark:text-foreground'>
             Compare {ids.length} records
