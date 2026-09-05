@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-05T20:25:28.215Z",
+  "generated_at": "2026-09-05T21:06:05.904Z",
   "releases": [
+    {
+      "version": "0.1.220",
+      "tag": "v0.1.220",
+      "date": "2026-09-05T17:05:59-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "report view changes to the host; batched instances route serves addendums",
+              "hash": "6eed536f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "pipeline rules, owners and header totals read the parent record",
+              "hash": "9dbbec05"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.219",
       "tag": "v0.1.219",
-      "date": "2026-09-05T16:25:21-04:00",
+      "date": "2026-09-05T16:25:28-04:00",
       "sections": [
         {
           "label": "Fixed",
