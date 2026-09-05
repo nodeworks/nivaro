@@ -57,6 +57,8 @@ const RELATION_INTERFACES = new Set([
   'image'
 ])
 
+const FILE_INTERFACES = new Set(['file', 'file-image', 'files-m2m', 'files', 'image'])
+
 function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
   const iface = field.interface ?? ''
   if (
@@ -611,6 +613,7 @@ export function FieldRow({
   forceVisible?: boolean
 }) {
   // Hooks must be called before any early return
+  const isFileField = FILE_INTERFACES.has(field.interface ?? '')
   const parentDraftCtx = useParentDraft()
   const m2mStaging = useM2MStaging()
   const queryClient = useQueryClient()
@@ -1028,11 +1031,16 @@ export function FieldRow({
         </div>
       )}
       {swapContent ?? (
-        <div className={cn(locked && 'cursor-not-allowed')}>
+        <div className={cn(locked && !isFileField && 'cursor-not-allowed')}>
           <div
             key={autoFillTick ?? 0}
             className={cn(
-              locked && 'pointer-events-none opacity-60',
+              // A locked FILE field stays interactive: its chips keep the
+              // download link and preview click (the component itself hides
+              // upload/replace/remove when readonly) — blocking pointer events
+              // made attachments unopenable on every locked form (addendum
+              // view, terminal states).
+              locked && !isFileField && 'pointer-events-none opacity-60',
               // The ring lands with a 2px shake so the eye finds the field;
               // the animation runs once when the class is added.
               error && 'nvr-shake ring-1 ring-red-400 rounded-md',
@@ -1061,7 +1069,7 @@ export function FieldRow({
               })
             ) : (
               <FieldRenderer
-                field={field}
+                field={locked && isFileField ? { ...field, readonly: true } : field}
                 value={value}
                 onChange={(v) => onChange(field.field, v)}
                 relations={relations}
