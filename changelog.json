@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-04T20:50:08.613Z",
+  "generated_at": "2026-09-05T19:10:30.772Z",
   "releases": [
+    {
+      "version": "0.1.217",
+      "tag": "v0.1.217",
+      "date": "2026-09-05T15:10:23-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "item-edit",
+              "text": "subtle motion — staggered section entry, tab crossfade, expand-in, error shake",
+              "hash": "e091b594"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.216",
       "tag": "v0.1.216",
-      "date": "2026-09-04T16:50:02-04:00",
+      "date": "2026-09-04T16:50:08-04:00",
       "sections": [
         {
           "label": "Fixed",
