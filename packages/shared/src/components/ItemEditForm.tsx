@@ -402,6 +402,9 @@ export interface ItemEditFormProps {
   /** Open with this addendum's view selected (the `?addendum=` deep link that
    *  My Work rows, digest lines and notifications carry). */
   initialAddendumViewId?: string | null
+  /** Fires whenever the selected view changes: an addendum id, or null for the
+   *  current record — hosts mirror it into the URL / tab chrome. */
+  onAddendumViewChange?: (addendumId: string | null) => void
   onBack?: () => void
   onSaved?: (id: string) => void
   onDeleted?: () => void
@@ -851,6 +854,7 @@ export function ItemEditForm({
   itemId: itemIdProp,
   layoutSlug,
   initialAddendumViewId,
+  onAddendumViewChange,
   onBack,
   onSaved,
   onDeleted,
@@ -1007,6 +1011,11 @@ export function ItemEditForm({
   const [pdfAttaching, setPdfAttaching] = useState(false)
   const [activeAddendumCount, setActiveAddendumCount] = useState(0)
   const [addendumViewId, setAddendumViewId] = useState<string>(initialAddendumViewId || 'original')
+  const onAddendumViewChangeRef = useRef(onAddendumViewChange)
+  onAddendumViewChangeRef.current = onAddendumViewChange
+  useEffect(() => {
+    onAddendumViewChangeRef.current?.(addendumViewId === 'original' ? null : addendumViewId)
+  }, [addendumViewId])
   const [addendumViewDropdownOpen, setAddendumViewDropdownOpen] = useState(false)
 
   const downloadPdf = useCallback(

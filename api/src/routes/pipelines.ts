@@ -14,7 +14,7 @@ import {
 import { can } from '../services/permissions.js'
 import {
   bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
-import { fetchPipelineRecord } from '../services/pipeline-subject.js'
+import { ADDENDUM_COLLECTION, fetchPipelineRecord } from '../services/pipeline-subject.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 import {
   evaluateTransitionRequirements,
@@ -2200,9 +2200,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
       .first()
-    if (!binding) return reply.send({ data: null })
+    // Addendums are never bound — their instances start from the layout's
+    // template (pipeline-subject.ts) — but a tab strip / badge still needs
+    // their state. Any other unbound collection has no instances to report.
+    if (!binding && collection !== ADDENDUM_COLLECTION) return reply.send({ data: null })
     if (ids && ids.length === 0) {
-      return reply.send({ data: { binding, instances: {} } })
+      return reply.send({ data: { binding: binding ?? null, instances: {} } })
     }
 
     const rows = await db('nivaro_workflow_instances as i')
@@ -2236,7 +2239,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         completed_at: r.completed_at as Date | null
       }
 
-    return reply.send({ data: { binding, instances: byItem } })
+    return reply.send({ data: { binding: binding ?? null, instances: byItem } })
   })
 
   // List all bindings (for collection browser / admin use)
