@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { writeRevision } from '../services/revisions.js'
 
 interface SavedViewRow {
   id: number
@@ -179,12 +180,22 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       .where({ id: Number(id) })
       .first()) as SavedViewRow
 
-    await logActivity({
+    // Saved views are raw-knex rows (never through the items service), so
+    // snapshot them here — a deleted collection default was unrecoverable
+    // before this (2026-09-03, workflows).
+    const updateActivity = await logActivity({
       action: 'update',
       user: req.user?.id,
       collection: 'nivaro_saved_views',
       item: String(id),
       req
+    })
+    await writeRevision({
+      activity: updateActivity,
+      collection: 'nivaro_saved_views',
+      item: String(id),
+      data: formatView(updated) as unknown as Record<string, unknown>,
+      delta: Object.fromEntries(Object.keys(update).map((k) => [k, (formatView(updated) as Record<string, unknown>)[k]]))
     })
 
     return reply.send({ data: formatView(updated) })
@@ -205,12 +216,22 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     await db('nivaro_saved_views')
       .where({ id: Number(id) })
       .delete()
-    await logActivity({
+    // Full snapshot rides the delete activity so the view can be rebuilt
+    // (columns, filters, sort, default flag) from revision history.
+    const deleteActivity = await logActivity({
       action: 'delete',
       user: req.user?.id,
       collection: 'nivaro_saved_views',
       item: String(id),
+      comment: `${view.collection} · ${view.name}${view.is_default ? ' (collection default)' : ''}`,
       req
+    })
+    await writeRevision({
+      activity: deleteActivity,
+      collection: 'nivaro_saved_views',
+      item: String(id),
+      data: formatView(view) as unknown as Record<string, unknown>,
+      delta: null
     })
     return reply.code(204).send()
   })
