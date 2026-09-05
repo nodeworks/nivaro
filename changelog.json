@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-05T21:33:45.494Z",
+  "generated_at": "2026-09-05T21:42:29.593Z",
   "releases": [
+    {
+      "version": "0.1.223",
+      "tag": "v0.1.223",
+      "date": "2026-09-05T17:42:23-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "sla",
+              "text": "addendum instances get SLA status, regional clocks, escalations and the banner",
+              "hash": "8eaba106"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.222",
       "tag": "v0.1.222",
-      "date": "2026-09-05T17:33:38-04:00",
+      "date": "2026-09-05T17:33:45-04:00",
       "sections": [
         {
           "label": "Fixed",
