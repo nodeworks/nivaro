@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
+import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -262,6 +263,26 @@ export async function addendumsRoutes(app: FastifyInstance) {
               current_state: startState.id,
               started_at: now
             })
+            // The addendum starts IN its approval state — no transition ever
+            // enters it, so tell the state's owners (and the parent's
+            // subscribers) it exists, the same way a transition would.
+            const startedInstance = (await db('nivaro_workflow_instances')
+              .where({ collection: 'nivaro_addendums', item: String(insertedId) })
+              .orderBy('started_at', 'desc')
+              .first('id')) as { id: string } | undefined
+            if (startedInstance) {
+              void emitWorkflowStartEvent({
+                instanceId: String(startedInstance.id),
+                collection: 'nivaro_addendums',
+                item: String(insertedId),
+                template: String(body.workflow_template_id),
+                stateId: String(startState.id),
+                userId: req.user?.id ?? null,
+                comment: body.description ?? null,
+                source: 'addendum-created',
+                label: 'Addendum created'
+              })
+            }
           }
         }
       } catch (err) {

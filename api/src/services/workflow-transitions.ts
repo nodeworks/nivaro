@@ -390,6 +390,139 @@ export async function evaluateSkipCriteria(
  *  newest history entry INTO the current state whose from_state still exists
  *  on the template. Null when history can't answer (no entries, started in
  *  this state, prior state removed). */
+/**
+ * The `workflow-transition` trigger payload — shared by a real transition
+ * (applyTransition) and an instance that STARTS in a state (an addendum
+ * created straight into its approval state), so both reach the same flows
+ * and templates: subject record (an addendum's parent), friendly id,
+ * record_url, resolved owners of the new state.
+ */
+async function buildTransitionEventPayload(args: {
+  instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
+  newStateObj: Pick<WorkflowState, 'id' | 'key' | 'label'> | null
+  prevStateObj: Pick<WorkflowState, 'key' | 'label'> | null
+  transitionId: string | null
+  transitionLabel: string
+  source: string
+  comment: string | null
+  userId: string | null
+  enteredPrevAt: Date | null
+}): Promise<Record<string, unknown>> {
+  const { instance, newStateObj, prevStateObj, enteredPrevAt } = args
+  const owners = newStateObj
+    ? await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
+    : []
+  const friendlyId = await resolveFriendlyId(instance.collection, instance.item)
+  // The SUBJECT record — an addendum's parent — so flows can read creator /
+  // contacts off the workflow and match on `subject_collection` while the
+  // instance itself stays the addendum's (pipeline-subject.ts).
+  const subject = await resolvePipelineSubject(instance.collection, instance.item)
+  const addendumInfo =
+    instance.collection === ADDENDUM_COLLECTION
+      ? ((await loadAddendums([String(instance.item)])).get(String(instance.item)) ?? null)
+      : null
+  // Absolute link to the record for mail/notification templates — the
+  // SUBJECT record (an addendum links its parent with the addendum view
+  // pinned), built from the instance's own base URL so a flow body never
+  // has to hardcode a host or guess an id shape.
+  const recordPath =
+    `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
+    (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
+  const recordUrl = `${adminBaseUrl() ?? ''}${recordPath}`
+  return {
+    collection: instance.collection,
+    item: instance.item,
+    subject_collection: subject.collection,
+    subject_item: subject.itemId,
+    is_addendum: instance.collection === ADDENDUM_COLLECTION,
+    addendum: addendumInfo ? { id: addendumInfo.id, title: addendumInfo.title } : null,
+    record_url: recordUrl,
+    record_path: recordPath,
+    friendly_id: friendlyId,
+    template: instance.template,
+    transition_id: args.transitionId,
+    transition_label: args.transitionLabel,
+    source: args.source,
+    comment: args.comment,
+    user_id: args.userId,
+    from_state: prevStateObj ? { key: prevStateObj.key, label: prevStateObj.label } : null,
+    to_state: newStateObj ? { key: newStateObj.key, label: newStateObj.label } : null,
+    owners,
+    owner_emails: owners
+      .map((o) => o.email)
+      .filter(Boolean)
+      .join(','),
+    entered_previous_state_at: enteredPrevAt ? enteredPrevAt.toISOString() : null,
+    hours_in_previous_state: enteredPrevAt
+      ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10
+      : null
+  }
+}
+
+/**
+ * An instance that STARTS in a state never transitions into it, so nothing
+ * told its owners it exists — an addendum created straight into Manager
+ * Approval emailed nobody. Emit the same trigger + state subscriptions a
+ * transition would, with from_state null and the creation reason as the
+ * comment. Best-effort, never throws.
+ */
+export async function emitWorkflowStartEvent(opts: {
+  instanceId: string
+  collection: string
+  item: string
+  template: string
+  stateId: string
+  userId?: string | null
+  comment?: string | null
+  source?: string
+  label?: string
+}): Promise<void> {
+  try {
+    const state = await db<WorkflowState>('nivaro_workflow_states')
+      .where({ id: opts.stateId })
+      .first()
+    if (!state) return
+    const instance = {
+      id: opts.instanceId,
+      collection: opts.collection,
+      item: opts.item,
+      template: opts.template
+    }
+    const payload = await buildTransitionEventPayload({
+      instance,
+      newStateObj: state,
+      prevStateObj: null,
+      transitionId: null,
+      transitionLabel: opts.label ?? 'Started',
+      source: opts.source ?? 'start',
+      comment: opts.comment ?? null,
+      userId: opts.userId ?? null,
+      enteredPrevAt: null
+    })
+    emitTrigger(
+      'workflow-transition',
+      payload,
+      console as unknown as Parameters<typeof emitTrigger>[2],
+      opts.userId ?? undefined
+    )
+    import('../hooks/notification-subscriptions.js')
+      .then(async ({ fireWorkflowStateSubscriptions }) =>
+        fireWorkflowStateSubscriptions({
+          collection: opts.collection,
+          item: opts.item,
+          friendlyId: String(payload.friendly_id ?? opts.item),
+          stateKey: state.key,
+          stateLabel: state.label,
+          transitionLabel: opts.label ?? 'Started',
+          actorUserId: opts.userId ?? null
+        })
+      )
+      .catch(() => {})
+  } catch {
+    /* best effort */
+  }
+}
+
 async function resolvePreviousState(instance: WorkflowInstance): Promise<string | null> {
   const entries = (await db('nivaro_workflow_history')
     .where({ instance: instance.id, to_state: instance.current_state })
@@ -659,26 +792,6 @@ export async function applyTransition(opts: {
     const prevStateObj = previousState
       ? await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()
       : null
-    const owners = newStateObj
-      ? await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
-      : []
-    const friendlyId = await resolveFriendlyId(instance.collection, instance.item)
-    // The SUBJECT record — an addendum's parent — so flows can read creator /
-    // contacts off the workflow and match on `subject_collection` while the
-    // instance itself stays the addendum's (pipeline-subject.ts).
-    const subject = await resolvePipelineSubject(instance.collection, instance.item)
-    const addendumInfo =
-      instance.collection === ADDENDUM_COLLECTION
-        ? ((await loadAddendums([String(instance.item)])).get(String(instance.item)) ?? null)
-        : null
-    // Absolute link to the record for mail/notification templates — the
-    // SUBJECT record (an addendum links its parent with the addendum view
-    // pinned), built from the instance's own base URL so a flow body never
-    // has to hardcode a host or guess an id shape.
-    const recordPath =
-      `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
-      (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
-    const recordUrl = `${adminBaseUrl() ?? ''}${recordPath}`
     // State timing tokens (#393): when the record ENTERED the state it just
     // left, and how long it sat there — templated as {{entered_previous_state_at}}
     // / {{hours_in_previous_state}} in flow mail/notification ops.
@@ -694,36 +807,20 @@ export async function applyTransition(opts: {
         enteredPrevAt = null
       }
     }
+    const payload = await buildTransitionEventPayload({
+      instance,
+      newStateObj: newStateObj ?? null,
+      prevStateObj: prevStateObj ?? null,
+      transitionId: transition.id,
+      transitionLabel: transition.label,
+      source: opts.source ?? 'manual',
+      comment: opts.comment ?? null,
+      userId: opts.userId ?? null,
+      enteredPrevAt
+    })
     emitTrigger(
       'workflow-transition',
-      {
-        collection: instance.collection,
-        item: instance.item,
-        subject_collection: subject.collection,
-        subject_item: subject.itemId,
-        is_addendum: instance.collection === ADDENDUM_COLLECTION,
-        addendum: addendumInfo ? { id: addendumInfo.id, title: addendumInfo.title } : null,
-        record_url: recordUrl,
-        record_path: recordPath,
-        friendly_id: friendlyId,
-        template: instance.template,
-        transition_id: transition.id,
-        transition_label: transition.label,
-        source: opts.source ?? 'manual',
-        comment: opts.comment ?? null,
-        user_id: opts.userId ?? null,
-        from_state: prevStateObj ? { key: prevStateObj.key, label: prevStateObj.label } : null,
-        to_state: newStateObj ? { key: newStateObj.key, label: newStateObj.label } : null,
-        owners,
-        owner_emails: owners
-          .map((o) => o.email)
-          .filter(Boolean)
-          .join(','),
-        entered_previous_state_at: enteredPrevAt ? enteredPrevAt.toISOString() : null,
-        hours_in_previous_state: enteredPrevAt
-          ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10
-          : null
-      },
+      payload,
       console as unknown as Parameters<typeof emitTrigger>[2],
       opts.userId ?? undefined
     )
