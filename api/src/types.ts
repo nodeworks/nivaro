@@ -61,6 +61,8 @@ export interface Policy {
 export interface CMSCollection {
   id: number
   collection: string
+  /** Addendums opt-in (migration 115; toggled in Data Model → Settings). */
+  addendums_enabled?: boolean | number | null
   display_name: string | null
   singular: string | null
   plural: string | null

@@ -34,7 +34,8 @@ import { Bell, Eye, Inbox,
   Save,
   SlidersHorizontal,
   Star,
-  X
+  X,
+  FileDiff
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -120,6 +121,16 @@ export interface QueueItemRow {
   extra?: Record<string, unknown>
   extra_ids?: Record<string, string[]>
   labels?: string[]
+  /** State/owners come from this in-flight addendum's instance. */
+  via_addendum?: { id: string; title: string | null } | null
+  /** Addendum presence (collection sources with addendums enabled). */
+  addendums?: {
+    active: number
+    total: number
+    latest_title: string | null
+    latest_status: string | null
+    cost_impact: number | null
+  } | null
   url: string
 }
 
@@ -217,6 +228,36 @@ const SCOPE_TABS: { value: Scope; label: string }[] = [
   { value: 'claimed', label: 'Claimed by me' },
   { value: 'all', label: 'All Items' }
 ]
+
+/** "1 in review · +$5.00" pill for the queue Addendums column; blank when none. */
+function QueueAddendumPill({ summary }: { summary: QueueItemRow['addendums'] }) {
+  if (!summary || summary.total === 0) return <span className='text-slate-300'>—</span>
+  const active = summary.active > 0
+  const status =
+    summary.latest_status === 'review' ? 'in review' : (summary.latest_status ?? 'active')
+  const cost = summary.cost_impact
+  const costText =
+    cost != null && cost !== 0
+      ? `${cost > 0 ? '+' : '−'}$${Math.abs(cost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : null
+  return (
+    <span
+      title={summary.latest_title ?? undefined}
+      className={cn(
+        'inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium',
+        active
+          ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300'
+          : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+      )}
+    >
+      <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 rounded-full', active ? 'bg-amber-500' : 'bg-slate-400')} />
+      {active
+        ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status}`
+        : `${summary.total} ${status}`}
+      {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
+    </span>
+  )
+}
 
 function formatAging(hours: number | null): string {
   return humanHours(hours)
@@ -1079,6 +1120,22 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     staleTime: 5 * 60 * 1000
   })
 
+  // Which source collections opted into addendums — adds the Addendums column
+  // + filter only when at least one did.
+  const addendumMetaQueries = useQueries({
+    queries: sourceCollections.map((col) => ({
+      queryKey: ['queue-collection-addendums', col],
+      queryFn: () =>
+        client
+          .request<{ data: { addendums_enabled?: boolean | number | null } }>(
+            get(`/collections/${col}`)
+          )
+          .then((r) => !!r.data?.addendums_enabled)
+          .catch(() => false),
+      staleTime: 5 * 60 * 1000
+    }))
+  })
+  const addendumsEnabled = addendumMetaQueries.some((q) => q.data === true)
   const stateQueries = useQueries({
     queries: sourceCollections.map((col) => ({
       queryKey: ['queue-collection-states', col],
@@ -1566,9 +1623,18 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
               backgroundColor: row.state_color ? `${row.state_color}1a` : undefined,
               color: row.state_color ?? undefined
             }}
-            title={stateLabel(row.state)}
+            title={
+              row.via_addendum
+                ? `Addendum "${row.via_addendum.title ?? ''}" — ${stateLabel(row.state)}`
+                : stateLabel(row.state)
+            }
           >
             {stateLabel(row.state)}
+            {row.via_addendum && (
+              <span className='ml-1 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'>
+                Addendum
+              </span>
+            )}
           </span>
         ) : (
           <span className='text-slate-300'>—</span>
@@ -1604,7 +1670,17 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             ⚑ Predicted
           </span>
         ) : null
-    }
+    },
+    ...(addendumsEnabled
+      ? [
+          {
+            key: 'addendums',
+            header: aliasFor('addendums', 'Addendums'),
+            sortable: false,
+            render: (row: QueueItemRow) => <QueueAddendumPill summary={row.addendums} />
+          } satisfies Column<QueueItemRow>
+        ]
+      : [])
   ]
 
   const claimColumn: Column<QueueItemRow> = {
@@ -1769,6 +1845,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     ...(multiCollection ? ['collection'] : []),
     'state',
     'owners',
+    ...(addendumsEnabled ? ['addendums'] : []),
     'aging_hours',
     'sla_status',
     'at_risk',
@@ -2014,6 +2091,19 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       ]
     },
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
+    ...(addendumsEnabled
+      ? [
+          {
+            key: 'addendums',
+            placeholder: 'Addendums',
+            type: 'select' as const,
+            options: [
+              { label: 'Active addendum', value: 'active' },
+              { label: 'No active addendum', value: 'none' }
+            ]
+          }
+        ]
+      : []),
     ...(triageLabels.length > 0
       ? [
           {
@@ -2430,6 +2520,29 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 </Command>
               </PopoverContent>
             </Popover>
+          )}
+          {addendumsEnabled && (
+            <button
+              type='button'
+              aria-pressed={filterValues.addendums === 'active'}
+              title='Only records with an addendum still in review'
+              onClick={() =>
+                setFilterValues((prev) => {
+                  const next = { ...prev }
+                  if (next.addendums === 'active') delete next.addendums
+                  else next.addendums = 'active'
+                  return next
+                })
+              }
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium transition-colors ${
+                filterValues.addendums === 'active'
+                  ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+              }`}
+            >
+              <FileDiff className='h-3 w-3' />
+              Active addendums
+            </button>
           )}
           {pendingUpdates > 0 && (
             <button

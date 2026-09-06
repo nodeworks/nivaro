@@ -41,6 +41,9 @@ export function requiresLiveResolveFallback(
   // Triage-label filters (#109) join a queue-local table the SQL pushdown
   // doesn't know — route to the live path, which filters in memory.
   if (_filters && Array.isArray((_filters as Record<string, unknown>).labels)) return true
+  // Addendum presence is not cached (it changes outside any write to the
+  // record) — a filter on it needs the live resolver's per-row summary.
+  if (_filters && (_filters as Record<string, unknown>).addendums) return true
   // Only an owners sort still live-resolves (it would need SQL string
   // aggregation across the owners M2M). priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { addendumSummaryBatch } from '../services/addendum-summary.js'
 import { can } from '../services/permissions.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
@@ -111,6 +112,21 @@ export async function addendumsRoutes(app: FastifyInstance) {
   // ─── Addendum CRUD ────────────────────────────────────────────────────────────
 
   // GET /addendums/:collection/:itemId — list addendums for a parent record
+  // POST /addendums/summary {collection, ids} — per-record counts + newest
+  // addendum for a page of rows (collection browser / queue columns).
+  app.post('/summary', { preHandler: authenticate }, async (req, reply) => {
+    const body = (req.body ?? {}) as { collection?: string; ids?: unknown }
+    if (!body.collection || !Array.isArray(body.ids)) {
+      return reply.code(400).send({ error: 'collection and ids[] are required' })
+    }
+    if (/^nivaro_/i.test(body.collection)) return reply.code(400).send({ error: 'Invalid collection' })
+    if (!(await can(req.user!, 'read', body.collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    const ids = body.ids.map(String).filter(Boolean).slice(0, 500)
+    const map = await addendumSummaryBatch(body.collection, ids)
+    return reply.send({ data: Object.fromEntries(map) })
+  })
+
   app.get('/:collection/:itemId', { preHandler: authenticate }, async (req, reply) => {
     const { collection, itemId } = req.params as { collection: string; itemId: string }
 

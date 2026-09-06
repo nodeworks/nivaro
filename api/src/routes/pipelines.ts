@@ -14,6 +14,8 @@ import {
 import { can } from '../services/permissions.js'
 import {
   bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
+import { activeAddendumInstances } from '../services/addendum-summary.js'
+import { getCollection } from '../services/collections.js'
 import { ADDENDUM_COLLECTION, fetchPipelineRecord } from '../services/pipeline-subject.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 import {
@@ -2239,6 +2241,33 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         completed_at: r.completed_at as Date | null
       }
 
+    // A record with an addendum in flight shows the ADDENDUM's state — that is
+    // the approval actually moving; the record's own instance sits at
+    // Completed. The record's state stays on the entry as record_state_*.
+    if (collection !== ADDENDUM_COLLECTION && ids && ids.length > 0) {
+      try {
+        const enabled = !!(await getCollection(collection))?.addendums_enabled
+        if (enabled) {
+          const active = await activeAddendumInstances(collection, ids)
+          for (const [item, a] of active) {
+            const own = byItem[item]
+            byItem[item] = {
+              ...(own ?? { completed_at: null }),
+              state_key: a.state_key,
+              state_label: a.state_label,
+              state_color: a.state_color,
+              completed_at: null,
+              record_state_key: own?.state_key ?? null,
+              record_state_label: own?.state_label ?? null,
+              via_addendum: { id: a.addendum_id, title: a.title }
+            } as (typeof byItem)[string]
+          }
+        }
+      } catch {
+        /* the record's own state is still a correct answer */
+      }
+    }
+
     return reply.send({ data: { binding: binding ?? null, instances: byItem } })
   })
 
@@ -2830,6 +2859,30 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         collection,
         itemId: String(i.item)
       }))
+    // Records with an addendum in flight answer with the ADDENDUM's owners —
+    // the people whose approval is pending (pipeline-subject.ts maps the
+    // addendum's rules back onto the parent record).
+    if (collection !== ADDENDUM_COLLECTION) {
+      try {
+        if ((await getCollection(collection))?.addendums_enabled) {
+          const active = await activeAddendumInstances(collection, idList)
+          for (const [item, a] of active) {
+            const idx = requests.findIndex((r) => r.key === item)
+            const req = {
+              key: item,
+              stateId: a.state_id,
+              instanceId: a.instance_id,
+              collection: ADDENDUM_COLLECTION,
+              itemId: a.addendum_id
+            }
+            if (idx >= 0) requests[idx] = req
+            else requests.push(req)
+          }
+        }
+      } catch {
+        /* fall back to the record's own owners */
+      }
+    }
     const byKey = await resolveStateOwnersBatch(requests)
     const out: Record<string, Array<{ id: string; name: string }>> = {}
     for (const [k, owners] of byKey)

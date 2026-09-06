@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useOptionalRealtime } from '../lib/realtime'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
-import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon } from 'lucide-react'
+import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon, FileDiff } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -113,6 +113,8 @@ interface CollectionMeta {
     cta_url?: string | null
   } | null
   browser_config?: CollectionBrowserConfig | null
+  /** Addendums opt-in — adds the Addendums column + 'Active addendums' filter. */
+  addendums_enabled?: boolean | number | null
   collection: string
   color?: string | null
   display_name: string | null
@@ -123,7 +125,17 @@ interface CollectionMeta {
 }
 interface PipelineInstancesMap {
   binding: { template: string } | null
-  instances: Record<string, { state_key?: string; state_label?: string; state_color?: string }>
+  instances: Record<
+    string,
+    {
+      state_key?: string
+      state_label?: string
+      state_color?: string
+      /** State/owners belong to this in-flight addendum, not the record itself. */
+      via_addendum?: { id: string; title: string | null } | null
+      record_state_label?: string | null
+    }
+  >
 }
 
 export interface ActiveFilter {
@@ -396,6 +408,49 @@ function fetchRelationRow(
     })
   }
   return current.promise.then((map) => map.get(id) ?? null)
+}
+
+type AddendumSummaryEntry = {
+  active: number
+  total: number
+  latest: { id: string; title: string | null; status: string; cost_impact: number | null } | null
+}
+const ADDENDUM_STATUS_LABEL: Record<string, string> = {
+  draft: 'draft',
+  submitted: 'submitted',
+  review: 'in review',
+  approved: 'approved',
+  rejected: 'rejected'
+}
+/** "1 in review · +$5.00" pill for the Addendums column; blank when none. */
+function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | undefined }) {
+  if (!summary || summary.total === 0) return <span className='text-[12px] text-slate-300'>—</span>
+  const latest = summary.latest
+  const active = summary.active > 0
+  const status = latest ? (ADDENDUM_STATUS_LABEL[latest.status] ?? latest.status) : ''
+  const cost = latest?.cost_impact
+  const costText =
+    cost != null && cost !== 0
+      ? `${cost > 0 ? '+' : '−'}$${Math.abs(cost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : null
+  const tip = latest ? `${latest.title ?? 'Addendum'} — ${status}${summary.total > 1 ? ` (${summary.total} total)` : ''}` : undefined
+  return (
+    <span
+      data-tip={tip}
+      className={`inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+        active
+          ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300'
+          : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-amber-500' : 'bg-slate-400'}`}
+      />
+      {active ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status || 'active'}` : `${summary.total} ${status}`}
+      {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
+    </span>
+  )
 }
 
 function RelationLabel({ relatedCollection, id }: { relatedCollection: string; id: unknown }) {
@@ -3611,6 +3666,8 @@ export function CollectionBrowserView({
 
   // ── Rows (admin dialect: search + conditions + total) ─────────────────────
   const debouncedColFilters = useDebounced(colFilters, 350)
+  // Session-only toggle (not part of saved views): show only records being amended.
+  const [addendumsOnly, setAddendumsOnly] = useState(false)
   const conditionsParam = useMemo(() => {
     const conds: Array<{ path: string[]; op: string; value: unknown }> = []
     for (const f of filters) {
@@ -3699,8 +3756,18 @@ export function CollectionBrowserView({
         ]
       })
     }
+    // Records being amended: an addendum still in flight (draft/submitted/review).
+    if (addendumsOnly) conds.push({ path: ['$addendums'], op: '_eq', value: 'active' })
     return conds.length > 0 ? JSON.stringify(conds) : undefined
-  }, [filters, effQuickFilters, appliedQuick, debouncedColFilters, linkConds, cellExcludes])
+  }, [
+    filters,
+    effQuickFilters,
+    appliedQuick,
+    debouncedColFilters,
+    linkConds,
+    cellExcludes,
+    addendumsOnly
+  ])
   // Any filter change resets to page 1 (the query key already refetches).
   // Map display mode (#19): available when the collection carries lat/long
   // columns; the map consumes the SAME compiled conditions as the table.
@@ -3864,6 +3931,22 @@ export function CollectionBrowserView({
   // ── Pipeline state column + bulk transitions ──────────────────────────────
   // Scoped to the visible page's ids: the unscoped endpoint returns every
   // instance in the collection (13s on 88k workflows) to fill 25 state badges.
+  // Addendum presence for the visible page — one batched call, only when the
+  // collection opted in. Drives the Addendums column.
+  const addendumsEnabled = !!meta?.addendums_enabled
+  const { data: addendumSummary } = useQuery({
+    queryKey: ['cbv-addendum-summary', collection, pageIdsKey],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AddendumSummaryEntry> }>(
+          post('/addendums/summary', { collection, ids: pageIdsKey.split(',') })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: !!collection && addendumsEnabled && pageIdsKey.length > 0,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+    retry: false
+  })
   const { data: pipelineData } = useQuery({
     queryKey: ['cbv-pipeline-instances', collection, pageIdsKey],
     queryFn: () =>
@@ -4271,7 +4354,7 @@ export function CollectionBrowserView({
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
       // entries; applyView drops them from the display-column list.
-      ...['__state__', '__owners__', '__actions__']
+      ...['__state__', '__owners__', '__addendums__', '__actions__']
         .filter((k) => effectivePins[k])
         .map((k) => ({ key: k, pin: effectivePins[k] }))
     ]
@@ -4587,7 +4670,7 @@ export function CollectionBrowserView({
   // ── Pinned-column layout ───────────────────────────────────────────────────
   // Left-pinned columns render first (checkbox always hard-left), right-pinned
   // last; sticky offsets come from live header-cell width measurement.
-  type CbvColDesc = { key: string; kind: 'data' | 'state' | 'owners' | 'actions' }
+  type CbvColDesc = { key: string; kind: 'data' | 'state' | 'owners' | 'addendums' | 'actions' }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) => ({ key: k, kind: 'data' as const })),
     ...(hasPipeline
@@ -4596,6 +4679,7 @@ export function CollectionBrowserView({
           { key: '__owners__', kind: 'owners' as const }
         ]
       : []),
+    ...(addendumsEnabled ? [{ key: '__addendums__', kind: 'addendums' as const }] : []),
     ...(enableActions ? [{ key: '__actions__', kind: 'actions' as const }] : [])
   ]
   const orderedCols: CbvColDesc[] = [
@@ -5024,6 +5108,22 @@ export function CollectionBrowserView({
             setPage(1)
           }}
         />
+        {addendumsEnabled && (
+          <button
+            type='button'
+            onClick={() => setAddendumsOnly((v) => !v)}
+            aria-pressed={addendumsOnly}
+            title='Only records with an addendum still in review'
+            className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+              addendumsOnly
+                ? 'border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+            }`}
+          >
+            <FileDiff className='h-3.5 w-3.5' />
+            Active addendums
+          </button>
+        )}
         {pendingLive > 0 && (
           <button
             type='button'
@@ -5977,7 +6077,13 @@ export function CollectionBrowserView({
                     const pinPart = pinCls(key, '', '')
                     if (col.kind !== 'data') {
                       const label =
-                        col.kind === 'state' ? 'State' : col.kind === 'owners' ? 'Owners' : ''
+                        col.kind === 'state'
+                          ? 'State'
+                          : col.kind === 'owners'
+                            ? 'Owners'
+                            : col.kind === 'addendums'
+                              ? 'Addendums'
+                              : ''
                       return (
                         <th
                           key={key}
@@ -6274,6 +6380,14 @@ export function CollectionBrowserView({
                                       style={{ backgroundColor: state.state_color ?? '#6b7280' }}
                                     />
                                     {state.state_label ?? state.state_key ?? '?'}
+                                    {state.via_addendum && (
+                                      <span
+                                        data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
+                                        className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+                                      >
+                                        Addendum
+                                      </span>
+                                    )}
                                   </span>
                                 ) : (
                                   <span className='text-[12px] text-slate-300'>—</span>
@@ -6293,6 +6407,18 @@ export function CollectionBrowserView({
                                   users={ownersByItem?.[String(id)] ?? []}
                                   showSingleName={false}
                                 />
+                              </td>
+                            )
+                          }
+                          if (col.kind === 'addendums') {
+                            const a = addendumSummary?.[String(id)]
+                            return (
+                              <td
+                                key={key}
+                                style={pinStyle(key)}
+                                className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                              >
+                                <AddendumSummaryPill summary={a} />
                               </td>
                             )
                           }

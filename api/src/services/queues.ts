@@ -13,6 +13,11 @@ import { getCollection, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
+import {
+  type AddendumSummary,
+  activeAddendumInstances,
+  addendumSummaryBatch
+} from './addendum-summary.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -377,6 +382,18 @@ export interface QueueItem {
   extra_ids?: Record<string, string[]>
   /** Queue-local triage labels (#109). */
   labels?: string[]
+  /** Addendum presence (collection sources with addendums enabled): in-flight
+   *  count + newest — powers the Addendums column and the 'active' filter.
+   *  Not in the materialized cache; a filter on it live-resolves. */
+  addendums?: {
+    active: number
+    total: number
+    latest_title: string | null
+    latest_status: string | null
+    cost_impact: number | null
+  } | null
+  /** Set when `state`/`owners` come from an in-flight addendum's instance. */
+  via_addendum?: { id: string; title: string | null } | null
   url: string
 }
 
@@ -544,6 +561,12 @@ export function applyColumnFilters(
       }
       if (key === 'at_risk') {
         if (item.at_risk !== (value === 'yes')) return false
+        continue
+      }
+      if (key === 'addendums') {
+        const active = item.addendums?.active ?? 0
+        if (value === 'active' && active === 0) return false
+        if (value === 'none' && active > 0) return false
         continue
       }
       if (key === 'collection' && !matchesAny(value, (v) => item.collection === v)) return false
@@ -1728,6 +1751,29 @@ export async function resolveCollectionSource(
       itemId: inst.item
     }))
 
+  // Addendums (collections that opted in): a record whose addendum is in
+  // flight shows the ADDENDUM's state + owners — the approval that is
+  // actually moving — instead of its own Completed/no-owner instance.
+  const addendumsEnabled = !!(await getCollection(source.collection as string))?.addendums_enabled
+  const viaAddendum = new Map<string, { id: string; title: string | null }>()
+  if (addendumsEnabled) {
+    const active = await activeAddendumInstances(source.collection as string, ids)
+    for (const [item, a] of active) {
+      if (a.state_key) stateById.set(item, { key: a.state_key, color: a.state_color, id: a.state_id })
+      const req = {
+        key: item,
+        stateId: a.state_id,
+        instanceId: a.instance_id,
+        collection: ADDENDUM_COLLECTION,
+        itemId: a.addendum_id
+      }
+      const idx = ownerRequests.findIndex((r) => r.key === item)
+      if (idx >= 0) ownerRequests[idx] = req
+      else ownerRequests.push(req)
+      viaAddendum.set(item, { id: a.addendum_id, title: a.title })
+    }
+  }
+
   // Labels, owner resolution, the at-risk block, and extra-field resolution are all
   // independent of each other's results — they only read `ids`/`instances`/
   // `source.collection` and are combined together in the final items.map() below. Run
@@ -1738,6 +1784,11 @@ export async function resolveCollectionSource(
   // Captured so the narrowing survives into the span callbacks — inside an
   // arrow function TS re-widens `source.collection` back to `string | null`.
   const sourceCollection = source.collection as string
+  // Addendum presence — only when the collection opted in (addendums_enabled),
+  // one query per source per read; other collections skip it entirely.
+  const addendumMapPromise = addendumsEnabled
+    ? span('queue:addendums', () => addendumSummaryBatch(sourceCollection, ids))
+    : Promise.resolve(new Map<string, AddendumSummary>())
   const [labels, ownersByItem, atRiskMap, extraResolved] = await Promise.all([
     span('queue:labels', () =>
       source.label_template
@@ -1813,6 +1864,7 @@ export async function resolveCollectionSource(
       return { extraById, extraIdsById }
     })
   ])
+  const addendumMap = await addendumMapPromise
 
   // Predictive risk: compare current time-in-state to the historical P80 for
   // that state (services/predictive-sla.ts). Non-fatal: prediction failures
@@ -1846,6 +1898,18 @@ export async function resolveCollectionSource(
       predicted_note: prediction.note,
       aging_hours: slaMap[id]?.elapsed_hours ?? null,
       claimed_by: null,
+      via_addendum: viaAddendum.get(id) ?? null,
+      addendums: (() => {
+        const a = addendumMap.get(id)
+        if (!a) return addendumMap.size === 0 && !addendumsEnabled ? undefined : null
+        return {
+          active: a.active,
+          total: a.total,
+          latest_title: a.latest?.title ?? null,
+          latest_status: a.latest?.status ?? null,
+          cost_impact: a.latest?.cost_impact ?? null
+        }
+      })(),
       extra: extraResolved.extraById.get(id) ?? {},
       extra_ids: extraResolved.extraIdsById.get(id) ?? {},
       url: `/collections/${source.collection}/${id}`

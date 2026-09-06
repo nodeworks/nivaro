@@ -1564,6 +1564,22 @@ async function applyConditions(
       })
       continue
     }
+    // Virtual path: addendum presence — 'active' = an addendum still in flight
+    // (draft/submitted/review), 'none' = no active addendum, 'any' = ever had one.
+    if (cond.path[0] === '$addendums' && cond.path.length === 1) {
+      const want = String(Array.isArray(cond.value) ? cond.value[0] : cond.value ?? 'active')
+      const activeOnly = want !== 'any'
+      const cb = function (this: QB) {
+        this.select(db.raw('1'))
+          .from('nivaro_addendums as adm')
+          .where('adm.parent_collection', collection)
+          .whereRaw('adm.parent_id = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+        if (activeOnly) this.whereNotIn('adm.status', ['approved', 'rejected'])
+      }
+      if (want === 'none') q.whereNotExists(cb)
+      else q.whereExists(cb)
+      continue
+    }
     // Content-presence virtual paths (#397/#398): $has_comments / $has_tasks /
     // $has_failed_push / $missing_required. Value truthiness picks the side —
     // {_eq: true} = has, {_eq: false} = does not have.
