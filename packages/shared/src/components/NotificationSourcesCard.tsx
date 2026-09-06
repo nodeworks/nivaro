@@ -797,28 +797,31 @@ export function NotificationSourcesCard() {
             </Section>
           )}
 
-          {(s.external ?? [])
-            .filter((g) => g.items.length > 0)
-            .map((g) => (
-              <Section key={g.key} title={g.title} hint={g.description}>
-                {g.items.map((it) => (
-                  <Row
-                    key={String(it.id)}
-                    title={it.label}
-                    description={it.detail ?? undefined}
-                    meta={it.is_active === false ? 'inactive' : null}
-                  />
-                ))}
-                {g.manage_url && (
-                  <a
-                    href={g.manage_url}
-                    className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                  >
-                    Manage →
-                  </a>
-                )}
-              </Section>
-            ))}
+          {(s.external ?? []).map((g) => (
+            <Section key={g.key} title={g.title} hint={g.description}>
+              {g.items.map((it) => (
+                <Row
+                  key={String(it.id)}
+                  title={it.label}
+                  description={it.detail ?? undefined}
+                  meta={it.is_active === false ? 'inactive' : null}
+                />
+              ))}
+              {g.items.length === 0 && (
+                <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>
+                  Nothing watched yet.
+                </p>
+              )}
+              {g.manage_url && (
+                <a
+                  href={g.manage_url}
+                  className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                >
+                  Manage →
+                </a>
+              )}
+            </Section>
+          ))}
 
           {(s.implicit.owner_group_memberships.length > 0 ||
             s.implicit.sla_escalations.length > 0) && (
