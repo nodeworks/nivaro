@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-05T22:11:19.059Z",
+  "generated_at": "2026-09-06T21:17:52.316Z",
   "releases": [
+    {
+      "version": "0.1.225",
+      "tag": "v0.1.225",
+      "date": "2026-09-06T17:17:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "extensions can contribute profile notification sources",
+              "hash": "30d1ebf2"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "external notification-source groups render their empty state",
+              "hash": "5b143633"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.224",
       "tag": "v0.1.224",
-      "date": "2026-09-05T18:11:11-04:00",
+      "date": "2026-09-05T18:11:19-04:00",
       "sections": [
         {
           "label": "Added",
