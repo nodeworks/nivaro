@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { notificationSourceRegistry } from '../extensions/notification-sources.js'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { getRelations } from '../services/collections.js'
@@ -383,9 +384,14 @@ export async function meNotificationRoutes(app: FastifyInstance) {
       templateCounts.set(t, (templateCounts.get(t) ?? 0) + 1)
     }
 
+    // Extension-contributed sources (e.g. EFP stock watches) — collected
+    // last, provider errors skipped.
+    const external = await notificationSourceRegistry.collect(uid)
+
     return reply.send({
       data: {
         preferences: { email_digest: emailDigest },
+        external,
         subscriptions,
         field_watches: fieldWatches,
         record_alerts: recordAlerts,

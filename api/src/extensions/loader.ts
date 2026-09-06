@@ -36,6 +36,7 @@ import {
   type NotificationChannelDef,
   notificationChannelRegistry
 } from './notification-channels.js'
+import { notificationSourceRegistry, type NotificationSourceProvider } from './notification-sources.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -121,6 +122,11 @@ export interface ExtensionContext {
   /** Register custom notification delivery channels (e.g. SMS, Slack, Teams). */
   notificationChannels: {
     register(def: NotificationChannelDef): void
+  }
+  /** Contribute extension-owned alert subscriptions to the profile's
+   *  notification-sources aggregation. */
+  notificationSources: {
+    register(provider: NotificationSourceProvider): void
   }
   /** Register custom dashboard widget types shown in the dashboard builder. */
   dashboardWidgets: {
@@ -437,6 +443,7 @@ async function loadExtension(
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
+    | 'notificationSources'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -577,6 +584,12 @@ async function loadExtension(
         register: (def) => {
           note('notification-channels')
           notificationChannelRegistry.register(def)
+        }
+      },
+      notificationSources: {
+        register: (provider) => {
+          note('notification-sources')
+          notificationSourceRegistry.register(provider)
         }
       },
       dashboardWidgets: {
@@ -754,6 +767,7 @@ export async function loadExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
+    | 'notificationSources'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -876,6 +890,7 @@ export async function loadCloudExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
+    | 'notificationSources'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -968,6 +983,7 @@ export async function loadCloudExtensions(
         bulkActions: { register: (def) => bulkActionRegistry.register(def) },
         itemActions: { register: (def) => itemActionRegistry.register(def) },
         notificationChannels: { register: (def) => notificationChannelRegistry.register(def) },
+        notificationSources: { register: (provider) => notificationSourceRegistry.register(provider) },
         dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
         storage: {
           register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
@@ -1096,6 +1112,7 @@ export async function scanNewExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
+    | 'notificationSources'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'

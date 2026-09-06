@@ -146,6 +146,15 @@ interface Sources {
     owner_group_memberships: Array<{ template: string; groups: number }>
     sla_escalations: Array<{ id: number; name: string; state_key: string; template: string | null }>
   }
+  /** Extension-contributed sources (e.g. EFP stock watches) — display-only
+   *  here; each group links to where it is managed. */
+  external?: Array<{
+    key: string
+    title: string
+    description?: string
+    manage_url?: string
+    items: Array<{ id: string | number; label: string; detail?: string | null; is_active?: boolean }>
+  }>
 }
 
 interface HistoryEntry {
@@ -787,6 +796,29 @@ export function NotificationSourcesCard() {
               )}
             </Section>
           )}
+
+          {(s.external ?? [])
+            .filter((g) => g.items.length > 0)
+            .map((g) => (
+              <Section key={g.key} title={g.title} hint={g.description}>
+                {g.items.map((it) => (
+                  <Row
+                    key={String(it.id)}
+                    title={it.label}
+                    description={it.detail ?? undefined}
+                    meta={it.is_active === false ? 'inactive' : null}
+                  />
+                ))}
+                {g.manage_url && (
+                  <a
+                    href={g.manage_url}
+                    className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                  >
+                    Manage →
+                  </a>
+                )}
+              </Section>
+            ))}
 
           {(s.implicit.owner_group_memberships.length > 0 ||
             s.implicit.sla_escalations.length > 0) && (
