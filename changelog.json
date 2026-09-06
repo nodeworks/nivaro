@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-06T21:17:52.316Z",
+  "generated_at": "2026-09-06T22:15:01.275Z",
   "releases": [
+    {
+      "version": "0.1.226",
+      "tag": "v0.1.226",
+      "date": "2026-09-06T18:14:54-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "queues",
+              "text": "membership follows the in-flight addendum's state; Addendums column auto-visible",
+              "hash": "d85a8284"
+            },
+            {
+              "section": "Added",
+              "scope": "addendums",
+              "text": "lists show the in-flight addendum's state and owners, with an Addendums column and filter",
+              "hash": "06913d5d"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.225",
       "tag": "v0.1.225",
-      "date": "2026-09-06T17:17:44-04:00",
+      "date": "2026-09-06T17:17:52-04:00",
       "sections": [
         {
           "label": "Added",
