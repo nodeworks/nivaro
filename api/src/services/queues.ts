@@ -14,8 +14,9 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { can } from './permissions.js'
 import {
+  type ActiveAddendumInstance,
   type AddendumSummary,
-  activeAddendumInstances,
+  activeAddendumInstancesForCollection,
   addendumSummaryBatch
 } from './addendum-summary.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
@@ -1631,6 +1632,41 @@ export async function resolveCollectionSource(
   } catch {
     return empty
   }
+
+  // Addendums (collections that opted in): a record's EFFECTIVE state is its
+  // in-flight addendum's state — that is the approval actually moving. So a
+  // Completed workflow whose addendum sits in Manager Approval belongs to an
+  // open-work queue, and one whose addendum reached an excluded state leaves it.
+  // Active addendums are few, so this is one small query over the collection.
+  const addendumsEnabled = await getCollection(source.collection as string)
+    .then((c) => !!c?.addendums_enabled)
+    .catch(() => false)
+  const activeAddendums = addendumsEnabled
+    ? await span('queue:active-addendums', () =>
+        activeAddendumInstancesForCollection(source.collection as string)
+      )
+    : new Map<string, ActiveAddendumInstance>()
+  if (activeAddendums.size > 0 && (stateValues?.length ?? 0) > 0) {
+    const idSet = new Set(ids)
+    const wanted: string[] = []
+    for (const [item, a] of activeAddendums) {
+      const keep = stateFilterKeep(a.state_key, stateValues ?? [], stateMode)
+      if (keep && !idSet.has(item)) wanted.push(item)
+      if (!keep && idSet.has(item)) idSet.delete(item)
+    }
+    if (wanted.length > 0) {
+      // Candidates still have to satisfy the source's own field conditions.
+      try {
+        const cq = db(source.collection).select('id').whereIn('id', wanted)
+        applyQueueConditions(cq as unknown as ConditionBuilder, conditions)
+        const extra = (await cq) as Array<{ id: string | number }>
+        for (const r of extra) idSet.add(String(r.id))
+      } catch {
+        /* an unqueryable condition set leaves the addendum candidates out */
+      }
+    }
+    ids = [...idSet]
+  }
   if (ids.length === 0) return empty
 
   type InstanceRow = {
@@ -1675,10 +1711,41 @@ export async function resolveCollectionSource(
     // semantics remain the backstop rather than an unreachable branch.
     if (!pushedDownState && stateValues?.length) {
       const stateByItem = new Map<string, string | null>()
-      for (const i of instances) stateByItem.set(i.item, i.state_key)
+      for (const i of instances) {
+        const a = activeAddendums.get(i.item)
+        stateByItem.set(i.item, a ? a.state_key : i.state_key)
+      }
       ids = ids.filter((id) => stateFilterKeep(stateByItem.get(id) ?? null, stateValues, stateMode))
       const kept = new Set(ids)
       instances = instances.filter((i) => kept.has(i.item))
+    }
+    // The row's DISPLAY state (state chips, by_state stats, idMeta) follows the
+    // in-flight addendum; instance_id/current_state stay the record's own so
+    // the SLA clock still reads the record's history.
+    if (activeAddendums.size > 0) {
+      const seen = new Set<string>()
+      for (const i of instances) {
+        const a = activeAddendums.get(i.item)
+        if (!a) continue
+        seen.add(i.item)
+        i.state_key = a.state_key
+        i.state_color = a.state_color
+      }
+      // A record with no instance of its own but an in-flight addendum still
+      // needs a row so it renders with the addendum's state.
+      for (const id of ids) {
+        const a = activeAddendums.get(id)
+        if (!a || seen.has(id)) continue
+        instances.push({
+          instance_id: a.instance_id,
+          item: id,
+          current_state: a.state_id,
+          state_key: a.state_key,
+          state_color: a.state_color,
+          template: a.template,
+          started_at: new Date()
+        })
+      }
     }
   }
 
@@ -1754,11 +1821,11 @@ export async function resolveCollectionSource(
   // Addendums (collections that opted in): a record whose addendum is in
   // flight shows the ADDENDUM's state + owners — the approval that is
   // actually moving — instead of its own Completed/no-owner instance.
-  const addendumsEnabled = !!(await getCollection(source.collection as string))?.addendums_enabled
   const viaAddendum = new Map<string, { id: string; title: string | null }>()
-  if (addendumsEnabled) {
-    const active = await activeAddendumInstances(source.collection as string, ids)
-    for (const [item, a] of active) {
+  if (activeAddendums.size > 0) {
+    for (const item of ids) {
+      const a = activeAddendums.get(item)
+      if (!a) continue
       if (a.state_key) stateById.set(item, { key: a.state_key, color: a.state_color, id: a.state_id })
       const req = {
         key: item,

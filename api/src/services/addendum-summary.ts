@@ -43,10 +43,29 @@ export async function activeAddendumInstances(
   ids: string[],
   database: typeof db = db
 ): Promise<Map<string, ActiveAddendumInstance>> {
-  const out = new Map<string, ActiveAddendumInstance>()
   const wanted = [...new Set(ids.map(String))]
-  if (wanted.length === 0) return out
-  const rows = (await selectInChunks(wanted, 2000, (chunk) =>
+  if (wanted.length === 0) return new Map()
+  return activeAddendumInstancesQuery(collection, wanted, database)
+}
+
+/** Every in-flight addendum instance in the collection (queue membership needs
+ *  the ones whose PARENT is not yet in the candidate set). Active addendums are
+ *  a small set by nature — this is one query, not a per-record probe. */
+export async function activeAddendumInstancesForCollection(
+  collection: string,
+  database: typeof db = db
+): Promise<Map<string, ActiveAddendumInstance>> {
+  return activeAddendumInstancesQuery(collection, null, database)
+}
+
+async function activeAddendumInstancesQuery(
+  collection: string,
+  wanted: string[] | null,
+  database: typeof db
+): Promise<Map<string, ActiveAddendumInstance>> {
+  const out = new Map<string, ActiveAddendumInstance>()
+  const chunks = wanted ?? [null]
+  const rows = (await selectInChunks(chunks as string[], 2000, (chunk) =>
     database('nivaro_addendums as a')
       .join('nivaro_workflow_instances as wi', function () {
         this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
@@ -56,7 +75,9 @@ export async function activeAddendumInstances(
       })
       .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
       .where('a.parent_collection', collection)
-      .whereIn('a.parent_id', chunk)
+      .modify((qb) => {
+        if (chunk[0] !== null) qb.whereIn('a.parent_id', chunk)
+      })
       .whereNotIn('a.status', [...FINAL_ADDENDUM_STATUSES])
       .whereNull('wi.completed_at')
       .whereNotNull('wi.current_state')

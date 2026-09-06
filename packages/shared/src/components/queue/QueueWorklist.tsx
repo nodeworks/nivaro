@@ -496,6 +496,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const [view, setView] = useState<'table' | 'kanban' | 'workload'>('table')
   const [sort, setSort] = useState('')
   const [filterValues, setFilterValues] = useState<Record<string, string | string[]>>({})
+  const [hiddenByUser, setHiddenByUser] = useState<Set<string>>(() => new Set())
 
   // Single serializable value so Phase 3 saved views can persist it without rework.
   const [groupBy, setGroupBy] = useState<string | null>(null)
@@ -1838,6 +1839,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     'aging_hours',
     'sla_status',
     'at_risk',
+    ...(addendumsEnabled ? ['addendums'] : []),
     ...extraFieldKeys.map((f) => `extra.${f}`)
   ]
 
@@ -1859,6 +1861,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const effectiveColumns = visibleColumns ?? queueDefaultColumns
 
   const effectiveVisible = new Set(effectiveColumns ?? DEFAULT_VISIBLE_COLUMNS)
+  // The Addendums column is informational and new: a builder-defined column
+  // set that predates it (or a saved view) would hide it forever, so it is
+  // auto-visible whenever a source collection opted into addendums. Toggling
+  // it off in Customize Columns still works for the session.
+  if (addendumsEnabled && !hiddenByUser.has('addendums')) effectiveVisible.add('addendums')
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to
@@ -2159,8 +2166,18 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
 
   function handleToggleColumn(key: string) {
     const current = new Set(effectiveVisible)
-    if (current.has(key)) current.delete(key)
-    else current.add(key)
+    if (current.has(key)) {
+      current.delete(key)
+      if (key === 'addendums') setHiddenByUser((prev) => new Set(prev).add('addendums'))
+    } else {
+      current.add(key)
+      if (key === 'addendums')
+        setHiddenByUser((prev) => {
+          const next = new Set(prev)
+          next.delete('addendums')
+          return next
+        })
+    }
     setVisibleColumns([...current])
   }
 
