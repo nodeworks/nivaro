@@ -88,7 +88,7 @@ export const fieldRulesGuide: DocSection = {
     { type: 'h3', text: 'Re-running on API updates' },
     {
       type: 'p',
-      text: 'By default row rules run on creates only. Tick "Also re-run on API updates when a trigger field changes" on a rule to have a PATCH that changes one of its trigger fields re-derive the target too. A target the caller sends explicitly in the same request always wins.'
+      text: 'Row rules run on API creates and, by default, on API updates too: a PATCH that changes one of a rule\'s trigger fields re-derives its target, the same way the form does when you edit. A target the caller sends explicitly in the same request always wins. Untick "Re-run on API updates when a trigger field changes" on a rule to run it on creates only.'
     },
     { type: 'h3', text: 'Testing rules against a record' },
     {

@@ -539,7 +539,8 @@ export interface RowRule {
   sort?: number
   /** Re-run this rule on API UPDATES when one of its trigger fields is in
    *  the PATCH (createOne always runs every rule; caller-sent targets still
-   *  win). Off by default — a PATCH is an explicit statement about fields. */
+   *  win). ON unless explicitly `false` — the form already re-derives on
+   *  every edit, so an API update behaving differently was the surprise. */
   on_update?: boolean
 }
 

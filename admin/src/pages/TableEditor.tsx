@@ -10863,15 +10863,20 @@ function RowRuleRow({
               <label className='mt-1 flex items-center gap-2 cursor-pointer'>
                 <input
                   type='checkbox'
-                  checked={!!rule.on_update}
-                  onChange={(e) => onChange({ ...rule, on_update: e.target.checked })}
+                  checked={rule.on_update !== false}
+                  onChange={(e) => {
+                    const next = { ...rule }
+                    if (e.target.checked) delete next.on_update
+                    else next.on_update = false
+                    onChange(next)
+                  }}
                   className='h-3.5 w-3.5 accent-nvr-cyan'
                 />
                 <span
                   className='text-[11px] text-slate-600'
-                  title='Rules only run on API creates by default. With this on, a PATCH that changes one of this rule&apos;s trigger fields re-derives the target too (a target the caller sent explicitly still wins).'
+                  title='On by default: an API PATCH that changes one of this rule&apos;s trigger fields re-derives the target, the same way the form does on edit (a target the caller sent explicitly still wins). Untick to run this rule on creates only.'
                 >
-                  Also re-run on API updates when a trigger field changes
+                  Re-run on API updates when a trigger field changes
                 </span>
               </label>
             )}
@@ -18289,7 +18294,7 @@ function FieldGroupsTab({
 }) {
   const qc = useQueryClient()
 
-  const { data: groups = [], isLoading: groupsLoading } = useQuery<FieldGroup[]>({
+  const { data: groupsData, isLoading: groupsLoading } = useQuery<FieldGroup[]>({
     queryKey: ['field-groups', tableName, layoutId],
     queryFn: () =>
       api
@@ -18336,7 +18341,13 @@ function FieldGroupsTab({
     staleTime: 30_000
   })
 
-  const fieldConfig = fieldConfigResult?.data ?? []
+  // Referentially stable while the queries are unsettled. A bare `?? []`
+  // here was a NEW array every render, so the init effect below (which
+  // depends on both and calls setState) re-ran on every render until React
+  // tripped "Maximum update depth exceeded" — four or five times per
+  // Table Editor open, on every tab.
+  const groups = useMemo(() => groupsData ?? [], [groupsData])
+  const fieldConfig = useMemo(() => fieldConfigResult?.data ?? [], [fieldConfigResult])
   const ungroupedSortFromServer: number | null = fieldConfigResult?.ungrouped_sort ?? null
   const { data: availableWidgets = [] } = useQuery<
     Array<{ id: number; name: string; widget_type: string; inputs: unknown }>

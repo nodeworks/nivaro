@@ -243,8 +243,8 @@ export async function applyRowRulesOnCreate(
 }
 
 /**
- * Re-run the rules a PATCH touched. Only rules flagged `on_update` whose
- * trigger fields (row-side, not $parent.*) intersect the caller's payload run,
+ * Re-run the rules a PATCH touched. Rules not opted out (`on_update !== false`)
+ * whose trigger fields (row-side, not $parent.*) intersect the caller's payload run,
  * against the MERGED row (existing + payload) so `only_if_empty` sees the
  * stored value. Targets the caller sent explicitly are never overwritten —
  * a PATCH that changes category AND task meant both. Never throws.
@@ -265,7 +265,7 @@ export async function applyRowRulesOnUpdate(
     const cache = new RowRuleLookupCache(db)
     for (const cfg of configs) {
       const live = cfg.rowRules.filter((r) => {
-        if (!r.on_update || r.target_type === 'lock') return false
+        if (r.on_update === false || r.target_type === 'lock') return false
         const triggers = [r.trigger_field, ...(r.trigger_fields ?? [])].filter(
           (t): t is string => typeof t === 'string' && !t.startsWith('$parent.')
         )
