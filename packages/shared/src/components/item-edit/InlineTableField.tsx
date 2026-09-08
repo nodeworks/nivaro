@@ -1587,6 +1587,16 @@ export function InlineTableField({
   }
   const [editState, setEditState] = useState<GridEditState | null>(null)
   const editStateRef = useRef<GridEditState | null>(null)
+  // Stale-response guard for /field-rules/evaluate. Every setDraftField bumps
+  // the sequence and stamps the edited key; a response only writes a key whose
+  // stamp is not NEWER than the request that produced it. Without this a slow
+  // evaluate fired by an earlier trigger (category → task autofill, ~2.7s)
+  // landed AFTER the user had already re-picked the target and overwrote it.
+  const ruleEvalSeqRef = useRef(0)
+  const draftKeySeqRef = useRef<{ rowId: string | null; seqs: Map<string, number> }>({
+    rowId: null,
+    seqs: new Map()
+  })
   useEffect(() => {
     editStateRef.current = editState
   }, [editState])
@@ -3145,6 +3155,10 @@ export function InlineTableField({
 
   function setDraftField(k: string, v: unknown) {
     const cur = editStateRef.current
+    const rowId = cur?.rowId ?? null
+    if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
+    const seq = ++ruleEvalSeqRef.current
+    draftKeySeqRef.current.seqs.set(k, seq)
     const nextDraft = cur
       ? applyComputedFields({ ...cur.draft, [k]: v })
       : applyComputedFields({ [k]: v })
@@ -3172,12 +3186,25 @@ export function InlineTableField({
           })
         )
         .then((res) => {
-          const hasUpdates = res.updates && Object.keys(res.updates).length > 0
+          // The editor moved to another row (or closed) while this was in
+          // flight — its answer describes a draft that no longer exists.
+          if (editStateRef.current?.rowId !== rowId || draftKeySeqRef.current.rowId !== rowId)
+            return
+          const seqs = draftKeySeqRef.current.seqs
+          const fresh: Record<string, unknown> = {}
+          for (const [key, val] of Object.entries(res.updates ?? {})) {
+            // Touched (by the user, or by a newer response) since this request
+            // was sent — the later write wins.
+            if ((seqs.get(key) ?? 0) > seq) continue
+            fresh[key] = val
+            seqs.set(key, seq)
+          }
+          const hasUpdates = Object.keys(fresh).length > 0
           setEditState((s) => {
-            if (!s) return s
+            if (!s || s.rowId !== rowId) return s
             return {
               ...s,
-              draft: hasUpdates ? applyComputedFields({ ...s.draft, ...res.updates }) : s.draft,
+              draft: hasUpdates ? applyComputedFields({ ...s.draft, ...fresh }) : s.draft,
               locks: res.locks ?? s.locks
             }
           })

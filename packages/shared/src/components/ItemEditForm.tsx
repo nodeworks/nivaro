@@ -1103,6 +1103,14 @@ export function ItemEditForm({
   const draftRef = useRef<Record<string, unknown>>({})
   // Fields the user actually edited this session (drives cascade auto-clear)
   const userTouchedRef = useRef<Set<string>>(new Set())
+  // Stale-response guard for /field-rules/evaluate (see InlineTableField for
+  // the grid twin): every user edit stamps its field with a fresh sequence
+  // number, a rule request captures the sequence at send time, and its
+  // response may only write scalar targets whose stamp is not newer than
+  // that — a target the user re-picked while the request was in flight
+  // keeps the user's value.
+  const ruleSeqRef = useRef(0)
+  const fieldEditSeqRef = useRef<Map<string, number>>(new Map())
 
   // ── Grid flush registry ────────────────────────────────────────────────────
   // Field components (file pickers, inline grids) register async commit
@@ -2732,11 +2740,18 @@ export function ItemEditForm({
   crossDefaultsRef.current = runCrossDefaults
 
   const applyFieldRuleResults = useCallback(
-    (results: Record<string, unknown> | null | undefined) => {
-      const { scalar, alias } = partitionRuleResults(
+    (results: Record<string, unknown> | null | undefined, sentSeq?: number) => {
+      const { scalar: rawScalar, alias } = partitionRuleResults(
         results,
         new Set(m2mAliasFieldsForRules.keys())
       )
+      // Drop scalar targets the user edited after this request was sent.
+      const scalar: Record<string, unknown> = {}
+      for (const [field, value] of Object.entries(rawScalar)) {
+        if (sentSeq !== undefined && (fieldEditSeqRef.current.get(field) ?? 0) > sentSeq) continue
+        scalar[field] = value
+        if (sentSeq !== undefined) fieldEditSeqRef.current.set(field, sentSeq)
+      }
       // Unsettled-guard: checked against the state captured when this
       // response's evaluate cycle started — a target that wasn't known yet
       // simply gets another chance on the next trigger fire.
@@ -2788,6 +2803,7 @@ export function ItemEditForm({
       if (existingTimer) clearTimeout(existingTimer)
       fieldRuleTimersRef.current[field] = setTimeout(() => {
         delete fieldRuleTimersRef.current[field]
+        const sentSeq = ruleSeqRef.current
         const triggerValue = explicitValue !== undefined ? explicitValue : draftRef.current[field]
         const targetDraft: Record<string, unknown> = {}
         for (const rule of rules) {
@@ -2804,7 +2820,7 @@ export function ItemEditForm({
               draft: targetDraft
             })
           )
-          .then((res) => applyFieldRuleResults(res.data))
+          .then((res) => applyFieldRuleResults(res.data, sentSeq))
           .catch(() => {})
       }, 300)
     },
@@ -2870,6 +2886,7 @@ export function ItemEditForm({
       // actually different (the phantom-dirty report).
       if (valuesEqual(draftRef.current[field], value)) return
       userTouchedRef.current.add(field)
+      fieldEditSeqRef.current.set(field, ++ruleSeqRef.current)
       const next = { ...draftRef.current, [field]: value }
       for (const fc of fieldConfig ?? []) {
         if (!fc.dependency_config) continue
