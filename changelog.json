@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-09-08T22:41:46.903Z",
+  "generated_at": "2026-09-08T23:29:39.221Z",
   "releases": [
+    {
+      "version": "0.1.230",
+      "tag": "v0.1.230",
+      "date": "2026-09-08T19:29:31-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "rebuild the inline-grid row history as a readable timeline",
+              "hash": "2f4777fd"
+            },
+            {
+              "section": "Added",
+              "scope": "field-rules",
+              "text": "re-run row rules on API updates by default; fix Table Editor update-depth loop",
+              "hash": "c174ef5c"
+            },
+            {
+              "section": "Added",
+              "scope": "field-rules",
+              "text": "autofill provenance, reset-to-auto, update-time re-runs, rule dry-run, evaluate stats",
+              "hash": "bc09288d"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.229",
       "tag": "v0.1.229",
-      "date": "2026-09-08T18:41:39-04:00",
+      "date": "2026-09-08T18:41:46-04:00",
       "sections": [
         {
           "label": "Performance",
