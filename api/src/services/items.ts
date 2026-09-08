@@ -33,7 +33,11 @@ import {
   type RollupSource,
   recalcAffectedRollups
 } from './rollups.js'
-import { applyRowLocksOnWrite, applyRowRulesOnCreate } from './row-rules-autofill.js'
+import {
+  applyRowLocksOnWrite,
+  applyRowRulesOnCreate,
+  applyRowRulesOnUpdate
+} from './row-rules-autofill.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
@@ -2704,6 +2708,11 @@ export async function updateOne(
   await span('field-rules', () => applyFieldRules(collection, ctx.payload))
   await span('row-locks', () =>
     applyRowLocksOnWrite(collection, ctx.payload, callerFields, previousData ?? null)
+  )
+  // Layout row rules flagged on_update re-derive their targets when the PATCH
+  // changed one of their triggers (caller-sent targets still win).
+  await span('row-rules:update', () =>
+    applyRowRulesOnUpdate(collection, ctx.payload, callerFields, previousData ?? null)
   )
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp

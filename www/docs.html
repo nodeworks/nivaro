@@ -8030,7 +8030,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
         </div>
 
         <!-- FIELD RULES -->
-        <div class="doc-section" id="s-field-rules" data-toc='[{"id":"field-rules","label":"Field Rules"}]'>
+        <div class="doc-section" id="s-field-rules" data-toc='[{"id":"field-rules","label":"Field Rules"},{"id":"field-rules-grid-row-rules","label":"Grid row rules (inline tables)"}]'>
           <!-- SYNC:field-rules -->
           <h1 class="doc-h1" id="field-rules">Field Rules</h1>
           <p class="doc-p">Field Rules are lightweight, per-collection automations that set or clear the value of one field based on the value of another. When a trigger field matches a condition, a target field is automatically set to a literal value or cleared. Rules run both server-side on save and in real time inside the item editor.</p>
@@ -8079,7 +8079,44 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
   "changed_field": "status"
 }
 // → { "updates": { "assigned_to": null } }</code></pre>
-          <div class="doc-note">CRUD endpoints (POST/PATCH/DELETE) require admin access. GET /api/field-rules?collection=… and POST /api/field-rules/evaluate require any authenticated user.</div>
+          <h2 class="doc-h2" id="field-rules-grid-row-rules">Grid row rules (inline tables)</h2>
+          <p class="doc-p">An inline-table field on a layout can carry its own per-row auto-fill rules (Table Editor → grid field settings → "Row auto-fill rules"): derive a line's category type from the picked category, its task from a project-type-filtered lookup, a lock on price for labor lines, and so on. The row editor evaluates them live as you edit, and the API runs the same rules when a child row is created directly.</p>
+          <h3 class="doc-h3">Auto vs overridden</h3>
+          <p class="doc-p">In the row editor every rule target shows a small chip: "auto" when the value is exactly what the rules would derive, "overridden" when you (or an import) hold a different value. Fields the rules would leave empty show no chip. "↺ reset" beside an overridden value re-derives that one field from its rules. A value you change never gets flipped back by a slower rule response that was already in flight.</p>
+          <h3 class="doc-h3">Re-running on API updates</h3>
+          <p class="doc-p">By default row rules run on creates only. Tick "Also re-run on API updates when a trigger field changes" on a rule to have a PATCH that changes one of its trigger fields re-derive the target too. A target the caller sends explicitly in the same request always wins.</p>
+          <h3 class="doc-h3">Testing rules against a record</h3>
+          <p class="doc-p">Below the rule list, "Test rules against a record" runs the rules exactly as edited (unsaved) against one real child record and lists what every rule did: the resolved trigger value, whether it fired, was not triggered or was skipped (and why), the value it wrote, per-rule time, and the pass's query count. Nothing is written. Optionally name a changed field to simulate a live edit instead of the create-time pass.</p>
+          <pre class="doc-pre"><code>// Live edit from a grid editor (probe returns what the rules WOULD derive):
+// POST /api/field-rules/evaluate
+{
+  "collection": "workflow_line_items",
+  "data": { "category": 67, "task": 42 },
+  "changed_field": "category",
+  "probe": true,
+  "parent_context": { "workflow_type": 1, "project_type": 2 },
+  "row_rules": [ /* the grid's row_rules */ ]
+}
+// → { "updates": { "oracle_category": 720, ... }, "locks": [], "expected": { "task": 1, ... } }
+
+// Reset one field to its rule-derived value:
+// { ..., "target_fields": ["task"], "probe": true }
+
+// Dry run against a real row (admin):
+// POST /api/field-rules/explain
+{
+  "collection": "workflow_line_items",
+  "record_id": 465323,
+  "parent_collection": "workflows",
+  "fk_field": "workflow",
+  "parent_context_fields": ["workflow_type", "project_type"],
+  "row_rules": [ /* ... */ ]
+}
+// → { "data": { "trace": [{ "index": 0, "target_field": "oracle_category", "outcome": "wrote", ... }], "changes": {...}, "queries": 4, "ms": 260 } }
+
+// Rule evaluation cost per collection (admin; also on the API Analytics page):
+// GET /api/field-rules/stats</code></pre>
+          <div class="doc-note">CRUD endpoints (POST/PATCH/DELETE), POST /api/field-rules/explain and GET /api/field-rules/stats require admin access. GET /api/field-rules?collection=… and POST /api/field-rules/evaluate require any authenticated user.</div>
           <!-- /SYNC:field-rules -->
         </div>
 

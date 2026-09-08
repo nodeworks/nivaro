@@ -537,6 +537,25 @@ export interface RowRule {
   sources?: RowRuleSource[]
   only_if_empty?: boolean
   sort?: number
+  /** Re-run this rule on API UPDATES when one of its trigger fields is in
+   *  the PATCH (createOne always runs every rule; caller-sent targets still
+   *  win). Off by default — a PATCH is an explicit statement about fields. */
+  on_update?: boolean
+}
+
+/** One line of an explain trace — what a rule did on one pass and why. */
+export interface RowRuleTraceEntry {
+  index: number
+  target_field: string
+  target_type: RowRule['target_type']
+  trigger_field: string | null
+  /** The value the trigger resolved to (after trigger_related_field hops). */
+  trigger_value: unknown
+  /** wrote | not-triggered | lock | skipped:<reason> */
+  outcome: string
+  /** Value written to the target (when outcome = wrote). */
+  value?: unknown
+  ms: number
 }
 
 /**
@@ -556,6 +575,13 @@ export interface RowRuleEvalOptions {
    *  share relation/record lookups across several evaluate passes in the
    *  same request (import prefill evaluates many lines). */
   cache?: RowRuleLookupCache
+  /** Only rules whose target_field is in this list run (reset-to-auto for one
+   *  field, update-time re-runs for the rules a PATCH touched). */
+  targetFields?: string[]
+  /** Only rules passing this predicate run (update-time re-runs). */
+  ruleFilter?: (rule: RowRule) => boolean
+  /** When given, one entry per rule is appended describing what it did. */
+  explain?: RowRuleTraceEntry[]
 }
 
 /**
@@ -570,6 +596,8 @@ export interface RowRuleEvalOptions {
 export class RowRuleLookupCache {
   private readonly rels = new Map<string, Promise<Record<string, unknown> | undefined>>()
   private readonly recs = new Map<string, Promise<Record<string, unknown> | undefined>>()
+  /** Round trips actually issued through this cache (memo hits excluded). */
+  queries = 0
   constructor(readonly database: Knex) {}
 
   private memo(
@@ -579,6 +607,7 @@ export class RowRuleLookupCache {
   ): Promise<Record<string, unknown> | undefined> {
     const hit = map.get(key)
     if (hit) return hit
+    this.queries += 1
     const p = run().catch((err) => {
       map.delete(key)
       throw err
@@ -644,10 +673,37 @@ export async function evaluateRowRules(
 
   const cache = evalOpts?.cache ?? new RowRuleLookupCache(database)
   const sorted = [...rowRules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
-  for (const rule of sorted) {
+  const targetFilter = evalOpts?.targetFields ? new Set(evalOpts.targetFields) : null
+  for (let ruleIndex = 0; ruleIndex < sorted.length; ruleIndex++) {
+    const rule = sorted[ruleIndex]
     const isLock = rule.target_type === 'lock'
-    if (evalOpts?.locksOnly && !isLock) continue
     const triggerField = rule.trigger_field ?? null
+    const startedAt = Date.now()
+    let traceVal: unknown = undefined
+    const note = (outcome: string, value?: unknown) => {
+      evalOpts?.explain?.push({
+        index: ruleIndex,
+        target_field: rule.target_field,
+        target_type: rule.target_type,
+        trigger_field: triggerField,
+        trigger_value: traceVal,
+        outcome,
+        ...(value !== undefined ? { value } : {}),
+        ms: Date.now() - startedAt
+      })
+    }
+    if (evalOpts?.locksOnly && !isLock) {
+      note('skipped:locks-only')
+      continue
+    }
+    if (targetFilter && !targetFilter.has(rule.target_field)) {
+      note('skipped:target-filter')
+      continue
+    }
+    if (evalOpts?.ruleFilter && !evalOpts.ruleFilter(rule)) {
+      note('skipped:rule-filter')
+      continue
+    }
     const isParentTrigger = !!triggerField && triggerField.startsWith('$parent.')
     const extraTriggerFields = Array.isArray(rule.trigger_fields)
       ? rule.trigger_fields.filter(Boolean)
@@ -659,9 +715,14 @@ export async function evaluateRowRules(
     if (!isParentTrigger) {
       // Lock rules re-evaluate on EVERY pass — a lock follows the row's current
       // state, not only the keystroke that changed its trigger.
-      if (!isLock && changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField))
+      if (!isLock && changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField)) {
+        note('skipped:other-field-changed')
         continue
-      if (triggerField && !(triggerField in working)) continue
+      }
+      if (triggerField && !(triggerField in working)) {
+        note('skipped:trigger-absent')
+        continue
+      }
     }
 
     let val: unknown
@@ -715,6 +776,7 @@ export async function evaluateRowRules(
       }
     }
 
+    traceVal = val
     const op = rule.trigger_op ?? 'nnull'
     const rawTriggerValue = subParent(rule.trigger_value)
 
@@ -754,13 +816,20 @@ export async function evaluateRowRules(
     }
     if (isLock) {
       if (triggered) evalOpts?.locks?.add(rule.target_field)
+      note(triggered ? 'lock' : 'not-triggered')
       continue
     }
-    if (!triggered) continue
+    if (!triggered) {
+      note('not-triggered')
+      continue
+    }
 
     if (rule.only_if_empty) {
       const existing = working[rule.target_field]
-      if (existing != null && existing !== '') continue
+      if (existing != null && existing !== '') {
+        note('skipped:only-if-empty', existing)
+        continue
+      }
     }
 
     if (rule.target_type === 'clear') {
@@ -772,11 +841,15 @@ export async function evaluateRowRules(
       const fkId = triggerField ? working[triggerField] : null
       if (fkId == null) {
         working[rule.target_field] = null
+        note('wrote', null)
         continue
       }
       try {
         const rel = await cache.m2oRel(collection, triggerField as string)
-        if (!rel?.one_collection) continue
+        if (!rel?.one_collection) {
+          note('skipped:no-relation')
+          continue
+        }
         const relatedRecord = await cache.record(rel.one_collection, fkId)
         working[rule.target_field] =
           relatedRecord && rule.target_value ? (relatedRecord[rule.target_value] ?? null) : null
@@ -798,6 +871,7 @@ export async function evaluateRowRules(
       )
       working[rule.target_field] = candidates.find((c) => c != null) ?? null
     }
+    note('wrote', working[rule.target_field])
   }
 
   return working
@@ -825,6 +899,7 @@ async function resolvePrecedenceSource(
     if (rowId == null) return null
     const rel = await cache.o2mRel(collection, src.source_field)
     if (!rel?.many_collection) return null
+    cache.queries += 1
     const firstRec = (await cache.database(rel.many_collection)
       .where({ [rel.many_field]: String(rowId) })
       .orderBy('id', 'asc')
@@ -847,6 +922,7 @@ async function resolvePrecedenceSource(
       if (rowId == null) return null
       const rel = await cache.o2mRel(collection, src.source_field)
       if (!rel?.many_collection) return null
+      cache.queries += 1
       const firstRec = (await cache.database(rel.many_collection)
         .where({ [rel.many_field]: String(rowId) })
         .orderBy('id', 'asc')
@@ -859,6 +935,7 @@ async function resolvePrecedenceSource(
     const fkRel = await cache.fkRel(src.o2m_collection, intermediateCollection)
     if (!fkRel?.many_field) return null
     const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
+    cache.queries += 1
     const matchRec = (await cache.database(src.o2m_collection)
       .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
       .orderBy('id', 'asc')

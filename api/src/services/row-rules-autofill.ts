@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
-import { evaluateRowRules, type RowRule } from './field-rules.js'
+import { evaluateRowRules, type RowRule, RowRuleLookupCache } from './field-rules.js'
+import { recordRuleEvalSample } from './field-rules-stats.js'
 
 function parseJson<T>(v: unknown): T | null {
   if (v == null) return null
@@ -219,7 +220,16 @@ export async function applyRowRulesOnCreate(
       }
 
       const working = { ...payload }
-      await evaluateRowRules(db, collection, working, parentContext, cfg.rowRules)
+      const cache = new RowRuleLookupCache(db)
+      const startedAt = Date.now()
+      await evaluateRowRules(db, collection, working, parentContext, cfg.rowRules, undefined, { cache })
+      recordRuleEvalSample(collection, {
+        at: Date.now(),
+        ms: Date.now() - startedAt,
+        queries: cache.queries,
+        rules: cfg.rowRules.length,
+        mode: 'create'
+      })
 
       for (const [key, value] of Object.entries(working)) {
         if (callerFields.has(key)) continue // explicit caller value always wins
@@ -230,4 +240,74 @@ export async function applyRowRulesOnCreate(
     // Autofill is a favor, not a contract — the create proceeds without it.
     console.warn(`row-rules autofill skipped for ${collection}:`, err)
   }
+}
+
+/**
+ * Re-run the rules a PATCH touched. Only rules flagged `on_update` whose
+ * trigger fields (row-side, not $parent.*) intersect the caller's payload run,
+ * against the MERGED row (existing + payload) so `only_if_empty` sees the
+ * stored value. Targets the caller sent explicitly are never overwritten —
+ * a PATCH that changes category AND task meant both. Never throws.
+ * Returns the fields it wrote.
+ */
+export async function applyRowRulesOnUpdate(
+  collection: string,
+  payload: Record<string, unknown>,
+  callerFields: Set<string>,
+  existing: Record<string, unknown> | null
+): Promise<string[]> {
+  const wrote: string[] = []
+  if (collection.startsWith('nivaro_') || !existing) return wrote
+  try {
+    const configs = await getConfigs(collection)
+    if (configs.length === 0) return wrote
+    const merged = { ...existing, ...payload }
+    const cache = new RowRuleLookupCache(db)
+    for (const cfg of configs) {
+      const live = cfg.rowRules.filter((r) => {
+        if (!r.on_update || r.target_type === 'lock') return false
+        const triggers = [r.trigger_field, ...(r.trigger_fields ?? [])].filter(
+          (t): t is string => typeof t === 'string' && !t.startsWith('$parent.')
+        )
+        return triggers.some((t) => callerFields.has(t))
+      })
+      if (live.length === 0) continue
+      const fkValue = merged[cfg.fkField]
+      if (fkValue == null || fkValue === '') continue
+      const wanted = new Set(cfg.parentContextFields)
+      for (const rule of live) {
+        const tf = rule.trigger_field
+        if (typeof tf === 'string' && tf.startsWith('$parent.')) wanted.add(tf.slice(8))
+      }
+      const parentContext: Record<string, unknown> = {}
+      if (wanted.size > 0) {
+        const parent = (await db(cfg.parentCollection)
+          .where({ id: String(fkValue) })
+          .first()) as Record<string, unknown> | undefined
+        if (!parent) continue
+        for (const f of wanted) parentContext[f] = parent[f] ?? null
+      }
+      const working = { ...merged }
+      const startedAt = Date.now()
+      await evaluateRowRules(db, collection, working, parentContext, live, undefined, { cache })
+      recordRuleEvalSample(collection, {
+        at: Date.now(),
+        ms: Date.now() - startedAt,
+        queries: cache.queries,
+        rules: live.length,
+        mode: 'update'
+      })
+      for (const rule of live) {
+        const key = rule.target_field
+        if (callerFields.has(key)) continue // explicit caller value always wins
+        if (working[key] !== merged[key]) {
+          payload[key] = working[key]
+          wrote.push(key)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`row-rules update re-run skipped for ${collection}:`, err)
+  }
+  return wrote
 }

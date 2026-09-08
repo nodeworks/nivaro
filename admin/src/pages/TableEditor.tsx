@@ -9057,6 +9057,7 @@ type RowRuleItem = {
   sources?: RowRuleSource[]
   only_if_empty?: boolean
   sort?: number
+  on_update?: boolean
 }
 
 const ROW_RULE_SKIP_TYPES = new Set([
@@ -10858,8 +10859,207 @@ function RowRuleRow({
                 Only set if target is currently empty
               </span>
             </label>
+            {rule.target_type !== 'lock' && (
+              <label className='mt-1 flex items-center gap-2 cursor-pointer'>
+                <input
+                  type='checkbox'
+                  checked={!!rule.on_update}
+                  onChange={(e) => onChange({ ...rule, on_update: e.target.checked })}
+                  className='h-3.5 w-3.5 accent-nvr-cyan'
+                />
+                <span
+                  className='text-[11px] text-slate-600'
+                  title='Rules only run on API creates by default. With this on, a PATCH that changes one of this rule&apos;s trigger fields re-derives the target too (a target the caller sent explicitly still wins).'
+                >
+                  Also re-run on API updates when a trigger field changes
+                </span>
+              </label>
+            )}
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Dry-run the editor's CURRENT (unsaved) row rules against one real child
+ * record and show what every rule did — resolved trigger value, fired or
+ * skipped and why, the value it wrote, per-rule ms and the pass's query
+ * count. Nothing is written. Mirrors the skip-criteria "Preview impact".
+ */
+function RowRuleTester({
+  childCollection,
+  parentCollection,
+  rowRules,
+  parentContextFields
+}: {
+  childCollection: string
+  parentCollection: string
+  rowRules: RowRuleItem[]
+  parentContextFields: string[]
+}) {
+  const [recordId, setRecordId] = useState('')
+  const [changedField, setChangedField] = useState('')
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<{
+    record_id: string
+    parent_id: string | null
+    parent_context: Record<string, unknown>
+    trace: Array<{
+      index: number
+      target_field: string
+      target_type: string
+      trigger_field: string | null
+      trigger_value: unknown
+      outcome: string
+      value?: unknown
+      ms: number
+    }>
+    locks: string[]
+    changes: Record<string, { before: unknown; after: unknown }>
+    queries: number
+    ms: number
+  } | null>(null)
+  const { data: rels = [] } = useQuery<CMSRelation[]>({
+    queryKey: ['relations-for', childCollection],
+    queryFn: () =>
+      api.get(`/data-model/relations/for/${childCollection}`).then((r) => r.data.data ?? r.data)
+  })
+  const fkField =
+    rels.find((r) => r.many_collection === childCollection && r.one_collection === parentCollection)
+      ?.many_field ?? null
+  const run = async () => {
+    if (!recordId.trim()) return
+    setRunning(true)
+    setError(null)
+    try {
+      const r = await api.post('/field-rules/explain', {
+        collection: childCollection,
+        record_id: recordId.trim(),
+        parent_collection: parentCollection,
+        fk_field: fkField,
+        parent_context_fields: parentContextFields,
+        row_rules: rowRules,
+        ...(changedField ? { changed_field: changedField } : {})
+      })
+      setResult(r.data.data)
+    } catch (err: unknown) {
+      setError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Dry run failed'
+      )
+    } finally {
+      setRunning(false)
+    }
+  }
+  const fmt = (v: unknown) =>
+    v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+  const outcomeTone = (o: string) =>
+    o === 'wrote'
+      ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-400/10 dark:text-emerald-300'
+      : o === 'lock'
+        ? 'text-violet-700 bg-violet-50 dark:bg-violet-400/10 dark:text-violet-300'
+        : o === 'not-triggered'
+          ? 'text-slate-500 bg-slate-100 dark:bg-white/5 dark:text-slate-400'
+          : 'text-amber-700 bg-amber-50 dark:bg-amber-400/10 dark:text-amber-300'
+  return (
+    <div className='mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2 dark:border-border dark:bg-muted/30'>
+      <div className='flex items-center justify-between'>
+        <Label className='text-[11px] text-slate-600'>Test rules against a record</Label>
+        <span className='text-[10px] text-slate-400'>Uses the rules as edited above · nothing is saved</span>
+      </div>
+      <div className='mt-1.5 flex items-center gap-1.5'>
+        <Input
+          value={recordId}
+          onChange={(e) => setRecordId(e.target.value)}
+          placeholder={`${childCollection} id`}
+          className='h-7 w-40 text-[11px]'
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void run()
+          }}
+        />
+        <Input
+          value={changedField}
+          onChange={(e) => setChangedField(e.target.value)}
+          placeholder='changed field (optional)'
+          className='h-7 w-44 text-[11px]'
+          title='Simulate a live edit of this field; blank = the create-time pass where every rule gets its chance'
+        />
+        <Button size='sm' variant='outline' className='h-7 text-[11px]' onClick={() => void run()} disabled={running || !recordId.trim()}>
+          {running ? 'Running…' : 'Run'}
+        </Button>
+      </div>
+      {error && <p className='mt-1.5 text-[11px] text-red-600'>{error}</p>}
+      {result && (
+        <div className='mt-2 space-y-2'>
+          <div className='flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-500'>
+            <span>
+              record <span className='font-mono text-slate-700 dark:text-slate-300'>{result.record_id}</span>
+            </span>
+            <span>
+              parent <span className='font-mono text-slate-700 dark:text-slate-300'>{result.parent_id ?? '—'}</span>
+            </span>
+            <span>
+              {result.queries} {result.queries === 1 ? 'query' : 'queries'} · {result.ms} ms
+            </span>
+            {result.locks.length > 0 && <span>locked: {result.locks.join(', ')}</span>}
+            {Object.keys(result.parent_context).length > 0 && (
+              <span>
+                parent context:{' '}
+                {Object.entries(result.parent_context)
+                  .map(([k, v]) => `${k}=${fmt(v)}`)
+                  .join(', ')}
+              </span>
+            )}
+          </div>
+          <div className='overflow-x-auto rounded border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <table className='w-full text-[10.5px]'>
+              <thead>
+                <tr className='text-left text-[9.5px] uppercase tracking-wide text-slate-400'>
+                  <th className='px-2 py-1'>#</th>
+                  <th className='px-2 py-1'>Target</th>
+                  <th className='px-2 py-1'>Trigger → value</th>
+                  <th className='px-2 py-1'>Outcome</th>
+                  <th className='px-2 py-1'>Wrote</th>
+                  <th className='px-2 py-1 text-right'>ms</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.trace.map((t) => (
+                  <tr key={t.index} className='border-t border-slate-100 dark:border-border'>
+                    <td className='px-2 py-1 text-slate-400'>{t.index + 1}</td>
+                    <td className='px-2 py-1 font-mono'>
+                      {t.target_field}
+                      <span className='ml-1 text-slate-400'>{t.target_type}</span>
+                    </td>
+                    <td className='px-2 py-1 font-mono text-slate-600 dark:text-slate-300'>
+                      {t.trigger_field ?? '—'} → {fmt(t.trigger_value)}
+                    </td>
+                    <td className='px-2 py-1'>
+                      <span className={cn('rounded px-1 py-px font-medium', outcomeTone(t.outcome))}>
+                        {t.outcome}
+                      </span>
+                    </td>
+                    <td className='px-2 py-1 font-mono'>{t.outcome === 'wrote' ? fmt(t.value) : ''}</td>
+                    <td className='px-2 py-1 text-right tabular-nums text-slate-500'>{t.ms}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {Object.keys(result.changes).length > 0 ? (
+            <div className='text-[10.5px] text-slate-600 dark:text-slate-300'>
+              Would change:{' '}
+              {Object.entries(result.changes)
+                .map(([k, c]) => `${k}: ${fmt(c.before)} → ${fmt(c.after)}`)
+                .join(' · ')}
+            </div>
+          ) : (
+            <div className='text-[10.5px] text-slate-500'>No field would change on this record.</div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -13124,6 +13324,14 @@ function FieldSettingsPopover({
                         }))}
                       />
                     ))}
+                    {rowRulesLocal.length > 0 && relatedCollection && collection && (
+                      <RowRuleTester
+                        childCollection={relatedCollection}
+                        parentCollection={collection}
+                        rowRules={rowRulesLocal}
+                        parentContextFields={parentContextFieldsLocal}
+                      />
+                    )}
                     {/* Parent context — always visible for inline-table */}
                     <div className='pt-1 border-t border-slate-100 space-y-1.5'>
                       <Label className='text-[11px] text-slate-600'>Parent context fields</Label>

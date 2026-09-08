@@ -1582,9 +1582,28 @@ export function InlineTableField({
     rowId: string
     draft: Record<string, unknown>
     locks?: string[]
+    /** Lock rules exist but their first evaluation for this row hasn't
+     *  answered yet — lock TARGETS render disabled until it does, so a field
+     *  that is about to lock never accepts a keystroke it will then drop. */
+    locksPending?: boolean
+    /** What every rule target WOULD be if derived from scratch for the
+     *  current draft (server `probe`). Drives the auto / overridden chips and
+     *  reset-to-auto; refreshed with every evaluate response. */
+    expected?: Record<string, unknown>
     /** Required columns the last save attempt found empty — highlighted until filled. */
     missing?: string[]
   }
+  /** Fields a 'lock' rule can make read-only — the ones that wait on the
+   *  first lock evaluation before accepting input. */
+  const lockTargets = useMemo(
+    () =>
+      new Set(
+        (rowRules ?? [])
+          .filter((r) => (r as { target_type?: string }).target_type === 'lock')
+          .map((r) => (r as { target_field: string }).target_field)
+      ),
+    [rowRules]
+  )
   const [editState, setEditState] = useState<GridEditState | null>(null)
   const editStateRef = useRef<GridEditState | null>(null)
   // Stale-response guard for /field-rules/evaluate. Every setDraftField bumps
@@ -3017,13 +3036,23 @@ export function InlineTableField({
     queryFn: async () => {
       const result: Record<string, Record<string, string>> = {}
       // Fetch all collection metas first so we know which fields to expand
+      // Collection meta is shared across every grid/picker on the page and
+      // changes rarely — served from the query cache when warm, so the label
+      // fetch is ONE round trip per collection instead of two.
       const colMetas = await Promise.all(
         [...m2oLookupIds.keys()].map((oneCollection) =>
-          client
-            .request<{ data: { display_template?: string | null } }>(
-              get(`/collections/${oneCollection}`)
-            )
-            .then((r) => ({ collection: oneCollection, meta: r.data }))
+          qc
+            .fetchQuery({
+              queryKey: ['collection-display-meta', oneCollection],
+              queryFn: () =>
+                client
+                  .request<{ data: { display_template?: string | null } }>(
+                    get(`/collections/${oneCollection}`)
+                  )
+                  .then((r) => r.data),
+              staleTime: 10 * 60_000
+            })
+            .then((meta) => ({ collection: oneCollection, meta }))
         )
       )
       await Promise.all(
@@ -3090,25 +3119,33 @@ export function InlineTableField({
     return parentCtx
   }
 
-  /** Ask the server which fields the layout's lock rules make read-only for
-   *  this row right now (lock rules only — no value changes on open). */
-  function refreshLocks(rowId: string, draft: Record<string, unknown>) {
-    if (!client || !rowRules?.some((r) => (r as { target_type?: string }).target_type === 'lock'))
-      return
+  /** On row-editor open: ask the server which fields the layout's lock rules
+   *  make read-only right now (lock rules only — no value changes) AND what
+   *  every rule target would be if derived from scratch (`expected`, for the
+   *  auto/overridden chips). One request, no writes to the draft. */
+  function refreshRuleState(rowId: string, draft: Record<string, unknown>) {
+    if (!client || !rowRules || rowRules.length === 0) return
     client
-      .request<{ locks?: string[] }>(
+      .request<{ locks?: string[]; expected?: Record<string, unknown> }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
           data: draft,
           locks_only: true,
+          probe: true,
           parent_context: buildParentCtx(),
           row_rules: rowRules
         })
       )
       .then((res) => {
-        setEditState((s) => (s && s.rowId === rowId ? { ...s, locks: res.locks ?? [] } : s))
+        setEditState((s) =>
+          s && s.rowId === rowId
+            ? { ...s, locks: res.locks ?? [], locksPending: false, expected: res.expected ?? s.expected }
+            : s
+        )
       })
-      .catch(() => {})
+      .catch(() => {
+        setEditState((s) => (s && s.rowId === rowId ? { ...s, locksPending: false } : s))
+      })
   }
 
   function startEdit(row: Record<string, unknown>) {
@@ -3116,8 +3153,8 @@ export function InlineTableField({
     const id = String(row.id)
     if (editState?.rowId === id) return
     const draft = applyComputedFields({ ...row })
-    setEditState({ rowId: id, draft })
-    refreshLocks(id, draft)
+    setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
+    refreshRuleState(id, draft)
   }
 
   function startPendingEdit(row: Record<string, unknown>, ri: number) {
@@ -3125,14 +3162,86 @@ export function InlineTableField({
     const rowId = `pending:${ri}`
     if (editState?.rowId === rowId) return
     const draft = applyComputedFields({ ...row })
-    setEditState({ rowId, draft })
-    refreshLocks(rowId, draft)
+    setEditState({ rowId, draft, locksPending: lockTargets.size > 0 })
+    refreshRuleState(rowId, draft)
+  }
+
+  /** Provenance of a rule-target value in the open editor: 'auto' when it
+   *  equals what the rules would derive, 'overridden' when the user (or an
+   *  import) holds a different non-empty value, null when not a rule target
+   *  or empty. */
+  function ruleProvenance(field: string): 'auto' | 'overridden' | null {
+    const exp = editState?.expected
+    if (!exp || !(field in exp)) return null
+    const cur = editState?.draft[field]
+    const curEmpty = cur === null || cur === undefined || cur === ''
+    if (curEmpty) return null
+    const want = exp[field]
+    const wantEmpty = want === null || want === undefined || want === ''
+    // The rules would derive NOTHING here (e.g. the price rule only fires
+    // for labor lines) — the user's value is just a value, not an override.
+    if (wantEmpty) return null
+    return String(cur) === String(want) ? 'auto' : 'overridden'
+  }
+
+  /** Re-derive ONE field from its rules (the target is treated as empty so
+   *  only-if-empty rules fire) and write the answer — the undo for a manual
+   *  override. Goes through the same sequence guard as live edits. */
+  function resetToAuto(field: string) {
+    const cur = editStateRef.current
+    if (!cur || !client || !rowRules || rowRules.length === 0) return
+    const rowId = cur.rowId
+    if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
+    const seq = ++ruleEvalSeqRef.current
+    draftKeySeqRef.current.seqs.set(field, seq)
+    client
+      .request<{ updates: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }>(
+        post('/field-rules/evaluate', {
+          collection: relatedCollection,
+          data: cur.draft,
+          target_fields: [field],
+          probe: true,
+          parent_context: buildParentCtx(),
+          row_rules: rowRules
+        })
+      )
+      .then((res) => applyEvalResponse(rowId, seq, { ...res, updates: { [field]: null, ...res.updates } }))
+      .catch(() => {})
+  }
+
+  /** Merge an evaluate response into the open editor, honoring the stale-
+   *  response guard: a key touched since `seq` (by the user, or by a newer
+   *  response) keeps the later write. */
+  function applyEvalResponse(
+    rowId: string,
+    seq: number,
+    res: { updates?: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }
+  ) {
+    if (editStateRef.current?.rowId !== rowId || draftKeySeqRef.current.rowId !== rowId) return
+    const seqs = draftKeySeqRef.current.seqs
+    const fresh: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(res.updates ?? {})) {
+      if ((seqs.get(key) ?? 0) > seq) continue
+      fresh[key] = val
+      seqs.set(key, seq)
+    }
+    const hasUpdates = Object.keys(fresh).length > 0
+    setEditState((s) => {
+      if (!s || s.rowId !== rowId) return s
+      return {
+        ...s,
+        draft: hasUpdates ? applyComputedFields({ ...s.draft, ...fresh }) : s.draft,
+        locks: res.locks ?? s.locks,
+        locksPending: false,
+        expected: res.expected ?? s.expected
+      }
+    })
   }
 
   function startNew() {
     if (readOnly) return
-    setEditState({ rowId: 'new', draft: { ...rowDefaultSeed } })
-    refreshLocks('new', { ...rowDefaultSeed })
+    setEditState({ rowId: 'new', draft: { ...rowDefaultSeed }, locksPending: lockTargets.size > 0 })
+    refreshRuleState('new', { ...rowDefaultSeed })
   }
 
   function cancelEdit() {
@@ -3176,39 +3285,17 @@ export function InlineTableField({
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
       client
-        .request<{ updates: Record<string, unknown>; locks?: string[] }>(
+        .request<{ updates: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }>(
           post('/field-rules/evaluate', {
             collection: relatedCollection,
             data: nextDraft,
             changed_field: k,
+            probe: true,
             parent_context: parentCtx,
             row_rules: rowRules
           })
         )
-        .then((res) => {
-          // The editor moved to another row (or closed) while this was in
-          // flight — its answer describes a draft that no longer exists.
-          if (editStateRef.current?.rowId !== rowId || draftKeySeqRef.current.rowId !== rowId)
-            return
-          const seqs = draftKeySeqRef.current.seqs
-          const fresh: Record<string, unknown> = {}
-          for (const [key, val] of Object.entries(res.updates ?? {})) {
-            // Touched (by the user, or by a newer response) since this request
-            // was sent — the later write wins.
-            if ((seqs.get(key) ?? 0) > seq) continue
-            fresh[key] = val
-            seqs.set(key, seq)
-          }
-          const hasUpdates = Object.keys(fresh).length > 0
-          setEditState((s) => {
-            if (!s || s.rowId !== rowId) return s
-            return {
-              ...s,
-              draft: hasUpdates ? applyComputedFields({ ...s.draft, ...fresh }) : s.draft,
-              locks: res.locks ?? s.locks
-            }
-          })
-        })
+        .then((res) => applyEvalResponse(rowId ?? '', seq, res))
         .catch(() => {})
     }
   }
@@ -3339,9 +3426,18 @@ export function InlineTableField({
         // Filter to display columns — draft includes full API row (id, system fields, etc.).
         // Deliberately the FULL layout-gated set, not preset-effective: row rules may autofill
         // preset-hidden fields, and a mid-edit preset switch must not drop typed values.
-        const writableKeys = new Set(
-          displayCols.map((c) => c.field).filter((k) => !k.startsWith('__m2m_'))
-        )
+        // Rule TARGETS ride along even when the layout doesn't display them
+        // (category_type is derived from the picked category but sits on no
+        // column) — otherwise the autofill the editor just showed is silently
+        // dropped at save and the record disagrees with the form.
+        const ruleTargetKeys = (rowRules ?? [])
+          .filter((r) => (r as { target_type?: string }).target_type !== 'lock')
+          .map((r) => (r as { target_field: string }).target_field)
+          .filter((k) => typeof k === 'string' && k.length > 0 && k !== 'id')
+        const writableKeys = new Set([
+          ...displayCols.map((c) => c.field).filter((k) => !k.startsWith('__m2m_')),
+          ...ruleTargetKeys
+        ])
         const rowPayload = Object.fromEntries(
           Object.entries(editState.draft).filter(([k]) => writableKeys.has(k))
         )
@@ -4227,7 +4323,7 @@ export function InlineTableField({
                 >
                   <span
                     className={cn(
-                      'text-[10px] font-medium uppercase tracking-wide',
+                      'flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide',
                       isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
                     )}
                   >
@@ -4235,6 +4331,37 @@ export function InlineTableField({
                     {isMissing && (
                       <span className='ml-1 normal-case tracking-normal'>· required</span>
                     )}
+                    {(() => {
+                      const prov = ruleProvenance(c.field)
+                      if (!prov) return null
+                      return prov === 'auto' ? (
+                        <span
+                          className='rounded bg-sky-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
+                          data-tip='Set automatically by a row rule'
+                        >
+                          auto
+                        </span>
+                      ) : (
+                        <span className='flex items-center gap-1'>
+                          <span
+                            className='rounded bg-amber-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
+                            data-tip='Differs from what the row rules would set'
+                          >
+                            overridden
+                          </span>
+                          {!readOnly && !editState?.locks?.includes(c.field) && (
+                            <button
+                              type='button'
+                              onClick={() => resetToAuto(c.field)}
+                              className='rounded px-1 text-[10px] normal-case tracking-normal text-nvr-cyan hover:underline'
+                              data-tip='Reset to the rule-derived value'
+                            >
+                              ↺ reset
+                            </button>
+                          )}
+                        </span>
+                      )
+                    })()}
                   </span>
                   {isComputedWrite ? (
                     <div className='text-[12px] italic text-slate-500'>
@@ -4252,6 +4379,16 @@ export function InlineTableField({
                           ? 'Set automatically for this row'
                           : undefined
                       }
+                    >
+                      {renderCell(c, args.draft[c.field], args.rowId)}
+                    </div>
+                  ) : editState?.locksPending && lockTargets.has(c.field) ? (
+                    // A lock rule may apply to this field; its first evaluation
+                    // hasn't answered yet. Hold input for that beat rather than
+                    // accept a value the lock would then silently drop.
+                    <div
+                      className='h-9 animate-pulse rounded-md border border-dashed border-border bg-[hsl(var(--nvr-skeleton))] px-2 text-[11px] leading-9 text-slate-400'
+                      data-tip='Checking whether this field is locked for this row…'
                     >
                       {renderCell(c, args.draft[c.field], args.rowId)}
                     </div>

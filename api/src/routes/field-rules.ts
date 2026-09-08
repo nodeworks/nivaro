@@ -8,9 +8,12 @@ import {
   type RowRule,
   VALID_OPS,
   VALID_TARGET_TYPES,
-  validateDynamicConfig
+  validateDynamicConfig,
+  RowRuleLookupCache,
+  type RowRuleTraceEntry
 } from '../services/field-rules.js'
 import { applyFieldRules } from '../services/items.js'
+import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
 import { can } from '../services/permissions.js'
 
 interface FieldRuleBody {
@@ -242,6 +245,13 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       changed_field?: string
       /** Evaluate only 'lock' rules (row editor open) — no value changes. */
       locks_only?: boolean
+      /** Also compute what every rule target WOULD be if it were empty
+       *  (`expected`), so the client can label auto vs overridden values and
+       *  offer reset-to-auto. Never applied server-side. */
+      probe?: boolean
+      /** Run only the rules targeting these fields (reset-to-auto). Those
+       *  targets are treated as empty so only_if_empty rules fire. */
+      target_fields?: string[]
       parent_context?: Record<string, unknown>
       row_rules?: Array<{
         trigger_field?: string | null
@@ -267,19 +277,47 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const parentContext = body.parent_context ?? {}
     const locks = new Set<string>()
 
+    let expected: Record<string, unknown> | undefined
     if (Array.isArray(body.row_rules) && body.row_rules.length > 0) {
       // The full evaluator lives in services/field-rules.ts now — createOne
       // runs the same rules for direct API child-row creates, so the logic
       // must not fork between the live-edit path and the write path.
+      const rules = body.row_rules as RowRule[]
+      const cache = new RowRuleLookupCache(db)
+      const startedAt = Date.now()
+      const targetFields = Array.isArray(body.target_fields)
+        ? body.target_fields.filter((f): f is string => typeof f === 'string')
+        : undefined
+      if (targetFields?.length) for (const f of targetFields) working[f] = null
       await evaluateRowRules(
         db,
         body.collection,
         working,
         parentContext,
-        body.row_rules as RowRule[],
-        body.changed_field,
-        { locks, locksOnly: body.locks_only === true }
+        rules,
+        targetFields?.length ? undefined : body.changed_field,
+        { locks, locksOnly: body.locks_only === true, cache, targetFields }
       )
+      if (body.probe === true) {
+        // Second pass over a copy with EVERY rule target cleared: what the
+        // rules would produce from scratch for this draft. Shares the cache,
+        // so it costs only the queries the first pass didn't already make.
+        const probeWorking: Record<string, unknown> = { ...working }
+        const targets = [...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))]
+        for (const t of targets) probeWorking[t] = null
+        await evaluateRowRules(db, body.collection, probeWorking, parentContext, rules, undefined, {
+          cache
+        })
+        expected = {}
+        for (const t of targets) expected[t] = probeWorking[t] ?? null
+      }
+      recordRuleEvalSample(body.collection, {
+        at: Date.now(),
+        ms: Date.now() - startedAt,
+        queries: cache.queries,
+        rules: rules.length,
+        mode: body.locks_only ? 'open' : body.probe ? 'probe' : 'live'
+      })
     } else {
       await applyFieldRules(body.collection, working, body.changed_field)
     }
@@ -290,6 +328,99 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       if (value !== before[key]) updates[key] = value
     }
 
-    return reply.send({ updates, locks: [...locks] })
+    return reply.send({ updates, locks: [...locks], ...(expected ? { expected } : {}) })
+  })
+
+  /** Rule health: recent evaluate timings per child collection (this replica). */
+  app.get('/stats', { preHandler: requireAdmin }, async (_req, reply) => {
+    return reply.send({ data: ruleEvalStats() })
+  })
+
+  /**
+   * Dry-run a grid's row rules against ONE real child record and explain what
+   * every rule did — resolved trigger value, fired/skipped and why, the value
+   * written, per-rule ms, total queries. Admin-only (Table Editor tester).
+   * The rules come from the request (the editor's UNSAVED draft), the record
+   * and its parent from the database. Nothing is written.
+   */
+  app.post('/explain', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = req.body as {
+      collection?: string
+      record_id?: string | number
+      parent_collection?: string
+      fk_field?: string
+      parent_context_fields?: string[]
+      row_rules?: RowRule[]
+      changed_field?: string
+    }
+    if (!body.collection || body.record_id == null || !Array.isArray(body.row_rules)) {
+      return reply.code(400).send({ error: 'collection, record_id and row_rules are required' })
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(body.collection) || body.collection.startsWith('nivaro_')) {
+      return reply.code(400).send({ error: 'Invalid collection' })
+    }
+    const record = (await db(body.collection).where({ id: String(body.record_id) }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!record) return reply.code(404).send({ error: 'Record not found' })
+    const parentContext: Record<string, unknown> = {}
+    const wanted = new Set(body.parent_context_fields ?? [])
+    for (const rule of body.row_rules) {
+      const tf = rule.trigger_field
+      if (typeof tf === 'string' && tf.startsWith('$parent.')) wanted.add(tf.slice(8))
+    }
+    let parentId: unknown = null
+    if (
+      wanted.size > 0 &&
+      body.parent_collection &&
+      body.fk_field &&
+      /^[A-Za-z0-9_]+$/.test(body.parent_collection) &&
+      /^[A-Za-z0-9_]+$/.test(body.fk_field)
+    ) {
+      parentId = record[body.fk_field]
+      if (parentId != null) {
+        const parent = (await db(body.parent_collection).where({ id: String(parentId) }).first()) as
+          | Record<string, unknown>
+          | undefined
+        if (parent) for (const f of wanted) parentContext[f] = parent[f] ?? null
+      }
+    }
+    const cache = new RowRuleLookupCache(db)
+    const explain: RowRuleTraceEntry[] = []
+    const locks = new Set<string>()
+    const working = { ...record }
+    const startedAt = Date.now()
+    await evaluateRowRules(db, body.collection, working, parentContext, body.row_rules, body.changed_field, {
+      cache,
+      explain,
+      locks
+    })
+    const ms = Date.now() - startedAt
+    recordRuleEvalSample(body.collection, {
+      at: Date.now(),
+      ms,
+      queries: cache.queries,
+      rules: body.row_rules.length,
+      mode: 'explain'
+    })
+    const changes: Record<string, { before: unknown; after: unknown }> = {}
+    for (const [k, v] of Object.entries(working)) {
+      // String-compare: rule values arrive as strings ('2') against numeric
+      // columns (2) and that is not a change the save would make.
+      if (String(v ?? '') !== String(record[k] ?? ''))
+        changes[k] = { before: record[k] ?? null, after: v ?? null }
+    }
+    return reply.send({
+      data: {
+        record_id: String(body.record_id),
+        parent_id: parentId == null ? null : String(parentId),
+        parent_context: parentContext,
+        trace: explain,
+        locks: [...locks],
+        changes,
+        queries: cache.queries,
+        ms
+      }
+    })
   })
 }

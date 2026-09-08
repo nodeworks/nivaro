@@ -288,6 +288,9 @@ export function ApiAnalyticsPage() {
           <RumPanel />
         </div>
         <div className='mt-6'>
+          <RuleEvalPanel />
+        </div>
+        <div className='mt-6'>
           <IndexAdvisorPanel />
         </div>
       </div>
@@ -603,6 +606,83 @@ function IndexAdvisorPanel() {
             )
           })}
         </div>
+      )}
+    </div>
+  )
+}
+
+/** Row-rule evaluate cost per child collection — the per-keystroke pass the
+ *  slow-request trace ring never sees (it only keeps requests over
+ *  TRACE_SLOW_MS). Per replica, in-memory, since boot. */
+function RuleEvalPanel() {
+  const { data = [], refetch, isFetching } = useQuery<
+    Array<{
+      collection: string
+      count: number
+      avg_ms: number
+      p50_ms: number
+      p95_ms: number
+      max_ms: number
+      avg_queries: number
+      rules: number
+      last_at: number
+      by_mode: Record<string, number>
+    }>
+  >({
+    queryKey: ['field-rules-stats'],
+    queryFn: () => api.get('/field-rules/stats').then((r) => r.data.data),
+    refetchInterval: 30_000
+  })
+  const tone = (ms: number) =>
+    ms >= 1500 ? 'text-red-600' : ms >= 700 ? 'text-amber-600' : 'text-emerald-600'
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border'>
+        <div>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Row-rule evaluation</h3>
+          <p className='text-[11px] text-slate-500'>
+            Grid autofill passes per child collection — every keystroke in a row editor pays one. Since this replica booted.
+          </p>
+        </div>
+        <Button size='sm' variant='outline' className='h-7 text-[11px]' onClick={() => void refetch()} disabled={isFetching}>
+          Refresh
+        </Button>
+      </div>
+      {data.length === 0 ? (
+        <p className='px-4 py-3 text-[12px] text-slate-500'>No rule passes recorded yet.</p>
+      ) : (
+        <table className='w-full text-[12px]'>
+          <thead>
+            <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+              <th className='px-4 py-1.5'>Collection</th>
+              <th className='px-2 py-1.5 text-right'>Passes</th>
+              <th className='px-2 py-1.5 text-right'>Rules</th>
+              <th className='px-2 py-1.5 text-right'>p50</th>
+              <th className='px-2 py-1.5 text-right'>p95</th>
+              <th className='px-2 py-1.5 text-right'>Max</th>
+              <th className='px-2 py-1.5 text-right'>Avg queries</th>
+              <th className='px-4 py-1.5'>By mode</th>
+            </tr>
+          </thead>
+          <tbody className='tabular-nums'>
+            {data.map((row) => (
+              <tr key={row.collection} className='border-t border-slate-100 dark:border-border'>
+                <td className='px-4 py-1.5 font-mono'>{row.collection}</td>
+                <td className='px-2 py-1.5 text-right'>{formatNumber(row.count)}</td>
+                <td className='px-2 py-1.5 text-right'>{row.rules}</td>
+                <td className={cn('px-2 py-1.5 text-right', tone(row.p50_ms))}>{row.p50_ms} ms</td>
+                <td className={cn('px-2 py-1.5 text-right', tone(row.p95_ms))}>{row.p95_ms} ms</td>
+                <td className='px-2 py-1.5 text-right text-slate-500'>{row.max_ms} ms</td>
+                <td className='px-2 py-1.5 text-right'>{row.avg_queries}</td>
+                <td className='px-4 py-1.5 text-[11px] text-slate-500'>
+                  {Object.entries(row.by_mode)
+                    .map(([m, n]) => `${m} ${n}`)
+                    .join(' · ')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   )
