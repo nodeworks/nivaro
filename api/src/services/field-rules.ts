@@ -552,6 +552,77 @@ export interface RowRuleEvalOptions {
   /** Evaluate ONLY lock rules — used when a row editor opens, so 'set' rules
    *  don't re-fire over values the user already has. */
   locksOnly?: boolean
+  /** Per-pass lookup cache. Created automatically when absent; pass one to
+   *  share relation/record lookups across several evaluate passes in the
+   *  same request (import prefill evaluates many lines). */
+  cache?: RowRuleLookupCache
+}
+
+/**
+ * Memoizes the lookups a rule pass repeats: the same `nivaro_relations` row
+ * and the same related record (the picked category, the picked CIFA) are
+ * resolved by most of the rules on a grid, and every one of them used to be a
+ * separate ~40ms round trip. Promises are memoized so concurrent sources
+ * dedupe too; a rejected lookup is forgotten so a transient error is not
+ * pinned for the rest of the pass. Scoped to ONE pass by construction — never
+ * hoist to module level (relations change in Data Model).
+ */
+export class RowRuleLookupCache {
+  private readonly rels = new Map<string, Promise<Record<string, unknown> | undefined>>()
+  private readonly recs = new Map<string, Promise<Record<string, unknown> | undefined>>()
+  constructor(readonly database: Knex) {}
+
+  private memo(
+    map: Map<string, Promise<Record<string, unknown> | undefined>>,
+    key: string,
+    run: () => Promise<Record<string, unknown> | undefined>
+  ): Promise<Record<string, unknown> | undefined> {
+    const hit = map.get(key)
+    if (hit) return hit
+    const p = run().catch((err) => {
+      map.delete(key)
+      throw err
+    })
+    map.set(key, p)
+    return p
+  }
+
+  /** Plain M2O relation row: `manyCollection.manyField` → one_collection. */
+  m2oRel(manyCollection: string, manyField: string) {
+    return this.memo(this.rels, `m2o|${manyCollection}|${manyField}`, () =>
+      this.database('nivaro_relations')
+        .where({ many_collection: manyCollection, many_field: manyField })
+        .whereNull('junction_field')
+        .first()
+    ) as Promise<{ one_collection: string } | undefined>
+  }
+
+  /** O2M alias relation row: `oneCollection.oneField` → many_collection/many_field. */
+  o2mRel(oneCollection: string, oneField: string) {
+    return this.memo(this.rels, `o2m|${oneCollection}|${oneField}`, () =>
+      this.database('nivaro_relations')
+        .where({ one_collection: oneCollection, one_field: oneField })
+        .whereNull('junction_field')
+        .first()
+    ) as Promise<{ many_collection: string; many_field: string } | undefined>
+  }
+
+  /** The FK column on `manyCollection` that points at `oneCollection`. */
+  fkRel(manyCollection: string, oneCollection: string) {
+    return this.memo(this.rels, `fk|${manyCollection}|${oneCollection}`, () =>
+      this.database('nivaro_relations')
+        .where({ many_collection: manyCollection, one_collection: oneCollection })
+        .whereNull('junction_field')
+        .first()
+    ) as Promise<{ many_field: string } | undefined>
+  }
+
+  /** One record by id. */
+  record(collection: string, id: unknown) {
+    return this.memo(this.recs, `${collection}|${String(id)}`, () =>
+      this.database(collection).where({ id: String(id) }).first()
+    )
+  }
 }
 
 export async function evaluateRowRules(
@@ -571,6 +642,7 @@ export async function evaluateRowRules(
     })
   }
 
+  const cache = evalOpts?.cache ?? new RowRuleLookupCache(database)
   const sorted = [...rowRules].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
   for (const rule of sorted) {
     const isLock = rule.target_type === 'lock'
@@ -606,14 +678,9 @@ export async function evaluateRowRules(
     // field instead; dot-paths hop, __id__/__entity__ compare the last FK id.
     if (rule.trigger_related_field && triggerField && val != null) {
       try {
-        const trigRel = (await database('nivaro_relations')
-          .where({ many_collection: collection, many_field: triggerField })
-          .whereNull('junction_field')
-          .first()) as { one_collection: string } | undefined
+        const trigRel = await cache.m2oRel(collection, triggerField)
         if (trigRel?.one_collection) {
-          let currentRecord = (await database(trigRel.one_collection)
-            .where({ id: String(val) })
-            .first()) as Record<string, unknown> | undefined
+          let currentRecord = await cache.record(trigRel.one_collection, val)
           let currentCollection = trigRel.one_collection
           let lastFkId: string | null = String(val)
           const parts = rule.trigger_related_field.split('.')
@@ -626,18 +693,13 @@ export async function evaluateRowRules(
               break
             }
             lastFkId = String(fkId)
-            const hopRel = (await database('nivaro_relations')
-              .where({ many_collection: currentCollection, many_field: hop })
-              .whereNull('junction_field')
-              .first()) as { one_collection: string } | undefined
+            const hopRel = await cache.m2oRel(currentCollection, hop)
             if (!hopRel?.one_collection) {
               currentRecord = undefined
               lastFkId = null
               break
             }
-            currentRecord = (await database(hopRel.one_collection)
-              .where({ id: String(fkId) })
-              .first()) as Record<string, unknown> | undefined
+            currentRecord = await cache.record(hopRel.one_collection, fkId)
             currentCollection = hopRel.one_collection
           }
           const lastPart = parts[parts.length - 1]
@@ -713,126 +775,102 @@ export async function evaluateRowRules(
         continue
       }
       try {
-        const rel = (await database('nivaro_relations')
-          .where({ many_collection: collection, many_field: triggerField })
-          .whereNull('junction_field')
-          .first()) as { one_collection: string } | undefined
+        const rel = await cache.m2oRel(collection, triggerField as string)
         if (!rel?.one_collection) continue
-        const relatedRecord = (await database(rel.one_collection)
-          .where({ id: String(fkId) })
-          .first()) as Record<string, unknown> | undefined
+        const relatedRecord = await cache.record(rel.one_collection, fkId)
         working[rule.target_field] =
           relatedRecord && rule.target_value ? (relatedRecord[rule.target_value] ?? null) : null
       } catch {
         /* non-fatal */
       }
     } else if (rule.target_type === 'precedence' && Array.isArray(rule.sources)) {
-      let resolved: unknown = null
-      for (const src of rule.sources) {
-        if (!src.source_field || !src.source_related_field) continue
-        try {
-          if (src.source_type === 'relation_field') {
-            const fkId = working[src.source_field]
-            if (fkId == null) continue
-            const rel = (await database('nivaro_relations')
-              .where({ many_collection: collection, many_field: src.source_field })
-              .whereNull('junction_field')
-              .first()) as { one_collection: string } | undefined
-            if (!rel?.one_collection) continue
-            const relRec = (await database(rel.one_collection)
-              .where({ id: String(fkId) })
-              .first()) as Record<string, unknown> | undefined
-            const candidate = relRec?.[src.source_related_field] ?? null
-            if (candidate != null) {
-              resolved = candidate
-              break
-            }
-          } else if (src.source_type === 'o2m_first') {
-            const rowId = working.id
-            if (rowId == null) continue
-            const rel = (await database('nivaro_relations')
-              .where({ one_collection: collection, one_field: src.source_field })
-              .whereNull('junction_field')
-              .first()) as { many_collection: string; many_field: string } | undefined
-            if (!rel?.many_collection) continue
-            const firstRec = (await database(rel.many_collection)
-              .where({ [rel.many_field]: String(rowId) })
-              .orderBy('id', 'asc')
-              .first()) as Record<string, unknown> | undefined
-            const candidate = firstRec?.[src.source_related_field] ?? null
-            if (candidate != null) {
-              resolved = candidate
-              break
-            }
-          } else if (src.source_type === 'o2m_filtered') {
-            if (!src.o2m_collection || !src.filter_field) continue
-            const hop = src.source_hop ?? 'm2o'
-            let intermediateId: string | null = null
-            let intermediateCollection: string | null = null
-            if (hop === 'm2o') {
-              const fkId = working[src.source_field]
-              if (fkId == null) continue
-              intermediateId = String(fkId)
-              const rel = (await database('nivaro_relations')
-                .where({ many_collection: collection, many_field: src.source_field })
-                .whereNull('junction_field')
-                .first()) as { one_collection: string } | undefined
-              intermediateCollection = rel?.one_collection ?? null
-            } else {
-              const rowId = working.id
-              if (rowId == null) continue
-              const rel = (await database('nivaro_relations')
-                .where({ one_collection: collection, one_field: src.source_field })
-                .whereNull('junction_field')
-                .first()) as { many_collection: string; many_field: string } | undefined
-              if (!rel?.many_collection) continue
-              const firstRec = (await database(rel.many_collection)
-                .where({ [rel.many_field]: String(rowId) })
-                .orderBy('id', 'asc')
-                .first()) as Record<string, unknown> | undefined
-              if (firstRec?.id == null) continue
-              intermediateId = String(firstRec.id)
-              intermediateCollection = rel.many_collection
-            }
-            if (!intermediateId || !intermediateCollection) continue
-            const fkRel = (await database('nivaro_relations')
-              .where({
-                many_collection: src.o2m_collection,
-                one_collection: intermediateCollection
-              })
-              .whereNull('junction_field')
-              .first()) as { many_field: string } | undefined
-            if (!fkRel?.many_field) continue
-            const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
-            const matchRec = (await database(src.o2m_collection)
-              .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
-              .orderBy('id', 'asc')
-              .first()) as Record<string, unknown> | undefined
-            const candidate = matchRec?.[src.source_related_field] ?? null
-            if (candidate != null) {
-              resolved = candidate
-              break
-            }
-          } else if (src.source_type === 'parent_m2o') {
-            if (!src.source_one_collection) continue
-            const fkId = parentContext[src.source_field]
-            if (fkId == null) continue
-            const relRec = (await database(src.source_one_collection)
-              .where({ id: String(fkId) })
-              .first()) as Record<string, unknown> | undefined
-            const candidate = relRec?.[src.source_related_field] ?? null
-            if (candidate != null) {
-              resolved = candidate
-              break
-            }
-          }
-        } catch {
-          continue
-        }
-      }
-      working[rule.target_field] = resolved
+      // Every source is resolved concurrently (they only READ `working` and
+      // `parentContext`, captured synchronously below), then the FIRST
+      // source in configured order with a non-null candidate wins — the
+      // same first-match semantics as the old sequential walk, minus the
+      // serial round trips. A source that throws simply yields no candidate.
+      const candidates = await Promise.all(
+        rule.sources.map((src) =>
+          resolvePrecedenceSource(src, collection, working, parentContext, subParent, cache).catch(
+            () => null
+          )
+        )
+      )
+      working[rule.target_field] = candidates.find((c) => c != null) ?? null
     }
   }
 
   return working
+}
+
+async function resolvePrecedenceSource(
+  src: RowRuleSource,
+  collection: string,
+  working: Record<string, unknown>,
+  parentContext: Record<string, unknown>,
+  subParent: (s: string | null | undefined) => string | null,
+  cache: RowRuleLookupCache
+): Promise<unknown> {
+  if (!src.source_field || !src.source_related_field) return null
+  if (src.source_type === 'relation_field') {
+    const fkId = working[src.source_field]
+    if (fkId == null) return null
+    const rel = await cache.m2oRel(collection, src.source_field)
+    if (!rel?.one_collection) return null
+    const relRec = await cache.record(rel.one_collection, fkId)
+    return relRec?.[src.source_related_field] ?? null
+  }
+  if (src.source_type === 'o2m_first') {
+    const rowId = working.id
+    if (rowId == null) return null
+    const rel = await cache.o2mRel(collection, src.source_field)
+    if (!rel?.many_collection) return null
+    const firstRec = (await cache.database(rel.many_collection)
+      .where({ [rel.many_field]: String(rowId) })
+      .orderBy('id', 'asc')
+      .first()) as Record<string, unknown> | undefined
+    return firstRec?.[src.source_related_field] ?? null
+  }
+  if (src.source_type === 'o2m_filtered') {
+    if (!src.o2m_collection || !src.filter_field) return null
+    const hop = src.source_hop ?? 'm2o'
+    let intermediateId: string | null = null
+    let intermediateCollection: string | null = null
+    if (hop === 'm2o') {
+      const fkId = working[src.source_field]
+      if (fkId == null) return null
+      intermediateId = String(fkId)
+      const rel = await cache.m2oRel(collection, src.source_field)
+      intermediateCollection = rel?.one_collection ?? null
+    } else {
+      const rowId = working.id
+      if (rowId == null) return null
+      const rel = await cache.o2mRel(collection, src.source_field)
+      if (!rel?.many_collection) return null
+      const firstRec = (await cache.database(rel.many_collection)
+        .where({ [rel.many_field]: String(rowId) })
+        .orderBy('id', 'asc')
+        .first()) as Record<string, unknown> | undefined
+      if (firstRec?.id == null) return null
+      intermediateId = String(firstRec.id)
+      intermediateCollection = rel.many_collection
+    }
+    if (!intermediateId || !intermediateCollection) return null
+    const fkRel = await cache.fkRel(src.o2m_collection, intermediateCollection)
+    if (!fkRel?.many_field) return null
+    const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
+    const matchRec = (await cache.database(src.o2m_collection)
+      .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
+      .orderBy('id', 'asc')
+      .first()) as Record<string, unknown> | undefined
+    return matchRec?.[src.source_related_field] ?? null
+  }
+  if (src.source_type === 'parent_m2o') {
+    if (!src.source_one_collection) return null
+    const fkId = parentContext[src.source_field]
+    if (fkId == null) return null
+    const relRec = await cache.record(src.source_one_collection, fkId)
+    return relRec?.[src.source_related_field] ?? null
+  }
+  return null
 }
