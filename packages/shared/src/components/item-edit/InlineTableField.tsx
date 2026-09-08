@@ -88,6 +88,7 @@ import {
 } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
+import { RowHistorySheet } from './RowHistorySheet'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -166,6 +167,7 @@ interface RowRevision {
   data: Record<string, unknown>
   timestamp?: string
   action?: string
+  comment?: string | null
   first_name?: string | null
   last_name?: string | null
   user_email?: string | null
@@ -5927,81 +5929,41 @@ export function InlineTableField({
         </SheetContent>
       </Sheet>
 
-      <Sheet open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
-        <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
-          <SheetHeader>
-            <SheetTitle className='text-[14px]'>Row history</SheetTitle>
-          </SheetHeader>
-          <div className='mt-4 space-y-3'>
-            {revLoading ? (
-              <div className='py-6 text-center'>
-                <Loader2 className='h-4 w-4 animate-spin inline text-slate-400' />
-              </div>
-            ) : rowRevisions.length === 0 ? (
-              <p className='py-6 text-center text-[12px] text-slate-400'>No history for this row</p>
-            ) : (
-              rowRevisions.map((rev) => {
-                const who =
-                  [rev.first_name, rev.last_name].filter(Boolean).join(' ') ||
-                  rev.user_email ||
-                  'System'
-                const changes = rev.delta ?? rev.data ?? {}
-                return (
-                  <div key={rev.id} className='rounded-lg border border-slate-200 p-3'>
-                    <div className='flex items-center justify-between gap-2'>
-                      <span className='text-[11px] font-medium text-slate-600'>{who}</span>
-                      <span className='text-[10px] text-slate-400'>
-                        {rev.timestamp ? formatRelative(rev.timestamp) : ''}
-                      </span>
-                    </div>
-                    {rev.action && (
-                      <span className='mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-slate-400'>
-                        {rev.action}
-                      </span>
-                    )}
-                    {(rev as { comment?: string | null }).comment && (
-                      <p className='mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-500/10 dark:text-amber-300'>
-                        Reason: {(rev as { comment?: string | null }).comment}
-                      </p>
-                    )}
-                    <div className='mt-2 space-y-1'>
-                      {Object.entries(changes).map(([k, v]) => (
-                        <div key={k} className='flex items-start gap-2 text-[11px]'>
-                          <span className='shrink-0 font-medium text-slate-500'>
-                            {titleCase(k)}:
-                          </span>
-                          <span className='break-words text-slate-700'>
-                            {v === null || v === undefined
-                              ? '—'
-                              : typeof v === 'object'
-                                ? JSON.stringify(v)
-                                : String(v)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {allowRevisionRestore && rev.data && (
-                      <button
-                        type='button'
-                        onClick={() => {
-                          setEditState({
-                            rowId: String(historyRow!.id),
-                            draft: { ...(rev.data as Record<string, unknown>) }
-                          })
-                          setHistoryRow(null)
-                        }}
-                        className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10'
-                      >
-                        Restore to this version
-                      </button>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
+      <RowHistorySheet
+        open={!!historyRow}
+        onOpenChange={(o) => !o && setHistoryRow(null)}
+        rowTitle={(() => {
+          const n = rowOrderField ? historyRow?.[rowOrderField] : historyRow?.line_number
+          return n !== null && n !== undefined && n !== '' ? `Line ${String(n)}` : 'This row'
+        })()}
+        rowSubtitle={(() => {
+          if (!historyRow) return null
+          const textCol = displayCols.find(
+            (c) =>
+              c.field !== 'id' &&
+              !m2oRelMap.get(c.field) &&
+              /^(string|text)$/i.test(c.type ?? '') &&
+              typeof historyRow[c.field] === 'string' &&
+              (historyRow[c.field] as string).trim() !== ''
+          )
+          return textCol ? String(historyRow[textCol.field]) : null
+        })()}
+        revisions={rowRevisions}
+        loading={revLoading}
+        fields={cols}
+        displayCols={displayCols}
+        parentField={manyField}
+        m2oRelMap={m2oRelMap}
+        relations={childRelations}
+        collection={relatedCollection}
+        m2oDisplays={m2oDisplays}
+        client={client}
+        allowRestore={!!allowRevisionRestore}
+        onRestore={(snapshot) => {
+          setEditState({ rowId: String(historyRow!.id), draft: { ...snapshot } })
+          setHistoryRow(null)
+        }}
+      />
     </div>
   )
 }
