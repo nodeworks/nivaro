@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-08T20:34:46.394Z",
+  "generated_at": "2026-09-08T22:41:46.903Z",
   "releases": [
+    {
+      "version": "0.1.229",
+      "tag": "v0.1.229",
+      "date": "2026-09-08T18:41:39-04:00",
+      "sections": [
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "field-rules",
+              "text": "memoize row-rule lookups per pass and resolve precedence sources in parallel",
+              "hash": "8740390a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.228",
       "tag": "v0.1.228",
-      "date": "2026-09-08T16:34:38-04:00",
+      "date": "2026-09-08T16:34:46-04:00",
       "sections": [
         {
           "label": "Fixed",
