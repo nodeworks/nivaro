@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-06T22:15:01.275Z",
+  "generated_at": "2026-09-08T20:12:27.446Z",
   "releases": [
+    {
+      "version": "0.1.227",
+      "tag": "v0.1.227",
+      "date": "2026-09-08T16:12:19-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "stamp sequential row order on new grid rows and flush them in staged order",
+              "hash": "c40a743b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.226",
       "tag": "v0.1.226",
-      "date": "2026-09-06T18:14:54-04:00",
+      "date": "2026-09-06T18:15:01-04:00",
       "sections": [
         {
           "label": "Added",
