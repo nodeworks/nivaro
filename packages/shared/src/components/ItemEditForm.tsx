@@ -5400,8 +5400,12 @@ export function ItemEditForm({
         updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
         try {
           let nestedFailures = 0
-          await Promise.all(
-            rowList.map(async (data) => {
+          // SEQUENTIAL on purpose: the rows are POSTed in the order the user
+          // built them, so their ids (and any order column the grid stamped)
+          // ascend in that order — a parallel flush let the server's answer
+          // order decide the line sequence.
+          for (const data of rowList) {
+            await (async () => {
               const o2mEntries = Object.entries(data).filter(([k]) => k.startsWith('__o2m_'))
               const cleanData = Object.fromEntries(
                 Object.entries(data).filter(([k]) => !k.startsWith('__o2m_'))
@@ -5441,8 +5445,8 @@ export function ItemEditForm({
                   }
                 }
               }
-            })
-          )
+            })()
+          }
           updateStep(
             stepId,
             nestedFailures > 0

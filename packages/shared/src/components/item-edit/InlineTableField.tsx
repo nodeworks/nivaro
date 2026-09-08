@@ -1439,7 +1439,7 @@ export function InlineTableField({
         for (const [k, v] of Object.entries(row)) {
           if (!COPY_STRIP.has(k) && v != null && typeof v !== 'object') clean[k] = v
         }
-        staging.queueRow(relatedCollection, manyField, clean)
+        staging.queueRow(relatedCollection, manyField, withNextOrder(clean))
       }
       toast.success(
         rows.length > 0
@@ -2180,6 +2180,42 @@ export function InlineTableField({
     [...pendingDeletes].sort().join(',') +
     '|' +
     JSON.stringify(pendingRows)
+
+  // ── Row order for NEW rows ─────────────────────────────────────────────
+  // A staged row that carries no order value (or one another row already
+  // holds) gets the next free number, so the sequence the user built is the
+  // sequence the layout's row_order_field sort renders after save. Without
+  // this every new line landed as line_number 1 and the server's completion
+  // order decided the list (three parallel POSTs came back shuffled).
+  const withNextOrder = (
+    rowData: Record<string, unknown>,
+    extraTaken: number[] = []
+  ): Record<string, unknown> => {
+    if (!rowOrderField) return rowData
+    const taken = new Set<number>(extraTaken)
+    for (const r of rows) {
+      const v = Number((isPendingMode ? pendingEdits.get(String(r.id))?.[rowOrderField] : undefined) ?? r[rowOrderField])
+      if (Number.isFinite(v)) taken.add(v)
+    }
+    for (const r of pendingRows) {
+      const v = Number(r[rowOrderField])
+      if (Number.isFinite(v)) taken.add(v)
+    }
+    const own = Number(rowData[rowOrderField])
+    if (Number.isFinite(own) && own > 0 && !taken.has(own)) return rowData
+    let next = 1
+    for (const v of taken) if (v >= next) next = v + 1
+    return { ...rowData, [rowOrderField]: next }
+  }
+  /** Stamp a whole batch so each row takes the next free number in turn. */
+  const withNextOrders = (batch: Record<string, unknown>[]): Record<string, unknown>[] => {
+    const assigned: number[] = []
+    return batch.map((rd) => {
+      const stamped = withNextOrder(rd, assigned)
+      if (rowOrderField) assigned.push(Number(stamped[rowOrderField]))
+      return stamped
+    })
+  }
 
   const effectiveRowsForRollup = useMemo(() => {
     const base = [
@@ -3215,7 +3251,7 @@ export function InlineTableField({
       }
       if (editState.rowId === 'new') {
         if ((isNew || isPendingMode) && staging) {
-          staging.queueRow(relatedCollection, manyField, { ...editState.draft })
+          staging.queueRow(relatedCollection, manyField, withNextOrder({ ...editState.draft }))
           clearIfStillEditing()
           return
         }
@@ -3228,7 +3264,10 @@ export function InlineTableField({
           )
         )
         const newRowRes = await client.request<{ data: { id: unknown } }>(
-          post(`/items/${relatedCollection}${pCtx}`, { ...cleanDraft, [manyField]: parentId })
+          post(`/items/${relatedCollection}${pCtx}`, {
+            ...withNextOrder(cleanDraft),
+            [manyField]: parentId
+          })
         )
         const newRowId = newRowRes?.data?.id
         if (newRowId != null && m2mEntries.length) {
@@ -3402,18 +3441,18 @@ export function InlineTableField({
       return { ...rowDefaultSeed, ...defaultValues, [dateField]: iso }
     })
     if ((isNew || isPendingMode) && staging) {
-      for (const rd of rowsData) staging.queueRow(relatedCollection, manyField, rd)
+      for (const rd of withNextOrders(rowsData)) staging.queueRow(relatedCollection, manyField, rd)
       return
     }
     setBulkAdding(true)
     try {
-      await Promise.all(
-        rowsData.map((rd) =>
-          client.request(
-            post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
-          )
+      // Sequential: ids then follow the pattern order, which is the only
+      // order a layout without a row_order_field can render.
+      for (const rd of withNextOrders(rowsData)) {
+        await client.request(
+          post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
         )
-      )
+      }
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* ignore */
@@ -3426,18 +3465,17 @@ export function InlineTableField({
     const n = Math.max(1, Math.min(100, bulkCount))
     const rowData = useDefaults ? { ...rowDefaultSeed, ...defaultValues } : { ...rowDefaultSeed }
     if ((isNew || isPendingMode) && staging) {
-      for (let i = 0; i < n; i++) staging.queueRow(relatedCollection, manyField, { ...rowData })
+      const batch = withNextOrders(Array.from({ length: n }, () => ({ ...rowData })))
+      for (const rd of batch) staging.queueRow(relatedCollection, manyField, rd)
       return
     }
     setBulkAdding(true)
     try {
-      await Promise.all(
-        Array.from({ length: n }, () =>
-          client.request(
-            post(`/items/${relatedCollection}${pCtx}`, { ...rowData, [manyField]: parentId })
-          )
+      for (const rd of withNextOrders(Array.from({ length: n }, () => ({ ...rowData })))) {
+        await client.request(
+          post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
         )
-      )
+      }
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* ignore */
