@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-09T16:56:15.879Z",
+  "generated_at": "2026-09-09T18:50:55.419Z",
   "releases": [
+    {
+      "version": "0.1.237",
+      "tag": "v0.1.237",
+      "date": "2026-09-09T14:50:48-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "access-request badge/digest/expiry, header freshness, row lints, import receipts",
+              "hash": "7f574c35"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "chip popover, rollup explainer, locked-cell reasons",
+              "hash": "0dc496e0"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.236",
       "tag": "v0.1.236",
-      "date": "2026-09-09T12:56:09-04:00",
+      "date": "2026-09-09T12:56:15-04:00",
       "sections": [
         {
           "label": "Fixed",
