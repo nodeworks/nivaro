@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-09T15:41:13.387Z",
+  "generated_at": "2026-09-09T16:15:48.048Z",
   "releases": [
+    {
+      "version": "0.1.235",
+      "tag": "v0.1.235",
+      "date": "2026-09-09T12:15:40-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "named presets keep relation-path columns; addendum sheet gets its own live-rows context",
+              "hash": "51d0ef99"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.234",
       "tag": "v0.1.234",
-      "date": "2026-09-09T11:41:05-04:00",
+      "date": "2026-09-09T11:41:13-04:00",
       "sections": [
         {
           "label": "Added",
