@@ -37,6 +37,7 @@ import { formatDisplayValue } from './GroupSection'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField } from './InlineTableField'
+import type { RowMatchPanelConfig } from './RowMatchPanel'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import {
   AddressField,
@@ -816,6 +817,7 @@ export function FieldRenderer({
           typeof opts.upload_template === 'string' && opts.upload_template
             ? opts.upload_template
             : undefined
+        const rowMatchPanel = (opts.row_match_panel ?? undefined) as RowMatchPanelConfig | undefined
         const rowDefaults =
           opts.row_defaults && typeof opts.row_defaults === 'object'
             ? (opts.row_defaults as Record<string, unknown>)
@@ -869,6 +871,7 @@ export function FieldRenderer({
             autoAllocate={autoAllocate}
             rowBulkActions={rowBulkActions}
             uploadTemplate={uploadTemplate}
+            rowMatchPanel={rowMatchPanel}
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
             parentFieldKey={field.field}

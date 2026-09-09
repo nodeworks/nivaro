@@ -11929,6 +11929,7 @@ function FieldSettingsPopover({
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [sectionGroupByLocal, setSectionGroupByLocal] = useState<string>('')
   const [catalogModeLocal, setCatalogModeLocal] = useState<string>('')
+  const [rowMatchPanelLocal, setRowMatchPanelLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -12342,6 +12343,7 @@ function FieldSettingsPopover({
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setSectionGroupByLocal((opts.section_group_by as string) ?? '')
         setCatalogModeLocal(opts.catalog_mode ? JSON.stringify(opts.catalog_mode, null, 2) : '')
+        setRowMatchPanelLocal(opts.row_match_panel ? JSON.stringify(opts.row_match_panel, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -12485,6 +12487,18 @@ function FieldSettingsPopover({
                             : { catalog_mode: undefined }
                         } catch {
                           return { catalog_mode: undefined }
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = rowMatchPanelLocal.trim()
+                            ? JSON.parse(rowMatchPanelLocal)
+                            : null
+                          return parsed?.relation && Array.isArray(parsed?.columns)
+                            ? { row_match_panel: parsed }
+                            : { row_match_panel: undefined }
+                        } catch {
+                          return { row_match_panel: undefined }
                         }
                       })()
                     })
@@ -13607,6 +13621,27 @@ function FieldSettingsPopover({
                       Replaces the grid with a full-catalog picker: every item of the child's
                       "item_field" M2O target renders under sections grouped by "section_by";
                       entering a quantity creates the child row. Empty = normal grid.
+                    </p>
+                  </div>
+                )}
+
+                {/* Row match panel (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Row match panel (JSON)</Label>
+                    <Textarea
+                      value={rowMatchPanelLocal}
+                      onChange={(e) => setRowMatchPanelLocal(e.target.value)}
+                      placeholder={
+                        '{\n  "relation": "po_line_items",\n  "title": "PO line",\n  "columns": [{"path": "purchase_order.number", "label": "PO #"}, {"path": "amount", "label": "Amount", "format": "currency"}],\n  "candidates": {\n    "filter": {"purchase_order": {"_in": "$parent.purchase_orders"}},\n    "keys": [{"row": "line_number", "candidate": "line_number", "label": "Line #"}],\n    "parent_label": "PO", "parent_path": "purchase_order.number"\n  }\n}'
+                      }
+                      rows={6}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      In the row editor, shows the related record this row is matched to
+                      (through the child's O2M "relation") and, when there is none, which
+                      match key disagrees with the nearest candidate. Empty = no panel.
                     </p>
                   </div>
                 )}
@@ -19292,6 +19327,7 @@ function FieldGroupsTab({
     'precision',
     'row_bulk_actions',
     'catalog_mode',
+    'row_match_panel',
     'picker_facets',
     'option_sort',
     'option_filter',

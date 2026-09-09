@@ -1804,6 +1804,37 @@ export const contentOpsGridPresets: DocSection = {
     {
       type: 'note',
       text: "The Drawer relations picker offers only relations defined on this table pointing to a child collection. The sum field options come from that CHILD relation's target (the grandchild collection) — chosen fresh per row once a relation is picked, and reset whenever the relation changes since a new relation implies a new grandchild collection. The cap field options come from this table's (the child's) own numeric fields — a different collection than the sum field, on purpose, since the cap lives on the row itself, not the rows underneath it."
+    },
+    { type: 'h3', text: 'Row match panel' },
+    {
+      type: 'p',
+      text: 'A third per-field option, `row_match_panel`, answers "which related record is this row matched to — and if none, why not?" inside the row editor. Point it at an O2M alias on the child collection (a workflow line\'s `po_line_items`) and list the columns to show for a match. For the unmatched case, describe how to find the nearest candidate: a filter over the target collection (with `$parent.<field>` tokens, so an M2M alias on the parent gives the linked purchase orders) and the keys the match rule compares. The panel then says which key disagrees with the nearest candidate — "PO 12345 line 3 differs — Amount: $500.00 here vs $520.00 on the PO" — or that no candidate carries that line number, or that the parent has nothing linked to match against yet.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "row_match_panel": {
+    "relation": "po_line_items",
+    "title": "PO line",
+    "columns": [
+      { "path": "purchase_order.number", "label": "PO #" },
+      { "path": "amount", "label": "Amount", "format": "currency" },
+      { "formula": "{{amount}} - {{open_unbilled_amount}}", "label": "Billed", "format": "currency" }
+    ],
+    "candidates": {
+      "filter": { "purchase_order": { "_in": "$parent.purchase_orders" } },
+      "keys": [
+        { "row": "line_number", "candidate": "line_number", "label": "Line #" },
+        { "row": "line_type", "candidate": "line_type", "label": "Line type", "candidate_display": "line_type.type" },
+        { "row": "amount", "candidate": "amount", "label": "Amount", "format": "currency" }
+      ],
+      "primary": "line_number",
+      "parent_label": "PO",
+      "parent_path": "purchase_order.number"
+    },
+    "no_parent_message": "No purchase order is linked to this workflow yet."
+  }
+}`
     }
   ]
 }

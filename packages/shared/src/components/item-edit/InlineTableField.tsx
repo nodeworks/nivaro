@@ -89,6 +89,7 @@ import {
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import { RowHistorySheet } from './RowHistorySheet'
+import { RowMatchPanel, type RowMatchPanelConfig } from './RowMatchPanel'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -1252,6 +1253,7 @@ export function InlineTableField({
   autoAllocate,
   rowBulkActions,
   uploadTemplate,
+  rowMatchPanel,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1306,6 +1308,9 @@ export function InlineTableField({
   /** Import template NAME — renders that template's upload button in this
    *  grid's toolbar (existing records; wired to ItemEditForm's reimport flow). */
   uploadTemplate?: string
+  /** "Which related record is this row matched to, and if not, why" — see
+   *  RowMatchPanel (options.row_match_panel). Rendered in the row editor. */
+  rowMatchPanel?: RowMatchPanelConfig
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -4411,6 +4416,19 @@ export function InlineTableField({
               )
             })}
         </div>
+        {rowMatchPanel && args.rowId && !args.rowId.startsWith('pending:') && (
+          <RowMatchPanel
+            config={rowMatchPanel}
+            rowId={args.rowId}
+            row={args.draft}
+            relatedCollection={relatedCollection}
+            childRelations={childRelations}
+            parentDraft={parentDraftCtx?.draft}
+            m2oRelMap={m2oRelMap}
+            m2oDisplays={m2oDisplays}
+            client={client}
+          />
+        )}
         {args.drawer}
       </div>
     </td>
