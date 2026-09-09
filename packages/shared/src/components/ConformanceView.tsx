@@ -292,7 +292,7 @@ function ScheduleToggle({ collection }: { collection: string }) {
       >
         <span
           className={cn(
-            'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+            'absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
             active ? 'translate-x-3.5' : 'translate-x-0.5'
           )}
         />

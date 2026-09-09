@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { post } from '../../lib/commands'
 import { useNivaroClient } from '../../context'
+import { post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 /**
  * A number over a record's child rows, shown in the item header: "Unallocated
@@ -96,6 +96,10 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
     placeholderData: (prev) => prev
   })
 
+  // Hooks stay ABOVE the early returns — a chip that flips from "nothing to
+  // show" to "has rows" (a line lands, the summary refetches) would otherwise
+  // render one more hook than the previous pass ('Rendered fewer hooks').
+  const [open, setOpen] = useState(false)
   if (!data && !isLoading) return null
   if (data && data.count === 0 && config.hide_when_zero !== false) return null
   const value = data
@@ -105,7 +109,6 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
     : '—'
   const countLabel = config.count_label ?? 'rows'
   const canOpen = !!data?.first_id
-  const [open, setOpen] = useState(false)
   const fmt = (n: number) =>
     config.format === 'number'
       ? n.toLocaleString('en-US', { maximumFractionDigits: 2 })
