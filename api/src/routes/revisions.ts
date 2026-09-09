@@ -161,7 +161,11 @@ export async function revisionsRoutes(app: FastifyInstance) {
   })
 
   app.get('/deleted-o2m', async (req, reply) => {
-    const { collection, many_field, parent_id } = req.query as { collection?: string; many_field?: string; parent_id?: string }
+    const { collection, many_field, parent_id } = req.query as {
+      collection?: string
+      many_field?: string
+      parent_id?: string
+    }
     if (!collection || !many_field || !parent_id) {
       return reply.code(400).send({ error: 'collection, many_field, and parent_id are required' })
     }
@@ -192,7 +196,16 @@ export async function revisionsRoutes(app: FastifyInstance) {
       .orderBy('a.timestamp', 'desc')
     const data = rows.map((row: Record<string, unknown>) => ({
       ...row,
-      data: typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data as string) } catch { return {} } })() : (row.data ?? {})
+      data:
+        typeof row.data === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(row.data as string)
+              } catch {
+                return {}
+              }
+            })()
+          : (row.data ?? {})
     }))
     return reply.send({ data })
   })
@@ -200,7 +213,13 @@ export async function revisionsRoutes(app: FastifyInstance) {
   // GET /revisions/o2m-snapshots?collection=X&many_field=Y&parent_id=Z
   // Returns all O2M revisions for a parent, ordered newest first, for client-side grouping.
   app.get('/o2m-snapshots', async (req, reply) => {
-    const { collection, many_field, parent_id } = req.query as { collection?: string; many_field?: string; parent_id?: string }
+    const q = req.query as {
+      collection?: string
+      many_field?: string
+      parent_id?: string
+      limit?: string
+    }
+    const { collection, many_field, parent_id } = q
     if (!collection || !many_field || !parent_id) {
       return reply.code(400).send({ error: 'collection, many_field, and parent_id are required' })
     }
@@ -211,7 +230,10 @@ export async function revisionsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     const itemIds = await o2mCandidateItemIds(collection, many_field, String(parent_id))
-    if (!itemIds.length) return reply.send({ data: [] })
+    if (!itemIds.length) return reply.send({ data: [], truncated: false })
+    // The lines timeline reads every version of every line — bound it so a
+    // 130-line record with years of nightly writes can't ship megabytes.
+    const limit = Math.min(5000, Math.max(50, Number(q.limit) || 2000))
     const rows: Record<string, unknown>[] = []
     for (const chunk of chunkArray(itemIds, 1000)) {
       const part = await db('nivaro_revisions as r')
@@ -228,21 +250,113 @@ export async function revisionsRoutes(app: FastifyInstance) {
           'a.item as item_id',
           'a.action',
           'a.timestamp',
+          'a.comment',
           'a.user as user_id',
           'u.first_name',
           'u.last_name',
           'u.email as user_email',
           'r.id as revision_id',
-          'r.data'
+          'r.data',
+          'r.delta'
         )
       rows.push(...(part as Record<string, unknown>[]))
     }
-    rows.sort((x, y) => String(y.timestamp).localeCompare(String(x.timestamp)))
-    const data = rows.map((row: Record<string, unknown>) => ({
+    // Newest first by revision id (global, monotonic) — timestamps alone tie
+    // inside a sequential flush that lands several lines in the same second.
+    rows.sort((x, y) => Number(y.revision_id) - Number(x.revision_id))
+    const truncated = rows.length > limit
+    const parse = (v: unknown): Record<string, unknown> | null => {
+      if (v === null || v === undefined) return null
+      if (typeof v !== 'string') return v as Record<string, unknown>
+      try {
+        return JSON.parse(v) as Record<string, unknown>
+      } catch {
+        return null
+      }
+    }
+    const data = rows.slice(0, limit).map((row: Record<string, unknown>) => ({
       ...row,
-      data: typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data as string) } catch { return {} } })() : (row.data ?? {})
+      data: parse(row.data) ?? {},
+      delta: parse(row.delta)
     }))
-    return reply.send({ data })
+    return reply.send({ data, truncated })
+  })
+
+  // GET /revisions/o2m-cell-provenance?collection=X&many_field=Y&parent_id=Z
+  // Per (row, field): who last CHANGED it and when — the grid's cell-level
+  // history entry point. Reads deltas only (small), never full snapshots, and
+  // skips creates: a value a line was born with is not a change worth a mark.
+  app.get('/o2m-cell-provenance', async (req, reply) => {
+    const { collection, many_field, parent_id } = req.query as {
+      collection?: string
+      many_field?: string
+      parent_id?: string
+    }
+    if (!collection || !many_field || !parent_id) {
+      return reply.code(400).send({ error: 'collection, many_field, and parent_id are required' })
+    }
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field)) {
+      return reply.code(400).send({ error: 'Invalid many_field' })
+    }
+    if (!(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const currentIds = (await db(collection)
+      .where({ [many_field]: String(parent_id) })
+      .pluck('id')) as Array<string | number>
+    const ids = currentIds.map(String)
+    if (!ids.length) return reply.send({ data: {} })
+    type Entry = { at: string; who: string; revision_id: number }
+    const out: Record<string, Record<string, Entry>> = {}
+    for (const chunk of chunkArray(ids, 1000)) {
+      const part = (await db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .where('a.collection', collection)
+        .where('a.action', 'update')
+        .whereIn('a.item', chunk)
+        .whereNotNull('r.delta')
+        .orderBy('r.id', 'desc')
+        .select(
+          'a.item as item_id',
+          'a.timestamp',
+          'u.first_name',
+          'u.last_name',
+          'u.email as user_email',
+          'r.id as revision_id',
+          'r.delta'
+        )) as Array<Record<string, unknown>>
+      for (const row of part) {
+        let delta: Record<string, unknown> | null = null
+        try {
+          delta =
+            typeof row.delta === 'string'
+              ? (JSON.parse(row.delta) as Record<string, unknown>)
+              : (row.delta as Record<string, unknown> | null)
+        } catch {
+          delta = null
+        }
+        if (!delta || typeof delta !== 'object') continue
+        const item = String(row.item_id)
+        const who =
+          [row.first_name, row.last_name].filter(Boolean).join(' ') ||
+          String(row.user_email ?? '') ||
+          'System'
+        const bucket = (out[item] ??= {})
+        for (const field of Object.keys(delta)) {
+          if (field === many_field || field.startsWith('__')) continue
+          // Rows arrive newest first — the first sighting of a field wins.
+          if (bucket[field]) continue
+          const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
+          bucket[field] = {
+            at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
+            who,
+            revision_id: Number(row.revision_id)
+          }
+        }
+      }
+    }
+    return reply.send({ data: out })
   })
 
   // POST /revisions/o2m-restore — bulk-replace O2M rows with a snapshot.
@@ -277,15 +391,25 @@ export async function revisionsRoutes(app: FastifyInstance) {
       // Reconstruct: for each item that ever belonged to this parent, find its latest revision
       // at or before target_timestamp; include if not deleted.
       const itemIds = await o2mCandidateItemIds(collection, many_field, String(parent_id))
-      const allRevisions: Array<{ item_id: string; action: string; timestamp: string; data: string | Record<string, unknown> }> = []
+      const allRevisions: Array<{
+        item_id: string
+        action: string
+        timestamp: string
+        data: string | Record<string, unknown>
+      }> = []
       for (const chunk of chunkArray(itemIds, 1000)) {
-        const part = await db('nivaro_revisions as r')
+        const part = (await db('nivaro_revisions as r')
           .join('nivaro_activity as a', 'r.activity', 'a.id')
           .where('a.collection', collection)
           .whereIn('a.item', chunk)
           .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
           .where('a.timestamp', '<=', target_timestamp)
-          .select('a.item as item_id', 'a.action', 'a.timestamp', 'r.data') as Array<{ item_id: string; action: string; timestamp: string; data: string | Record<string, unknown> }>
+          .select('a.item as item_id', 'a.action', 'a.timestamp', 'r.data')) as Array<{
+          item_id: string
+          action: string
+          timestamp: string
+          data: string | Record<string, unknown>
+        }>
         allRevisions.push(...part)
       }
       allRevisions.sort((x, y) => String(x.timestamp).localeCompare(String(y.timestamp)))
@@ -293,7 +417,16 @@ export async function revisionsRoutes(app: FastifyInstance) {
       // For each item_id, keep only the latest revision (last in ordered list)
       const latestByItem = new Map<string, { action: string; data: Record<string, unknown> }>()
       for (const rev of allRevisions) {
-        const data = typeof rev.data === 'string' ? (() => { try { return JSON.parse(rev.data) } catch { return {} } })() : (rev.data ?? {})
+        const data =
+          typeof rev.data === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(rev.data)
+                } catch {
+                  return {}
+                }
+              })()
+            : (rev.data ?? {})
         latestByItem.set(rev.item_id, { action: rev.action, data })
       }
       restoredRows = []
@@ -305,7 +438,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     }
 
     // Delete all current rows for this parent then insert restored snapshot
-    await db(collection).where({ [many_field]: parent_id }).delete()
+    await db(collection)
+      .where({ [many_field]: parent_id })
+      .delete()
     for (const row of restoredRows) {
       const payload = { ...row }
       delete payload.id
@@ -444,9 +579,15 @@ export async function revisionsRoutes(app: FastifyInstance) {
 
     // Through the items service — validation rules, field rules, computed
     // fields, RLS and the after-hooks (incl. a fresh revision) all apply.
-    await updateOne(req.user!, activity.collection, activity.item, {
-      [field]: revisionData[field]
-    }, req)
+    await updateOne(
+      req.user!,
+      activity.collection,
+      activity.item,
+      {
+        [field]: revisionData[field]
+      },
+      req
+    )
 
     await logActivity({
       action: 'revision-field-revert',

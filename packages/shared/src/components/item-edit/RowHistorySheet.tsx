@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, RotateCcw } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { get } from '../../lib/commands'
 import { numericIntlOptions } from '../../lib/format-value'
 import { cn, formatDate, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
@@ -30,6 +30,14 @@ export interface RowRevisionEntry {
   first_name?: string | null
   last_name?: string | null
   user_email?: string | null
+  /** Timeline mode: which child row this version belongs to. */
+  item_id?: string
+}
+
+export interface RestoreContext {
+  itemId: string | null
+  /** The row's newest version is a delete — a restore re-creates it. */
+  rowDeleted: boolean
 }
 
 interface Client {
@@ -61,7 +69,22 @@ interface Props {
   m2oDisplays: Record<string, Record<string, string>>
   client: Client
   allowRestore: boolean
-  onRestore: (snapshot: Record<string, unknown>) => void
+  onRestore: (snapshot: Record<string, unknown>, ctx: RestoreContext) => void
+  /** 'row' (default) = one row's versions. 'timeline' = every row of the
+   *  record, grouped by item_id, batched per save, newest first. */
+  mode?: 'row' | 'timeline'
+  /** Timeline: how to name a row ("Line 3", subtitle = description). */
+  rowLabel?: (
+    itemId: string,
+    data: Record<string, unknown>
+  ) => { title: string; subtitle?: string | null }
+  /** Scroll to + highlight this version when the sheet opens (cell history). */
+  focusRevisionId?: number | null
+  /** Timeline: newest N versions kept by the server; older ones not loaded. */
+  truncated?: boolean
+  /** Timeline: put every line back to how it stood at this moment. */
+  onRestoreAllTo?: (timestamp: string) => void
+  restoringAll?: boolean
 }
 
 // Importer / job stamps that ride nivaro_activity.comment. They explain WHERE
@@ -129,9 +152,16 @@ export function RowHistorySheet({
   m2oDisplays,
   client,
   allowRestore,
-  onRestore
+  onRestore,
+  mode = 'row',
+  rowLabel,
+  focusRevisionId = null,
+  truncated = false,
+  onRestoreAllTo,
+  restoringAll = false
 }: Props) {
   const qc = useQueryClient()
+  const isTimeline = mode === 'timeline'
   const fieldByName = useMemo(() => new Map(fields.map((f) => [f.field, f])), [fields])
   const m2oRelMap = useMemo(() => {
     const m = new Map(gridRelMap)
@@ -151,13 +181,8 @@ export function RowHistorySheet({
     return m
   }, [displayCols, fields])
 
-  // Oldest → newest so each version can be read against the one before it.
-  const ordered = useMemo(
-    () => [...revisions].sort((a, b) => a.id - b.id),
-    [revisions]
-  )
-
   type Change = { field: string; before: unknown; after: unknown }
+  type RowRef = { itemId: string; title: string; subtitle?: string | null; deleted: boolean }
   type Version = {
     rev: RowRevisionEntry
     kind: 'create' | 'update' | 'delete' | 'other'
@@ -166,12 +191,19 @@ export function RowHistorySheet({
     /** create: the fields the row started with */
     snapshot: Array<{ field: string; value: unknown }>
     provenance: ReturnType<typeof provenanceOf>
+    /** Timeline: the row this version belongs to. */
+    row: RowRef | null
+    /** The row as it stood right BEFORE this version (delete → what was lost). */
+    before: Record<string, unknown> | null
   }
 
   const visibleField = (k: string) =>
     !SYSTEM_FIELDS.has(k) && !HIDDEN_ALWAYS.has(k) && k !== parentField && !k.startsWith('__')
 
-  const versions = useMemo<Version[]>(() => {
+  // One row's revisions, oldest → newest so each version reads against the
+  // one before it. Returns newest first.
+  const buildVersions = (list: RowRevisionEntry[], row: RowRef | null): Version[] => {
+    const ordered = [...list].sort((a, b) => a.id - b.id)
     const out: Version[] = []
     let prev: Record<string, unknown> | null = null
     for (const rev of ordered) {
@@ -179,11 +211,25 @@ export function RowHistorySheet({
         [rev.first_name, rev.last_name].filter(Boolean).join(' ') || rev.user_email || 'System'
       const action = String(rev.action ?? '').toLowerCase()
       const kind: Version['kind'] =
-        action === 'create' ? 'create' : action === 'update' ? 'update' : action === 'delete' ? 'delete' : 'other'
+        action === 'create'
+          ? 'create'
+          : action === 'update'
+            ? 'update'
+            : action === 'delete'
+              ? 'delete'
+              : 'other'
       const data = rev.data ?? {}
       const changes: Change[] = []
       const snapshot: Array<{ field: string; value: unknown }> = []
-      if (kind === 'create' || !prev) {
+      if (kind === 'delete') {
+        // What the line held when it went — read from the version before it,
+        // falling back to the delete revision's own copy of the row.
+        const lost = prev ?? data
+        for (const [k, v] of Object.entries(lost)) {
+          if (!visibleField(k) || isEmpty(v)) continue
+          snapshot.push({ field: k, value: v })
+        }
+      } else if (kind === 'create' || !prev) {
         for (const [k, v] of Object.entries(data)) {
           if (!visibleField(k) || isEmpty(v)) continue
           snapshot.push({ field: k, value: v })
@@ -202,11 +248,84 @@ export function RowHistorySheet({
         (orderIndex.get(a) ?? 9999) - (orderIndex.get(b) ?? 9999)
       changes.sort((a, b) => byOrder(a.field, b.field))
       snapshot.sort((a, b) => byOrder(a.field, b.field))
-      out.push({ rev, kind, who, changes, snapshot, provenance: provenanceOf(rev.comment) })
-      if (Object.keys(data).length > 0) prev = data
+      out.push({
+        rev,
+        kind,
+        who,
+        changes,
+        snapshot,
+        provenance: provenanceOf(rev.comment),
+        row,
+        before: prev
+      })
+      if (kind !== 'delete' && Object.keys(data).length > 0) prev = data
     }
     return out.reverse() // newest first for reading
-  }, [ordered, orderIndex, parentField])
+  }
+
+  const versions = useMemo<Version[]>(() => {
+    if (!isTimeline) return buildVersions(revisions, null)
+    const byItem = new Map<string, RowRevisionEntry[]>()
+    for (const r of revisions) {
+      const k = String(r.item_id ?? '')
+      const list = byItem.get(k) ?? []
+      list.push(r)
+      byItem.set(k, list)
+    }
+    const all: Version[] = []
+    for (const [itemId, list] of byItem) {
+      const newest = [...list].sort((a, b) => b.id - a.id)[0]
+      const deleted = String(newest?.action ?? '').toLowerCase() === 'delete'
+      // Name the row by its newest non-empty snapshot (a delete revision may
+      // carry an empty body).
+      const named = [...list]
+        .sort((a, b) => b.id - a.id)
+        .find((r) => Object.keys(r.data ?? {}).length > 0)
+      const label = rowLabel?.(itemId, named?.data ?? newest?.data ?? {}) ?? { title: `#${itemId}` }
+      all.push(
+        ...buildVersions(list, { itemId, title: label.title, subtitle: label.subtitle, deleted })
+      )
+    }
+    all.sort((a, b) => b.rev.id - a.rev.id)
+    return all
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revisions, orderIndex, parentField, isTimeline, rowLabel])
+
+  // Timeline: a Save flushes lines one at a time, so one person's versions
+  // landing within a few seconds of each other are ONE event to a reader —
+  // "Robert saved 3 lines", not three entries.
+  type Batch = { key: number; versions: Version[]; who: string; at?: string }
+  const batches = useMemo<Batch[]>(() => {
+    if (!isTimeline)
+      return versions.map((v) => ({
+        key: v.rev.id,
+        versions: [v],
+        who: v.who,
+        at: v.rev.timestamp
+      }))
+    const out: Batch[] = []
+    let cur: Batch | null = null
+    for (const v of versions) {
+      const t = v.rev.timestamp ? new Date(v.rev.timestamp).getTime() : NaN
+      const curT = cur?.at ? new Date(cur.at).getTime() : NaN
+      // Same person, within seconds, and a DIFFERENT row — two versions of
+      // one row back to back are two saves, never "saved 2 lines".
+      const close =
+        cur &&
+        cur.who === v.who &&
+        Number.isFinite(t) &&
+        Number.isFinite(curT) &&
+        Math.abs(curT - t) <= 5_000 &&
+        !cur.versions.some((x) => x.row?.itemId === v.row?.itemId)
+      if (close && cur) {
+        cur.versions.push(v)
+      } else {
+        cur = { key: v.rev.id, versions: [v], who: v.who, at: v.rev.timestamp }
+        out.push(cur)
+      }
+    }
+    return out
+  }, [versions, isTimeline])
 
   // Foreign keys that appear in history but not in the grid's current rows
   // (the task this line USED to have) — resolve their labels once per open.
@@ -250,7 +369,9 @@ export function RowHistorySheet({
             queryKey: ['collection-display-meta', collection],
             queryFn: () =>
               client
-                .request<{ data: { display_template?: string | null } }>(get(`/collections/${collection}`))
+                .request<{ data: { display_template?: string | null } }>(
+                  get(`/collections/${collection}`)
+                )
                 .then((r) => r.data),
             staleTime: 10 * 60_000
           })
@@ -311,7 +432,10 @@ export function RowHistorySheet({
       const s = String(v)
       return { text: /^\d{4}-\d{2}-\d{2}$/.test(s) ? formatDate(s) : formatDateTime(s), mono: true }
     }
-    if (typeof v === 'number' || (/^(integer|decimal|float|bigInteger|money)$/i.test(type) && Number.isFinite(Number(v))))
+    if (
+      typeof v === 'number' ||
+      (/^(integer|decimal|float|bigInteger|money)$/i.test(type) && Number.isFinite(Number(v)))
+    )
       return { text: Number(v).toLocaleString('en-US', numericIntlOptions(opts)), mono: true }
     const s = String(v)
     // Rich text arrives as HTML; show the words.
@@ -333,31 +457,269 @@ export function RowHistorySheet({
       else n.add(id)
       return n
     })
+  // Timeline batches with many lines start folded — a create flush lands
+  // every line of the record in one batch.
+  const [openBatches, setOpenBatches] = useState<Set<number>>(new Set())
+  const toggleBatch = (key: number) =>
+    setOpenBatches((s) => {
+      const n = new Set(s)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
+  const BATCH_FOLD_AT = 4
+
+  // Cell history: land on the version that changed the cell, and light it.
+  const [focused, setFocused] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open || focusRevisionId == null || loading) {
+      if (!open) setFocused(null)
+      return
+    }
+    const owner = batches.find((b) => b.versions.some((v) => v.rev.id === focusRevisionId))
+    if (owner && owner.versions.length > BATCH_FOLD_AT) {
+      setOpenBatches((s) => (s.has(owner.key) ? s : new Set(s).add(owner.key)))
+    }
+    setFocused(focusRevisionId)
+    const t = window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-rev-id="${focusRevisionId}"]`)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 60)
+    const clear = window.setTimeout(() => setFocused(null), 3200)
+    return () => {
+      window.clearTimeout(t)
+      window.clearTimeout(clear)
+    }
+  }, [open, focusRevisionId, loading, batches])
 
   const summaryOf = (v: Version): string => {
-    if (v.kind === 'create') return 'created this line'
-    if (v.kind === 'delete') return 'deleted this line'
-    if (v.changes.length === 0) return 'saved it without changes'
-    if (v.changes.length === 1) return `changed ${labelFor(v.changes[0].field)}`
+    const what = isTimeline && v.row ? v.row.title : 'this line'
+    if (v.kind === 'create') return `added ${what}`
+    if (v.kind === 'delete') return `deleted ${what}`
+    if (v.changes.length === 0) {
+      if (!v.before && isTimeline) return `saved ${what}`
+      return isTimeline ? `saved ${what} without changes` : 'saved it without changes'
+    }
+    const on = isTimeline ? ` on ${what}` : ''
+    if (v.changes.length === 1) return `changed ${labelFor(v.changes[0].field)}${on}`
     if (v.changes.length === 2)
-      return `changed ${labelFor(v.changes[0].field)} and ${labelFor(v.changes[1].field)}`
-    return `changed ${v.changes.length} fields`
+      return `changed ${labelFor(v.changes[0].field)} and ${labelFor(v.changes[1].field)}${on}`
+    return `changed ${v.changes.length} fields${on}`
   }
+
+  const batchSummary = (b: Batch): string => {
+    const added = b.versions.filter((v) => v.kind === 'create').length
+    const deleted = b.versions.filter((v) => v.kind === 'delete').length
+    const changed = b.versions.length - added - deleted
+    const parts: string[] = []
+    if (added) parts.push(`added ${added}`)
+    if (changed) parts.push(`changed ${changed}`)
+    if (deleted) parts.push(`deleted ${deleted}`)
+    const n = b.versions.length
+    return `saved ${n} ${n === 1 ? 'line' : 'lines'} · ${parts.join(', ')}`
+  }
+
+  const restoreCtx = (v: Version): RestoreContext => ({
+    itemId: v.row?.itemId ?? null,
+    rowDeleted: !!v.row?.deleted
+  })
+
+  /** The field-level body of one version: reason, change pairs, snapshot. */
+  const renderVersionBody = (v: Version) => {
+    const isOpen = expanded.has(v.rev.id)
+    const snapshotLimit = 6
+    const shownSnapshot = isOpen ? v.snapshot : v.snapshot.slice(0, snapshotLimit)
+    const hiddenCount = v.snapshot.length - shownSnapshot.length
+    return (
+      <>
+        {v.provenance.kind === 'machine' && (
+          <p className='mt-0.5 text-[11.5px] text-muted-foreground'>{v.provenance.text}</p>
+        )}
+        {v.provenance.kind === 'reason' && (
+          <p className='mt-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] leading-5 text-foreground'>
+            <span className='text-muted-foreground'>Reason: </span>
+            {v.provenance.text}
+          </p>
+        )}
+
+        {v.changes.length > 0 && (
+          <dl className='mt-2 grid grid-cols-[minmax(96px,max-content)_1fr] gap-x-4 gap-y-1.5 text-[12px] leading-5'>
+            {v.changes.map((c) => {
+              const from = formatValue(c.field, c.before)
+              const to = formatValue(c.field, c.after)
+              return (
+                <Fragment key={c.field}>
+                  <dt className='truncate text-muted-foreground' title={labelFor(c.field)}>
+                    {labelFor(c.field)}
+                  </dt>
+                  <dd className='flex min-w-0 flex-wrap items-baseline gap-x-1.5'>
+                    <span
+                      className={cn(
+                        'break-words text-muted-foreground line-through decoration-slate-300 dark:decoration-slate-600',
+                        from.mono && 'tabular-nums'
+                      )}
+                    >
+                      {from.text}
+                    </span>
+                    {/* arrow travels with the new value, so a long
+                        label never leaves it dangling at a line end */}
+                    <span
+                      className={cn(
+                        'break-words font-medium text-foreground',
+                        to.mono && 'tabular-nums'
+                      )}
+                    >
+                      <span className='mr-1.5 font-normal text-slate-400' aria-hidden='true'>
+                        →
+                      </span>
+                      {to.text}
+                    </span>
+                  </dd>
+                </Fragment>
+              )
+            })}
+          </dl>
+        )}
+
+        {v.snapshot.length > 0 && (
+          <>
+            <dl
+              className={cn(
+                'mt-2 grid grid-cols-[minmax(96px,max-content)_1fr] gap-x-4 gap-y-1 text-[12px] leading-5',
+                v.kind === 'delete' && 'text-muted-foreground'
+              )}
+            >
+              {shownSnapshot.map((s) => {
+                const val = formatValue(s.field, s.value)
+                return (
+                  <Fragment key={s.field}>
+                    <dt className='truncate text-muted-foreground' title={labelFor(s.field)}>
+                      {labelFor(s.field)}
+                    </dt>
+                    <dd
+                      className={cn(
+                        'break-words',
+                        v.kind === 'delete'
+                          ? 'text-muted-foreground line-through decoration-slate-300 dark:decoration-slate-600'
+                          : 'text-foreground',
+                        val.mono && 'tabular-nums'
+                      )}
+                    >
+                      {val.text}
+                    </dd>
+                  </Fragment>
+                )
+              })}
+            </dl>
+            {(hiddenCount > 0 || isOpen) && v.snapshot.length > snapshotLimit && (
+              <button
+                type='button'
+                onClick={() => toggle(v.rev.id)}
+                className='mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground'
+                aria-expanded={isOpen}
+              >
+                <ChevronDown
+                  className={cn(
+                    'h-3 w-3 transition-transform duration-150',
+                    isOpen && 'rotate-180'
+                  )}
+                  aria-hidden='true'
+                />
+                {isOpen
+                  ? 'Show fewer'
+                  : `Show ${hiddenCount} more ${hiddenCount === 1 ? 'field' : 'fields'}`}
+              </button>
+            )}
+          </>
+        )}
+      </>
+    )
+  }
+
+  const canRestoreVersion = (v: Version, isLatest: boolean) => {
+    if (!allowRestore) return false
+    if (v.kind === 'delete') return v.snapshot.length > 0
+    if (isLatest && !isTimeline) return false
+    // Timeline: the newest version of a still-live row IS the row — nothing to restore.
+    if (isTimeline && isLatestOfRow(v)) return false
+    return Object.keys(v.rev.data ?? {}).length > 0
+  }
+  const newestPerRow = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const v of versions) {
+      const k = v.row?.itemId ?? ''
+      if (!m.has(k)) m.set(k, v.rev.id)
+    }
+    return m
+  }, [versions])
+  const isLatestOfRow = (v: Version) => newestPerRow.get(v.row?.itemId ?? '') === v.rev.id
+
+  const restoreButton = (v: Version, isLatest: boolean) => {
+    if (!canRestoreVersion(v, isLatest)) return null
+    const deleted = v.kind === 'delete' || !!v.row?.deleted
+    const snapshot =
+      v.kind === 'delete'
+        ? Object.fromEntries(v.snapshot.map((s) => [s.field, s.value]))
+        : v.rev.data
+    return (
+      <button
+        type='button'
+        onClick={() => onRestore(snapshot, { ...restoreCtx(v), rowDeleted: deleted })}
+        className='ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        data-tip={
+          deleted
+            ? 'Open a new line pre-filled with these values — nothing is saved until you save the line'
+            : 'Load this version into the row editor — nothing is saved until you save the row'
+        }
+      >
+        <RotateCcw className='h-3 w-3' aria-hidden='true' />
+        {deleted ? 'Restore line' : 'Restore'}
+      </button>
+    )
+  }
+
+  const rail = (isLatest: boolean, kind: Version['kind'], last: boolean) => (
+    <div className='relative flex justify-center'>
+      <span
+        className={cn(
+          'relative z-[1] mt-[7px] h-2 w-2 rounded-full ring-2 ring-background',
+          isLatest
+            ? 'bg-nvr-cyan'
+            : kind === 'delete'
+              ? 'bg-red-400'
+              : kind === 'create'
+                ? 'bg-emerald-400'
+                : 'bg-slate-300 dark:bg-slate-600'
+        )}
+      />
+      {!last && <span className='absolute bottom-[-24px] top-[11px] w-px bg-border' />}
+    </div>
+  )
+
+  const total = versions.length
+  const headerCount = isTimeline
+    ? `${total} ${total === 1 ? 'version' : 'versions'} across ${newestPerRow.size} ${newestPerRow.size === 1 ? 'line' : 'lines'}`
+    : `${revisions.length} ${revisions.length === 1 ? 'version' : 'versions'}`
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className='flex w-[560px] flex-col gap-0 p-0 sm:max-w-[560px]'>
         <SheetHeader className='shrink-0 border-b border-border px-6 pb-4 pt-5 text-left'>
-          <SheetTitle className='text-[14px] font-semibold'>Row history</SheetTitle>
+          <SheetTitle className='text-[14px] font-semibold'>
+            {isTimeline ? 'Lines timeline' : 'Row history'}
+          </SheetTitle>
           <p className='mt-0.5 flex min-w-0 items-baseline gap-2 text-[12px] text-muted-foreground'>
             <span className='shrink-0 font-medium text-foreground'>{rowTitle}</span>
             {rowSubtitle && <span className='truncate'>{rowSubtitle}</span>}
-            {!loading && revisions.length > 0 && (
-              <span className='ml-auto shrink-0 tabular-nums'>
-                {revisions.length} {revisions.length === 1 ? 'version' : 'versions'}
-              </span>
+            {!loading && total > 0 && (
+              <span className='ml-auto shrink-0 tabular-nums'>{headerCount}</span>
             )}
           </p>
+          {truncated && !loading && (
+            <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-400'>
+              Showing the newest versions only — older history was not loaded.
+            </p>
+          )}
         </SheetHeader>
 
         <div className='min-h-0 flex-1 overflow-y-auto px-6 py-5'>
@@ -378,143 +740,167 @@ export function RowHistorySheet({
             <div className='rounded-lg border border-dashed border-border px-4 py-8 text-center'>
               <p className='text-[13px] font-medium text-foreground'>No history yet</p>
               <p className='mt-1 text-[12px] text-muted-foreground'>
-                Every save of this line will be listed here with what changed.
+                {isTimeline
+                  ? 'Every line added, changed or removed on this record will be listed here.'
+                  : 'Every save of this line will be listed here with what changed.'}
               </p>
             </div>
           ) : (
             <ol className='relative'>
-              {versions.map((v, i) => {
-                const isLatest = i === 0
-                const isOpen = expanded.has(v.rev.id)
-                const snapshotLimit = 6
-                const shownSnapshot = isOpen ? v.snapshot : v.snapshot.slice(0, snapshotLimit)
-                const hiddenCount = v.snapshot.length - shownSnapshot.length
-                const exact = v.rev.timestamp ? formatDateTime(v.rev.timestamp) : ''
+              {batches.map((b, bi) => {
+                const isLatestBatch = bi === 0
+                const last = bi === batches.length - 1
+                const exact = b.at ? formatDateTime(b.at) : ''
+                const multi = b.versions.length > 1
+                const folded = multi && b.versions.length > BATCH_FOLD_AT && !openBatches.has(b.key)
+                const restoreAll =
+                  isTimeline && allowRestore && onRestoreAllTo && !isLatestBatch && b.at ? (
+                    <button
+                      type='button'
+                      disabled={restoringAll}
+                      onClick={() => onRestoreAllTo(b.at!)}
+                      className='ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                      data-tip='Put every line back to how it stood right after this save — writes immediately'
+                    >
+                      <RotateCcw className='h-3 w-3' aria-hidden='true' />
+                      {restoringAll ? 'Restoring…' : 'All lines to here'}
+                    </button>
+                  ) : null
+                if (!multi) {
+                  const v = b.versions[0]
+                  const isLatest = isLatestBatch
+                  return (
+                    <li
+                      key={b.key}
+                      data-rev-id={v.rev.id}
+                      className={cn(
+                        'nvr-row-enter grid grid-cols-[14px_1fr] gap-x-3 pb-6 last:pb-0 rounded-md transition-shadow duration-500',
+                        focused === v.rev.id &&
+                          'ring-2 ring-nvr-cyan/60 ring-offset-4 ring-offset-background'
+                      )}
+                      style={{ animationDelay: `${Math.min(bi, 8) * 30}ms` }}
+                    >
+                      {rail(isLatest, v.kind, last)}
+                      <div className='min-w-0'>
+                        <div className='flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[12.5px] leading-5'>
+                          <span className='font-semibold text-foreground'>{v.who}</span>
+                          <span className='text-muted-foreground'>{summaryOf(v)}</span>
+                          {isTimeline && v.row?.subtitle && (
+                            <span className='truncate text-muted-foreground'>
+                              — {v.row.subtitle}
+                            </span>
+                          )}
+                          <span className='text-muted-foreground'>·</span>
+                          <span className='text-muted-foreground' data-tip={exact || undefined}>
+                            {v.rev.timestamp ? formatRelative(v.rev.timestamp) : ''}
+                          </span>
+                          {isLatest && !isTimeline && (
+                            <span className='ml-auto rounded-full bg-nvr-cyan/10 px-2 py-px text-[10.5px] font-medium text-[#0b7ea6] dark:text-nvr-cyan'>
+                              Current
+                            </span>
+                          )}
+                          {(canRestoreVersion(v, isLatest) || restoreAll) && (
+                            <span className='ml-auto inline-flex items-center gap-1'>
+                              {restoreButton(v, isLatest)}
+                              {isTimeline && restoreAll}
+                            </span>
+                          )}
+                        </div>
+                        {renderVersionBody(v)}
+                      </div>
+                    </li>
+                  )
+                }
                 return (
                   <li
-                    key={v.rev.id}
+                    key={b.key}
                     className='nvr-row-enter grid grid-cols-[14px_1fr] gap-x-3 pb-6 last:pb-0'
-                    style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+                    style={{ animationDelay: `${Math.min(bi, 8) * 30}ms` }}
                   >
-                    {/* rail */}
-                    <div className='relative flex justify-center'>
-                      <span
-                        className={cn(
-                          'relative z-[1] mt-[7px] h-2 w-2 rounded-full ring-2 ring-background',
-                          isLatest
-                            ? 'bg-nvr-cyan'
-                            : v.kind === 'delete'
-                              ? 'bg-red-400'
-                              : 'bg-slate-300 dark:bg-slate-600'
-                        )}
-                      />
-                      {i < versions.length - 1 && (
-                        <span className='absolute bottom-[-24px] top-[11px] w-px bg-border' />
-                      )}
-                    </div>
-
+                    {rail(isLatestBatch, 'other', last)}
                     <div className='min-w-0'>
                       <div className='flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[12.5px] leading-5'>
-                        <span className='font-semibold text-foreground'>{v.who}</span>
-                        <span className='text-muted-foreground'>{summaryOf(v)}</span>
+                        <span className='font-semibold text-foreground'>{b.who}</span>
+                        <span className='text-muted-foreground'>{batchSummary(b)}</span>
                         <span className='text-muted-foreground'>·</span>
                         <span className='text-muted-foreground' data-tip={exact || undefined}>
-                          {v.rev.timestamp ? formatRelative(v.rev.timestamp) : ''}
+                          {b.at ? formatRelative(b.at) : ''}
                         </span>
-                        {isLatest && (
-                          <span className='ml-auto rounded-full bg-nvr-cyan/10 px-2 py-px text-[10.5px] font-medium text-[#0b7ea6] dark:text-nvr-cyan'>
-                            Current
-                          </span>
-                        )}
-                        {!isLatest && allowRestore && v.kind !== 'delete' && Object.keys(v.rev.data ?? {}).length > 0 && (
-                          <button
-                            type='button'
-                            onClick={() => onRestore(v.rev.data)}
-                            className='ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                            data-tip='Load this version into the row editor — nothing is saved until you save the row'
-                          >
-                            <RotateCcw className='h-3 w-3' aria-hidden='true' />
-                            Restore
-                          </button>
-                        )}
+                        {restoreAll}
                       </div>
-
-                      {v.provenance.kind === 'machine' && (
-                        <p className='mt-0.5 text-[11.5px] text-muted-foreground'>{v.provenance.text}</p>
-                      )}
-                      {v.provenance.kind === 'reason' && (
-                        <p className='mt-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] leading-5 text-foreground'>
-                          <span className='text-muted-foreground'>Reason: </span>
-                          {v.provenance.text}
-                        </p>
-                      )}
-
-                      {v.changes.length > 0 && (
-                        <dl className='mt-2 grid grid-cols-[minmax(96px,max-content)_1fr] gap-x-4 gap-y-1.5 text-[12px] leading-5'>
-                          {v.changes.map((c) => {
-                            const from = formatValue(c.field, c.before)
-                            const to = formatValue(c.field, c.after)
-                            return (
-                              <Fragment key={c.field}>
-                                <dt className='truncate text-muted-foreground' title={labelFor(c.field)}>
-                                  {labelFor(c.field)}
-                                </dt>
-                                <dd className='flex min-w-0 flex-wrap items-baseline gap-x-1.5'>
-                                  <span
-                                    className={cn(
-                                      'break-words text-muted-foreground line-through decoration-slate-300 dark:decoration-slate-600',
-                                      from.mono && 'tabular-nums'
-                                    )}
-                                  >
-                                    {from.text}
-                                  </span>
-                                  {/* arrow travels with the new value, so a long
-                                      label never leaves it dangling at a line end */}
-                                  <span className={cn('break-words font-medium text-foreground', to.mono && 'tabular-nums')}>
-                                    <span className='mr-1.5 font-normal text-slate-400' aria-hidden='true'>
-                                      →
-                                    </span>
-                                    {to.text}
-                                  </span>
-                                </dd>
-                              </Fragment>
-                            )
-                          })}
-                        </dl>
-                      )}
-
-                      {v.snapshot.length > 0 && (
-                        <>
-                          <dl className='mt-2 grid grid-cols-[minmax(96px,max-content)_1fr] gap-x-4 gap-y-1 text-[12px] leading-5'>
-                            {shownSnapshot.map((s) => {
-                              const val = formatValue(s.field, s.value)
-                              return (
-                                <Fragment key={s.field}>
-                                  <dt className='truncate text-muted-foreground' title={labelFor(s.field)}>
-                                    {labelFor(s.field)}
-                                  </dt>
-                                  <dd className={cn('break-words text-foreground', val.mono && 'tabular-nums')}>
-                                    {val.text}
-                                  </dd>
-                                </Fragment>
-                              )
-                            })}
-                          </dl>
-                          {(hiddenCount > 0 || isOpen) && v.snapshot.length > snapshotLimit && (
-                            <button
-                              type='button'
-                              onClick={() => toggle(v.rev.id)}
-                              className='mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground'
-                              aria-expanded={isOpen}
+                      {folded ? (
+                        <button
+                          type='button'
+                          onClick={() => toggleBatch(b.key)}
+                          className='mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground'
+                          aria-expanded={false}
+                        >
+                          <ChevronDown className='h-3 w-3' aria-hidden='true' />
+                          Show {b.versions.length} lines
+                        </button>
+                      ) : (
+                        <ol className='mt-2 space-y-3 border-l border-border pl-3'>
+                          {b.versions.map((v) => (
+                            <li
+                              key={v.rev.id}
+                              data-rev-id={v.rev.id}
+                              className={cn(
+                                'rounded-md transition-shadow duration-500',
+                                focused === v.rev.id &&
+                                  'ring-2 ring-nvr-cyan/60 ring-offset-4 ring-offset-background'
+                              )}
                             >
-                              <ChevronDown
-                                className={cn('h-3 w-3 transition-transform duration-150', isOpen && 'rotate-180')}
-                                aria-hidden='true'
-                              />
-                              {isOpen ? 'Show fewer' : `Show ${hiddenCount} more ${hiddenCount === 1 ? 'field' : 'fields'}`}
-                            </button>
+                              <div className='flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[12px] leading-5'>
+                                <span
+                                  className={cn(
+                                    'font-medium',
+                                    v.kind === 'delete'
+                                      ? 'text-red-600 dark:text-red-400'
+                                      : v.kind === 'create'
+                                        ? 'text-emerald-700 dark:text-emerald-400'
+                                        : 'text-foreground'
+                                  )}
+                                >
+                                  {v.row?.title ?? 'Line'}
+                                </span>
+                                <span className='text-muted-foreground'>
+                                  {v.kind === 'create'
+                                    ? 'added'
+                                    : v.kind === 'delete'
+                                      ? 'deleted'
+                                      : v.changes.length === 0
+                                        ? 'saved'
+                                        : `${v.changes
+                                            .map((c) => labelFor(c.field))
+                                            .slice(0, 3)
+                                            .join(
+                                              ', '
+                                            )}${v.changes.length > 3 ? ` +${v.changes.length - 3}` : ''}`}
+                                </span>
+                                {v.row?.subtitle && (
+                                  <span className='truncate text-muted-foreground'>
+                                    — {v.row.subtitle}
+                                  </span>
+                                )}
+                                {restoreButton(v, false)}
+                              </div>
+                              {renderVersionBody(v)}
+                            </li>
+                          ))}
+                          {b.versions.length > BATCH_FOLD_AT && (
+                            <li>
+                              <button
+                                type='button'
+                                onClick={() => toggleBatch(b.key)}
+                                className='inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground'
+                                aria-expanded={true}
+                              >
+                                <ChevronDown className='h-3 w-3 rotate-180' aria-hidden='true' />
+                                Show fewer
+                              </button>
+                            </li>
                           )}
-                        </>
+                        </ol>
                       )}
                     </div>
                   </li>

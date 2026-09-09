@@ -77,7 +77,13 @@ import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
-import { applyDisplayTemplate, EMPTY_NESTED_OPS, parseJson, SENTINEL_FIELDS } from './helpers'
+import {
+  applyDisplayTemplate,
+  EMPTY_NESTED_OPS,
+  parseJson,
+  SENTINEL_FIELDS,
+  SYSTEM_FIELDS
+} from './helpers'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
   type LiveRowsCtx,
@@ -88,8 +94,13 @@ import {
 } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
-import { RowHistorySheet } from './RowHistorySheet'
-import { RowMatchDot, RowMatchPanel, type RowMatchPanelConfig, useRowMatches } from './RowMatchPanel'
+import { type RestoreContext, RowHistorySheet, type RowRevisionEntry } from './RowHistorySheet'
+import {
+  RowMatchDot,
+  RowMatchPanel,
+  type RowMatchPanelConfig,
+  useRowMatches
+} from './RowMatchPanel'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -178,11 +189,20 @@ interface O2MRevisionEntry {
   item_id: string
   action: string
   timestamp: string
+  comment?: string | null
   first_name?: string | null
   last_name?: string | null
   user_email?: string | null
+  revision_id: number
   data: Record<string, unknown>
+  delta: Record<string, unknown> | null
 }
+
+/** Per (row, field): who last changed it and when — the cell-history entry. */
+type CellProvenance = Record<
+  string,
+  Record<string, { at: string; who: string; revision_id: number }>
+>
 
 const NON_DISPLAY_TYPES = new Set([
   'alias',
@@ -269,61 +289,6 @@ function getUniqueKey(row: Record<string, unknown>, fields: string[]): string {
       return String(staged !== undefined ? (staged ?? '') : (row[f] ?? ''))
     })
     .join('\x00')
-}
-
-function DeletedRowsSection({
-  deletedRows,
-  displayCols,
-  onOpenHistory
-}: {
-  deletedRows: Array<{ id: string; data: Record<string, unknown> }>
-  displayCols: CMSField[]
-  onOpenHistory: (id: string, data: Record<string, unknown>) => void
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className='border-t border-slate-100 mt-1'>
-      <button
-        type='button'
-        onClick={() => setOpen((o) => !o)}
-        className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-muted'
-      >
-        <ChevronRight
-          className={cn(
-            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
-            open && 'rotate-90'
-          )}
-        />
-        <span className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
-          Deleted rows
-        </span>
-        <span className='ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500'>
-          {deletedRows.length}
-        </span>
-      </button>
-      {open &&
-        deletedRows.map((dr) => {
-          const firstCol = displayCols[0]
-          const label = firstCol ? String(dr.data[firstCol.field] ?? dr.id) : dr.id
-          return (
-            <div
-              key={dr.id}
-              className='flex items-center gap-2 px-3 py-1 text-[11px] text-slate-400'
-            >
-              <span className='flex-1 truncate line-through'>{label}</span>
-              <button
-                type='button'
-                title='Row history'
-                onClick={() => onOpenHistory(dr.id, dr.data)}
-                className='shrink-0 rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
-              >
-                <History className='h-3 w-3' />
-              </button>
-            </div>
-          )
-        })}
-    </div>
-  )
 }
 
 function resolveMatchToken(
@@ -1467,45 +1432,13 @@ export function InlineTableField({
 
   // Row revision history sheet — holds the saved row whose history is open
   const [historyRow, setHistoryRow] = useState<Record<string, unknown> | null>(null)
+  const [historyFocus, setHistoryFocus] = useState<number | null>(null)
+  const [timelineOpen, setTimelineOpen] = useState(false)
   // Field-level restore sheet
-  const [fieldRestoreOpen, setFieldRestoreOpen] = useState(false)
-  const [fieldRestoring, setFieldRestoring] = useState(false)
+  const [restoringAll, setRestoringAll] = useState(false)
   // Rows deleted this session not yet in server query (pending-mode race condition buffer)
-  const [deletedRows, setDeletedRows] = useState<Array<Record<string, unknown>>>([])
 
   // Persistent deleted-row query — survives page reload
-  const { data: serverDeletedRows = [], refetch: refetchDeleted } = useQuery<
-    Array<{
-      item: string
-      data: Record<string, unknown>
-      timestamp: string
-      first_name?: string | null
-      last_name?: string | null
-    }>
-  >({
-    queryKey: ['o2m-deleted-rows', relatedCollection, manyField, parentId],
-    queryFn: () =>
-      client
-        .request<{
-          data: Array<{
-            item: string
-            data: Record<string, unknown>
-            timestamp: string
-            first_name?: string | null
-            last_name?: string | null
-          }>
-        }>(
-          get('/revisions/deleted-o2m', {
-            collection: relatedCollection,
-            many_field: manyField,
-            parent_id: parentId
-          })
-        )
-        .then((r) => r.data ?? []),
-    enabled: !!showRowRevisions && !isNew,
-    staleTime: 30_000
-  })
-
   const { data: rowRevisions = [], isLoading: revLoading } = useQuery<RowRevision[]>({
     queryKey: ['o2m-row-revisions', relatedCollection, historyRow?.id],
     queryFn: () =>
@@ -1518,47 +1451,41 @@ export function InlineTableField({
     staleTime: 15_000
   })
 
-  const { data: fieldSnapshots = [], isLoading: fieldSnapshotsLoading } = useQuery<
-    O2MRevisionEntry[]
-  >({
+  const { data: timelineResp, isLoading: timelineLoading } = useQuery<{
+    data: O2MRevisionEntry[]
+    truncated?: boolean
+  }>({
     queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId],
     queryFn: () =>
-      client
-        .request<{ data: O2MRevisionEntry[] }>(
-          get('/revisions/o2m-snapshots', {
-            collection: relatedCollection,
-            many_field: manyField,
-            parent_id: parentId
-          })
-        )
-        .then((r) => r.data ?? []),
-    enabled: fieldRestoreOpen && !isNew,
+      client.request<{ data: O2MRevisionEntry[]; truncated?: boolean }>(
+        get('/revisions/o2m-snapshots', {
+          collection: relatedCollection,
+          many_field: manyField,
+          parent_id: parentId
+        })
+      ),
+    enabled: timelineOpen && !isNew,
     staleTime: 15_000
   })
+  const timelineEntries = useMemo<RowRevisionEntry[]>(
+    () =>
+      (timelineResp?.data ?? []).map((e) => ({
+        id: e.revision_id,
+        delta: e.delta ?? null,
+        data: e.data ?? {},
+        timestamp: e.timestamp,
+        action: e.action,
+        comment: e.comment ?? null,
+        first_name: e.first_name,
+        last_name: e.last_name,
+        user_email: e.user_email,
+        item_id: String(e.item_id)
+      })),
+    [timelineResp]
+  )
 
-  // Group flat revision list into time-window batches (entries within 5s = one snapshot)
-  const fieldSnapshotGroups = (() => {
-    if (!fieldSnapshots.length) return []
-    const groups: Array<{ timestamp: string; user: string; entries: O2MRevisionEntry[] }> = []
-    let cur: (typeof groups)[0] | null = null
-    for (const entry of fieldSnapshots) {
-      const ts = new Date(entry.timestamp).getTime()
-      if (!cur || ts - new Date(cur.timestamp).getTime() > 5_000) {
-        const user =
-          [entry.first_name, entry.last_name].filter(Boolean).join(' ') ||
-          entry.user_email ||
-          'System'
-        cur = { timestamp: entry.timestamp, user, entries: [entry] }
-        groups.push(cur)
-      } else {
-        cur.entries.push(entry)
-      }
-    }
-    return groups
-  })()
-
-  async function restoreFieldAt(timestamp: string) {
-    setFieldRestoring(true)
+  async function restoreAllTo(timestamp: string) {
+    setRestoringAll(true)
     try {
       await client.request(
         post('/revisions/o2m-restore', {
@@ -1572,9 +1499,11 @@ export function InlineTableField({
       qc.invalidateQueries({
         queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]
       })
-      setFieldRestoreOpen(false)
+      setTimelineOpen(false)
+    } catch {
+      /* surfaced by the sheet staying open */
     } finally {
-      setFieldRestoring(false)
+      setRestoringAll(false)
     }
   }
 
@@ -1620,21 +1549,29 @@ export function InlineTableField({
   const lastEditingRowRef = useRef<string | null>(null)
   useEffect(() => {
     const id = editState?.rowId
-    const key = id && id !== 'new' && !id.startsWith('pending:') ? `${relatedCollection}:${id}` : null
+    const key =
+      id && id !== 'new' && !id.startsWith('pending:') ? `${relatedCollection}:${id}` : null
     if (key === lastEditingRowRef.current) return
     if (typeof window === 'undefined') return
     if (lastEditingRowRef.current)
       window.dispatchEvent(
-        new CustomEvent('nvr:row-editing', { detail: { row: lastEditingRowRef.current, state: 'end' } })
+        new CustomEvent('nvr:row-editing', {
+          detail: { row: lastEditingRowRef.current, state: 'end' }
+        })
       )
-    if (key) window.dispatchEvent(new CustomEvent('nvr:row-editing', { detail: { row: key, state: 'start' } }))
+    if (key)
+      window.dispatchEvent(
+        new CustomEvent('nvr:row-editing', { detail: { row: key, state: 'start' } })
+      )
     lastEditingRowRef.current = key
   }, [editState?.rowId, relatedCollection])
   useEffect(
     () => () => {
       if (lastEditingRowRef.current && typeof window !== 'undefined')
         window.dispatchEvent(
-          new CustomEvent('nvr:row-editing', { detail: { row: lastEditingRowRef.current, state: 'end' } })
+          new CustomEvent('nvr:row-editing', {
+            detail: { row: lastEditingRowRef.current, state: 'end' }
+          })
         )
     },
     []
@@ -1837,6 +1774,26 @@ export function InlineTableField({
         .then((r) => r.data ?? []),
     enabled: !isNew,
     staleTime: 30_000
+  })
+
+  // Who last changed each cell — deltas only, one small map per grid. Keyed
+  // on the rows query's freshness so a save refreshes it without every
+  // write site having to remember to.
+  const { data: cellProvenance = {} } = useQuery<CellProvenance>({
+    queryKey: ['o2m-cell-provenance', relatedCollection, manyField, parentId, rowsUpdatedAt],
+    queryFn: () =>
+      client
+        .request<{ data: CellProvenance }>(
+          get('/revisions/o2m-cell-provenance', {
+            collection: relatedCollection,
+            many_field: manyField,
+            parent_id: parentId
+          })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: !!showRowRevisions && !isNew && rawRows.length > 0,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev
   })
 
   // ── Cascade parent → child field filters ──────────────────────────────────
@@ -2231,7 +2188,10 @@ export function InlineTableField({
               ...numericIntlOptions(opts, 'currency'),
               currency: (opts.currency as string) || 'USD'
             })
-          : result.toLocaleString('en-US', numericIntlOptions(opts, opts.format as string | undefined))
+          : result.toLocaleString(
+              'en-US',
+              numericIntlOptions(opts, opts.format as string | undefined)
+            )
       out.push({ label: c.label || titleCase(c.field), text })
     }
     return out
@@ -2312,7 +2272,10 @@ export function InlineTableField({
     if (!rowOrderField) return rowData
     const taken = new Set<number>(extraTaken)
     for (const r of rows) {
-      const v = Number((isPendingMode ? pendingEdits.get(String(r.id))?.[rowOrderField] : undefined) ?? r[rowOrderField])
+      const v = Number(
+        (isPendingMode ? pendingEdits.get(String(r.id))?.[rowOrderField] : undefined) ??
+          r[rowOrderField]
+      )
       if (Number.isFinite(v)) taken.add(v)
     }
     for (const r of pendingRows) {
@@ -3242,7 +3205,12 @@ export function InlineTableField({
       .then((res) => {
         setEditState((s) =>
           s && s.rowId === rowId
-            ? { ...s, locks: res.locks ?? [], locksPending: false, expected: res.expected ?? s.expected }
+            ? {
+                ...s,
+                locks: res.locks ?? [],
+                locksPending: false,
+                expected: res.expected ?? s.expected
+              }
             : s
         )
       })
@@ -3298,7 +3266,11 @@ export function InlineTableField({
     const seq = ++ruleEvalSeqRef.current
     draftKeySeqRef.current.seqs.set(field, seq)
     client
-      .request<{ updates: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }>(
+      .request<{
+        updates: Record<string, unknown>
+        locks?: string[]
+        expected?: Record<string, unknown>
+      }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
           data: cur.draft,
@@ -3308,7 +3280,9 @@ export function InlineTableField({
           row_rules: rowRules
         })
       )
-      .then((res) => applyEvalResponse(rowId, seq, { ...res, updates: { [field]: null, ...res.updates } }))
+      .then((res) =>
+        applyEvalResponse(rowId, seq, { ...res, updates: { [field]: null, ...res.updates } })
+      )
       .catch(() => {})
   }
 
@@ -3339,6 +3313,30 @@ export function InlineTableField({
         expected: res.expected ?? s.expected
       }
     })
+  }
+
+  /** A history version lands in the row editor — never saved until the user
+   *  saves the row. A deleted line comes back as a NEW row pre-filled with
+   *  what it held (so staging / immediate mode both apply as usual). */
+  function restoreFromHistory(snapshot: Record<string, unknown>, ctx: RestoreContext) {
+    if (readOnly) return
+    const draft: Record<string, unknown> = { ...snapshot }
+    if (ctx.rowDeleted || !ctx.itemId) {
+      delete draft.id
+      for (const k of Object.keys(draft)) if (SYSTEM_FIELDS.has(k)) delete draft[k]
+      delete draft[manyField]
+      setEditState({
+        rowId: 'new',
+        draft: withNextOrder(draft),
+        locksPending: lockTargets.size > 0
+      })
+      refreshRuleState('new', draft)
+    } else {
+      setEditState({ rowId: String(ctx.itemId), draft })
+    }
+    setHistoryRow(null)
+    setHistoryFocus(null)
+    setTimelineOpen(false)
   }
 
   function startNew() {
@@ -3388,7 +3386,11 @@ export function InlineTableField({
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
       client
-        .request<{ updates: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }>(
+        .request<{
+          updates: Record<string, unknown>
+          locks?: string[]
+          expected?: Record<string, unknown>
+        }>(
           post('/field-rules/evaluate', {
             collection: relatedCollection,
             data: nextDraft,
@@ -3782,9 +3784,6 @@ export function InlineTableField({
       if (editState?.rowId === String(id)) {
         setEditState(null)
       }
-      // Capture now — hidden while still in pendingDeletes, visible after parent save flushes the delete
-      if (showRowRevisions)
-        setDeletedRows((prev) => (prev.some((r) => r.id === id) ? prev : [...prev, row]))
       return
     }
     try {
@@ -3793,10 +3792,10 @@ export function InlineTableField({
       if (editState?.rowId === String(id)) {
         setEditState(null)
       }
-      if (showRowRevisions) {
-        setDeletedRows((prev) => (prev.some((r) => r.id === id) ? prev : [...prev, row]))
-        void refetchDeleted()
-      }
+      if (showRowRevisions)
+        qc.invalidateQueries({
+          queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]
+        })
     } catch {
       /* ignore */
     }
@@ -4519,9 +4518,12 @@ export function InlineTableField({
               )
             })}
         </div>
-        {rowMatchPanel && args.rowId && !args.rowId.startsWith('pending:') && args.rowId !== 'new' && (
-          <RowMatchPanel config={rowMatchPanel} result={rowMatches.byRow.get(args.rowId)} />
-        )}
+        {rowMatchPanel &&
+          args.rowId &&
+          !args.rowId.startsWith('pending:') &&
+          args.rowId !== 'new' && (
+            <RowMatchPanel config={rowMatchPanel} result={rowMatches.byRow.get(args.rowId)} />
+          )}
         {args.drawer}
       </div>
     </td>
@@ -4753,11 +4755,11 @@ export function InlineTableField({
           )}
           {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
           {presetSwitcher}
-          {showRowRevisions && allowRevisionRestore && !isNew && (
+          {showRowRevisions && !isNew && (
             <button
               type='button'
-              title='Restore field from history'
-              onClick={() => setFieldRestoreOpen(true)}
+              data-tip='Lines timeline — every line added, changed or removed on this record'
+              onClick={() => setTimelineOpen(true)}
               className='ml-auto rounded p-1 text-slate-300 hover:text-[#00ceff]'
             >
               <History className='h-3.5 w-3.5' />
@@ -4922,15 +4924,22 @@ export function InlineTableField({
                           </span>
                           {(() => {
                             const sums = sectionSummary(
-                              rows.filter((r) => sectionOf(r) === section && !pendingDeletes.has(String(r.id)))
+                              rows.filter(
+                                (r) => sectionOf(r) === section && !pendingDeletes.has(String(r.id))
+                              )
                             )
                             if (sums.length === 0) return null
                             return (
                               <span className='ml-auto flex flex-wrap items-baseline gap-x-3 pr-1 text-[10.5px] tabular-nums'>
                                 {sums.map((sm) => (
-                                  <span key={sm.label} className='text-slate-500 dark:text-slate-400'>
+                                  <span
+                                    key={sm.label}
+                                    className='text-slate-500 dark:text-slate-400'
+                                  >
                                     {sm.label}{' '}
-                                    <span className='font-semibold text-slate-700 dark:text-slate-200'>{sm.text}</span>
+                                    <span className='font-semibold text-slate-700 dark:text-slate-200'>
+                                      {sm.text}
+                                    </span>
                                   </span>
                                 ))}
                               </span>
@@ -4987,7 +4996,7 @@ export function InlineTableField({
                         }
                       }}
                       className={cn(
-                        'border-b border-slate-100 transition-[color,background-color,opacity] duration-300',
+                        'group/row border-b border-slate-100 transition-[color,background-color,opacity] duration-300',
                         isDragging ? 'opacity-40' : '',
                         isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                         isPendingDelete
@@ -5022,7 +5031,10 @@ export function InlineTableField({
                               <span className='inline-flex items-center gap-1'>
                                 {ri + 1}
                                 {rowMatchPanel && (
-                                  <RowMatchDot result={rowMatches.byRow.get(id)} title={rowMatchPanel.title} />
+                                  <RowMatchDot
+                                    result={rowMatches.byRow.get(id)}
+                                    title={rowMatchPanel.title}
+                                  />
                                 )}
                               </span>
                             </td>
@@ -5030,7 +5042,10 @@ export function InlineTableField({
                           {isPendingMode && (
                             <td className='px-3 py-1 align-middle w-20'>
                               {!showLineNumbers && rowMatchPanel && (
-                                <RowMatchDot result={rowMatches.byRow.get(id)} title={rowMatchPanel.title} />
+                                <RowMatchDot
+                                  result={rowMatches.byRow.get(id)}
+                                  title={rowMatchPanel.title}
+                                />
                               )}
                               {isPendingDelete ? (
                                 <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
@@ -5077,8 +5092,37 @@ export function InlineTableField({
                                     isEditing ? (editState?.draft ?? displayRow) : displayRow
                                   ) ?? displayRow[c.field])
                                 : null
+                              // Cell history: a value someone CHANGED after the
+                              // line was created carries who/when on hover and
+                              // a glyph that opens the row's history on that
+                              // very version. Creation values stay quiet.
+                              const prov =
+                                showRowRevisions && !isEditing && !isPendingDelete
+                                  ? cellProvenance[id]?.[c.field]
+                                  : undefined
+                              const provTip = prov
+                                ? `${c.label || titleCase(c.field)} · changed ${formatRelative(prov.at)} by ${prov.who}`
+                                : undefined
                               return (
-                                <td key={c.field} className='px-2 py-1 align-top'>
+                                <td
+                                  key={c.field}
+                                  className={cn('px-2 py-1 align-top', prov && 'relative')}
+                                  data-tip={provTip}
+                                >
+                                  {prov && (
+                                    <button
+                                      type='button'
+                                      aria-label={`History of ${c.label || titleCase(c.field)}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setHistoryFocus(prov.revision_id)
+                                        setHistoryRow(row)
+                                      }}
+                                      className='absolute right-0.5 top-0.5 rounded p-px text-slate-300 opacity-0 transition-opacity duration-150 hover:text-[#00ceff] focus-visible:opacity-100 group-hover/row:opacity-100 dark:text-slate-500'
+                                    >
+                                      <History className='h-2.5 w-2.5' aria-hidden='true' />
+                                    </button>
+                                  )}
                                   {isComputedWrite ? (
                                     <div className='py-0.5 overflow-hidden text-slate-500 italic'>
                                       {renderCell(c, computedDisplayVal)}
@@ -5991,82 +6035,52 @@ export function InlineTableField({
             </button>
           </div>
         )}
-
-        {showRowRevisions &&
-          (() => {
-            // Merge server results + local state; local fills the gap before server catches up
-            const serverIds = new Set(serverDeletedRows.map((r) => String(r.item)))
-            const localOnly = deletedRows.filter(
-              (dr) => !pendingDeletes.has(String(dr.id)) && !serverIds.has(String(dr.id))
-            )
-            const allDeleted: Array<{ id: string; data: Record<string, unknown> }> = [
-              ...serverDeletedRows.map((r) => ({ id: r.item, data: r.data })),
-              ...localOnly.map((dr) => ({ id: String(dr.id), data: dr }))
-            ]
-            if (allDeleted.length === 0) return null
-            return (
-              <DeletedRowsSection
-                deletedRows={allDeleted}
-                displayCols={displayCols}
-                onOpenHistory={(id, data) => setHistoryRow({ id, ...data })}
-              />
-            )
-          })()}
       </div>
 
-      <Sheet open={fieldRestoreOpen} onOpenChange={setFieldRestoreOpen}>
-        <SheetContent className='w-[420px] sm:max-w-[420px] overflow-y-auto'>
-          <SheetHeader>
-            <SheetTitle className='text-[14px]'>Field history</SheetTitle>
-          </SheetHeader>
-          <div className='mt-4 space-y-3'>
-            {fieldSnapshotsLoading ? (
-              <div className='py-6 text-center'>
-                <Loader2 className='h-4 w-4 animate-spin inline text-slate-400' />
-              </div>
-            ) : fieldSnapshotGroups.length === 0 ? (
-              <p className='py-6 text-center text-[12px] text-slate-400'>
-                No history for this field
-              </p>
-            ) : (
-              fieldSnapshotGroups.map((group, i) => {
-                const creates = group.entries.filter((e) => e.action === 'create').length
-                const updates = group.entries.filter((e) => e.action === 'update').length
-                const deletes = group.entries.filter((e) => e.action === 'delete').length
-                const parts: string[] = []
-                if (creates) parts.push(`${creates} added`)
-                if (updates) parts.push(`${updates} updated`)
-                if (deletes) parts.push(`${deletes} removed`)
-                return (
-                  <div key={i} className='rounded-lg border border-slate-200 p-3'>
-                    <div className='flex items-center justify-between gap-2'>
-                      <span className='text-[11px] font-medium text-slate-600'>{group.user}</span>
-                      <span className='text-[10px] text-slate-400'>
-                        {formatRelative(group.timestamp)}
-                      </span>
-                    </div>
-                    {parts.length > 0 && (
-                      <p className='mt-1 text-[10px] text-slate-500'>{parts.join(', ')}</p>
-                    )}
-                    <button
-                      type='button'
-                      disabled={fieldRestoring}
-                      onClick={() => restoreFieldAt(group.timestamp)}
-                      className='mt-2 rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
-                    >
-                      {fieldRestoring ? 'Restoring…' : 'Restore to this state'}
-                    </button>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
+      <RowHistorySheet
+        mode='timeline'
+        open={timelineOpen}
+        onOpenChange={setTimelineOpen}
+        rowTitle={`${rows.length} ${rows.length === 1 ? 'line' : 'lines'} on this record`}
+        revisions={timelineEntries}
+        loading={timelineLoading}
+        truncated={!!timelineResp?.truncated}
+        fields={cols}
+        displayCols={displayCols}
+        parentField={manyField}
+        m2oRelMap={m2oRelMap}
+        relations={childRelations}
+        collection={relatedCollection}
+        m2oDisplays={m2oDisplays}
+        client={client}
+        allowRestore={!!allowRevisionRestore && !readOnly}
+        rowLabel={(itemId, data) => {
+          const n = rowOrderField ? data[rowOrderField] : data.line_number
+          const title =
+            n !== null && n !== undefined && n !== '' ? `Line ${String(n)}` : `Line #${itemId}`
+          const textCol = displayCols.find(
+            (c) =>
+              c.field !== 'id' &&
+              !m2oRelMap.get(c.field) &&
+              /^(string|text)$/i.test(c.type ?? '') &&
+              typeof data[c.field] === 'string' &&
+              (data[c.field] as string).trim() !== ''
+          )
+          const sub = textCol ? String(data[textCol.field]) : null
+          return { title, subtitle: sub && sub.length > 48 ? `${sub.slice(0, 48)}…` : sub }
+        }}
+        onRestore={(snapshot, ctx) => restoreFromHistory(snapshot, ctx)}
+        onRestoreAllTo={restoreAllTo}
+        restoringAll={restoringAll}
+      />
 
       <RowHistorySheet
         open={!!historyRow}
-        onOpenChange={(o) => !o && setHistoryRow(null)}
+        onOpenChange={(o) => {
+          if (o) return
+          setHistoryRow(null)
+          setHistoryFocus(null)
+        }}
         rowTitle={(() => {
           const n = rowOrderField ? historyRow?.[rowOrderField] : historyRow?.line_number
           return n !== null && n !== undefined && n !== '' ? `Line ${String(n)}` : 'This row'
@@ -6093,11 +6107,11 @@ export function InlineTableField({
         collection={relatedCollection}
         m2oDisplays={m2oDisplays}
         client={client}
-        allowRestore={!!allowRevisionRestore}
-        onRestore={(snapshot) => {
-          setEditState({ rowId: String(historyRow!.id), draft: { ...snapshot } })
-          setHistoryRow(null)
-        }}
+        allowRestore={!!allowRevisionRestore && !readOnly}
+        focusRevisionId={historyFocus}
+        onRestore={(snapshot, ctx) =>
+          restoreFromHistory(snapshot, { ...ctx, itemId: ctx.itemId ?? String(historyRow!.id) })
+        }
       />
     </div>
   )

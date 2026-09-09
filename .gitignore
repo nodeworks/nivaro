@@ -40,3 +40,4 @@ api/extensions/*
 .idea/
 nivaro-cloud-plan.html
 *.tsbuildinfo
+.scratch-verify/

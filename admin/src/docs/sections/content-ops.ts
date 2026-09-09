@@ -1835,6 +1835,15 @@ export const contentOpsGridPresets: DocSection = {
     "no_parent_message": "No purchase order is linked to this workflow yet."
   }
 }`
+    },
+    { type: 'h3', text: 'Lines timeline and cell history' },
+    {
+      type: 'p',
+      text: 'When a grid shows row revisions, two history entry points sit on the grid itself. The toolbar clock opens the **Lines timeline**: one history across every line of the record — adds, changes and deletes in order, newest first, with a save that flushed several lines shown as one event ("saved 3 lines · added 1, changed 2") that unfolds into per-line changes. A deleted line lists what it held and offers "Restore line", which opens a new row pre-filled with those values (nothing is saved until the row is saved, exactly like a normal add). "All lines to here" puts every line back to how it stood right after that save; this one writes immediately. The server keeps the newest 2,000 versions per record for this view and says so when older history was left out.'
+    },
+    {
+      type: 'p',
+      text: 'Any cell whose value someone changed after the line was created carries **cell history**: hovering shows "Price · changed 7m ago by Robert", and a small clock in the cell opens that row\'s history landed on the very version that changed it. Values a line was born with are left quiet, so the marks point at edits rather than at every filled field.'
     }
   ]
 }
