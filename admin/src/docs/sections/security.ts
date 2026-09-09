@@ -483,6 +483,18 @@ GET  /api/scope-dimensions/:id/coverage     # live per-collection route preview 
 GET  /api/users/me/scopes                   # caller's dimensions + defaults + restricted
 PUT  /api/users/me/scopes/:dimension        # self-edit defaults only { values: [ids] }
 GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }`
+    },
+    { type: 'h3', text: 'Access requests' },
+    {
+      type: 'p',
+      text: 'When a record is hidden from someone, the access-denied panel explains why and offers "Request access". The request notifies admins and lands under System → Access Requests with the reasons captured at that moment (evaluated as the requester): a role without read permission, a row-level rule, or a User Scope whose values exclude the record — with the record\'s own value named ("this record\'s Zone is National, you are limited to Zone 1, 2, 3"). Granting applies the smallest fitting change: widen that scope by the record\'s value, or add a read policy to the role. Row-level rules are never changed automatically — the request stays pending and says what still blocks it. Both sides are notified; a whole-collection request works the same way with a read policy.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/access-requests { collection, item?, note? }   # any user
+GET  /api/access-requests?status=pending|granted|denied  # admin — rows carry reasons + plan
+POST /api/access-requests/:id/resolve { decision: 'grant' | 'deny' }
+     # → { status, applied: [...], remaining: [...] }  (status stays 'pending' when something still blocks)`
     }
   ]
 }

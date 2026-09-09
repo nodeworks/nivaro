@@ -13,13 +13,26 @@ import { cn } from '@/lib/utils'
  * notification either way.
  */
 
+interface AccessReason {
+  type: string
+  message: string
+  dimension_label?: string
+}
+interface GrantAction {
+  type: 'scope' | 'policy' | 'manual'
+  label: string
+}
 interface AccessRequest {
   id: number
   user: string
   user_name: string | null
   user_email: string | null
   collection: string
+  item: string | null
+  item_label: string | null
   note: string | null
+  reasons: AccessReason[] | null
+  plan: GrantAction[]
   status: string
   created_at: string
   resolved_at: string | null
@@ -37,14 +50,28 @@ export default function AccessRequests() {
   const resolve = useMutation({
     mutationFn: ({ id, decision }: { id: number; decision: 'grant' | 'deny' }) =>
       api.post(`/access-requests/${id}/resolve`, { decision }).then((r) => r.data.data),
-    onSuccess: (d) => {
-      toast.success(
-        d.status === 'granted'
-          ? d.policy_added
-            ? 'Granted — a read policy was added to their role'
-            : 'Granted — their role already had read access'
-          : 'Request denied'
-      )
+    onSuccess: (d: {
+      status: string
+      applied?: string[]
+      policy_added?: boolean
+      remaining?: AccessReason[]
+    }) => {
+      if (d.status === 'pending') {
+        toast.warning(
+          `Applied: ${d.applied?.length ? d.applied.join('; ') : 'nothing'} — still blocked: ${(
+            d.remaining ?? []
+          )
+            .map((r) => r.message)
+            .join(' ')}`,
+          { duration: 12000 }
+        )
+      } else if (d.status === 'granted') {
+        toast.success(
+          d.applied?.length
+            ? `Granted — ${d.applied.join('; ')}`
+            : 'Granted — nothing needed changing, they already had access'
+        )
+      } else toast.success('Request denied')
       void qc.invalidateQueries({ queryKey: ['access-requests'] })
     },
     onError: (e: { response?: { data?: { error?: string } } }) =>
@@ -61,8 +88,10 @@ export default function AccessRequests() {
               Access Requests
             </h1>
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Collection-level requests from people who hit an access wall. Granting adds a read
-              policy to the requester's role — wider grants live on the Roles page.
+              Requests from people who hit an access wall — a whole collection or one record. Each
+              one names why it was denied and what granting will change: widen the scope that
+              excludes the record, or give their role read access. Wider grants live on the Roles
+              and user pages.
             </p>
           </div>
         </div>
@@ -101,8 +130,48 @@ export default function AccessRequests() {
                 <Link to={`/users/${r.user}`} className='font-semibold hover:underline'>
                   {r.user_name || r.user_email || r.user}
                 </Link>{' '}
-                wants access to <span className='font-mono font-medium'>{r.collection}</span>
+                wants access to{' '}
+                {r.item ? (
+                  <Link
+                    to={`/collections/${r.collection}/${r.item}`}
+                    className='font-medium text-nvr-navy underline decoration-dotted underline-offset-2 hover:decoration-solid dark:text-nvr-cyan'
+                  >
+                    {r.collection.replace(/_/g, ' ')} {r.item_label ?? r.item}
+                  </Link>
+                ) : (
+                  <span className='font-mono font-medium'>{r.collection}</span>
+                )}
               </p>
+              {r.reasons && r.reasons.length > 0 && (
+                <ul className='mt-1.5 space-y-1'>
+                  {r.reasons.map((why, i) => (
+                    <li
+                      key={i}
+                      className='flex items-start gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+                    >
+                      <span className='mt-[3px] h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
+                      {/* Reasons were written to the requester ("Your Zone filter…");
+                          read them as the admin. */}
+                      <span>
+                        {why.message
+                          .replace(/^Your /, 'Their ')
+                          .replace(/\byou are limited/g, 'they are limited')
+                          .replace(/\byour role\b/gi, 'their role')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {tab === 'pending' && r.plan.length > 0 && (
+                <p className='mt-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  <span className='font-medium text-slate-700 dark:text-slate-200'>
+                    Granting will:
+                  </span>{' '}
+                  {r.plan.map((a) => a.label).join('; ')}
+                  {r.plan.every((a) => a.type === 'manual') &&
+                    ' — nothing here can do that automatically.'}
+                </p>
+              )}
               {r.note && (
                 <p className='mt-0.5 text-[12.5px] italic text-slate-500 dark:text-muted-foreground'>
                   “{r.note}”
@@ -117,11 +186,14 @@ export default function AccessRequests() {
               <div className='flex shrink-0 gap-1.5'>
                 <button
                   type='button'
-                  disabled={resolve.isPending}
+                  disabled={resolve.isPending || r.plan.every((a) => a.type === 'manual')}
                   onClick={() => resolve.mutate({ id: r.id, decision: 'grant' })}
                   className='h-8 rounded-md bg-emerald-500 px-3 text-[12.5px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50'
+                  title={r.plan.map((a) => a.label).join('; ') || undefined}
                 >
-                  Grant read
+                  {r.plan.some((a) => a.type === 'scope')
+                    ? 'Grant — widen their filter'
+                    : 'Grant read'}
                 </button>
                 <button
                   type='button'
