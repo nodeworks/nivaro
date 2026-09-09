@@ -924,6 +924,10 @@ export const dataIntegrityGuide: DocSection = {
           'Every part of the display template resolved empty, so the record shows as its internal id.'
         ],
         [
+          'Lines missing rule inputs',
+          "A line's rule INPUT is empty — a workflow line with no category has no basis for its task, Oracle category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically."
+        ],
+        [
           'Lines off their rules',
           'An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \\"X\\" — rules derive \\"Y\\"".'
         ]

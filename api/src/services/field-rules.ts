@@ -807,6 +807,24 @@ export async function evaluateRowRules(
     const op = rule.trigger_op ?? 'nnull'
     const rawTriggerValue = subParent(rule.trigger_value)
 
+    // A rule keyed on a RELATED field ("category → sub_category.__entity__")
+    // has nothing to compare when the FK itself is empty: null is not
+    // "not Labor", it is "no category yet". Comparing it made every
+    // category-less line derive the neq branch (PO line type "Goods"), which
+    // hid the real problem — the missing category. Only the null/nnull ops
+    // are ABOUT emptiness and still run.
+    if (
+      rule.trigger_related_field &&
+      triggerField &&
+      !isParentTrigger &&
+      (working[triggerField] == null || working[triggerField] === '') &&
+      op !== 'null' &&
+      op !== 'nnull'
+    ) {
+      note('skipped:trigger-empty')
+      continue
+    }
+
     let triggered = false
     switch (op) {
       case 'eq':

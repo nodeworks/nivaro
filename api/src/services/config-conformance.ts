@@ -113,7 +113,13 @@ function parseJson<T>(raw: unknown): T | null {
   }
 }
 
-const label = (field: string) => field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+const label = (field: string) =>
+  field
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    // Title-casing a machine name turns "po_line_type" into "Po Line Type";
+    // the acronyms people actually read stay upper-case.
+    .replace(/\b(Po|Id|Sku|Cifa|Req|Mwf|Sla)\b/g, (m) => m.toUpperCase())
 
 /** Calendar day (UTC ms at midnight) from a Date or date-ish string; bare
  *  yyyy-mm-dd parses without timezone shifting. */
@@ -1043,6 +1049,34 @@ async function evaluateRowRuleCheck(
       mode: 'all',
       cache
     })
+    // Lines whose rule INPUTS are empty: a category-less workflow line has no
+    // basis for its task / Oracle category / PO line type at all — the
+    // real defect is the missing category, not whichever value sits in the
+    // targets. Reported separately (rule 'row-input'), never auto-fixed.
+    for (const line of lines) {
+      const missing = new Map<string, Set<string>>()
+      for (const rule of rc.rowRules) {
+        const tf = rule.trigger_field
+        if (!tf || tf.startsWith('$parent.') || rule.target_type === 'lock') continue
+        if ((rule.trigger_op ?? 'nnull') === 'null') continue
+        const v = line[tf]
+        if (v != null && v !== '') continue
+        if (!missing.has(tf)) missing.set(tf, new Set())
+        missing.get(tf)?.add(rule.target_field)
+      }
+      for (const [tf, targets] of missing) {
+        const lineNo = rc.lineField ? line[rc.lineField] : null
+        const head =
+          lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+        const names = [...targets].map((t) => rc.childFields.get(t)?.label ?? label(t))
+        out.push({
+          item_id: String(parent.id),
+          field: rc.aliasField,
+          rule: 'row-input',
+          message: `${head}: ${rc.childFields.get(tf)?.label ?? label(tf)} is empty — ${names.join(', ')} cannot be derived until it is set`
+        })
+      }
+    }
     for (const ch of plan.changes) {
       const line = lines.find((l) => String(l.id) === ch.id)
       if (!line) continue

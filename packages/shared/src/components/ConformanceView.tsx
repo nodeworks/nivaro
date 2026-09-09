@@ -88,6 +88,10 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   'row-rule': {
     label: 'Lines off their rules',
     cls: 'bg-orange-500/10 text-orange-700 dark:text-orange-400'
+  },
+  'row-input': {
+    label: 'Lines missing rule inputs',
+    cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
   }
 }
 
