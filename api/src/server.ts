@@ -1405,6 +1405,23 @@ export async function buildServer() {
       } catch {
         /* job-runs table shape mid-migration — skip */
       }
+
+      // Same for Data Integrity sweeps: a conformance run still 'running'
+      // from before this boot died with the process, and its row would
+      // 409 every new run for that collection forever.
+      try {
+        const bootTime = new Date(Date.now() - process.uptime() * 1000)
+        await db('nivaro_conformance_runs')
+          .where('status', 'running')
+          .where('started_at', '<', bootTime)
+          .update({
+            status: 'error',
+            error: 'Interrupted by an API restart — run it again.',
+            finished_at: new Date()
+          })
+      } catch {
+        /* table absent mid-migration — skip */
+      }
     })
 
   return app

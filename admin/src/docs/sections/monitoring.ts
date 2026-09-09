@@ -895,3 +895,83 @@ export const queueSlaTimers: DocSection = {
     }
   ]
 }
+
+export const dataIntegrityGuide: DocSection = {
+  id: 'data-integrity',
+  label: 'Data Integrity',
+  content: [
+    { type: 'h1', id: 'data-integrity', text: 'Data Integrity' },
+    {
+      type: 'p',
+      text: 'Data Integrity (Monitoring → Data Integrity, `/data-integrity`) answers "which records would fail their own form today". Pick a collection and run its checks over the newest records; every finding names the record, the field, and what is wrong in plain language. A nightly schedule can re-run a collection and notify you when the count rises.'
+    },
+    { type: 'h3', text: 'What it checks' },
+    {
+      type: 'table',
+      head: ['Check', 'What counts as a finding'],
+      rows: [
+        ['Required empty', 'A required field (or required M2M link) is empty on the record.'],
+        [
+          'Validation',
+          'A field value fails one of its validation rules — the same evaluator the save path uses. Date-offset rules ("at least 7 days from today") are judged against the record\'s creation date.'
+        ],
+        [
+          'Not an available option',
+          'A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type).'
+        ],
+        [
+          'Broken display label',
+          'Every part of the display template resolved empty, so the record shows as its internal id.'
+        ],
+        [
+          'Lines off their rules',
+          'An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \\"X\\" — rules derive \\"Y\\"".'
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: "Row-rule checks read the rules on the collection's ACTIVE grouped layout — the same layout the API applies on line creates. Rules configured only on a slugged or role-conditional layout are a per-audience view and are not swept."
+    },
+    { type: 'h3', text: 'Fixing findings' },
+    {
+      type: 'ul',
+      items: [
+        'On the record: the integrity banner at the top of the form lists the record\'s findings; a "Fix" button appears where the repair is mechanical. For "Lines off their rules" the fix re-runs the row rules on every line of the record — the same pass as the grid\'s "re-run rules" button — writing only the lines whose values change, each revisioned and attributed to you.',
+        'On the run: filter by the rule and the field, and the bulk-fix bar offers "Re-run rules…" across every affected record in the run (cap 1,000 records). Clearing stale cascade values and regenerating ids work the same way.',
+        'Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the line.'
+      ]
+    },
+    { type: 'h3', text: 'API' },
+    {
+      type: 'table',
+      head: ['Route', 'Purpose'],
+      rows: [
+        [
+          '`GET /api/config-conformance/collections`',
+          'Collections with anything to check, with per-kind counts (including grids with row rules).'
+        ],
+        [
+          '`POST /api/config-conformance/:collection/run`',
+          'Start a run (`{limit}` — newest N records, 0 = whole collection). 202 + run id; 409 while one is running.'
+        ],
+        [
+          '`GET /api/config-conformance/runs/:id`',
+          'Run status + paged findings; `rule=` and `field=` facets.'
+        ],
+        [
+          '`POST /api/config-conformance/runs/:id/remediate`',
+          '`{action:"clear"|"rederive", field, rule}` — bulk fix across the run\'s affected records.'
+        ],
+        [
+          '`GET /api/config-conformance/record/:collection/:id`',
+          'Findings for one record from the latest completed run (drives the form banner).'
+        ],
+        [
+          '`POST /api/config-conformance/record/:collection/:id/fix`',
+          '`{field, rule}` — repair one finding on one record.'
+        ]
+      ]
+    }
+  ]
+}

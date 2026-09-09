@@ -1,11 +1,15 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { requireAuth } from '../middleware/authenticate.js'
-import { can } from '../services/permissions.js'
 import { runConformance, summarizeAllCollections } from '../services/config-conformance.js'
 import { updateOne } from '../services/items.js'
+import { can } from '../services/permissions.js'
+import {
+  gridRuleConfigsFor,
+  parentContextFrom,
+  planRowRuleChanges
+} from '../services/row-rules-apply.js'
 
 /** Config conformance runs — admin-only, access-audit execution model:
  *  fire-and-forget run, pollable status, findings paged per run. */
@@ -70,7 +74,10 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
             ...f,
             fixable:
               (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
-              (f.rule === 'display' && !!f.field && autoIds.has(f.field))
+              (f.rule === 'display' && !!f.field && autoIds.has(f.field)) ||
+              // Row-rule drift re-derives the lines through the same planner
+              // the grid's "re-run rules" uses — always repairable.
+              (f.rule === 'row-rule' && !!f.field)
           }))
         }
       }
@@ -109,12 +116,13 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
       return reply.code(403).send({ error: 'Forbidden' })
     }
     if (rule === 'cascade') {
-      const isPhysical = (
-        (await db('information_schema.columns')
-          .where({ table_name: collection, column_name: field })
-          .pluck('column_name')
-          .catch(() => [])) as string[]
-      ).length > 0
+      const isPhysical =
+        (
+          (await db('information_schema.columns')
+            .where({ table_name: collection, column_name: field })
+            .pluck('column_name')
+            .catch(() => [])) as string[]
+        ).length > 0
       if (!isPhysical) {
         return reply
           .code(400)
@@ -171,8 +179,67 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
       await clearFinding(collection, id, field, rule)
       return { data: { fixed: true, action: 'regenerated', value } }
     }
+    if (rule === 'row-rule') {
+      const result = await rederiveGridLines(req.user!, collection, id, field, req)
+      if (!result) {
+        return reply
+          .code(400)
+          .send({ error: 'This grid no longer carries row rules on the active layout.' })
+      }
+      await clearFinding(collection, id, field, rule)
+      return { data: { fixed: true, action: 'rederived', ...result } }
+    }
     return reply.code(400).send({ error: 'This finding cannot be auto-fixed.' })
   })
+}
+
+/**
+ * Re-derive every saved line of one record's grid (mode 'all' — the grid's
+ * "re-run rules" semantics) and write the differences through updateOne so
+ * revisions, attribution and hooks land like any edit. Returns null when the
+ * alias no longer maps to a rule-carrying grid.
+ */
+async function rederiveGridLines(
+  user: NonNullable<FastifyRequest['user']>,
+  collection: string,
+  id: string,
+  aliasField: string,
+  req: FastifyRequest
+): Promise<{ applied: number; failed: number; rows: number } | null> {
+  const cfg = (await gridRuleConfigsFor(collection)).find((c) => c.aliasField === aliasField)
+  if (!cfg) return null
+  const parent = (await db(collection).where({ id }).first()) as Record<string, unknown> | undefined
+  if (!parent) return null
+  const rows = (await db(cfg.childCollection)
+    .where({ [cfg.fkField]: String(id) })
+    .orderBy('id')
+    .limit(500)) as Array<Record<string, unknown>>
+  const plan = await planRowRuleChanges({
+    collection: cfg.childCollection,
+    rows,
+    parentContext: parentContextFrom(cfg, parent),
+    rules: cfg.rowRules,
+    mode: 'all'
+  })
+  let applied = 0
+  let failed = 0
+  for (const c of plan.changes) {
+    try {
+      await updateOne(user, cfg.childCollection, c.id, { ...c.patch }, req)
+      applied++
+    } catch {
+      failed++
+    }
+  }
+  await logActivity({
+    action: 'integrity-fix',
+    user: user.id,
+    collection,
+    item: String(id),
+    comment: `re-derived row rules on ${aliasField}: ${applied} line(s) updated${failed ? `, ${failed} failed` : ''}`,
+    req
+  })
+  return { applied, failed, rows: rows.length }
 }
 
 export async function configConformanceRoutes(app: FastifyInstance): Promise<void> {
@@ -253,6 +320,42 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
     const run = await db('nivaro_conformance_runs').where('id', req.params.id).first()
     if (!run) return reply.code(404).send({ error: 'Not found' })
     const b = req.body as { field?: string; rule?: string; action?: string }
+    if (b.action === 'rederive') {
+      if (!b.field || !IDENT.test(b.field) || b.rule !== 'row-rule') {
+        return reply
+          .code(400)
+          .send({ error: 'action=rederive needs rule=row-rule and the grid field' })
+      }
+      const findings = (await db('nivaro_conformance_findings')
+        .where({ run: run.id, field: b.field, rule: 'row-rule' })
+        .select('item_id')) as Array<{ item_id: string }>
+      const ids = [...new Set(findings.map((f) => f.item_id))].slice(0, 1000)
+      let records = 0
+      let lines = 0
+      let failed = 0
+      for (const id of ids) {
+        try {
+          const r = await rederiveGridLines(req.user!, String(run.collection), id, b.field, req)
+          if (!r) {
+            failed++
+            continue
+          }
+          records++
+          lines += r.applied
+          failed += r.failed
+        } catch {
+          failed++
+        }
+      }
+      await logActivity({
+        action: 'conformance-remediate',
+        user: req.user?.id,
+        collection: String(run.collection),
+        comment: `re-derived row rules on ${b.field}: ${lines} line(s) across ${records} record(s) from run #${run.id}${failed ? ` (${failed} failed)` : ''}`,
+        req
+      })
+      return { data: { records, lines, failed, total: ids.length } }
+    }
     if (b.action !== 'clear' || !b.field || !IDENT.test(b.field)) {
       return reply.code(400).send({ error: 'action=clear and a valid field are required' })
     }
@@ -304,7 +407,7 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       .filter((r) => IDENT.test(r.collection))
       .map((r) => {
         const s = summaries.get(r.collection)
-        if (!s || s.required + s.validation + s.cascade === 0) return null
+        if (!s || s.required + s.validation + s.cascade + s.row_rules === 0) return null
         return { display_name: r.display_name, ...s }
       })
       .filter(Boolean)
@@ -365,18 +468,16 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
         .limit(limit)) as Array<{ item_id: string; c: number }>
       const itemIds = items.map((i) => i.item_id)
       const rows =
-        itemIds.length === 0
-          ? []
-          : await base().whereIn('item_id', itemIds).orderBy('id', 'asc')
+        itemIds.length === 0 ? [] : await base().whereIn('item_id', itemIds).orderBy('id', 'asc')
       findings = itemIds.map((id) => ({
         item_id: id,
         item_label: rows.find((r: { item_id: string }) => r.item_id === id)?.item_label ?? null,
         count: Number(items.find((i) => i.item_id === id)?.c ?? 0),
         findings: rows.filter((r: { item_id: string }) => r.item_id === id)
       }))
-      const groupCount = (await base()
-        .countDistinct({ c: 'item_id' })
-        .first()) as { c?: unknown } | undefined
+      const groupCount = (await base().countDistinct({ c: 'item_id' }).first()) as
+        | { c?: unknown }
+        | undefined
       counted = groupCount
     } else {
       findings = await base()

@@ -23,6 +23,7 @@ interface CheckableCollection {
   required: number
   validation: number
   cascade: number
+  row_rules?: number
   skipped: number
 }
 
@@ -52,7 +53,9 @@ function relTime(iso: string | null): string {
 
 function runDuration(r: Run): string {
   if (!r.started_at || !r.finished_at) return ''
-  const s = Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+  const s = Math.round(
+    (new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000
+  )
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
@@ -81,6 +84,10 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   display: {
     label: 'Broken display label',
     cls: 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
+  },
+  'row-rule': {
+    label: 'Lines off their rules',
+    cls: 'bg-orange-500/10 text-orange-700 dark:text-orange-400'
   }
 }
 
@@ -95,16 +102,16 @@ export function ConformanceView({ className }: { className?: string }) {
   const [startError, setStartError] = useState<string | null>(null)
   const [sampleSize, setSampleSize] = useState('5000')
 
-  const { data: collections = [], isLoading: loadingCollections } = useQuery<
-    CheckableCollection[]
-  >({
-    queryKey: ['conformance-collections'],
-    queryFn: () =>
-      client
-        .request<{ data: CheckableCollection[] }>(get('/config-conformance/collections'))
-        .then((r) => r.data ?? []),
-    staleTime: 5 * 60_000
-  })
+  const { data: collections = [], isLoading: loadingCollections } = useQuery<CheckableCollection[]>(
+    {
+      queryKey: ['conformance-collections'],
+      queryFn: () =>
+        client
+          .request<{ data: CheckableCollection[] }>(get('/config-conformance/collections'))
+          .then((r) => r.data ?? []),
+      staleTime: 5 * 60_000
+    }
+  )
 
   const { data: runs = [], isFetched: runsFetched } = useQuery<Run[]>({
     queryKey: ['conformance-runs', collection],
@@ -119,7 +126,8 @@ export function ConformanceView({ className }: { className?: string }) {
 
   // A just-started run isn't in the list until the next poll — fall back to
   // the newest known run instead of flashing the empty-state overview.
-  const shownRun = (activeRunId != null ? runs.find((r) => r.id === activeRunId) : undefined) ?? runs[0]
+  const shownRun =
+    (activeRunId != null ? runs.find((r) => r.id === activeRunId) : undefined) ?? runs[0]
   const selected = collections.find((c) => c.collection === collection)
 
   const startRun = async () => {
@@ -165,8 +173,10 @@ export function ConformanceView({ className }: { className?: string }) {
         </div>
         {selected && (
           <p className='pb-1.5 text-[11.5px] text-slate-400'>
-            {selected.required} required · {selected.validation} validation ·{' '}
-            {selected.cascade} cascade check{selected.cascade === 1 ? '' : 's'}
+            {selected.required} required · {selected.validation} validation · {selected.cascade}{' '}
+            cascade check{selected.cascade === 1 ? '' : 's'}
+            {(selected.row_rules ?? 0) > 0 &&
+              ` · ${selected.row_rules} grid${selected.row_rules === 1 ? '' : 's'} with row rules`}
             {selected.skipped > 0 && ` · ${selected.skipped} not evaluable`}
           </p>
         )}
@@ -198,9 +208,7 @@ export function ConformanceView({ className }: { className?: string }) {
           {starting ? 'Starting…' : 'Run checks'}
         </button>
         {collection && <ScheduleToggle collection={collection} />}
-        {runs.filter((r) => r.status === 'completed').length >= 2 && (
-          <TrendSpark runs={runs} />
-        )}
+        {runs.filter((r) => r.status === 'completed').length >= 2 && <TrendSpark runs={runs} />}
         {startError && (
           <p className='pb-1.5 text-[12px] text-red-600 dark:text-red-400'>{startError}</p>
         )}
@@ -216,7 +224,9 @@ export function ConformanceView({ className }: { className?: string }) {
           onOpenItem={(id, focus) => {
             if (focus) {
               const url = nav.urlFor({ collection: shownRun.collection, itemId: id })
-              navCtx.navigate(`${url}${url.includes('?') ? '&' : '?'}focus=${encodeURIComponent(focus)}`)
+              navCtx.navigate(
+                `${url}${url.includes('?') ? '&' : '?'}focus=${encodeURIComponent(focus)}`
+              )
             } else {
               nav.open({ collection: shownRun.collection, itemId: id })
             }
@@ -235,8 +245,9 @@ export function ConformanceView({ className }: { className?: string }) {
             Field rules accumulate while data drifts underneath them — imports, integrations, and
             parent-link changes leave records whose values a person could never save today
             (&ldquo;this value is not an available option&rdquo;). Pick a collection and run its
-            checks: required fields, validation rules, and cascade availability, evaluated against
-            the newest records.
+            checks: required fields, validation rules, cascade availability, and inline-grid row
+            rules (a labor line still priced at $40, a line whose task no longer matches its
+            category), evaluated against the newest records.
           </p>
         </div>
       )}
@@ -271,9 +282,7 @@ function ScheduleToggle({ collection }: { collection: string }) {
         aria-checked={active}
         onClick={() =>
           void client
-            .request(
-              put(`/config-conformance/schedules/${collection}`, { is_active: !active })
-            )
+            .request(put(`/config-conformance/schedules/${collection}`, { is_active: !active }))
             .then(() => qc.invalidateQueries({ queryKey: ['conformance-schedules'] }))
         }
         className={cn(
@@ -501,10 +510,12 @@ function RunDetail({
         )}
         <span className='flex-1' />
         <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-          {([
-            { value: false, label: 'All issues' },
-            { value: true, label: 'By record' }
-          ] as const).map((opt) => (
+          {(
+            [
+              { value: false, label: 'All issues' },
+              { value: true, label: 'By record' }
+            ] as const
+          ).map((opt) => (
             <button
               key={opt.label}
               type='button'
@@ -565,20 +576,22 @@ function RunDetail({
         </div>
       )}
 
-      {rule && field && ['cascade', 'validation', 'display'].includes(rule) && (
+      {rule && field && ['cascade', 'validation', 'display', 'row-rule'].includes(rule) && (
         <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />
       )}
 
       <div className='min-h-0 flex-1 overflow-y-auto'>
         {/* Only a SETTLED empty answer earns the green all-clear — while the
             findings are loading (fresh run, run switch) nothing shows. */}
-        {data !== undefined && (data?.findings ?? []).length === 0 && run.status === 'completed' && (
-          <p className='px-4 py-6 text-[12.5px] text-emerald-600 dark:text-emerald-400'>
-            {rule || field
-              ? 'No findings match the filters.'
-              : 'Every checked record satisfies its field configuration.'}
-          </p>
-        )}
+        {data !== undefined &&
+          (data?.findings ?? []).length === 0 &&
+          run.status === 'completed' && (
+            <p className='px-4 py-6 text-[12.5px] text-emerald-600 dark:text-emerald-400'>
+              {rule || field
+                ? 'No findings match the filters.'
+                : 'Every checked record satisfies its field configuration.'}
+            </p>
+          )}
         {grouped ? (
           <div>
             {((data?.findings ?? []) as FindingGroup[]).map((g) => (
@@ -627,49 +640,49 @@ function RunDetail({
             ))}
           </div>
         ) : (
-        <table className='w-full border-collapse text-[12px] tabular-nums'>
-          <tbody>
-            {((data?.findings ?? []) as Finding[]).map((f) => (
-              <tr
-                key={f.id}
-                className='border-b border-slate-50 transition-colors hover:bg-slate-50 dark:border-border/50 dark:hover:bg-background/40'
-              >
-                <td className='w-[190px] px-4 py-1.5'>
-                  <button
-                    type='button'
-                    onClick={() => onOpenItem(f.item_id)}
-                    className='text-left text-nvr-cyan underline decoration-dotted underline-offset-2'
-                  >
-                    {f.item_label || `#${f.item_id}`}
-                  </button>
-                </td>
-                <td className='w-[160px] px-2 py-1.5'>
-                  <button
-                    type='button'
-                    onClick={() => onOpenItem(f.item_id, f.field)}
-                    data-tip='Open the record at this field'
-                    className='font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
-                  >
-                    {f.field}
-                  </button>
-                </td>
-                <td className='w-[150px] px-2 py-1.5'>
-                  <span
-                    className={cn(
-                      'rounded-full px-2 py-0.5 text-[10.5px] font-medium',
-                      RULE_META[f.rule]?.cls ?? 'bg-slate-500/10 text-slate-600'
-                    )}
-                  >
-                    {RULE_META[f.rule]?.label ?? f.rule}
-                  </span>
-                </td>
-                <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>
-                  {f.message}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          <table className='w-full border-collapse text-[12px] tabular-nums'>
+            <tbody>
+              {((data?.findings ?? []) as Finding[]).map((f) => (
+                <tr
+                  key={f.id}
+                  className='border-b border-slate-50 transition-colors hover:bg-slate-50 dark:border-border/50 dark:hover:bg-background/40'
+                >
+                  <td className='w-[190px] px-4 py-1.5'>
+                    <button
+                      type='button'
+                      onClick={() => onOpenItem(f.item_id)}
+                      className='text-left text-nvr-cyan underline decoration-dotted underline-offset-2'
+                    >
+                      {f.item_label || `#${f.item_id}`}
+                    </button>
+                  </td>
+                  <td className='w-[160px] px-2 py-1.5'>
+                    <button
+                      type='button'
+                      onClick={() => onOpenItem(f.item_id, f.field)}
+                      data-tip='Open the record at this field'
+                      className='font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
+                    >
+                      {f.field}
+                    </button>
+                  </td>
+                  <td className='w-[150px] px-2 py-1.5'>
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10.5px] font-medium',
+                        RULE_META[f.rule]?.cls ?? 'bg-slate-500/10 text-slate-600'
+                      )}
+                    >
+                      {RULE_META[f.rule]?.label ?? f.rule}
+                    </span>
+                  </td>
+                  <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>
+                    {f.message}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 
@@ -721,11 +734,22 @@ function RemediateBar({
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   if (total === 0 && !result) return null
+  const rederive = rule === 'row-rule'
   return (
     <div className='flex flex-wrap items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-4 py-2 dark:border-border dark:bg-background/40'>
       <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-        Bulk fix: clear <span className='font-mono'>{field}</span> on the affected records — each
-        write is revisioned and attributed to you.
+        {rederive ? (
+          <>
+            Bulk fix: re-run the <span className='font-mono'>{field}</span> row rules on every
+            affected record — the same pass as the grid&apos;s &ldquo;re-run rules&rdquo;, each line
+            revisioned and attributed to you.
+          </>
+        ) : (
+          <>
+            Bulk fix: clear <span className='font-mono'>{field}</span> on the affected records —
+            each write is revisioned and attributed to you.
+          </>
+        )}
       </span>
       {result ? (
         <span className='text-[11.5px] font-medium text-emerald-600 dark:text-emerald-400'>
@@ -739,25 +763,38 @@ function RemediateBar({
             onClick={() => {
               setBusy(true)
               void client
-                .request<{ data: { cleared: number; failed: number } }>(
+                .request<{
+                  data: { cleared?: number; records?: number; lines?: number; failed: number }
+                }>(
                   post(`/config-conformance/runs/${run.id}/remediate`, {
-                    action: 'clear',
+                    action: rederive ? 'rederive' : 'clear',
                     field,
                     rule
                   })
                 )
                 .then((r) => {
                   setResult(
-                    `Cleared on ${r.data.cleared} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
+                    rederive
+                      ? `Re-derived ${r.data.lines ?? 0} line(s) across ${r.data.records ?? 0} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
+                      : `Cleared on ${r.data.cleared ?? 0} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
                   )
                   void qc.invalidateQueries({ queryKey: ['conformance-run', run.id] })
                 })
                 .catch((err: Error) => setResult(err.message))
                 .finally(() => setBusy(false))
             }}
-            className='h-6 rounded-md bg-red-600 px-2.5 text-[11.5px] font-medium text-white disabled:opacity-50'
+            className={cn(
+              'h-6 rounded-md px-2.5 text-[11.5px] font-medium text-white disabled:opacity-50',
+              rederive ? 'bg-orange-600' : 'bg-red-600'
+            )}
           >
-            {busy ? 'Clearing…' : `Yes, clear ${total.toLocaleString()} value(s)`}
+            {busy
+              ? rederive
+                ? 'Re-deriving…'
+                : 'Clearing…'
+              : rederive
+                ? `Yes, re-run rules on ${total.toLocaleString()} record(s)`
+                : `Yes, clear ${total.toLocaleString()} value(s)`}
           </button>
           <button
             type='button'
@@ -771,12 +808,16 @@ function RemediateBar({
         <button
           type='button'
           onClick={() => setConfirming(true)}
-          className='h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 hover:border-red-300 hover:text-red-600 dark:border-border dark:text-muted-foreground'
+          className={cn(
+            'h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 dark:border-border dark:text-muted-foreground',
+            rederive
+              ? 'hover:border-orange-300 hover:text-orange-600'
+              : 'hover:border-red-300 hover:text-red-600'
+          )}
         >
-          Clear values…
+          {rederive ? 'Re-run rules…' : 'Clear values…'}
         </button>
       )}
     </div>
   )
 }
-

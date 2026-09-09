@@ -6,15 +6,16 @@ import {
   evaluateRowRules,
   evaluateRulesForTrigger,
   type RowRule,
+  RowRuleLookupCache,
+  type RowRuleTraceEntry,
   VALID_OPS,
   VALID_TARGET_TYPES,
-  validateDynamicConfig,
-  RowRuleLookupCache,
-  type RowRuleTraceEntry
+  validateDynamicConfig
 } from '../services/field-rules.js'
-import { applyFieldRules, updateOne } from '../services/items.js'
 import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
+import { applyFieldRules, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { planRowRuleChanges } from '../services/row-rules-apply.js'
 
 interface FieldRuleBody {
   collection?: string
@@ -410,46 +411,18 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const rows = (await q.limit(500)) as Array<Record<string, unknown>>
     const parentContext = body.parent_context ?? {}
     const cache = new RowRuleLookupCache(db)
-    const isEmpty = (v: unknown) => v === null || v === undefined || v === ''
-    const changes: Array<{
-      id: string
-      patch: Record<string, unknown>
-      before: Record<string, unknown>
-    }> = []
-    const fields: Record<string, number> = {}
     const startedAt = Date.now()
-    const hasLocks = rules.some((r) => r.target_type === 'lock')
-    for (const row of rows) {
-      // Fields a rule LOCKS on this row belong to the rules — nobody could
-      // have typed them — so even fill-blanks mode re-derives those.
-      const locked = new Set<string>()
-      if (hasLocks) {
-        await evaluateRowRules(db, collection, { ...row }, parentContext, rules, undefined, {
-          cache,
-          locks: locked,
-          locksOnly: true
-        })
-      }
-      const working: Record<string, unknown> = { ...row }
-      if (mode === 'all') for (const t of targets) working[t] = null
-      else for (const t of locked) if (targets.has(t)) working[t] = null
-      await evaluateRowRules(db, collection, working, parentContext, rules, undefined, { cache })
-      const patch: Record<string, unknown> = {}
-      const before: Record<string, unknown> = {}
-      for (const t of targets) {
-        const was = row[t]
-        const now = working[t]
-        if (String(now ?? '') === String(was ?? '')) continue
-        if (mode === 'empty-only' && !isEmpty(was) && !locked.has(t)) continue
-        // 'all' mode blanked the target — a rule that derives nothing must
-        // not erase a value the row already had.
-        if (mode === 'all' && isEmpty(now) && !isEmpty(was)) continue
-        patch[t] = now ?? null
-        before[t] = was ?? null
-        fields[t] = (fields[t] ?? 0) + 1
-      }
-      if (Object.keys(patch).length) changes.push({ id: String(row.id), patch, before })
-    }
+    // One planner shared with the Data Integrity sweep + fixes — the grid's
+    // preview and the integrity finding must agree on what the rules derive.
+    const plan = await planRowRuleChanges({
+      collection,
+      rows,
+      parentContext,
+      rules,
+      mode,
+      cache
+    })
+    const { changes, fields } = plan
     recordRuleEvalSample(collection, {
       at: Date.now(),
       ms: Date.now() - startedAt,

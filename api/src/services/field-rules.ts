@@ -660,6 +660,20 @@ export class RowRuleLookupCache {
         .first()
     )
   }
+
+  /** First row of `collection` matching `where` (id ascending). Memoized on
+   *  the where-clause — precedence sources like "cifa_tasks for this cifa +
+   *  project type" repeat across every line sharing the pair, and a sweep
+   *  over thousands of lines would otherwise pay one round trip each. */
+  firstWhere(collection: string, where: Record<string, string>) {
+    const key = `first|${collection}|${Object.keys(where)
+      .sort()
+      .map((k) => `${k}=${where[k]}`)
+      .join('&')}`
+    return this.memo(this.recs, key, () =>
+      this.database(collection).where(where).orderBy('id', 'asc').first()
+    )
+  }
 }
 
 export async function evaluateRowRules(
@@ -687,7 +701,7 @@ export async function evaluateRowRules(
     const isLock = rule.target_type === 'lock'
     const triggerField = rule.trigger_field ?? null
     const startedAt = Date.now()
-    let traceVal: unknown = undefined
+    let traceVal: unknown
     const note = (outcome: string, value?: unknown) => {
       evalOpts?.explain?.push({
         index: ruleIndex,
@@ -920,12 +934,9 @@ async function resolvePrecedenceSource(
     if (rowId == null) return null
     const rel = await cache.o2mRel(collection, src.source_field)
     if (!rel?.many_collection) return null
-    cache.queries += 1
-    const firstRec = (await cache
-      .database(rel.many_collection)
-      .where({ [rel.many_field]: String(rowId) })
-      .orderBy('id', 'asc')
-      .first()) as Record<string, unknown> | undefined
+    const firstRec = await cache.firstWhere(rel.many_collection, {
+      [rel.many_field]: String(rowId)
+    })
     return firstRec?.[src.source_related_field] ?? null
   }
   if (src.source_type === 'o2m_filtered') {
@@ -944,12 +955,9 @@ async function resolvePrecedenceSource(
       if (rowId == null) return null
       const rel = await cache.o2mRel(collection, src.source_field)
       if (!rel?.many_collection) return null
-      cache.queries += 1
-      const firstRec = (await cache
-        .database(rel.many_collection)
-        .where({ [rel.many_field]: String(rowId) })
-        .orderBy('id', 'asc')
-        .first()) as Record<string, unknown> | undefined
+      const firstRec = await cache.firstWhere(rel.many_collection, {
+        [rel.many_field]: String(rowId)
+      })
       if (firstRec?.id == null) return null
       intermediateId = String(firstRec.id)
       intermediateCollection = rel.many_collection
@@ -958,12 +966,10 @@ async function resolvePrecedenceSource(
     const fkRel = await cache.fkRel(src.o2m_collection, intermediateCollection)
     if (!fkRel?.many_field) return null
     const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
-    cache.queries += 1
-    const matchRec = (await cache
-      .database(src.o2m_collection)
-      .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
-      .orderBy('id', 'asc')
-      .first()) as Record<string, unknown> | undefined
+    const matchRec = await cache.firstWhere(src.o2m_collection, {
+      [fkRel.many_field]: intermediateId,
+      [src.filter_field]: resolvedFilter
+    })
     return matchRec?.[src.source_related_field] ?? null
   }
   if (src.source_type === 'parent_m2o') {

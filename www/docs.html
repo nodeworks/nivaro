@@ -300,6 +300,7 @@
           <a class="docs-nav-item" data-section="queue-sla-timers" href="#queue-sla-timers">Queue SLA Timers</a>
           <a class="docs-nav-item" data-section="alerts" href="#alerts">Alert Engine</a>
           <a class="docs-nav-item" data-section="at-risk-flagging" href="#at-risk-flagging">At-Risk Flagging</a>
+          <a class="docs-nav-item" data-section="data-integrity" href="#data-integrity">Data Integrity</a>
           <a class="docs-nav-item" data-section="imports" href="#imports">Data Import Queue</a>
           <a class="docs-nav-item" data-section="import-templates" href="#import-templates">Import Templates</a>
           <a class="docs-nav-item" data-section="submission-forms" href="#submission-forms">Submission Forms</a>
@@ -7122,6 +7123,39 @@ Authorization: Bearer &lt;token&gt;
           </table></div>
           <div class="doc-note">Rules live in <code class="doc-code">nivaro_at_risk_rules</code>; system (<code class="doc-code">nivaro_*</code>) collections cannot have rules. SDK: <code class="doc-code">listAtRiskRules</code>, <code class="doc-code">listActiveAtRiskRules</code>, <code class="doc-code">createAtRiskRule</code>, <code class="doc-code">updateAtRiskRule</code>, <code class="doc-code">deleteAtRiskRule</code>, <code class="doc-code">evaluateAtRisk(collection, ids)</code>, <code class="doc-code">readAtRiskSummary()</code>.</div>
           <!-- /SYNC:at-risk-flagging -->
+        </div>
+
+        <div class="doc-section" id="s-data-integrity" data-toc='[{"id":"data-integrity","label":"Data Integrity"}]'>
+          <!-- SYNC:data-integrity -->
+          <h1 class="doc-h1" id="data-integrity">Data Integrity</h1>
+          <p class="doc-p">Data Integrity (Monitoring → Data Integrity, <code class="doc-code">/data-integrity</code>) answers "which records would fail their own form today". Pick a collection and run its checks over the newest records; every finding names the record, the field, and what is wrong in plain language. A nightly schedule can re-run a collection and notify you when the count rises.</p>
+          <h3 class="doc-h3">What it checks</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Check</th><th>What counts as a finding</th></tr></thead>
+            <tbody><tr><tr><td>Required empty</td><td>A required field (or required M2M link) is empty on the record.</td></tr>
+              <tr><td>Validation</td><td>A field value fails one of its validation rules — the same evaluator the save path uses. Date-offset rules ("at least 7 days from today") are judged against the record's creation date.</td></tr>
+              <tr><td>Not an available option</td><td>A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type).</td></tr>
+              <tr><td>Broken display label</td><td>Every part of the display template resolved empty, so the record shows as its internal id.</td></tr>
+              <tr><td>Lines off their rules</td><td>An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \"X\" — rules derive \"Y\"".</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Row-rule checks read the rules on the collection's ACTIVE grouped layout — the same layout the API applies on line creates. Rules configured only on a slugged or role-conditional layout are a per-audience view and are not swept.</div>
+          <h3 class="doc-h3">Fixing findings</h3>
+          <ul class="doc-ul">
+            <li>On the record: the integrity banner at the top of the form lists the record's findings; a "Fix" button appears where the repair is mechanical. For "Lines off their rules" the fix re-runs the row rules on every line of the record — the same pass as the grid's "re-run rules" button — writing only the lines whose values change, each revisioned and attributed to you.</li>
+            <li>On the run: filter by the rule and the field, and the bulk-fix bar offers "Re-run rules…" across every affected record in the run (cap 1,000 records). Clearing stale cascade values and regenerating ids work the same way.</li>
+            <li>Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the line.</li>
+          </ul>
+          <h3 class="doc-h3">API</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">GET /api/config-conformance/collections</code></td><td>Collections with anything to check, with per-kind counts (including grids with row rules).</td></tr>
+              <tr><td><code class="doc-code">POST /api/config-conformance/:collection/run</code></td><td>Start a run (<code class="doc-code">{limit}</code> — newest N records, 0 = whole collection). 202 + run id; 409 while one is running.</td></tr>
+              <tr><td><code class="doc-code">GET /api/config-conformance/runs/:id</code></td><td>Run status + paged findings; <code class="doc-code">rule=</code> and <code class="doc-code">field=</code> facets.</td></tr>
+              <tr><td><code class="doc-code">POST /api/config-conformance/runs/:id/remediate</code></td><td><code class="doc-code">{action:"clear"|"rederive", field, rule}</code> — bulk fix across the run's affected records.</td></tr>
+              <tr><td><code class="doc-code">GET /api/config-conformance/record/:collection/:id</code></td><td>Findings for one record from the latest completed run (drives the form banner).</td></tr>
+              <tr><td><code class="doc-code">POST /api/config-conformance/record/:collection/:id/fix</code></td><td><code class="doc-code">{field, rule}</code> — repair one finding on one record.</td></tr></tr></tbody>
+          </table></div>
+          <!-- /SYNC:data-integrity -->
         </div>
 
         <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>

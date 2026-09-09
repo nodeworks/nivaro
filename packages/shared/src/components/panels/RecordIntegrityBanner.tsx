@@ -108,7 +108,9 @@ export function RecordIntegrityBanner({
                   title={
                     f.rule === 'display'
                       ? 'Regenerate the id from its pattern'
-                      : 'Clear the stale value (it is no longer an available option)'
+                      : f.rule === 'row-rule'
+                        ? 'Re-run the row rules on every line of this record'
+                        : 'Clear the stale value (it is no longer an available option)'
                   }
                   className='shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10.5px] font-semibold text-white transition-opacity hover:bg-amber-700 disabled:opacity-50'
                 >
@@ -117,9 +119,7 @@ export function RecordIntegrityBanner({
               )}
             </div>
           ))}
-          {fixError && (
-            <p className='text-[11px] text-red-600 dark:text-red-400'>{fixError}</p>
-          )}
+          {fixError && <p className='text-[11px] text-red-600 dark:text-red-400'>{fixError}</p>}
           {fix.isSuccess && !fixError && (
             <p className='text-[11px] text-emerald-700 dark:text-emerald-400'>
               Fixed — reload the record to see the new value everywhere.

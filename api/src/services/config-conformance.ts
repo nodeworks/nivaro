@@ -1,6 +1,15 @@
 import { db } from '../db/index.js'
+import { selectInChunks } from './db-batch.js'
+import { RowRuleLookupCache } from './field-rules.js'
 import { getLabels } from './queues.js'
-import { type ValidationRule, applyValidationRule } from './validation-rules.js'
+import {
+  type GridRuleConfig,
+  gridRuleConfigsFor,
+  parentContextFrom,
+  parentFieldsFor,
+  planRowRuleChanges
+} from './row-rules-apply.js'
+import { applyValidationRule, type ValidationRule } from './validation-rules.js'
 
 /**
  * Config conformance — which items would FAIL their own form if someone
@@ -80,8 +89,18 @@ interface CompiledChecks {
   /** Display-template parts — a record whose parts all resolve empty renders
    *  as its internal id everywhere labels are used. */
   displayTokens: DisplayToken[]
+  /** Inline-grid row rules (task / labor price / line type autofill) judged
+   *  against every SAVED child row of each record. */
+  rowRules: RowRuleCheck[]
   /** Rules present in config but not evaluable by this sweep. */
   skipped: string[]
+}
+
+export interface RowRuleCheck extends GridRuleConfig {
+  /** Child column used to name a line in messages ("Line 3"), when present. */
+  lineField: string | null
+  /** Child field labels + display hints for the message. */
+  childFields: Map<string, { label: string; currency: boolean; relatedCollection: string | null }>
 }
 
 function parseJson<T>(raw: unknown): T | null {
@@ -243,6 +262,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     cascades: [],
     displayTokens: [],
     dateOffsets: [],
+    rowRules: [],
     skipped: []
   }
   const { layouts, visibleOn } = await layoutPresence(collection)
@@ -256,9 +276,9 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
 
   // Display template completeness — each {{token}} should resolve to a value,
   // or the record renders as its internal id in pickers, queues and labels.
-  const meta = (await db('nivaro_collections')
-    .where({ collection })
-    .first('display_template')) as { display_template: string | null } | undefined
+  const meta = (await db('nivaro_collections').where({ collection }).first('display_template')) as
+    | { display_template: string | null }
+    | undefined
   for (const m of String(meta?.display_template ?? '').matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
     const path = m[1].split('.')
     if (path.length > 3 || path.some((seg) => !IDENT.test(seg))) {
@@ -429,6 +449,43 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       out.cascades.push(check)
     }
   }
+
+  // ── inline-grid row rules ────────────────────────────────────────────────
+  // The same rules the grid runs as a line is typed and the API runs on a
+  // line create: a saved line whose stored target differs from what the
+  // rules derive TODAY is the "labor line priced at $40" class of drift.
+  for (const cfg of await gridRuleConfigsFor(collection).catch(() => [] as GridRuleConfig[])) {
+    const childFieldRows = (await db('nivaro_fields')
+      .where({ collection: cfg.childCollection })
+      .select('field', 'label', 'options')) as Array<{
+      field: string
+      label: string | null
+      options: unknown
+    }>
+    const childRels = (await db('nivaro_relations')
+      .where({ many_collection: cfg.childCollection })
+      .whereNotNull('one_collection')
+      .select('many_field', 'one_collection')) as Array<{
+      many_field: string
+      one_collection: string
+    }>
+    const childFields = new Map<
+      string,
+      { label: string; currency: boolean; relatedCollection: string | null }
+    >()
+    for (const f of childFieldRows) {
+      const o = parseJson<{ format?: string }>(f.options)
+      childFields.set(f.field, {
+        label: f.label || label(f.field),
+        currency: o?.format === 'currency' || /price|amount|cost|total/i.test(f.field),
+        relatedCollection: childRels.find((r) => r.many_field === f.field)?.one_collection ?? null
+      })
+    }
+    const lineField = (await hasPhysicalColumn(cfg.childCollection, 'line_number'))
+      ? 'line_number'
+      : null
+    out.rowRules.push({ ...cfg, lineField, childFields })
+  }
   return out
 }
 
@@ -437,6 +494,8 @@ export interface CollectionCheckSummary {
   required: number
   validation: number
   cascade: number
+  /** Inline grids on the active layout carrying row rules. */
+  row_rules: number
   skipped: number
 }
 
@@ -455,7 +514,13 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
           .orWhereNotNull('validation_rules')
           .orWhereNotNull('dependency_config')
       )
-      .select('collection', 'field', 'required', 'validation_rules', 'dependency_config') as Promise<
+      .select(
+        'collection',
+        'field',
+        'required',
+        'validation_rules',
+        'dependency_config'
+      ) as Promise<
       Array<{
         collection: string
         field: string
@@ -468,7 +533,9 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
       .where('layout_type', 'grouped')
       // Same reachability rule as layoutPresence — the two must not drift.
       .where((qb) =>
-        qb.where('is_active', true).orWhere((q2) => q2.whereNotNull('slug').where('create_hidden', false))
+        qb
+          .where('is_active', true)
+          .orWhere((q2) => q2.whereNotNull('slug').where('create_hidden', false))
       )
       .select('id', 'collection') as Promise<Array<{ id: number; collection: string }>>,
     db('nivaro_layout_field_assignments')
@@ -496,7 +563,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
   const entry = (collection: string): CollectionCheckSummary => {
     let e = out.get(collection)
     if (!e) {
-      e = { collection, required: 0, validation: 0, cascade: 0, skipped: 0 }
+      e = { collection, required: 0, validation: 0, cascade: 0, row_rules: 0, skipped: 0 }
       out.set(collection, e)
     }
     return e
@@ -516,13 +583,30 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
       else e.skipped++
     }
     const dep = parseJson<{
-      cascade_filters?: Array<{ parent_field?: string; filter_column?: string; filter_via_many?: boolean }>
+      cascade_filters?: Array<{
+        parent_field?: string
+        filter_column?: string
+        filter_via_many?: boolean
+      }>
     }>(f.dependency_config)
     for (const c of dep?.cascade_filters ?? []) {
       if (!c.parent_field || !c.filter_column) continue
       if (c.filter_column.includes('.') || c.filter_via_many) e.skipped++
       else e.cascade++
     }
+  }
+  // Grids with row rules on ACTIVE grouped layouts — one query, LIKE-narrowed
+  // to the handful of assignment rows that carry them.
+  const gridRows = (await db('nivaro_layout_field_assignments as a')
+    .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
+    .where('l.is_active', true)
+    .where('l.layout_type', 'grouped')
+    .whereRaw("a.overrides LIKE '%row_rules%'")
+    .select('l.collection')
+    .catch(() => [])) as Array<{ collection: string }>
+  for (const g of gridRows) {
+    if (!IDENT.test(g.collection) || /^nivaro_|^directus_/i.test(g.collection)) continue
+    entry(g.collection).row_rules++
   }
   return out
 }
@@ -543,15 +627,17 @@ export async function runConformance(
   try {
     const checks = await compileChecks(collection)
     const summary = await evaluate(runId, checks, rowCap)
-    await db('nivaro_conformance_runs').where('id', runId).update({
-      status: 'completed',
-      checked_records: summary.checked,
-      violation_count: summary.violations,
-      truncated: summary.truncated,
-      rule_counts: JSON.stringify(summary.ruleCounts),
-      field_counts: JSON.stringify(summary.fieldCounts),
-      finished_at: new Date()
-    })
+    await db('nivaro_conformance_runs')
+      .where('id', runId)
+      .update({
+        status: 'completed',
+        checked_records: summary.checked,
+        violation_count: summary.violations,
+        truncated: summary.truncated,
+        rule_counts: JSON.stringify(summary.ruleCounts),
+        field_counts: JSON.stringify(summary.fieldCounts),
+        finished_at: new Date()
+      })
   } catch (err) {
     await db('nivaro_conformance_runs')
       .where('id', runId)
@@ -586,14 +672,16 @@ async function evaluate(
     columns.add(d.field)
     columns.add(d.baseline)
   }
+  for (const rc of checks.rowRules) {
+    for (const f of parentFieldsFor(rc)) columns.add(f)
+  }
   // Only real columns survive — required flags on alias fields (M2M pickers)
   // have no scalar column to test here.
   const physical = new Set(
     (
-      (await db.raw(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`,
-        [collection]
-      )) as Array<{ COLUMN_NAME: string }>
+      (await db.raw(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`, [
+        collection
+      ])) as Array<{ COLUMN_NAME: string }>
     ).map((c) => c.COLUMN_NAME)
   )
   const selectable = [...columns].filter((c) => physical.has(c))
@@ -626,14 +714,20 @@ async function evaluate(
       for (const r of checks.requiredFields) {
         if (r.kind !== 'column' || !physical.has(r.field)) continue
         const msg = applyValidationRule({ type: 'required' }, row[r.field], r.label)
-        if (msg) findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
+        if (msg)
+          findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
       }
       for (const v of checks.validation) {
         if (!physical.has(v.field)) continue
         for (const rule of v.rules) {
           const msg = applyValidationRule(rule, row[v.field], v.label, row)
           if (msg) {
-            findings.push({ item_id: String(row.id), field: v.field, rule: 'validation', message: msg })
+            findings.push({
+              item_id: String(row.id),
+              field: v.field,
+              rule: 'validation',
+              message: msg
+            })
             break
           }
         }
@@ -699,9 +793,7 @@ async function evaluate(
       if (c.childIsM2M && c.childJunction) {
         const links = (await db(c.childJunction.table)
           .whereIn(c.childJunction.srcFk, rowIds as never[])
-          .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<
-          Record<string, unknown>
-        >
+          .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<Record<string, unknown>>
         for (const l of links) {
           const key = String(l[c.childJunction.srcFk])
           if (!childSets.has(key)) childSets.set(key, new Set())
@@ -719,9 +811,7 @@ async function evaluate(
       if (c.parentIsM2M && c.parentJunction) {
         const links = (await db(c.parentJunction.table)
           .whereIn(c.parentJunction.srcFk, rowIds as never[])
-          .select(c.parentJunction.srcFk, c.parentJunction.tgtFk)) as Array<
-          Record<string, unknown>
-        >
+          .select(c.parentJunction.srcFk, c.parentJunction.tgtFk)) as Array<Record<string, unknown>>
         for (const l of links) {
           const key = String(l[c.parentJunction.srcFk])
           if (!parentSets.has(key)) parentSets.set(key, new Set())
@@ -742,9 +832,7 @@ async function evaluate(
       if (c.filterIsM2M && c.filterJunction) {
         const links = (await db(c.filterJunction.table)
           .whereIn(c.filterJunction.srcFk, childVals as never[])
-          .select(c.filterJunction.srcFk, c.filterJunction.tgtFk)) as Array<
-          Record<string, unknown>
-        >
+          .select(c.filterJunction.srcFk, c.filterJunction.tgtFk)) as Array<Record<string, unknown>>
         for (const l of links) {
           const key = String(l[c.filterJunction.srcFk])
           if (!availability.has(key)) availability.set(key, new Set())
@@ -775,7 +863,13 @@ async function evaluate(
           const key = `${row.id}|${c.field}`
           let agg = cascadeFails.get(key)
           if (!agg) {
-            agg = { field: c.field, fieldLabel: c.fieldLabel, isM2M: c.childIsM2M, badCount: 0, parents: [] }
+            agg = {
+              field: c.field,
+              fieldLabel: c.fieldLabel,
+              isM2M: c.childIsM2M,
+              badCount: 0,
+              parents: []
+            }
             cascadeFails.set(key, agg)
           }
           agg.badCount = Math.max(agg.badCount, bad.length)
@@ -842,6 +936,15 @@ async function evaluate(
       }
     }
 
+    // ── inline-grid row rules: stored child values vs what the rules derive ─
+    for (const rc of checks.rowRules) {
+      try {
+        findings.push(...(await evaluateRowRuleCheck(rc, rows)))
+      } catch (err) {
+        console.warn(`conformance row-rule check skipped for ${collection}.${rc.aliasField}:`, err)
+      }
+    }
+
     // ── persist chunk findings with labels — EVERY finding stores; the
     // detail is the point, and the rows are small ────────────────────────
     for (const f of findings) {
@@ -893,6 +996,118 @@ async function evaluate(
 }
 
 /**
+ * One parent chunk of the row-rule check: fetch every child row of the chunk
+ * in bulk, re-derive every rule target from scratch (the grid's "all" mode —
+ * a rule deriving nothing never counts as drift), and report one finding per
+ * line naming each stored-vs-derived disagreement. FK values are shown as
+ * labels so "Task is X — rules derive Y" reads like the form does.
+ */
+async function evaluateRowRuleCheck(
+  rc: RowRuleCheck,
+  parents: Array<Record<string, unknown>>
+): Promise<Array<{ item_id: string; field: string; rule: string; message: string }>> {
+  const out: Array<{ item_id: string; field: string; rule: string; message: string }> = []
+  const parentIds = parents.map((p) => String(p.id))
+  const children = await selectInChunks(
+    parentIds,
+    1000,
+    (ids) =>
+      db(rc.childCollection).whereIn(rc.fkField, ids).orderBy('id').select('*') as Promise<
+        Array<Record<string, unknown>>
+      >
+  )
+  if (children.length === 0) return out
+  const byParent = new Map<string, Array<Record<string, unknown>>>()
+  for (const c of children) {
+    const k = String(c[rc.fkField])
+    if (!byParent.has(k)) byParent.set(k, [])
+    byParent.get(k)?.push(c)
+  }
+  // One lookup cache per chunk: relation metadata + related records are
+  // shared across every line of every parent in the chunk, bounded in size.
+  const cache = new RowRuleLookupCache(db)
+  type Drift = {
+    parentId: string
+    line: Record<string, unknown>
+    diffs: Array<{ field: string; was: unknown; now: unknown; locked: boolean }>
+  }
+  const drifts: Drift[] = []
+  for (const parent of parents) {
+    const lines = byParent.get(String(parent.id))
+    if (!lines || lines.length === 0) continue
+    const plan = await planRowRuleChanges({
+      collection: rc.childCollection,
+      rows: lines,
+      parentContext: parentContextFrom(rc, parent),
+      rules: rc.rowRules,
+      mode: 'all',
+      cache
+    })
+    for (const ch of plan.changes) {
+      const line = lines.find((l) => String(l.id) === ch.id)
+      if (!line) continue
+      drifts.push({
+        parentId: String(parent.id),
+        line,
+        diffs: Object.keys(ch.patch).map((f) => ({
+          field: f,
+          was: ch.before[f],
+          now: ch.patch[f],
+          locked: ch.locked.includes(f)
+        }))
+      })
+    }
+  }
+  if (drifts.length === 0) return out
+
+  // Resolve FK ids → labels in one batch per related collection.
+  const wanted = new Map<string, Set<string>>()
+  for (const d of drifts) {
+    for (const diff of d.diffs) {
+      const rel = rc.childFields.get(diff.field)?.relatedCollection
+      if (!rel) continue
+      for (const v of [diff.was, diff.now]) {
+        if (v == null || v === '') continue
+        if (!wanted.has(rel)) wanted.set(rel, new Set())
+        wanted.get(rel)?.add(String(v))
+      }
+    }
+  }
+  const labels =
+    wanted.size > 0 ? await getLabels(wanted).catch(() => ({}) as Record<string, string>) : {}
+  const fmt = (field: string, v: unknown): string => {
+    if (v == null || v === '') return 'empty'
+    const meta = rc.childFields.get(field)
+    if (meta?.relatedCollection) {
+      const l = labels[`${meta.relatedCollection}:${String(v)}`]
+      return l ? `"${l}"` : `#${String(v)}`
+    }
+    const n = typeof v === 'number' ? v : Number(v)
+    if (Number.isFinite(n) && String(v).trim() !== '') {
+      if (meta?.currency) return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+      return n.toLocaleString('en-US', { maximumFractionDigits: 4 })
+    }
+    return `"${String(v)}"`
+  }
+  for (const d of drifts) {
+    const lineNo = rc.lineField ? d.line[rc.lineField] : null
+    const head =
+      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(d.line.id)}`
+    const parts = d.diffs.map((diff) => {
+      const lbl = rc.childFields.get(diff.field)?.label ?? label(diff.field)
+      return `${lbl} is ${fmt(diff.field, diff.was)} — rules derive ${fmt(diff.field, diff.now)}${diff.locked ? ' (locked)' : ''}`
+    })
+    out.push({
+      item_id: d.parentId,
+      field: rc.aliasField,
+      rule: 'row-rule',
+      message: `${head}: ${parts.join('; ')}`
+    })
+  }
+  return out
+}
+
+/**
  * Validation-rule change impact: evaluate CURRENT vs PROPOSED rules for one
  * field over the newest rows and report the flips. Same evaluator the save
  * path uses; date-offset rules judged against the creation date exactly like
@@ -920,10 +1135,11 @@ export async function previewValidationImpact(
       ? 'created_at'
       : null
 
-  const fieldRow = (await db('nivaro_fields').where({ collection, field }).first(
-    'validation_rules',
-    'required'
-  )) as { validation_rules: string | null; required: boolean | number | null } | undefined
+  const fieldRow = (await db('nivaro_fields')
+    .where({ collection, field })
+    .first('validation_rules', 'required')) as
+    | { validation_rules: string | null; required: boolean | number | null }
+    | undefined
   const currentRules = parseJson<ValidationRule[]>(fieldRow?.validation_rules) ?? []
   const currentRequired = fieldRow?.required === true || fieldRow?.required === 1
 
@@ -961,10 +1177,9 @@ export async function previewValidationImpact(
   }
 
   const cols = creationBaseline ? ['id', field, creationBaseline] : ['id', field]
-  const rows = (await db(collection)
-    .select(cols)
-    .orderBy('id', 'desc')
-    .limit(opts.limit)) as Array<Record<string, unknown>>
+  const rows = (await db(collection).select(cols).orderBy('id', 'desc').limit(opts.limit)) as Array<
+    Record<string, unknown>
+  >
 
   let currentFailing = 0
   let proposedFailing = 0
