@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-09T18:50:55.419Z",
+  "generated_at": "2026-09-09T19:44:39.726Z",
   "releases": [
+    {
+      "version": "0.1.238",
+      "tag": "v0.1.238",
+      "date": "2026-09-09T15:44:32-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "data-integrity",
+              "text": "sweep inline-grid row rules and re-derive drifted lines",
+              "hash": "e7739340"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "nightly-sweep knob no longer covers its label; HeaderSummaryChip hook order",
+              "hash": "67955cbb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "re-run rules stages edits on pending-mode grids",
+              "hash": "7ed2dee7"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.237",
       "tag": "v0.1.237",
-      "date": "2026-09-09T14:50:48-04:00",
+      "date": "2026-09-09T14:50:55-04:00",
       "sections": [
         {
           "label": "Added",
