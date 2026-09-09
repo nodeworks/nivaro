@@ -1273,6 +1273,10 @@ export function ItemEditForm({
   const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(
     new Map()
   )
+  // New rows that did NOT land in the last flush, per relation — the save's
+  // post-flush cleanup keeps exactly these staged so a retry re-posts only
+  // them. Reset at the start of every save.
+  const remainingO2MRowsRef = useRef<Map<string, Record<string, unknown>[]>>(new Map())
   // Pending edits/deletes for existing rows (saveMode='pending')
   const [pendingO2MEdits, setPendingO2MEdits] = useState<
     Map<string, Map<string, Record<string, unknown>>>
@@ -5202,6 +5206,7 @@ export function ItemEditForm({
         })
       ]
       setSaveSteps(steps)
+      remainingO2MRowsRef.current = new Map()
       setSaveDialogOpen(true)
 
       // ── Grid flushers (file pickers etc.) — run BEFORE the payload build so
@@ -5391,6 +5396,11 @@ export function ItemEditForm({
       }
 
       // ── O2M new rows ───────────────────────────────────────────────────────
+      // Rows that did NOT land this pass, per relation — kept staged so a
+      // retry re-posts only them (clearing everything would lose the unsaved
+      // lines; keeping everything would duplicate the saved ones).
+      remainingO2MRowsRef.current = new Map()
+      const remainingO2MRows = remainingO2MRowsRef.current
       for (const key of newO2MKeys) {
         const stepId = `o2m:new:${key}`
         const [rc, mf] = key.split('.')
@@ -5415,21 +5425,47 @@ export function ItemEditForm({
           }
         }
         updateStep(stepId, { status: 'running', progress: { done: 0, total: rowList.length } })
+        // A human handle for a line in progress/failure messages: its order
+        // number when the grid stamps one, else its position in the batch.
+        const lineLabel = (data: Record<string, unknown>, idx: number) => {
+          const n = data.line_number ?? data.sort ?? null
+          const desc = ['item_description', 'description', 'name', 'title', 'label']
+            .map((k) => data[k])
+            .find((v) => typeof v === 'string' && v.trim() !== '') as string | undefined
+          const head = `line ${n !== null && n !== undefined && n !== '' ? String(n) : idx + 1}`
+          return desc ? `${head} · ${desc.length > 40 ? `${desc.slice(0, 40)}…` : desc}` : head
+        }
+        const failedLines: Array<{ label: string; error: string }> = []
+        const remaining: Record<string, unknown>[] = []
         try {
           let nestedFailures = 0
           // SEQUENTIAL on purpose: the rows are POSTed in the order the user
           // built them, so their ids (and any order column the grid stamped)
           // ascend in that order — a parallel flush let the server's answer
           // order decide the line sequence.
-          for (const data of rowList) {
+          for (let rowIdx = 0; rowIdx < rowList.length; rowIdx++) {
+            const data = rowList[rowIdx]
+            updateStep(stepId, {
+              detail: `Saving ${lineLabel(data, rowIdx)} (${rowIdx + 1} of ${rowList.length})`
+            })
+            // One failed line must not abort the rest: later lines still land
+            // (in order), the failure is named, and only the failed line stays
+            // staged for the retry.
             await (async () => {
               const o2mEntries = Object.entries(data).filter(([k]) => k.startsWith('__o2m_'))
               const cleanData = Object.fromEntries(
                 Object.entries(data).filter(([k]) => !k.startsWith('__o2m_'))
               )
-              const res = await client.request<{ data: { id: unknown } }>(
-                post(`/items/${rc}`, { ...cleanData, [mf]: savedId })
-              )
+              let res: { data: { id: unknown } } | null = null
+              try {
+                res = await client.request<{ data: { id: unknown } }>(
+                  post(`/items/${rc}`, { ...cleanData, [mf]: savedId })
+                )
+              } catch (err) {
+                failedLines.push({ label: lineLabel(data, rowIdx), error: errMsg(err) })
+                remaining.push(data)
+                return
+              }
               const childId = res?.data?.id
               updateStep(stepId, (s) => ({
                 progress: { done: (s.progress?.done ?? 0) + 1, total: rowList.length }
@@ -5464,16 +5500,28 @@ export function ItemEditForm({
               }
             })()
           }
+          if (remaining.length > 0) remainingO2MRows.set(key, remaining)
+          const problems: string[] = []
+          if (failedLines.length > 0) {
+            const landed = rowList.length - failedLines.length
+            problems.push(
+              `${failedLines.length} of ${rowList.length} line${rowList.length !== 1 ? 's' : ''} did not save` +
+                (landed > 0 ? ` (${landed} saved)` : '') +
+                ` — ${failedLines.map((f) => `${f.label}: ${f.error}`).join(' · ')}`
+            )
+          }
+          if (nestedFailures > 0)
+            problems.push(`${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`)
           updateStep(
             stepId,
-            nestedFailures > 0
-              ? {
-                  status: 'error',
-                  error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`
-                }
-              : { status: 'done' }
+            problems.length > 0
+              ? { status: 'error', detail: undefined, error: problems.join('. ') }
+              : { status: 'done', detail: `${rowList.length} line${rowList.length !== 1 ? 's' : ''} saved` }
           )
         } catch (err) {
+          // Only a failure OUTSIDE the per-line guard lands here (e.g. the
+          // relation lookup) — nothing of this batch is known to have landed.
+          remainingO2MRows.set(key, rowList)
           updateStep(stepId, { status: 'error', error: errMsg(err) })
         }
       }
@@ -5732,7 +5780,7 @@ export function ItemEditForm({
         const mf = key.slice(dotIdx + 1)
         qc.invalidateQueries({ queryKey: ['o2m-rows', rc, mf, id] })
       }
-      setPendingO2MRows(new Map())
+      setPendingO2MRows(new Map(remainingO2MRowsRef.current))
       // Staged grandchild ops just flushed — the widget registry must stop
       // reporting them (a grid unmounted on another tab can't re-report).
       stagedRelsSigRef.current.clear()

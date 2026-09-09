@@ -5,7 +5,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
-import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS } from './helpers'
+import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS, richTextToPlain } from './helpers'
 import type { M2MStagingCtx } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
@@ -403,28 +403,23 @@ function SummaryFieldValueInner({
   const isEmpty = val === null || val === undefined || val === ''
   if (isEmpty) return <span className='text-slate-400 dark:text-slate-500'>—</span>
 
-  if (iface === 'extension-editorjs') {
-    try {
-      const doc = JSON.parse(String(val)) as { blocks?: Array<{ data: { text?: string } }> }
-      const text = (doc.blocks ?? [])
-        .map((b) => b.data?.text ?? '')
-        .join(' ')
-        .trim()
-      return <span className='truncate text-slate-700 dark:text-slate-200'>{text || '—'}</span>
-    } catch {
-      /* fall through */
-    }
-  }
-  if (iface === 'input-rich-text-html') {
-    const div = typeof document !== 'undefined' ? document.createElement('div') : null
-    if (div) {
-      div.innerHTML = String(val)
+  // Rich text: judged by CONTENT, not interface. A field whose interface is
+  // rich_text today may still hold the legacy EditorJS JSON it was imported
+  // with, and the summary must never show that blob (Rob's report).
+  if (
+    iface === 'extension-editorjs' ||
+    iface === 'input-rich-text-html' ||
+    iface === 'rich_text' ||
+    iface === 'wysiwyg' ||
+    typeof val === 'string'
+  ) {
+    const plain = richTextToPlain(val)
+    if (plain !== null)
       return (
-        <span className='truncate text-slate-700 dark:text-slate-200'>
-          {div.textContent || '—'}
+        <span className='truncate text-slate-700 dark:text-slate-200' title={plain}>
+          {plain || '—'}
         </span>
       )
-    }
   }
 
   if (typeof val === 'boolean')

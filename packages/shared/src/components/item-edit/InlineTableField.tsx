@@ -89,7 +89,7 @@ import {
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import { RowHistorySheet } from './RowHistorySheet'
-import { RowMatchPanel, type RowMatchPanelConfig } from './RowMatchPanel'
+import { RowMatchDot, RowMatchPanel, type RowMatchPanelConfig, useRowMatches } from './RowMatchPanel'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -3109,6 +3109,20 @@ export function InlineTableField({
     staleTime: 60_000
   })
 
+  // Row ↔ related-record matching (options.row_match_panel): resolved once
+  // for every saved row so the grid can show a per-row dot and the editor the
+  // full reason; no-op when the option is absent.
+  const rowMatches = useRowMatches({
+    config: rowMatchPanel,
+    rows,
+    relatedCollection,
+    childRelations,
+    parentDraft: parentDraftCtx?.draft,
+    m2oRelMap,
+    m2oDisplays,
+    client
+  })
+
   function buildParentCtx(): Record<string, unknown> {
     const parentCtx: Record<string, unknown> = {}
     if (parentDraftCtx?.draft) {
@@ -3467,6 +3481,13 @@ export function InlineTableField({
                 )
               )
             : rowPayload
+          // Opening a row and clicking away is not an edit. An EMPTY queued
+          // payload still registered the row as pending ("Edited" badge, a
+          // flush PATCH with no fields) — close without queueing instead.
+          if (Object.keys(queuedPayload).length === 0 && nestedOpsEntries.length === 0) {
+            clearIfStillEditing()
+            return
+          }
           staging.queueEdit(relatedCollection, manyField, editState.rowId, {
             ...queuedPayload,
             ...Object.fromEntries(nestedOpsEntries)
@@ -4416,18 +4437,8 @@ export function InlineTableField({
               )
             })}
         </div>
-        {rowMatchPanel && args.rowId && !args.rowId.startsWith('pending:') && (
-          <RowMatchPanel
-            config={rowMatchPanel}
-            rowId={args.rowId}
-            row={args.draft}
-            relatedCollection={relatedCollection}
-            childRelations={childRelations}
-            parentDraft={parentDraftCtx?.draft}
-            m2oRelMap={m2oRelMap}
-            m2oDisplays={m2oDisplays}
-            client={client}
-          />
+        {rowMatchPanel && args.rowId && !args.rowId.startsWith('pending:') && args.rowId !== 'new' && (
+          <RowMatchPanel config={rowMatchPanel} result={rowMatches.byRow.get(args.rowId)} />
         )}
         {args.drawer}
       </div>
@@ -4910,11 +4921,19 @@ export function InlineTableField({
                           )}
                           {showLineNumbers && (
                             <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
-                              {ri + 1}
+                              <span className='inline-flex items-center gap-1'>
+                                {ri + 1}
+                                {rowMatchPanel && (
+                                  <RowMatchDot result={rowMatches.byRow.get(id)} title={rowMatchPanel.title} />
+                                )}
+                              </span>
                             </td>
                           )}
                           {isPendingMode && (
                             <td className='px-3 py-1 align-middle w-20'>
+                              {!showLineNumbers && rowMatchPanel && (
+                                <RowMatchDot result={rowMatches.byRow.get(id)} title={rowMatchPanel.title} />
+                              )}
                               {isPendingDelete ? (
                                 <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
                                   Delete

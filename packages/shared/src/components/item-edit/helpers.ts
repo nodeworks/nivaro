@@ -212,3 +212,49 @@ export const isSentinelKey = (field: string) =>
   SENTINEL_FIELDS.has(field) || (field.startsWith('__widget_') && field.endsWith('__'))
 
 export const EMPTY_NESTED_OPS: NestedOps = { created: [], updated: [], deleted: [] }
+
+/**
+ * Rich text as plain words. Handles BOTH storage shapes a rich-text field
+ * can hold: Tiptap HTML (the current shape) and the legacy EditorJS document
+ * (`{"time":…,"blocks":[…]}`) that rows converted before 2026-08-13 — or
+ * never converted — still carry. Returns null when the value is neither, so
+ * callers can fall back to their normal rendering.
+ */
+export function richTextToPlain(val: unknown): string | null {
+  if (typeof val !== 'string') return null
+  const s = val.trim()
+  if (!s) return null
+  if (s.startsWith('{') && /"blocks"\s*:/.test(s)) {
+    try {
+      const doc = JSON.parse(s) as { blocks?: Array<{ type?: string; data?: Record<string, unknown> }> }
+      if (Array.isArray(doc.blocks)) {
+        const parts: string[] = []
+        for (const b of doc.blocks) {
+          const d = b.data ?? {}
+          if (typeof d.text === 'string') parts.push(d.text)
+          else if (Array.isArray(d.items))
+            parts.push(
+              (d.items as unknown[])
+                .map((it) => (typeof it === 'string' ? it : String((it as Record<string, unknown>)?.content ?? '')))
+                .filter(Boolean)
+                .join(' · ')
+            )
+        }
+        return stripTags(parts.join(' ')).trim()
+      }
+    } catch {
+      /* not EditorJS after all */
+    }
+  }
+  if (/<[a-z][\s\S]*>/i.test(s)) return stripTags(s).trim()
+  return null
+}
+
+function stripTags(html: string): string {
+  if (typeof document !== 'undefined') {
+    const div = document.createElement('div')
+    div.innerHTML = html
+    return (div.textContent || '').replace(/\s+/g, ' ')
+  }
+  return html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ')
+}
