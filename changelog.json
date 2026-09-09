@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-09T02:10:27.432Z",
+  "generated_at": "2026-09-09T15:41:13.387Z",
   "releases": [
+    {
+      "version": "0.1.234",
+      "tag": "v0.1.234",
+      "date": "2026-09-09T11:41:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "access",
+              "text": "record access requests join the grant queue with a fitting grant",
+              "hash": "7333b039"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.233",
       "tag": "v0.1.233",
-      "date": "2026-09-08T22:10:20-04:00",
+      "date": "2026-09-08T22:10:27-04:00",
       "sections": [
         {
           "label": "Added",
