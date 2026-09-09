@@ -447,18 +447,32 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Room per record; viewer lists live in a module-level map (single-node
     // fidelity — with the Redis adapter, cross-node lists degrade gracefully
     // to per-node views, same accepted limitation as presence:join rooms).
+    // A socket may sit in SEVERAL record rooms at once (a frontend with a
+    // record tab strip keeps every open record mounted). `joinedRecordRoom`
+    // is the most recent join — the fallback target for clients that don't
+    // say which record an event belongs to; `joinedRecordRooms` is the full
+    // set, and events that name their record route to that room.
     let joinedRecordRoom: string | null = null
+    const joinedRecordRooms = new Set<string>()
     const displayName = (u: User) =>
       [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+    /** The room an event targets: the named record when the socket is in it,
+     *  else the last joined room. Null = not in any record room. */
+    const roomFor = (payload?: { collection?: string; item?: unknown }): string | null => {
+      if (payload && typeof payload.collection === 'string' && payload.item != null) {
+        const named = `record:${payload.collection}:${String(payload.item)}`
+        if (joinedRecordRooms.has(named)) return named
+      }
+      return joinedRecordRoom
+    }
 
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
       io.to(room).emit('record:viewers', { viewers })
     }
-    const leaveRecordRoom = () => {
-      if (!joinedRecordRoom) return
-      const room = joinedRecordRoom
-      joinedRecordRoom = null
+    const leaveOneRoom = (room: string) => {
+      joinedRecordRooms.delete(room)
+      if (joinedRecordRoom === room) joinedRecordRoom = [...joinedRecordRooms].pop() ?? null
       socket.leave(room)
       const map = recordViewers.get(room)
       if (map) {
@@ -466,6 +480,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (map.size === 0) recordViewers.delete(room)
       }
       broadcastViewers(room)
+    }
+    /** No payload (legacy clients, disconnect) = leave every record room. A
+     *  named record leaves only that one, so a closed tab doesn't drop the
+     *  tabs still open. */
+    const leaveRecordRoom = (payload?: { collection?: string; item?: unknown }) => {
+      if (payload && typeof payload.collection === 'string' && payload.item != null) {
+        const named = `record:${payload.collection}:${String(payload.item)}`
+        if (joinedRecordRooms.has(named)) leaveOneRoom(named)
+        return
+      }
+      for (const room of [...joinedRecordRooms]) leaveOneRoom(room)
     }
 
     // Comment typing (#263): "X is writing a note…" relayed to co-viewers of
@@ -489,9 +514,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       } catch {
         return
       }
-      leaveRecordRoom()
       const room = `record:${collection}:${String(item)}`
       joinedRecordRoom = room
+      joinedRecordRooms.add(room)
       socket.join(room)
       let map = recordViewers.get(room)
       if (!map) {
@@ -501,7 +526,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       map.set(socket.id, { id: user.id, name: displayName(user) })
       broadcastViewers(room)
     })
-    socket.on('record:leave', () => leaveRecordRoom())
+    socket.on('record:leave', (payload?: { collection?: string; item?: unknown }) =>
+      leaveRecordRoom(payload)
+    )
 
     // Mission-control pulse — admin-only live activity stream
     socket.on('pulse:join', async () => {
@@ -552,10 +579,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('presence-map:leave', () => socket.leave('presence-map'))
 
     // Field editing indicator — fan out inside the record room only.
-    socket.on('field:focus', (payload: { field?: string }) => {
+    socket.on('field:focus', (payload: { field?: string; collection?: string; item?: unknown }) => {
       const user = authenticatedUser
-      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
-      socket.to(joinedRecordRoom).emit('field:editing', {
+      const room = roomFor(payload)
+      if (!user || !room || typeof payload?.field !== 'string') return
+      socket.to(room).emit('field:editing', {
         field: payload.field,
         user: { id: user.id, name: displayName(user) }
       })
@@ -563,21 +591,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
-    socket.on('field:change', (payload: { field?: string; value?: unknown }) => {
+    socket.on('field:change', (payload: { field?: string; value?: unknown; collection?: string; item?: unknown }) => {
       const user = authenticatedUser
-      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
+      const room = roomFor(payload)
+      if (!user || !room || typeof payload?.field !== 'string') return
       const value = typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
-      socket.to(joinedRecordRoom).emit('field:changed', {
+      socket.to(room).emit('field:changed', {
         field: payload.field,
         value,
         user: { id: user.id, name: displayName(user) }
       })
     })
 
-    socket.on('field:blur', (payload: { field?: string }) => {
+    socket.on('field:blur', (payload: { field?: string; collection?: string; item?: unknown }) => {
       const user = authenticatedUser
-      if (!user || !joinedRecordRoom || typeof payload?.field !== 'string') return
-      socket.to(joinedRecordRoom).emit('field:editing', { field: payload.field, user: null })
+      const room = roomFor(payload)
+      if (!user || !room || typeof payload?.field !== 'string') return
+      socket.to(room).emit('field:editing', { field: payload.field, user: null })
     })
 
     // Upload presence (#282): "Beth is uploading quote.pdf" chips for

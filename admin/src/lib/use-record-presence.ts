@@ -106,12 +106,12 @@ export function useRecordPresence(collection: string | undefined, item: string |
     const onFocusIn = (e: FocusEvent) => {
       const wrap = (e.target as HTMLElement | null)?.closest?.('[data-field]')
       const field = wrap?.getAttribute('data-field')
-      if (field) socket.emit('field:focus', { field })
+      if (field) socket.emit('field:focus', { field, collection, item })
     }
     const onFocusOut = (e: FocusEvent) => {
       const wrap = (e.target as HTMLElement | null)?.closest?.('[data-field]')
       const field = wrap?.getAttribute('data-field')
-      if (field) socket.emit('field:blur', { field })
+      if (field) socket.emit('field:blur', { field, collection, item })
     }
     // Broadcast my keystrokes (throttled) for the live preview on other screens
     let lastEmit = 0
@@ -127,7 +127,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
         target && 'type' in target && (target as HTMLInputElement).type === 'checkbox'
           ? (target as HTMLInputElement).checked
           : (target?.value ?? '')
-      socket.emit('field:change', { field, value })
+      socket.emit('field:change', { field, value, collection, item })
     }
     // Row presence: an inline grid announces which saved row is open in its
     // editor; relay it as a synthetic `row:<collection>:<id>` field so the
@@ -135,7 +135,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
     const onRowEditing = (e: Event) => {
       const d = (e as CustomEvent).detail as { row?: string; state?: string }
       if (!d?.row) return
-      socket.emit(d.state === 'end' ? 'field:blur' : 'field:focus', { field: `row:${d.row}` })
+      socket.emit(d.state === 'end' ? 'field:blur' : 'field:focus', {
+        field: `row:${d.row}`,
+        collection,
+        item
+      })
     }
     window.addEventListener('nvr:row-editing', onRowEditing)
     document.addEventListener('focusin', onFocusIn)
@@ -149,7 +153,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('input', onInput)
-      socket.emit('record:leave')
+      socket.emit('record:leave', { collection, item })
       socket.disconnect()
       socketRef.current = null
       setViewers([])
