@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-09T00:16:53.777Z",
+  "generated_at": "2026-09-09T00:46:09.482Z",
   "releases": [
+    {
+      "version": "0.1.232",
+      "tag": "v0.1.232",
+      "date": "2026-09-08T20:46:01-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "empty-picker explanation, section subtotals, row-rule lint, row presence",
+              "hash": "0335181e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "a socket can sit in several record rooms; focus events name their record",
+              "hash": "158d6591"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.231",
       "tag": "v0.1.231",
-      "date": "2026-09-08T20:16:44-04:00",
+      "date": "2026-09-08T20:16:53-04:00",
       "sections": [
         {
           "label": "Added",
