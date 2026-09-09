@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-09T19:53:54.746Z",
+  "generated_at": "2026-09-09T22:46:27.304Z",
   "releases": [
+    {
+      "version": "0.1.240",
+      "tag": "v0.1.240",
+      "date": "2026-09-09T18:46:20-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "data-integrity",
+              "text": "fix proposals — ranked, previewed, confirmable repairs with undo",
+              "hash": "758ec44f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "data-integrity",
+              "text": "proposal routes require record visibility and per-collection permissions",
+              "hash": "604be173"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.239",
       "tag": "v0.1.239",
-      "date": "2026-09-09T15:53:48-04:00",
+      "date": "2026-09-09T15:53:54-04:00",
       "sections": [
         {
           "label": "Fixed",
