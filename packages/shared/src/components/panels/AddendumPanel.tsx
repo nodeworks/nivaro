@@ -17,7 +17,12 @@ import {
 import { AddendumCompare } from './AddendumCompare'
 import { AddendumLinesDiff } from './AddendumLinesDiff'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
-import { O2MStagingContext, useLiveRows } from '../item-edit/O2MStagingContext'
+import {
+  LiveRowsContext,
+  O2MStagingContext,
+  useLiveRows,
+  useLocalLiveRows
+} from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { Button } from '../ui/button'
 import {
@@ -689,6 +694,9 @@ function AddendumCreateSheet({
     pendingO2MRowsRef.current = pendingO2MRows
   }, [pendingO2MRows])
 
+  // The sheet's grids publish live rows HERE, not into the record form —
+  // see useLocalLiveRows for the loop that mounting both grids caused.
+  const localLiveRows = useLocalLiveRows()
   const o2mStagingCtx = useMemo<O2MStagingCtx>(
     () => ({
       getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
@@ -820,119 +828,121 @@ function AddendumCreateSheet({
   })
 
   return (
-    <O2MStagingContext.Provider value={o2mStagingCtx}>
-      <div className='flex h-full flex-col'>
-        <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-4 dark:border-border'>
-          <SheetTitle className='text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
-            New Addendum
-          </SheetTitle>
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
-            Propose changes to this record. Fields are pre-filled with current values — edit what's
-            changing.
-          </p>
-        </SheetHeader>
+    <LiveRowsContext.Provider value={localLiveRows}>
+      <O2MStagingContext.Provider value={o2mStagingCtx}>
+        <div className='flex h-full flex-col'>
+          <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-4 dark:border-border'>
+            <SheetTitle className='text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
+              New Addendum
+            </SheetTitle>
+            <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
+              Propose changes to this record. Fields are pre-filled with current values — edit
+              what's changing.
+            </p>
+          </SheetHeader>
 
-        <div className='flex-1 overflow-y-auto px-5 py-4 space-y-4'>
-          <div className='space-y-3'>
-            <div>
-              <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
-                Title <span className='text-red-500'>*</span>
-              </Label>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className='h-8 text-[12px]'
-                placeholder='Brief description of this addendum'
-                autoFocus
-              />
-            </div>
-            <div>
-              <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
-                Notes
-              </Label>
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                className='text-[12px]'
-                placeholder='Why is this change needed?'
-              />
-            </div>
-            <div>
-              <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
-                Attachments
-              </Label>
-              <input
-                ref={attachInputRef}
-                type='file'
-                multiple
-                className='hidden'
-                onChange={(e) => {
-                  void uploadAttachment(Array.from(e.target.files ?? []))
-                  e.target.value = ''
-                }}
-              />
-              <div className='flex flex-wrap items-center gap-1.5'>
-                {attachments.map((a) => (
-                  <span
-                    key={a.id}
-                    className='inline-flex max-w-[240px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
-                  >
-                    <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
-                    <span className='truncate'>{a.name}</span>
-                    <button
-                      type='button'
-                      onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
-                      className='shrink-0 text-slate-400 hover:text-red-500'
+          <div className='flex-1 overflow-y-auto px-5 py-4 space-y-4'>
+            <div className='space-y-3'>
+              <div>
+                <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
+                  Title <span className='text-red-500'>*</span>
+                </Label>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className='h-8 text-[12px]'
+                  placeholder='Brief description of this addendum'
+                  autoFocus
+                />
+              </div>
+              <div>
+                <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
+                  Notes
+                </Label>
+                <Textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                  className='text-[12px]'
+                  placeholder='Why is this change needed?'
+                />
+              </div>
+              <div>
+                <Label className='mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400'>
+                  Attachments
+                </Label>
+                <input
+                  ref={attachInputRef}
+                  type='file'
+                  multiple
+                  className='hidden'
+                  onChange={(e) => {
+                    void uploadAttachment(Array.from(e.target.files ?? []))
+                    e.target.value = ''
+                  }}
+                />
+                <div className='flex flex-wrap items-center gap-1.5'>
+                  {attachments.map((a) => (
+                    <span
+                      key={a.id}
+                      className='inline-flex max-w-[240px] items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
                     >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                <button
-                  type='button'
-                  onClick={() => attachInputRef.current?.click()}
-                  disabled={uploadingCount > 0}
-                  className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-slate-300 dark:hover:text-slate-100'
-                >
-                  {uploadingCount > 0 ? (
-                    <Loader2 className='h-3 w-3 animate-spin' />
-                  ) : (
-                    <Upload className='h-3 w-3' />
-                  )}
-                  {uploadingCount > 0 ? 'Uploading…' : 'Upload'}
-                </button>
+                      <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
+                      <span className='truncate'>{a.name}</span>
+                      <button
+                        type='button'
+                        onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                        className='shrink-0 text-slate-400 hover:text-red-500'
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    type='button'
+                    onClick={() => attachInputRef.current?.click()}
+                    disabled={uploadingCount > 0}
+                    className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-slate-300 dark:hover:text-slate-100'
+                  >
+                    {uploadingCount > 0 ? (
+                      <Loader2 className='h-3 w-3 animate-spin' />
+                    ) : (
+                      <Upload className='h-3 w-3' />
+                    )}
+                    {uploadingCount > 0 ? 'Uploading…' : 'Upload'}
+                  </button>
+                </div>
               </div>
             </div>
+
+            <ProposedChangesForm
+              parentData={parentData}
+              configuredFields={configuredFields}
+              fieldMap={fieldMap}
+              formData={formData}
+              onFieldChange={handleFieldChange}
+              relations={relations}
+              collection={collection}
+              prefillParentId={itemId}
+            />
           </div>
 
-          <ProposedChangesForm
-            parentData={parentData}
-            configuredFields={configuredFields}
-            fieldMap={fieldMap}
-            formData={formData}
-            onFieldChange={handleFieldChange}
-            relations={relations}
-            collection={collection}
-            prefillParentId={itemId}
-          />
+          <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
+            <Button variant='outline' size='sm' className='h-8 text-[12px]' onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              size='sm'
+              className='h-8 bg-nvr-cyan text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
+              disabled={!title.trim() || createMut.isPending}
+              onClick={() => createMut.mutate()}
+            >
+              {createMut.isPending ? 'Creating…' : 'Create Addendum'}
+            </Button>
+          </div>
         </div>
-
-        <div className='shrink-0 flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
-          <Button variant='outline' size='sm' className='h-8 text-[12px]' onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size='sm'
-            className='h-8 bg-nvr-cyan text-[12px] font-medium text-white hover:bg-nvr-cyan/90'
-            disabled={!title.trim() || createMut.isPending}
-            onClick={() => createMut.mutate()}
-          >
-            {createMut.isPending ? 'Creating…' : 'Create Addendum'}
-          </Button>
-        </div>
-      </div>
-    </O2MStagingContext.Provider>
+      </O2MStagingContext.Provider>
+    </LiveRowsContext.Provider>
   )
 }
 

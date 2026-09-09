@@ -2472,8 +2472,22 @@ export function InlineTableField({
       : undefined
   // Membership filter in LAYOUT order — stored preset column order is ignored for
   // child columns; unknown/stale names in preset.columns are silently skipped.
+  // A dotted token is EITHER a relation-path / formula column the layout
+  // carries as its own field ("po_line_items.amount" — kept, filtered like any
+  // child column) OR a drawer summary token ("unit_workflows.unit" — rendered
+  // synthetically below). Dropping every dotted token hid relation-path
+  // columns from every named view; they only ever showed under "All".
+  const drawerRelationFields = new Set(
+    (drawerRelations ?? []).map((dr) => (typeof dr === 'string' ? dr : dr.field))
+  )
   const presetChildFieldSet = resolvedPreset
-    ? new Set(resolvedPreset.columns.filter((token) => !token.includes('.')))
+    ? new Set(
+        resolvedPreset.columns.filter((token) => {
+          const dot = token.indexOf('.')
+          if (dot < 0) return true
+          return !drawerRelationFields.has(token.slice(0, dot))
+        })
+      )
     : null
   const presetCols = presetChildFieldSet
     ? displayCols.filter((c) => presetChildFieldSet.has(c.field))
