@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-08T23:29:39.221Z",
+  "generated_at": "2026-09-09T00:16:53.777Z",
   "releases": [
+    {
+      "version": "0.1.231",
+      "tag": "v0.1.231",
+      "date": "2026-09-08T20:16:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "per-line match dots, named flush progress, empty-edit fix, Summary rich text",
+              "hash": "5ff1a768"
+            },
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "row match panel — show the matched PO line, or why the match fails",
+              "hash": "a2d2517b"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.230",
       "tag": "v0.1.230",
-      "date": "2026-09-08T19:29:31-04:00",
+      "date": "2026-09-08T19:29:39-04:00",
       "sections": [
         {
           "label": "Added",
