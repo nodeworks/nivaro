@@ -294,7 +294,7 @@ export function RowHistorySheet({
   // Timeline: a Save flushes lines one at a time, so one person's versions
   // landing within a few seconds of each other are ONE event to a reader —
   // "Robert saved 3 lines", not three entries.
-  type Batch = { key: number; versions: Version[]; who: string; at?: string }
+  type Batch = { key: number; versions: Version[]; who: string; at?: string; lastAt?: string }
   const batches = useMemo<Batch[]>(() => {
     if (!isTimeline)
       return versions.map((v) => ({
@@ -307,7 +307,9 @@ export function RowHistorySheet({
     let cur: Batch | null = null
     for (const v of versions) {
       const t = v.rev.timestamp ? new Date(v.rev.timestamp).getTime() : NaN
-      const curT = cur?.at ? new Date(cur.at).getTime() : NaN
+      // Adjacent gap, not distance from the batch's newest — a flush of 20
+      // lines at ~1s each is one save even though it spans 20s.
+      const curT = cur?.lastAt ? new Date(cur.lastAt).getTime() : NaN
       // Same person, within seconds, and a DIFFERENT row — two versions of
       // one row back to back are two saves, never "saved 2 lines".
       const close =
@@ -319,8 +321,15 @@ export function RowHistorySheet({
         !cur.versions.some((x) => x.row?.itemId === v.row?.itemId)
       if (close && cur) {
         cur.versions.push(v)
+        cur.lastAt = v.rev.timestamp
       } else {
-        cur = { key: v.rev.id, versions: [v], who: v.who, at: v.rev.timestamp }
+        cur = {
+          key: v.rev.id,
+          versions: [v],
+          who: v.who,
+          at: v.rev.timestamp,
+          lastAt: v.rev.timestamp
+        }
         out.push(cur)
       }
     }

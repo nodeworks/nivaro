@@ -10,7 +10,7 @@ interface Sample {
   ms: number
   queries: number
   rules: number
-  mode: 'live' | 'open' | 'probe' | 'explain' | 'create' | 'update'
+  mode: 'live' | 'open' | 'probe' | 'explain' | 'create' | 'update' | 'apply'
 }
 
 const RING = 500

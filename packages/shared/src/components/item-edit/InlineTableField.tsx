@@ -3168,6 +3168,63 @@ export function InlineTableField({
     client
   })
 
+  async function rerunRules(dryRun: boolean) {
+    if (!client || !rowRules?.length || isNew) return
+    setRerunBusy(dryRun ? 'preview' : 'apply')
+    try {
+      const res = await client.request<{
+        data: {
+          rows: number
+          fields: Record<string, number>
+          changes: Array<{ id: string; patch: Record<string, unknown> }>
+          applied: number
+          failed: Array<{ id: string; error: string }>
+          truncated?: boolean
+        }
+      }>(
+        post('/field-rules/apply', {
+          collection: relatedCollection,
+          fk_field: manyField,
+          parent_id: parentId,
+          parent_context: buildParentCtx(),
+          row_rules: rowRules,
+          mode: rerunMode,
+          dry_run: dryRun
+        })
+      )
+      const d = res.data
+      if (dryRun) {
+        setRerunPreview({
+          rows: d.rows,
+          fields: d.fields,
+          changes: d.changes,
+          truncated: d.truncated
+        })
+        return
+      }
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      qc.invalidateQueries({
+        queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]
+      })
+      if (d.failed.length) {
+        toast.error(
+          `Rules applied to ${d.applied} ${d.applied === 1 ? 'line' : 'lines'} — ${d.failed.length} failed: ${d.failed
+            .slice(0, 3)
+            .map((f) => `#${f.id} ${f.error}`)
+            .join('; ')}`
+        )
+      } else {
+        toast.success(`Rules applied to ${d.applied} ${d.applied === 1 ? 'line' : 'lines'}`)
+      }
+      setRerunPreview(null)
+      setRerunOpen(false)
+    } catch (err) {
+      toast.error(`Re-run rules failed: ${(err as Error)?.message ?? 'unknown error'}`)
+    } finally {
+      setRerunBusy(null)
+    }
+  }
+
   function buildParentCtx(): Record<string, unknown> {
     const parentCtx: Record<string, unknown> = {}
     if (parentDraftCtx?.draft) {
@@ -3621,6 +3678,16 @@ export function InlineTableField({
   const [defaultsOpen, setDefaultsOpen] = useState(false)
   const [defaultValues, setDefaultValues] = useState<Record<string, unknown>>({})
   const [applyOpen, setApplyOpen] = useState(false)
+  // Bulk re-derive ("Re-run rules on all lines"): preview → apply.
+  const [rerunOpen, setRerunOpen] = useState(false)
+  const [rerunMode, setRerunMode] = useState<'empty-only' | 'all'>('empty-only')
+  const [rerunBusy, setRerunBusy] = useState<'preview' | 'apply' | null>(null)
+  const [rerunPreview, setRerunPreview] = useState<{
+    rows: number
+    fields: Record<string, number>
+    changes: Array<{ id: string; patch: Record<string, unknown> }>
+    truncated?: boolean
+  } | null>(null)
   const [applyValues, setApplyValues] = useState<Record<string, unknown>>({})
   const [applying, setApplying] = useState(false)
 
@@ -4753,6 +4820,24 @@ export function InlineTableField({
               apply values…
             </button>
           )}
+          {!!rowRules?.length && !isNew && rows.length > 0 && (
+            <button
+              type='button'
+              onClick={() => {
+                setRerunOpen((v) => !v)
+                setRerunPreview(null)
+              }}
+              className={cn(
+                'h-6 px-2.5 rounded border transition-colors',
+                rerunOpen
+                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+              )}
+              data-tip='Re-run this grid&apos;s auto-fill rules over every saved line'
+            >
+              re-run rules…
+            </button>
+          )}
           {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
           {presetSwitcher}
           {showRowRevisions && !isNew && (
@@ -4796,6 +4881,92 @@ export function InlineTableField({
               {applying ? 'Applying…' : `Apply to all ${rows.length + pendingRows.length} rows`}
             </button>
           </div>
+        </div>
+      )}
+
+      {rerunOpen && !!rowRules?.length && !isNew && (
+        <div className='rounded-lg border border-[#00ceff]/40 bg-[#00ceff]/5 p-3 space-y-2 dark:bg-nvr-cyan/5'>
+          <p className='text-[11px] font-medium text-slate-700 dark:text-slate-200'>
+            Re-run rules on all {rows.length} saved {rows.length === 1 ? 'line' : 'lines'}
+          </p>
+          <p className='text-[11px] text-slate-500'>
+            Rules edited after these lines were created never touched them. Preview first — nothing
+            is written until you apply, and every applied change lands in each line&apos;s history.
+          </p>
+          <div className='flex flex-wrap items-center gap-3 text-[11px]'>
+            {(
+              [
+                ['empty-only', 'Fill blanks only', 'Only fields that are empty today are written.'],
+                [
+                  'all',
+                  'Re-derive everything',
+                  'Rule targets are re-derived even where a value was typed by hand.'
+                ]
+              ] as const
+            ).map(([m, label, tip]) => (
+              <label
+                key={m}
+                className='inline-flex items-center gap-1.5 cursor-pointer'
+                data-tip={tip}
+              >
+                <input
+                  type='radio'
+                  name={`rerun-mode-${manyField}`}
+                  checked={rerunMode === m}
+                  onChange={() => {
+                    setRerunMode(m)
+                    setRerunPreview(null)
+                  }}
+                  className='accent-[#00ceff]'
+                />
+                {label}
+              </label>
+            ))}
+            <button
+              type='button'
+              disabled={rerunBusy !== null}
+              onClick={() => void rerunRules(true)}
+              className='h-7 rounded border border-slate-300 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:border-slate-400 disabled:opacity-50 dark:bg-card dark:text-slate-200'
+            >
+              {rerunBusy === 'preview' ? 'Previewing…' : 'Preview'}
+            </button>
+            {rerunPreview && rerunPreview.changes.length > 0 && (
+              <button
+                type='button'
+                disabled={rerunBusy !== null}
+                onClick={() => void rerunRules(false)}
+                className='h-7 rounded bg-[#00ceff] px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+              >
+                {rerunBusy === 'apply'
+                  ? 'Applying…'
+                  : `Apply to ${rerunPreview.changes.length} ${rerunPreview.changes.length === 1 ? 'line' : 'lines'}`}
+              </button>
+            )}
+          </div>
+          {rerunPreview && (
+            <div className='text-[11px] text-slate-600 dark:text-slate-300'>
+              {rerunPreview.changes.length === 0 ? (
+                <span>Every line already matches its rules — nothing to change.</span>
+              ) : (
+                <ul className='flex flex-wrap gap-x-4 gap-y-1'>
+                  {Object.entries(rerunPreview.fields).map(([f, count]) => {
+                    const col = cols.find((c) => c.field === f)
+                    return (
+                      <li key={f}>
+                        <span className='font-medium text-foreground'>
+                          {col?.label || titleCase(f)}
+                        </span>{' '}
+                        on {count} {count === 1 ? 'line' : 'lines'}
+                      </li>
+                    )
+                  })}
+                  {rerunPreview.truncated && (
+                    <li className='text-amber-700'>Preview shows the first 200 lines.</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       )}
 

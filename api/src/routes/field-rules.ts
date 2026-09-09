@@ -12,7 +12,7 @@ import {
   RowRuleLookupCache,
   type RowRuleTraceEntry
 } from '../services/field-rules.js'
-import { applyFieldRules } from '../services/items.js'
+import { applyFieldRules, updateOne } from '../services/items.js'
 import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
 import { can } from '../services/permissions.js'
 
@@ -146,12 +146,14 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       // Validate dynamic_config against the effective (patched or existing) target_type.
       // Required+shape-checked for set_lookup/set_from_trigger; forbidden (and cleared) otherwise.
       if (effectiveType === 'set_lookup' || effectiveType === 'set_from_trigger') {
-        const effectiveDynamicConfig = 'dynamic_config' in body ? body.dynamic_config : existing.dynamic_config
+        const effectiveDynamicConfig =
+          'dynamic_config' in body ? body.dynamic_config : existing.dynamic_config
         const dynamicConfigError = validateDynamicConfig(effectiveType, effectiveDynamicConfig)
         if (dynamicConfigError) {
           return reply.code(400).send({ error: dynamicConfigError })
         }
-        if ('dynamic_config' in body) patch.dynamic_config = normalizeDynamicConfig(body.dynamic_config)
+        if ('dynamic_config' in body)
+          patch.dynamic_config = normalizeDynamicConfig(body.dynamic_config)
       } else {
         patch.dynamic_config = null
       }
@@ -262,7 +264,16 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         target_field: string
         target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick' | 'lock'
         target_value?: string | null
-        sources?: Array<{ source_type: string; source_field: string; source_related_field: string; source_hop?: string; o2m_collection?: string; filter_field?: string; filter_value?: string; source_one_collection?: string }>
+        sources?: Array<{
+          source_type: string
+          source_field: string
+          source_related_field: string
+          source_hop?: string
+          o2m_collection?: string
+          filter_field?: string
+          filter_value?: string
+          source_one_collection?: string
+        }>
         only_if_empty?: boolean
         sort?: number
       }>
@@ -303,7 +314,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         // rules would produce from scratch for this draft. Shares the cache,
         // so it costs only the queries the first pass didn't already make.
         const probeWorking: Record<string, unknown> = { ...working }
-        const targets = [...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))]
+        const targets = [
+          ...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
+        ]
         for (const t of targets) probeWorking[t] = null
         await evaluateRowRules(db, body.collection, probeWorking, parentContext, rules, undefined, {
           cache
@@ -332,6 +345,140 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
   })
 
   /** Rule health: recent evaluate timings per child collection (this replica). */
+  // POST /field-rules/apply — re-run a grid's row rules over every SAVED row
+  // of one parent ("Re-run rules on all lines"). A rule edited after the
+  // rows were created never touched them; this is the catch-up. mode
+  // 'empty-only' fills blanks (only-if-empty semantics for every rule),
+  // 'all' treats every rule target as blank first so set rules win over
+  // hand-entered values. dry_run (default) previews per-field counts and
+  // per-row changes; a real run writes through updateOne so revisions and
+  // attribution land like any edit.
+  app.post('/apply', { preHandler: authenticate }, async (req, reply) => {
+    const body = req.body as {
+      collection?: string
+      fk_field?: string
+      parent_id?: string | number
+      parent_context?: Record<string, unknown>
+      row_rules?: RowRule[]
+      mode?: 'empty-only' | 'all'
+      dry_run?: boolean
+      row_ids?: Array<string | number>
+    }
+    const { collection, fk_field } = body
+    if (!collection || !fk_field || body.parent_id == null || !Array.isArray(body.row_rules)) {
+      return reply
+        .code(400)
+        .send({ error: 'collection, fk_field, parent_id and row_rules are required' })
+    }
+    if (
+      !/^[A-Za-z0-9_]+$/.test(collection) ||
+      !/^[A-Za-z0-9_]+$/.test(fk_field) ||
+      collection.startsWith('nivaro_')
+    ) {
+      return reply.code(400).send({ error: 'Invalid collection or fk_field' })
+    }
+    const registered = await db('nivaro_collections').where({ collection }).first()
+    if (!registered) return reply.code(400).send({ error: `Unknown collection "${collection}"` })
+    const dryRun = body.dry_run !== false
+    if (!(await can(req.user!, dryRun ? 'read' : 'update', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const mode = body.mode === 'all' ? 'all' : 'empty-only'
+    const rules = body.row_rules.filter((r) => r && typeof r.target_field === 'string')
+    const targets = new Set(
+      rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field)
+    )
+    if (targets.size === 0)
+      return reply.send({ data: { rows: 0, fields: {}, changes: [], applied: 0, failed: [] } })
+
+    let q = db(collection)
+      .where({ [fk_field]: String(body.parent_id) })
+      .orderBy('id')
+    if (Array.isArray(body.row_ids) && body.row_ids.length)
+      q = q.whereIn('id', body.row_ids.map(String))
+    const rows = (await q.limit(500)) as Array<Record<string, unknown>>
+    const parentContext = body.parent_context ?? {}
+    const cache = new RowRuleLookupCache(db)
+    const isEmpty = (v: unknown) => v === null || v === undefined || v === ''
+    const changes: Array<{
+      id: string
+      patch: Record<string, unknown>
+      before: Record<string, unknown>
+    }> = []
+    const fields: Record<string, number> = {}
+    const startedAt = Date.now()
+    for (const row of rows) {
+      const working: Record<string, unknown> = { ...row }
+      if (mode === 'all') for (const t of targets) working[t] = null
+      await evaluateRowRules(db, collection, working, parentContext, rules, undefined, { cache })
+      const patch: Record<string, unknown> = {}
+      const before: Record<string, unknown> = {}
+      for (const t of targets) {
+        const was = row[t]
+        const now = working[t]
+        if (String(now ?? '') === String(was ?? '')) continue
+        if (mode === 'empty-only' && !isEmpty(was)) continue
+        // 'all' mode blanked the target — a rule that derives nothing must
+        // not erase a value the row already had.
+        if (mode === 'all' && isEmpty(now) && !isEmpty(was)) continue
+        patch[t] = now ?? null
+        before[t] = was ?? null
+        fields[t] = (fields[t] ?? 0) + 1
+      }
+      if (Object.keys(patch).length) changes.push({ id: String(row.id), patch, before })
+    }
+    recordRuleEvalSample(collection, {
+      at: Date.now(),
+      ms: Date.now() - startedAt,
+      queries: cache.queries,
+      rules: rules.length,
+      mode: 'apply'
+    })
+    if (dryRun) {
+      return reply.send({
+        data: {
+          rows: rows.length,
+          fields,
+          changes: changes.slice(0, 200),
+          applied: 0,
+          failed: [],
+          truncated: changes.length > 200
+        }
+      })
+    }
+    let applied = 0
+    const failed: Array<{ id: string; error: string }> = []
+    for (const c of changes) {
+      try {
+        await updateOne(req.user!, collection, c.id, c.patch, req)
+        applied += 1
+      } catch (err) {
+        const e = err as { message?: string; code?: string }
+        failed.push({
+          id: c.id,
+          error: e.code ? `${e.code}: ${e.message ?? ''}` : (e.message ?? 'failed')
+        })
+      }
+    }
+    await logActivity({
+      action: 'row-rules-apply',
+      user: req.user!.id,
+      collection,
+      item: String(body.parent_id),
+      comment: JSON.stringify({
+        fk_field,
+        mode,
+        rows: rows.length,
+        applied,
+        failed: failed.length,
+        fields
+      })
+    })
+    return reply.send({
+      data: { rows: rows.length, fields, changes: changes.slice(0, 200), applied, failed }
+    })
+  })
+
   app.get('/stats', { preHandler: requireAdmin }, async (_req, reply) => {
     return reply.send({ data: ruleEvalStats() })
   })
@@ -359,9 +506,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     if (!/^[A-Za-z0-9_]+$/.test(body.collection) || body.collection.startsWith('nivaro_')) {
       return reply.code(400).send({ error: 'Invalid collection' })
     }
-    const record = (await db(body.collection).where({ id: String(body.record_id) }).first()) as
-      | Record<string, unknown>
-      | undefined
+    const record = (await db(body.collection)
+      .where({ id: String(body.record_id) })
+      .first()) as Record<string, unknown> | undefined
     if (!record) return reply.code(404).send({ error: 'Record not found' })
     const parentContext: Record<string, unknown> = {}
     const wanted = new Set(body.parent_context_fields ?? [])
@@ -379,9 +526,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     ) {
       parentId = record[body.fk_field]
       if (parentId != null) {
-        const parent = (await db(body.parent_collection).where({ id: String(parentId) }).first()) as
-          | Record<string, unknown>
-          | undefined
+        const parent = (await db(body.parent_collection)
+          .where({ id: String(parentId) })
+          .first()) as Record<string, unknown> | undefined
         if (parent) for (const f of wanted) parentContext[f] = parent[f] ?? null
       }
     }
@@ -390,11 +537,19 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const locks = new Set<string>()
     const working = { ...record }
     const startedAt = Date.now()
-    await evaluateRowRules(db, body.collection, working, parentContext, body.row_rules, body.changed_field, {
-      cache,
-      explain,
-      locks
-    })
+    await evaluateRowRules(
+      db,
+      body.collection,
+      working,
+      parentContext,
+      body.row_rules,
+      body.changed_field,
+      {
+        cache,
+        explain,
+        locks
+      }
+    )
     const ms = Date.now() - startedAt
     recordRuleEvalSample(body.collection, {
       at: Date.now(),

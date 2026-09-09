@@ -90,6 +90,11 @@ export const fieldRulesGuide: DocSection = {
       type: 'p',
       text: 'Row rules run on API creates and, by default, on API updates too: a PATCH that changes one of a rule\'s trigger fields re-derives its target, the same way the form does when you edit. A target the caller sends explicitly in the same request always wins. Untick "Re-run on API updates when a trigger field changes" on a rule to run it on creates only.'
     },
+    { type: 'h3', text: 'Re-running rules over existing lines' },
+    {
+      type: 'p',
+      text: 'A rule added or changed after lines were created never touched them. The grid toolbar\'s "re-run rules…" opens a panel with two modes: **Fill blanks only** writes rule targets that are empty today, **Re-derive everything** treats every rule target as blank first so set rules win over hand-typed values (a rule that derives nothing never erases what a line had). Preview lists which fields would change on how many lines and writes nothing; Apply goes through the normal update path, so each line gets a revision attributed to you and the lines timeline shows the batch. The same call is `POST /field-rules/apply` with `{collection, fk_field, parent_id, parent_context, row_rules, mode, dry_run}` — update permission on the child collection is required for a real run, read permission for a preview.'
+    },
     { type: 'h3', text: 'Testing rules against a record' },
     {
       type: 'p',
