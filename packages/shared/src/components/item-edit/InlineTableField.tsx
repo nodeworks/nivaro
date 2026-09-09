@@ -152,9 +152,9 @@ import {
 } from './RowHistorySheet'
 import {
   RowMatchDot,
-  rowFromCandidate,
   RowMatchPanel,
   type RowMatchPanelConfig,
+  rowFromCandidate,
   useRowMatches
 } from './RowMatchPanel'
 import type { CMSField, CMSRelation, NestedOps } from './types'
@@ -2500,6 +2500,115 @@ export function InlineTableField({
   const withdrawRef = useRef<() => void>(() => {})
   withdrawRef.current = () => reportLiveRows?.(relatedCollection, manyField, null)
   useEffect(() => () => withdrawRef.current(), [])
+
+  // ── Floating picker defaults (options.pinned_options) ─────────────────────
+  // [{when:{field,op,value}, parent_field, parent_collection, source_field,
+  //   tag}] — when the ROW matches `when` (category_type eq 2 = a materials
+  // line), the value the PARENT's linked record holds in `source_field`
+  // (workflow.project → projects.default_materials_cifa) is pinned at the top
+  // of that column's picker. The parent records are fetched once per grid.
+  type PinnedCfg = {
+    when?: { field: string; op?: string; value?: string | string[] }
+    parent_field: string
+    parent_collection: string
+    source_field: string
+    tag?: string
+  }
+  const pinnedConfigByField = useMemo(() => {
+    const out = new Map<string, PinnedCfg[]>()
+    for (const c of cols) {
+      let o: Record<string, unknown> | null = null
+      if (c.options && typeof c.options === 'object') o = c.options as Record<string, unknown>
+      else if (typeof c.options === 'string') {
+        try {
+          o = JSON.parse(c.options) as Record<string, unknown>
+        } catch {
+          o = null
+        }
+      }
+      const list = Array.isArray(o?.pinned_options) ? (o.pinned_options as PinnedCfg[]) : []
+      const valid = list.filter(
+        (x) =>
+          x &&
+          typeof x.parent_field === 'string' &&
+          typeof x.parent_collection === 'string' &&
+          typeof x.source_field === 'string'
+      )
+      if (valid.length) out.set(c.field, valid)
+    }
+    return out
+  }, [cols])
+  const pinnedParents = useMemo(() => {
+    const want = new Map<string, { collection: string; id: string; fields: Set<string> }>()
+    for (const list of pinnedConfigByField.values()) {
+      for (const cfg of list) {
+        const pid = parentDraftCtx?.draft?.[cfg.parent_field]
+        if (pid == null || pid === '' || typeof pid === 'object') continue
+        const key = `${cfg.parent_collection}|${String(pid)}`
+        if (!want.has(key))
+          want.set(key, {
+            collection: cfg.parent_collection,
+            id: String(pid),
+            fields: new Set(['id'])
+          })
+        want.get(key)?.fields.add(cfg.source_field)
+      }
+    }
+    return [...want.entries()]
+  }, [pinnedConfigByField, parentDraftCtx?.draft])
+  const pinnedParentQueries = useQueries({
+    queries: pinnedParents.map(([key, p]) => ({
+      queryKey: ['pinned-parent', p.collection, p.id, [...p.fields].sort().join(',')],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, unknown> }>(
+            get(`/items/${p.collection}/${p.id}`, { fields: [...p.fields].join(',') })
+          )
+          .then((r) => [key, r.data] as const)
+          .catch(() => [key, null] as const),
+      staleTime: 60_000
+    }))
+  })
+  const pinnedParentRows = useMemo(() => {
+    const m = new Map<string, Record<string, unknown> | null>()
+    for (const q of pinnedParentQueries) if (q.data) m.set(q.data[0], q.data[1])
+    return m
+  }, [pinnedParentQueries])
+  const pinnedOptionFor = (field: string, draft: Record<string, unknown>) => {
+    const list = pinnedConfigByField.get(field)
+    if (!list) return null
+    for (const cfg of list) {
+      if (cfg.when?.field) {
+        const v = draft[cfg.when.field]
+        const op = cfg.when.op ?? 'eq'
+        const want = cfg.when.value
+        const sv = v == null ? '' : String(v)
+        const hit =
+          op === 'nnull'
+            ? sv !== ''
+            : op === 'null'
+              ? sv === ''
+              : op === 'neq'
+                ? sv !== String(want ?? '')
+                : op === 'in'
+                  ? (Array.isArray(want)
+                      ? want.map(String)
+                      : String(want ?? '')
+                          .split(',')
+                          .map((x) => x.trim())
+                    ).includes(sv)
+                  : sv === String(want ?? '')
+        if (!hit) continue
+      }
+      const pid = parentDraftCtx?.draft?.[cfg.parent_field]
+      if (pid == null || pid === '') continue
+      const parent = pinnedParentRows.get(`${cfg.parent_collection}|${String(pid)}`)
+      const id = parent?.[cfg.source_field]
+      if (id == null || id === '') continue
+      return { id, tag: cfg.tag ?? 'Default' }
+    }
+    return null
+  }
 
   const displayCols = cols.filter(
     (c) =>
@@ -4854,6 +4963,7 @@ export function InlineTableField({
                       collection={relatedCollection}
                       itemId={args.rowId ?? 'new'}
                       cascadeFilter={fieldCascadeFilters[c.field]}
+                      pinnedOption={pinnedOptionFor(c.field, args.draft)}
                     />
                   )}
                 </div>
@@ -5706,6 +5816,10 @@ export function InlineTableField({
                                         collection={relatedCollection}
                                         itemId={id}
                                         cascadeFilter={fieldCascadeFilters[c.field]}
+                                        pinnedOption={pinnedOptionFor(
+                                          c.field,
+                                          editState?.draft ?? {}
+                                        )}
                                         displayOnly={
                                           !isEditing ||
                                           isPendingDelete ||
@@ -5995,6 +6109,7 @@ export function InlineTableField({
                                 collection={relatedCollection}
                                 itemId='new'
                                 cascadeFilter={fieldCascadeFilters[c.field]}
+                                pinnedOption={pinnedOptionFor(c.field, editState!.draft)}
                               />
                             </div>
                           )}
@@ -6375,6 +6490,7 @@ export function InlineTableField({
                                         collection={relatedCollection}
                                         itemId='new'
                                         cascadeFilter={fieldCascadeFilters[c.field]}
+                                        pinnedOption={pinnedOptionFor(c.field, editState!.draft)}
                                       />
                                     </div>
                                   ) : c.interface === 'formula-column' ? (

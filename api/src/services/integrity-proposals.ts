@@ -941,7 +941,7 @@ async function rowInputProposals(
   // Sibling FKs the majority inference may lean on: real inputs (CIFA), never
   // a field the rules DERIVE from the missing one — "lines with the same PO
   // line type" is circular when PO line type comes from the category.
-  const ruleTargets = new Set(cfg.rowRules.map((r) => r.target_field))
+  const ruleTargets = new Set(cfg.rowRules.filter((r) => !r.seed_only).map((r) => r.target_field))
   const siblingFks = [...childMeta.values()].filter(
     (m) => m.related && m.field !== cfg.fkField && !ruleTargets.has(m.field)
   )

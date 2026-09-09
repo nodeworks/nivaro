@@ -322,7 +322,11 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         const targets = [
           ...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
         ]
-        for (const t of targets) probeWorking[t] = null
+        // seed_only targets are inputs — never blanked for the probe.
+        const derivable = new Set(
+          rules.filter((r) => r.target_type !== 'lock' && !r.seed_only).map((r) => r.target_field)
+        )
+        for (const t of targets) if (derivable.has(t)) probeWorking[t] = null
         await evaluateRowRules(db, body.collection, probeWorking, parentContext, rules, undefined, {
           cache
         })

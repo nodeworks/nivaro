@@ -37,7 +37,6 @@ import { formatDisplayValue } from './GroupSection'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField, type RowLint } from './InlineTableField'
-import type { RowMatchPanelConfig } from './RowMatchPanel'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import {
   AddressField,
@@ -56,6 +55,7 @@ import { QuickCreateButton, type QuickCreateConfig } from './QuickCreateButton'
 import { RelationCombobox } from './RelationCombobox'
 import { RelationGroupedCombobox } from './RelationGroupedCombobox'
 import { RichTextEditor } from './RichTextEditor'
+import type { RowMatchPanelConfig } from './RowMatchPanel'
 import type { CMSField, CMSRelation } from './types'
 
 function resolveTokenNode(
@@ -178,7 +178,8 @@ export function FieldRenderer({
   narrowedBy,
   onCountChange,
   displayOnly,
-  prefillParentId
+  prefillParentId,
+  pinnedOption
 }: {
   field: CMSField
   value: unknown
@@ -193,6 +194,8 @@ export function FieldRenderer({
   onCountChange?: (count: number) => void
   displayOnly?: boolean
   prefillParentId?: string
+  /** M2O pickers: a floating first option (see RelationCombobox `pinned`). */
+  pinnedOption?: { id: unknown; tag?: string } | null
 }) {
   const drill = useDrilldown()
   const parentDraftForFilters = useParentDraft()
@@ -321,6 +324,7 @@ export function FieldRenderer({
         }
         requiredParent={requiredParentLabel ?? undefined}
         narrowedBy={narrowedBy}
+        pinned={pinnedOption}
         facets={
           Array.isArray(m2oOpts?.picker_facets)
             ? m2oOpts.picker_facets.map((f) => ({

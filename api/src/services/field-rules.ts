@@ -520,6 +520,18 @@ export interface RowRuleSource {
   filter_field?: string
   filter_value?: string
   source_one_collection?: string
+  /** Optional gate: the source only yields a candidate when the row (or the
+   *  parent, via a `$parent.<field>` field) matches. `related_field` compares
+   *  a field of the M2O record the row field points at (dot-hops; `__id__` /
+   *  `__entity__` = the last FK id), exactly like a rule trigger. This is how
+   *  one precedence chain can hold "services default for labor lines, goods
+   *  default for the rest, P2 default when the workflow is P2". */
+  when?: {
+    field: string
+    op?: 'eq' | 'neq' | 'in' | 'null' | 'nnull' | 'contains'
+    value?: string | null
+    related_field?: string | null
+  }
 }
 
 export interface RowRule {
@@ -536,6 +548,12 @@ export interface RowRule {
   target_value?: string | null
   sources?: RowRuleSource[]
   only_if_empty?: boolean
+  /** The target is an INPUT the rule merely seeds when empty (a project's
+   *  default category / CIFA for a new line): re-derivation passes never
+   *  blank it, drift sweeps never judge it, and it always behaves as
+   *  only_if_empty. Without this, a "default" rule would turn a hand-picked
+   *  input into a target that "re-run rules" wipes and re-derives. */
+  seed_only?: boolean
   sort?: number
   /** Re-run this rule on API UPDATES when one of its trigger fields is in
    *  the PATCH (createOne always runs every rule; caller-sent targets still
@@ -877,7 +895,7 @@ export async function evaluateRowRules(
       continue
     }
 
-    if (rule.only_if_empty) {
+    if (rule.only_if_empty || rule.seed_only) {
       const existing = working[rule.target_field]
       if (existing != null && existing !== '') {
         note('skipped:only-if-empty', existing)
@@ -930,6 +948,63 @@ export async function evaluateRowRules(
   return working
 }
 
+/** Walk `path` ("sub_category.__entity__") from the row's M2O `field`. Mirrors
+ *  the trigger_related_field resolution in evaluateRowRules. */
+async function resolveRelatedValue(
+  collection: string,
+  working: Record<string, unknown>,
+  field: string,
+  path: string,
+  cache: RowRuleLookupCache
+): Promise<unknown> {
+  const fkId = working[field]
+  if (fkId == null || fkId === '') return null
+  const rel = await cache.m2oRel(collection, field)
+  if (!rel?.one_collection) return null
+  let currentRecord = await cache.record(rel.one_collection, fkId)
+  let currentCollection = rel.one_collection
+  let lastFkId: string | null = String(fkId)
+  const parts = path.split('.')
+  for (let i = 0; i < parts.length - 1; i++) {
+    const hop = parts[i]
+    const hopId = currentRecord?.[hop]
+    if (hopId == null) return null
+    lastFkId = String(hopId)
+    const hopRel = await cache.m2oRel(currentCollection, hop)
+    if (!hopRel?.one_collection) return null
+    currentRecord = await cache.record(hopRel.one_collection, hopId)
+    currentCollection = hopRel.one_collection
+  }
+  const last = parts[parts.length - 1]
+  return last === '__id__' || last === '__entity__' ? lastFkId : (currentRecord?.[last] ?? null)
+}
+
+async function sourceGateOpen(
+  src: RowRuleSource,
+  collection: string,
+  working: Record<string, unknown>,
+  parentContext: Record<string, unknown>,
+  subParent: (s: string | null | undefined) => string | null,
+  cache: RowRuleLookupCache
+): Promise<boolean> {
+  const w = src.when
+  if (!w?.field) return true
+  const op = w.op ?? 'nnull'
+  let val: unknown
+  if (w.field.startsWith('$parent.')) {
+    val = parentContext[w.field.slice(8)] ?? null
+  } else if (w.related_field) {
+    // An empty FK has nothing to compare (the trigger-empty rule) — closed
+    // unless the op is about emptiness.
+    if ((working[w.field] == null || working[w.field] === '') && op !== 'null' && op !== 'nnull')
+      return false
+    val = await resolveRelatedValue(collection, working, w.field, w.related_field, cache)
+  } else {
+    val = working[w.field] ?? null
+  }
+  return matchesTrigger(op, val, subParent(w.value ?? null))
+}
+
 async function resolvePrecedenceSource(
   src: RowRuleSource,
   collection: string,
@@ -939,6 +1014,8 @@ async function resolvePrecedenceSource(
   cache: RowRuleLookupCache
 ): Promise<unknown> {
   if (!src.source_field || !src.source_related_field) return null
+  if (!(await sourceGateOpen(src, collection, working, parentContext, subParent, cache)))
+    return null
   if (src.source_type === 'relation_field') {
     const fkId = working[src.source_field]
     if (fkId == null) return null

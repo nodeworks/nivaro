@@ -99,6 +99,13 @@ export function parentFieldsFor(
     for (const t of rule.trigger_fields ?? []) {
       if (typeof t === 'string' && t.startsWith('$parent.')) wanted.add(t.slice(8))
     }
+    // Precedence sources read parent columns too: parent_m2o sources by their
+    // source_field, and `when` gates on a $parent field.
+    for (const src of rule.sources ?? []) {
+      if (src.source_type === 'parent_m2o' && src.source_field) wanted.add(src.source_field)
+      const wf = src.when?.field
+      if (typeof wf === 'string' && wf.startsWith('$parent.')) wanted.add(wf.slice(8))
+    }
   }
   return [...wanted]
 }
@@ -148,7 +155,14 @@ export async function planRowRuleChanges(opts: {
   cache?: RowRuleLookupCache
 }): Promise<RowRulePlan> {
   const rules = opts.rules.filter((r) => r && typeof r.target_field === 'string')
+  // Every non-lock target is judged for drift; only targets that some
+  // NON-seed rule derives are blanked for re-derivation — a seed_only target
+  // (default category / CIFA) is an input the rules fill when empty, never
+  // one they own.
   const targets = new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
+  const derivable = new Set(
+    rules.filter((r) => r.target_type !== 'lock' && !r.seed_only).map((r) => r.target_field)
+  )
   const plan: RowRulePlan = { rows: opts.rows.length, fields: {}, changes: [] }
   if (targets.size === 0) return plan
   const cache = opts.cache ?? new RowRuleLookupCache(db)
@@ -174,8 +188,8 @@ export async function planRowRuleChanges(opts: {
       )
     }
     const working: Record<string, unknown> = { ...row }
-    if (opts.mode === 'all') for (const t of targets) working[t] = null
-    else for (const t of locked) if (targets.has(t)) working[t] = null
+    if (opts.mode === 'all') for (const t of derivable) working[t] = null
+    else for (const t of locked) if (derivable.has(t)) working[t] = null
     await evaluateRowRules(db, opts.collection, working, opts.parentContext, rules, undefined, {
       cache,
       locks: locked

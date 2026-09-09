@@ -95,6 +95,19 @@ export const fieldRulesGuide: DocSection = {
       type: 'p',
       text: 'A cell a `lock` rule holds is read-only in both the inline editor and the row panel, and hovering it says which trigger locked it, using the row\'s own value: "Locked — Category is Installation - Labor". The evaluate call returns `lock_reasons` (trigger field, operator, value) beside `locks`.'
     },
+    { type: 'h3', text: 'Seed-only rules, conditional sources and pinned picker defaults' },
+    {
+      type: 'p',
+      text: 'A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project\'s default category or default CIFA for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes.'
+    },
+    {
+      type: 'p',
+      text: 'A precedence source may carry `when: {field, op, value, related_field?}` — the source only yields a candidate when the row (or the parent, via a `$parent.<field>` field) matches, with the same related-field hops as a trigger. One chain can therefore hold "P2 default when the workflow source is P2, services default for labor lines, goods default otherwise" in front of the legacy fallback. A source whose row field is empty is closed unless the op is about emptiness.'
+    },
+    {
+      type: 'p',
+      text: "An M2O picker column can float a context-dependent default to the top of its list: `options.pinned_options: [{when:{field,op,value}, parent_field, parent_collection, source_field, tag}]` — when the ROW matches `when` (a materials line), the value the parent's linked record holds in `source_field` (workflow → project → default materials CIFA) is pinned first with a tag, above search results and sort. Nothing is pinned without a match or a value."
+    },
     { type: 'h3', text: 'Re-running rules over existing lines' },
     {
       type: 'p',

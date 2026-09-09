@@ -63,11 +63,16 @@ export function RelationCombobox({
   requiredParent,
   facets,
   fieldKey,
-  narrowedBy
+  narrowedBy,
+  pinned
 }: {
   collection: string
   value: unknown
   onChange: (v: unknown) => void
+  /** A "floating" option shown FIRST regardless of search or sort — the
+   *  project's default CIFA for a materials line, say. Label = the option's
+   *  own display label; `tag` is the small badge beside it ("Default"). */
+  pinned?: { id: unknown; tag?: string } | null
   disabled?: boolean
   placeholder?: string
   extraFilter?: Record<string, unknown>
@@ -287,6 +292,20 @@ export function RelationCombobox({
     staleTime: 60_000
   })
 
+  const pinnedId = pinned?.id != null && pinned.id !== '' ? String(pinned.id) : null
+  const { data: pinnedItem } = useQuery<Item | null>({
+    queryKey: ['relation-single', collection, pinnedId ?? '', tmplFields],
+    queryFn: () =>
+      client
+        .request<{ data: Item }>(
+          get(`/items/${collection}/${pinnedId}`, tmplFields ? { fields: tmplFields } : undefined)
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: !!pinnedId && open,
+    staleTime: 60_000
+  })
+
   const availabilityFilter = extraFilter
     ? JSON.stringify({ _and: [{ id: { _eq: value } }, extraFilter] })
     : JSON.stringify({ id: { _eq: value } })
@@ -455,6 +474,36 @@ export function RelationCombobox({
                   Clear selection
                 </button>
               )}
+              {pinnedId && (
+                <button
+                  type='button'
+                  data-nvr-pinned-option
+                  onClick={() => {
+                    onChange(pinnedItem?.id ?? pinned?.id)
+                    setOpen(false)
+                  }}
+                  className='flex w-full items-center gap-2 border-b border-slate-100 bg-nvr-cyan/5 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border'
+                >
+                  <div
+                    className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                      String(value) === pinnedId
+                        ? 'border-nvr-cyan bg-nvr-cyan'
+                        : 'border-slate-300'
+                    )}
+                  >
+                    {String(value) === pinnedId && <Check className='h-2.5 w-2.5 text-white' />}
+                  </div>
+                  <span className='min-w-0 flex-1 truncate'>
+                    {pinnedItem
+                      ? applyDisplayTemplate(tmpl, pinnedItem) || `#${pinnedId}`
+                      : `#${pinnedId}`}
+                  </span>
+                  <span className='shrink-0 rounded bg-nvr-cyan/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:text-foreground'>
+                    {pinned?.tag ?? 'Default'}
+                  </span>
+                </button>
+              )}
               {isLoadingOptions ? (
                 <div className='flex items-center justify-center py-4'>
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
@@ -464,7 +513,9 @@ export function RelationCombobox({
                   <div className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'>
                     <p>
                       No options for{' '}
-                      <span className='font-medium text-foreground'>{narrowedBy.labels.join(' · ')}</span>
+                      <span className='font-medium text-foreground'>
+                        {narrowedBy.labels.join(' · ')}
+                      </span>
                       {narrowedBy.onClear ? ' — clear one to widen the list:' : '.'}
                     </p>
                     {narrowedBy.onClear && (
@@ -498,37 +549,39 @@ export function RelationCombobox({
                         ? applyDisplayTemplate(tmpl, b).localeCompare(applyDisplayTemplate(tmpl, a))
                         : applyDisplayTemplate(tmpl, a).localeCompare(applyDisplayTemplate(tmpl, b))
                     )
-                ).map((item) => {
-                  const label = applyDisplayTemplate(tmpl, item) || `#${item.id}`
-                  const sel = String(item.id) === String(value)
-                  return (
-                    <button
-                      key={String(item.id)}
-                      type='button'
-                      onClick={() => {
-                        onChange(item.id)
-                        setOpen(false)
-                      }}
-                      className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
-                    >
-                      <div
-                        className={cn(
-                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                          sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
-                        )}
+                )
+                  .filter((item) => !pinnedId || String(item.id) !== pinnedId)
+                  .map((item) => {
+                    const label = applyDisplayTemplate(tmpl, item) || `#${item.id}`
+                    const sel = String(item.id) === String(value)
+                    return (
+                      <button
+                        key={String(item.id)}
+                        type='button'
+                        onClick={() => {
+                          onChange(item.id)
+                          setOpen(false)
+                        }}
+                        className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
                       >
-                        {sel && <Check className='h-2.5 w-2.5 text-white' />}
-                      </div>
-                      {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
-                        <span
-                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
-                          data-tip='Online now'
-                        />
-                      )}
-                      {label}
-                    </button>
-                  )
-                })
+                        <div
+                          className={cn(
+                            'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                            sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                          )}
+                        >
+                          {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                        </div>
+                        {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
+                          <span
+                            className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                            data-tip='Online now'
+                          />
+                        )}
+                        {label}
+                      </button>
+                    )
+                  })
               )}
             </div>
           </div>,

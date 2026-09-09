@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { createOne, updateOne } from './items.js'
+import { getLabels } from './queues.js'
 
 /**
  * Service-mode processor for staged imports.
@@ -34,7 +35,19 @@ export interface ServiceColumnConfig {
    *  the items service for every unmatched value; 'null' keeps the file row
    *  with an empty link (the procs' LEFT JOIN semantics). Default (absent)
    *  drops the row — the original warehouse-import behavior. */
-  lookup?: { collection: string; match_field: string; on_missing?: 'create' | 'null' }
+  lookup?: {
+    collection: string
+    /** Column the file value is matched against (case-insensitive). */
+    match_field?: string
+    /** Match the file value against the collection's DISPLAY LABEL instead —
+     *  for targets with no single name column (categories render as
+     *  "Core -> Sub"). Whole collection labelled once, cap 5,000 rows;
+     *  separators/punctuation are normalized so "ISP Power - Materials" and
+     *  "ISP Power -> Materials" both hit. on_missing 'create' is not
+     *  possible for label matches (there is no column to write). */
+    match_label?: boolean
+    on_missing?: 'create' | 'null'
+  }
 }
 
 export interface ServiceImportConfig {
@@ -52,6 +65,11 @@ export interface ServiceImportConfig {
   /** Audit stamp columns on the target table (legacy Directus convention —
    *  the items service does not stamp these itself). */
   timestamps?: { create?: string; update?: string }
+  /** Never create: a file row whose natural key matches nothing is skipped
+   *  and counted ("no existing … match") — for sheets that annotate a
+   *  reference table (project-type defaults), where a typo must not mint a
+   *  new project type. */
+  update_only?: boolean
 }
 
 export interface ServiceImportSummary {
@@ -137,14 +155,41 @@ function normForDiff(value: unknown): string {
   return s
 }
 
+const normLabel = (v: string) =>
+  v
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+
 async function resolveLookup(
   cfg: NonNullable<ServiceColumnConfig['lookup']>,
   values: Set<string>
 ): Promise<Map<string, unknown>> {
-  if (!IDENT.test(cfg.collection) || !IDENT.test(cfg.match_field)) {
-    throw new Error(`Unsafe lookup config: ${cfg.collection}.${cfg.match_field}`)
-  }
+  if (!IDENT.test(cfg.collection)) throw new Error(`Unsafe lookup collection: ${cfg.collection}`)
   const map = new Map<string, unknown>()
+  if (cfg.match_label) {
+    const ids = (
+      (await db(cfg.collection).orderBy('id', 'asc').limit(5000).select('id')) as Array<{
+        id: unknown
+      }>
+    ).map((r) => String(r.id))
+    const labels = await getLabels(new Map([[cfg.collection, new Set(ids)]]))
+    const byNorm = new Map<string, string>()
+    for (const id of ids) {
+      const l = labels[`${cfg.collection}:${id}`]
+      if (!l) continue
+      const k = normLabel(l)
+      if (!byNorm.has(k)) byNorm.set(k, id)
+    }
+    for (const v of values) {
+      const hit = byNorm.get(normLabel(v))
+      if (hit != null) map.set(v.toLowerCase(), hit)
+    }
+    return map
+  }
+  if (!cfg.match_field || !IDENT.test(cfg.match_field)) {
+    throw new Error(`Unsafe lookup config: ${cfg.collection}.${String(cfg.match_field)}`)
+  }
   const list = [...values]
   for (let i = 0; i < list.length; i += CHUNK) {
     const rows = await db(cfg.collection)
@@ -152,7 +197,7 @@ async function resolveLookup(
       .orderBy('id', 'asc')
       .select('id', cfg.match_field)
     for (const r of rows as Array<Record<string, unknown>>) {
-      const key = String(r[cfg.match_field] ?? '')
+      const key = String(r[cfg.match_field ?? ''] ?? '')
         .trim()
         .toLowerCase()
       // first (lowest id) wins — MIN(id) convention for duplicate cifa_numbers
@@ -193,7 +238,7 @@ export async function runServiceImport({
       if (v) values.add(v)
     }
     const map = await resolveLookup(cc.lookup, values)
-    if (cc.lookup.on_missing === 'create') {
+    if (cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
       // Stub-create unmatched values through the items service so the rows
       // are revisioned/attributed like any other write.
       let stubbed = 0
@@ -203,7 +248,7 @@ export async function runServiceImport({
           const created = await createOne(
             user,
             cc.lookup.collection,
-            { [cc.lookup.match_field]: v },
+            { [cc.lookup.match_field as string]: v },
             undefined,
             undefined,
             { skipRollupRecalc: true }
@@ -299,9 +344,7 @@ export async function runServiceImport({
   if (!IDENT.test(config.collection) || config.match_by.some((f) => !IDENT.test(f))) {
     throw new Error('Unsafe service_config identifiers')
   }
-  const compareFields = [
-    ...new Set(Object.values(config.columns).map((c) => c.field))
-  ]
+  const compareFields = [...new Set(Object.values(config.columns).map((c) => c.field))]
   if (config.month_from) compareFields.push(config.month_from.field)
   const firstVals = appendOnly
     ? []
@@ -325,6 +368,10 @@ export async function runServiceImport({
   for (const [k, payload] of byKey) {
     const existing = existingByKey.get(k)
     try {
+      if (!existing && config.update_only) {
+        skip(`no existing ${config.collection} match (update-only import)`)
+        continue
+      }
       if (!existing) {
         const body = { ...payload }
         if (config.timestamps?.create) body[config.timestamps.create] = now

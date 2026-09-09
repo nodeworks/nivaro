@@ -9056,6 +9056,7 @@ type RowRuleItem = {
   target_value?: string | null
   sources?: RowRuleSource[]
   only_if_empty?: boolean
+  seed_only?: boolean
   sort?: number
   on_update?: boolean
 }
@@ -10859,6 +10860,22 @@ function RowRuleRow({
                 Only set if target is currently empty
               </span>
             </label>
+            {rule.target_type !== 'lock' && (
+              <label className='mt-1 flex items-center gap-2 cursor-pointer'>
+                <input
+                  type='checkbox'
+                  checked={!!rule.seed_only}
+                  onChange={(e) => onChange({ ...rule, seed_only: e.target.checked })}
+                  className='h-3.5 w-3.5 accent-nvr-cyan'
+                />
+                <span
+                  className='text-[11px] text-slate-600'
+                  title='The target is an input this rule only seeds when empty (a project default). Re-run rules never blanks it to re-derive, and Data Integrity never reports it as drift.'
+                >
+                  Seed only — target is an input, never re-derived
+                </span>
+              </label>
+            )}
             {rule.target_type !== 'lock' && (
               <label className='mt-1 flex items-center gap-2 cursor-pointer'>
                 <input

@@ -1055,10 +1055,16 @@ async function evaluateRowRuleCheck(
     // targets. Reported separately (rule 'row-input'), never auto-fixed.
     for (const line of lines) {
       const missing = new Map<string, Set<string>>()
+      // A trigger the rules themselves DERIVE for this line (a project's
+      // default category) is a row-rule drift, not a missing input.
+      const derivedHere = new Set(
+        Object.keys(plan.changes.find((c) => c.id === String(line.id))?.patch ?? {})
+      )
       for (const rule of rc.rowRules) {
         const tf = rule.trigger_field
         if (!tf || tf.startsWith('$parent.') || rule.target_type === 'lock') continue
         if ((rule.trigger_op ?? 'nnull') === 'null') continue
+        if (derivedHere.has(tf)) continue
         const v = line[tf]
         if (v != null && v !== '') continue
         if (!missing.has(tf)) missing.set(tf, new Set())
