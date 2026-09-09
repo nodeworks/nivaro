@@ -1613,6 +1613,32 @@ export function InlineTableField({
   )
   const [editState, setEditState] = useState<GridEditState | null>(null)
   const editStateRef = useRef<GridEditState | null>(null)
+  // Row presence: tell the host which SAVED row this user is editing right
+  // now (window event — the record-presence hook relays it into the record
+  // room as a `row:<collection>:<id>` focus, and marks the same row for
+  // co-viewers). Pending/new rows have no shared identity yet.
+  const lastEditingRowRef = useRef<string | null>(null)
+  useEffect(() => {
+    const id = editState?.rowId
+    const key = id && id !== 'new' && !id.startsWith('pending:') ? `${relatedCollection}:${id}` : null
+    if (key === lastEditingRowRef.current) return
+    if (typeof window === 'undefined') return
+    if (lastEditingRowRef.current)
+      window.dispatchEvent(
+        new CustomEvent('nvr:row-editing', { detail: { row: lastEditingRowRef.current, state: 'end' } })
+      )
+    if (key) window.dispatchEvent(new CustomEvent('nvr:row-editing', { detail: { row: key, state: 'start' } }))
+    lastEditingRowRef.current = key
+  }, [editState?.rowId, relatedCollection])
+  useEffect(
+    () => () => {
+      if (lastEditingRowRef.current && typeof window !== 'undefined')
+        window.dispatchEvent(
+          new CustomEvent('nvr:row-editing', { detail: { row: lastEditingRowRef.current, state: 'end' } })
+        )
+    },
+    []
+  )
   // Stale-response guard for /field-rules/evaluate. Every setDraftField bumps
   // the sequence and stamps the edited key; a response only writes a key whose
   // stamp is not NEWER than the request that produced it. Without this a slow
@@ -2142,7 +2168,21 @@ export function InlineTableField({
 
   // Section grouping (sectionGroupBy): active once resolved values are in
   const sectionsActive = !!sectionGroupBy && !!resolvedPathRows
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  // Collapse state is remembered per browser for this grid (collection +
+  // field), so a long lines list opens the way it was left.
+  const sectionMemoryKey = sectionGroupBy
+    ? `nvr_grid_sections:${relatedCollection}:${parentFieldKey ?? manyField}`
+    : null
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
+    if (!sectionMemoryKey || typeof localStorage === 'undefined') return new Set()
+    try {
+      const raw = localStorage.getItem(sectionMemoryKey)
+      const arr = raw ? (JSON.parse(raw) as unknown) : null
+      return new Set(Array.isArray(arr) ? arr.map(String) : [])
+    } catch {
+      return new Set()
+    }
+  })
   const sectionOf = (r: Record<string, unknown>): string => {
     const v = String(r[sectionGroupBy ?? ''] ?? '').trim()
     return v || 'Uncategorized'
@@ -2152,8 +2192,50 @@ export function InlineTableField({
       const next = new Set(prev)
       if (next.has(name)) next.delete(name)
       else next.add(name)
+      if (sectionMemoryKey) {
+        try {
+          localStorage.setItem(sectionMemoryKey, JSON.stringify([...next]))
+        } catch {
+          /* private mode etc. — memory is a convenience */
+        }
+      }
       return next
     })
+  /** Per-section aggregates for the columns that carry `options.aggregate`,
+   *  same math as the footer, over the section's live rows. */
+  const sectionSummary = (sectionRows: Record<string, unknown>[]) => {
+    const out: Array<{ label: string; text: string }> = []
+    for (const c of effectiveCols) {
+      const opts = parseJson<Record<string, unknown>>(c.options) ?? {}
+      const agg = opts.aggregate as string | undefined
+      if (!agg || c.interface === 'formula-column' || c.interface === 'match-agg-column') continue
+      const nums = sectionRows
+        .map((r) => {
+          const rid = String(r.id)
+          const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+          return Number(applyComputedFields(merged as Record<string, unknown>)[c.field])
+        })
+        .filter((n) => !Number.isNaN(n))
+      let result: number | null = null
+      if (agg === 'count') result = sectionRows.length
+      else if (nums.length > 0) {
+        if (agg === 'sum') result = nums.reduce((a, b) => a + b, 0)
+        else if (agg === 'avg') result = nums.reduce((a, b) => a + b, 0) / nums.length
+        else if (agg === 'min') result = Math.min(...nums)
+        else if (agg === 'max') result = Math.max(...nums)
+      }
+      if (result === null) continue
+      const text =
+        opts.format === 'currency'
+          ? result.toLocaleString('en-US', {
+              ...numericIntlOptions(opts, 'currency'),
+              currency: (opts.currency as string) || 'USD'
+            })
+          : result.toLocaleString('en-US', numericIntlOptions(opts, opts.format as string | undefined))
+      out.push({ label: c.label || titleCase(c.field), text })
+    }
+    return out
+  }
 
   const computedWriteCols = useMemo(
     () =>
@@ -4838,6 +4920,22 @@ export function InlineTableField({
                           <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
                             {rows.reduce((n, r) => n + (sectionOf(r) === section ? 1 : 0), 0)}
                           </span>
+                          {(() => {
+                            const sums = sectionSummary(
+                              rows.filter((r) => sectionOf(r) === section && !pendingDeletes.has(String(r.id)))
+                            )
+                            if (sums.length === 0) return null
+                            return (
+                              <span className='ml-auto flex flex-wrap items-baseline gap-x-3 pr-1 text-[10.5px] tabular-nums'>
+                                {sums.map((sm) => (
+                                  <span key={sm.label} className='text-slate-500 dark:text-slate-400'>
+                                    {sm.label}{' '}
+                                    <span className='font-semibold text-slate-700 dark:text-slate-200'>{sm.text}</span>
+                                  </span>
+                                ))}
+                              </span>
+                            )
+                          })()}
                         </button>
                       </td>
                     </tr>

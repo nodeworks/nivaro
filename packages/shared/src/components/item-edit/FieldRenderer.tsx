@@ -175,6 +175,7 @@ export function FieldRenderer({
   itemId,
   cascadeFilter,
   requiredParentLabel,
+  narrowedBy,
   onCountChange,
   displayOnly,
   prefillParentId
@@ -187,6 +188,8 @@ export function FieldRenderer({
   itemId: string
   cascadeFilter?: Record<string, unknown>
   requiredParentLabel?: string | null
+  /** Cascade parents currently narrowing an M2O picker (see RelationCombobox). */
+  narrowedBy?: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
   onCountChange?: (count: number) => void
   displayOnly?: boolean
   prefillParentId?: string
@@ -317,6 +320,7 @@ export function FieldRenderer({
             : undefined
         }
         requiredParent={requiredParentLabel ?? undefined}
+        narrowedBy={narrowedBy}
         facets={
           Array.isArray(m2oOpts?.picker_facets)
             ? m2oOpts.picker_facets.map((f) => ({

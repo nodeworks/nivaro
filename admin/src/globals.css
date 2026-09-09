@@ -234,6 +234,27 @@
   outline-offset: 3px;
   border-radius: 6px;
 }
+/* …and a colleague has this grid row open in its editor */
+[data-o2m-row].nvr-remote-editing > td:first-child {
+  position: relative;
+  box-shadow: inset 3px 0 0 rgb(251 191 36 / 0.85);
+}
+[data-o2m-row].nvr-remote-editing > td:first-child::after {
+  content: attr(data-remote-editor);
+  position: absolute;
+  left: 8px;
+  bottom: -7px;
+  background: rgb(251 191 36);
+  color: #422006;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+}
 [data-field].nvr-remote-editing::after {
   content: attr(data-remote-editor);
   position: absolute;

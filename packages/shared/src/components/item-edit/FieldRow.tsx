@@ -1077,6 +1077,15 @@ export function FieldRow({
                 itemId={itemId}
                 cascadeFilter={cascadeFilter}
                 requiredParentLabel={requiredParentLabel}
+                narrowedBy={
+                  cascadeParentLabels.length > 0
+                    ? {
+                        labels: cascadeParentLabels,
+                        keys: cascadeParentFieldKeys,
+                        onClear: (k) => onChange(k, null)
+                      }
+                    : undefined
+                }
                 onCountChange={
                   onCountChange ? (count) => onCountChange(field.field, count) : undefined
                 }

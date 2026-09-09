@@ -10888,6 +10888,101 @@ function RowRuleRow({
 }
 
 /**
+ * Static lint over the editor's CURRENT row rules — the causes behind what
+ * the tester below shows as symptoms. Pure function of the rule list plus
+ * the child's field names; runs on every edit, nothing is saved.
+ */
+type RowRuleLintFinding = { tone: 'error' | 'warn' | 'info'; text: string }
+function lintRowRules(rules: RowRuleItem[], childFieldNames: Set<string>): RowRuleLintFinding[] {
+  const out: RowRuleLintFinding[] = []
+  const sorted = rules
+    .map((r, idx) => ({ r, idx, sort: r.sort ?? idx }))
+    .sort((a, b) => a.sort - b.sort)
+  const num = (i: number) => `rule ${i + 1}`
+  const fieldExists = (f: string | null | undefined) =>
+    !f || f.startsWith('$parent.') || childFieldNames.size === 0 || childFieldNames.has(f)
+  for (const { r, idx } of sorted) {
+    if (!r.target_field) out.push({ tone: 'error', text: `${num(idx)} has no target field.` })
+    else if (!fieldExists(r.target_field))
+      out.push({ tone: 'error', text: `${num(idx)} targets "${r.target_field}", which is not a field on this collection.` })
+    if (!r.trigger_field && !(r.trigger_fields ?? []).length)
+      out.push({ tone: 'warn', text: `${num(idx)} has no trigger — it fires on every pass.` })
+    for (const t of [r.trigger_field, ...(r.trigger_fields ?? [])])
+      if (t && !fieldExists(t))
+        out.push({ tone: 'error', text: `${num(idx)} is triggered by "${t}", which is not a field on this collection.` })
+    if (r.target_type === 'precedence' && !(r.sources ?? []).length)
+      out.push({ tone: 'warn', text: `${num(idx)} is a precedence rule with no sources — it always writes empty.` })
+  }
+  // Same target written by several rules: order decides; only-if-empty
+  // silently loses to a later unconditional writer.
+  const byTarget = new Map<string, Array<{ r: RowRuleItem; idx: number }>>()
+  for (const e of sorted) {
+    if (!e.r.target_field) continue
+    const list = byTarget.get(e.r.target_field) ?? []
+    list.push(e)
+    byTarget.set(e.r.target_field, list)
+  }
+  for (const [target, list] of byTarget) {
+    const writers = list.filter((e) => e.r.target_type !== 'lock')
+    const locks = list.filter((e) => e.r.target_type === 'lock')
+    if (writers.length > 1) {
+      const sameTrigger = new Set(writers.map((e) => `${e.r.trigger_field ?? ''}|${e.r.trigger_op ?? ''}|${e.r.trigger_value ?? ''}|${e.r.trigger_related_field ?? ''}`))
+      if (sameTrigger.size < writers.length)
+        out.push({
+          tone: 'warn',
+          text: `"${target}" is written by ${writers.map((e) => num(e.idx)).join(' and ')} on the SAME trigger — the later one wins every time; the earlier is dead.`
+        })
+      else
+        out.push({
+          tone: 'info',
+          text: `"${target}" is written by ${writers.map((e) => num(e.idx)).join(', ')}; on one pass the later rule wins when both fire.`
+        })
+      for (let i = 0; i < writers.length; i++) {
+        const a = writers[i]
+        if (!a.r.only_if_empty) continue
+        const later = writers.slice(i + 1).filter((b) => !b.r.only_if_empty)
+        if (later.length)
+          out.push({
+            tone: 'warn',
+            text: `${num(a.idx)} only fills "${target}" when empty, but ${later.map((b) => num(b.idx)).join(', ')} overwrite${later.length === 1 ? 's' : ''} it later in the same pass — the only-if-empty guard has no effect.`
+          })
+      }
+    }
+    if (locks.length && writers.length)
+      out.push({
+        tone: 'info',
+        text: `"${target}" is locked by ${locks.map((e) => num(e.idx)).join(', ')} and set by ${writers.map((e) => num(e.idx)).join(', ')} — rules still write it; the lock only refuses the user's edits.`
+      })
+  }
+  return out
+}
+
+function RowRuleLint({ rules, childFieldNames }: { rules: RowRuleItem[]; childFieldNames: Set<string> }) {
+  const findings = useMemo(() => lintRowRules(rules, childFieldNames), [rules, childFieldNames])
+  if (findings.length === 0)
+    return (
+      <p className='text-[10px] text-emerald-700 dark:text-emerald-300'>
+        No conflicts between these rules.
+      </p>
+    )
+  const tone = (t: RowRuleLintFinding['tone']) =>
+    t === 'error'
+      ? 'text-red-700 bg-red-50 dark:bg-red-400/10 dark:text-red-300'
+      : t === 'warn'
+        ? 'text-amber-700 bg-amber-50 dark:bg-amber-400/10 dark:text-amber-300'
+        : 'text-slate-600 bg-slate-100 dark:bg-white/5 dark:text-slate-300'
+  return (
+    <ul className='space-y-1' aria-label='Rule conflicts'>
+      {findings.map((f, i) => (
+        <li key={i} className={cn('rounded px-2 py-1 text-[10.5px] leading-snug', tone(f.tone))}>
+          {f.text}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
  * Dry-run the editor's CURRENT (unsaved) row rules against one real child
  * record and show what every rule did — resolved trigger value, fired or
  * skipped and why, the value it wrote, per-rule ms and the pass's query
@@ -13343,6 +13438,12 @@ function FieldSettingsPopover({
                         }))}
                       />
                     ))}
+                    {rowRulesLocal.length > 0 && (
+                      <RowRuleLint
+                        rules={rowRulesLocal}
+                        childFieldNames={new Set(childAllFields.map((f) => f.field))}
+                      />
+                    )}
                     {rowRulesLocal.length > 0 && relatedCollection && collection && (
                       <RowRuleTester
                         childCollection={relatedCollection}

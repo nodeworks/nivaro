@@ -62,7 +62,8 @@ export function RelationCombobox({
   optionSort,
   requiredParent,
   facets,
-  fieldKey
+  fieldKey,
+  narrowedBy
 }: {
   collection: string
   value: unknown
@@ -70,6 +71,10 @@ export function RelationCombobox({
   disabled?: boolean
   placeholder?: string
   extraFilter?: Record<string, unknown>
+  /** The parent fields whose current values narrow this picker (cascade
+   *  filters). When the narrowed list is EMPTY the panel says which parents
+   *  did it and offers to clear one — instead of a blank "No results". */
+  narrowedBy?: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
   /** When the filtered option set has EXACTLY one option and the field is
    *  empty, pick it automatically (options.auto_select_single). Two or more
    *  options — or zero — leave the field blank; an existing value is never
@@ -455,7 +460,36 @@ export function RelationCombobox({
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
                 </div>
               ) : (data ?? []).length === 0 ? (
-                <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
+                narrowedBy && narrowedBy.labels.length > 0 && !query.trim() ? (
+                  <div className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'>
+                    <p>
+                      No options for{' '}
+                      <span className='font-medium text-foreground'>{narrowedBy.labels.join(' · ')}</span>
+                      {narrowedBy.onClear ? ' — clear one to widen the list:' : '.'}
+                    </p>
+                    {narrowedBy.onClear && (
+                      <div className='mt-1.5 flex flex-wrap gap-1.5'>
+                        {narrowedBy.keys.map((k, i) => (
+                          <button
+                            key={k}
+                            type='button'
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              narrowedBy.onClear?.(k)
+                            }}
+                            className='rounded-md border border-border bg-background px-2 py-0.5 text-[11.5px] font-medium text-foreground transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                          >
+                            Clear {narrowedBy.labels[i] ?? k}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className='px-3 py-2 text-[13px] text-muted-foreground'>
+                    {query.trim() ? `No results for “${query.trim()}”` : 'No results'}
+                  </p>
+                )
               ) : (
                 (serverSort
                   ? [...(data ?? [])]

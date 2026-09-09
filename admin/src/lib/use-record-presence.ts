@@ -129,6 +129,15 @@ export function useRecordPresence(collection: string | undefined, item: string |
           : (target?.value ?? '')
       socket.emit('field:change', { field, value })
     }
+    // Row presence: an inline grid announces which saved row is open in its
+    // editor; relay it as a synthetic `row:<collection>:<id>` field so the
+    // existing field:editing fan-out carries it.
+    const onRowEditing = (e: Event) => {
+      const d = (e as CustomEvent).detail as { row?: string; state?: string }
+      if (!d?.row) return
+      socket.emit(d.state === 'end' ? 'field:blur' : 'field:focus', { field: `row:${d.row}` })
+    }
+    window.addEventListener('nvr:row-editing', onRowEditing)
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
     document.addEventListener('input', onInput)
@@ -136,6 +145,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     return () => {
       window.removeEventListener('nvr:upload-state', onLocalUpload)
       disposed = true
+      window.removeEventListener('nvr:row-editing', onRowEditing)
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('input', onInput)
@@ -151,7 +161,10 @@ export function useRecordPresence(collection: string | undefined, item: string |
   useEffect(() => {
     const marked: HTMLElement[] = []
     for (const field of Object.keys(editing)) {
-      const el = document.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`)
+      // `row:<collection>:<id>` marks a grid row; anything else a field wrapper.
+      const el = field.startsWith('row:')
+        ? document.querySelector<HTMLElement>(`[data-o2m-row="${CSS.escape(field.slice(4))}"]`)
+        : document.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`)
       if (el) {
         el.classList.add('nvr-remote-editing')
         const e = editing[field]
