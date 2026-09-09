@@ -372,6 +372,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       mode?: 'empty-only' | 'all'
       dry_run?: boolean
       row_ids?: Array<string | number>
+      /** dry_run: return EVERY row patch (a staged grid queues them all). */
+      all_changes?: boolean
     }
     const { collection, fk_field } = body
     if (!collection || !fk_field || body.parent_id == null || !Array.isArray(body.row_rules)) {
@@ -456,14 +458,15 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       mode: 'apply'
     })
     if (dryRun) {
+      const list = body.all_changes === true ? changes : changes.slice(0, 200)
       return reply.send({
         data: {
           rows: rows.length,
           fields,
-          changes: changes.slice(0, 200),
+          changes: list,
           applied: 0,
           failed: [],
-          truncated: changes.length > 200
+          truncated: list.length < changes.length
         }
       })
     }

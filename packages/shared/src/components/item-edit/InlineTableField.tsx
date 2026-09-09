@@ -3331,6 +3331,10 @@ export function InlineTableField({
   async function rerunRules(dryRun: boolean) {
     if (!client || !rowRules?.length || isNew) return
     setRerunBusy(dryRun ? 'preview' : 'apply')
+    // A staged grid (save_mode 'pending') never writes on its own: the
+    // re-derived values are QUEUED as row edits and land with the record's
+    // Save, so they show as "Edited" first and can still be cancelled.
+    const stageIt = isPendingMode && !!staging
     try {
       const res = await client.request<{
         data: {
@@ -3349,7 +3353,8 @@ export function InlineTableField({
           parent_context: buildParentCtx(),
           row_rules: rowRules,
           mode: rerunMode,
-          dry_run: dryRun
+          dry_run: dryRun || stageIt,
+          all_changes: stageIt
         })
       )
       const d = res.data
@@ -3360,6 +3365,18 @@ export function InlineTableField({
           changes: d.changes,
           truncated: d.truncated
         })
+        return
+      }
+      if (stageIt) {
+        for (const c of d.changes) {
+          if (pendingDeletes.has(String(c.id))) continue
+          staging!.queueEdit(relatedCollection, manyField, String(c.id), c.patch)
+        }
+        toast.success(
+          `Rules staged on ${d.changes.length} ${d.changes.length === 1 ? 'line' : 'lines'} — saved with the record`
+        )
+        setRerunPreview(null)
+        setRerunOpen(false)
         return
       }
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -5149,7 +5166,10 @@ export function InlineTableField({
           </p>
           <p className='text-[11px] text-slate-500'>
             Rules edited after these lines were created never touched them. Preview first — nothing
-            is written until you apply, and every applied change lands in each line&apos;s history.
+            is written until you{' '}
+            {isPendingMode && staging
+              ? 'stage them: staged lines show as Edited and land with Save.'
+              : 'apply, and every applied change lands in each line\u2019s history.'}
           </p>
           <div className='flex flex-wrap items-center gap-3 text-[11px]'>
             {(
@@ -5200,8 +5220,10 @@ export function InlineTableField({
                 className='h-7 rounded bg-[#00ceff] px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
               >
                 {rerunBusy === 'apply'
-                  ? 'Applying…'
-                  : `Apply to ${rerunPreview.changes.length} ${rerunPreview.changes.length === 1 ? 'line' : 'lines'}`}
+                  ? isPendingMode && staging
+                    ? 'Staging…'
+                    : 'Applying…'
+                  : `${isPendingMode && staging ? 'Stage for' : 'Apply to'} ${rerunPreview.changes.length} ${rerunPreview.changes.length === 1 ? 'line' : 'lines'}`}
               </button>
             )}
           </div>
