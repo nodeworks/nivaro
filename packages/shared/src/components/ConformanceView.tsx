@@ -580,9 +580,11 @@ function RunDetail({
         </div>
       )}
 
-      {rule && field && ['cascade', 'validation', 'display', 'row-rule'].includes(rule) && (
-        <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />
-      )}
+      {rule &&
+        field &&
+        ['cascade', 'validation', 'display', 'row-rule', 'required', 'row-input'].includes(
+          rule
+        ) && <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />}
 
       <div className='min-h-0 flex-1 overflow-y-auto'>
         {/* Only a SETTLED empty answer earns the green all-clear — while the
@@ -734,26 +736,53 @@ function RemediateBar({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [confirming, setConfirming] = useState(false)
+  const [confirming, setConfirming] = useState<null | 'clear' | 'rederive' | 'apply-high'>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   if (total === 0 && !result) return null
-  const rederive = rule === 'row-rule'
+  const blunt: null | 'clear' | 'rederive' =
+    rule === 'row-rule'
+      ? 'rederive'
+      : ['cascade', 'validation', 'display'].includes(rule)
+        ? 'clear'
+        : null
+  const run_ = (action: 'clear' | 'rederive' | 'apply-high') => {
+    setBusy(true)
+    void client
+      .request<{
+        data: {
+          cleared?: number
+          records?: number
+          lines?: number
+          applied?: number
+          skipped?: number
+          failed: number
+          by_kind?: Record<string, number>
+        }
+      }>(post(`/config-conformance/runs/${run.id}/remediate`, { action, field, rule }))
+      .then((r) => {
+        const d = r.data
+        const tail = d.failed ? ` — ${d.failed} failed` : ''
+        setResult(
+          action === 'apply-high'
+            ? `Applied confident fixes on ${d.applied ?? 0} record(s); ${d.skipped ?? 0} need a person${tail}. Re-run the checks to confirm.`
+            : action === 'rederive'
+              ? `Re-derived ${d.lines ?? 0} line(s) across ${d.records ?? 0} record(s)${tail}. Re-run the checks to confirm.`
+              : `Cleared on ${d.cleared ?? 0} record(s)${tail}. Re-run the checks to confirm.`
+        )
+        void qc.invalidateQueries({ queryKey: ['conformance-run', run.id] })
+      })
+      .catch((err: Error) => setResult(err.message))
+      .finally(() => {
+        setBusy(false)
+        setConfirming(null)
+      })
+  }
   return (
     <div className='flex flex-wrap items-center gap-2.5 border-b border-slate-100 bg-slate-50/60 px-4 py-2 dark:border-border dark:bg-background/40'>
       <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-        {rederive ? (
-          <>
-            Bulk fix: re-run the <span className='font-mono'>{field}</span> row rules on every
-            affected record — the same pass as the grid&apos;s &ldquo;re-run rules&rdquo;, each line
-            revisioned and attributed to you.
-          </>
-        ) : (
-          <>
-            Bulk fix: clear <span className='font-mono'>{field}</span> on the affected records —
-            each write is revisioned and attributed to you.
-          </>
-        )}
+        Bulk fix on <span className='font-mono'>{field}</span> across the affected records — each
+        write is revisioned and attributed to you.
       </span>
       {result ? (
         <span className='text-[11.5px] font-medium text-emerald-600 dark:text-emerald-400'>
@@ -764,63 +793,57 @@ function RemediateBar({
           <button
             type='button'
             disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              void client
-                .request<{
-                  data: { cleared?: number; records?: number; lines?: number; failed: number }
-                }>(
-                  post(`/config-conformance/runs/${run.id}/remediate`, {
-                    action: rederive ? 'rederive' : 'clear',
-                    field,
-                    rule
-                  })
-                )
-                .then((r) => {
-                  setResult(
-                    rederive
-                      ? `Re-derived ${r.data.lines ?? 0} line(s) across ${r.data.records ?? 0} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
-                      : `Cleared on ${r.data.cleared ?? 0} record(s)${r.data.failed ? ` — ${r.data.failed} failed` : ''}. Re-run the checks to confirm.`
-                  )
-                  void qc.invalidateQueries({ queryKey: ['conformance-run', run.id] })
-                })
-                .catch((err: Error) => setResult(err.message))
-                .finally(() => setBusy(false))
-            }}
+            onClick={() => run_(confirming)}
             className={cn(
               'h-6 rounded-md px-2.5 text-[11.5px] font-medium text-white disabled:opacity-50',
-              rederive ? 'bg-orange-600' : 'bg-red-600'
+              confirming === 'clear'
+                ? 'bg-red-600'
+                : confirming === 'rederive'
+                  ? 'bg-orange-600'
+                  : 'bg-emerald-600'
             )}
           >
             {busy
-              ? rederive
-                ? 'Re-deriving…'
-                : 'Clearing…'
-              : rederive
-                ? `Yes, re-run rules on ${total.toLocaleString()} record(s)`
-                : `Yes, clear ${total.toLocaleString()} value(s)`}
+              ? 'Working…'
+              : confirming === 'apply-high'
+                ? `Yes, apply confident fixes on ${total.toLocaleString()} record(s)`
+                : confirming === 'rederive'
+                  ? `Yes, re-run rules on ${total.toLocaleString()} record(s)`
+                  : `Yes, clear ${total.toLocaleString()} value(s)`}
           </button>
           <button
             type='button'
-            onClick={() => setConfirming(false)}
+            onClick={() => setConfirming(null)}
             className='text-[11.5px] text-slate-400 hover:text-slate-600'
           >
             Cancel
           </button>
         </span>
       ) : (
-        <button
-          type='button'
-          onClick={() => setConfirming(true)}
-          className={cn(
-            'h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 dark:border-border dark:text-muted-foreground',
-            rederive
-              ? 'hover:border-orange-300 hover:text-orange-600'
-              : 'hover:border-red-300 hover:text-red-600'
+        <span className='flex items-center gap-1.5'>
+          <button
+            type='button'
+            onClick={() => setConfirming('apply-high')}
+            title='For each record, apply the top proposal only when its confidence is high (an only option, a rule-derived value); everything else is left for a person.'
+            className='h-6 rounded-md border border-emerald-300 px-2.5 text-[11.5px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
+          >
+            Apply confident fixes…
+          </button>
+          {blunt && (
+            <button
+              type='button'
+              onClick={() => setConfirming(blunt)}
+              className={cn(
+                'h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 dark:border-border dark:text-muted-foreground',
+                blunt === 'rederive'
+                  ? 'hover:border-orange-300 hover:text-orange-600'
+                  : 'hover:border-red-300 hover:text-red-600'
+              )}
+            >
+              {blunt === 'rederive' ? 'Re-run rules…' : 'Clear values…'}
+            </button>
           )}
-        >
-          {rederive ? 'Re-run rules…' : 'Clear values…'}
-        </button>
+        </span>
       )}
     </div>
   )

@@ -35,7 +35,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CHUNK = 500
 const DEFAULT_ROW_CAP = 5000
 
-interface CascadeCheck {
+export interface CascadeCheck {
   field: string
   fieldLabel: string
   parent_field: string

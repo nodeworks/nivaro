@@ -937,13 +937,47 @@ export const dataIntegrityGuide: DocSection = {
       type: 'note',
       text: "Row-rule checks read the rules on the collection's ACTIVE grouped layout — the same layout the API applies on line creates. Rules configured only on a slugged or role-conditional layout are a per-audience view and are not swept."
     },
-    { type: 'h3', text: 'Fixing findings' },
+    { type: 'h3', text: 'Fixing findings — proposals' },
+    {
+      type: 'p',
+      text: 'On the record, the integrity banner lists the record\'s findings and every one has a "Fix…" button. It opens a list of PROPOSALS — concrete repairs the server worked out from the record, ranked by confidence, each showing the exact writes it would make (field: old → new), the basis it rests on, and a confidence: Confident (an only option, a rule-derived value), Likely (history, siblings, links), Manual (you decide). Nothing is written until you pick one; every apply goes through the normal write path and can be undone for 30 seconds.'
+    },
+    {
+      type: 'table',
+      head: ['Finding', 'Proposals it can make'],
+      rows: [
+        [
+          'Not an available option',
+          'Set the only option under the current parent · replace with the same-named option under the current parent · keep the value and set the PARENT it belongs to (shows who last changed the parent) · choose from the options that qualify · clear.'
+        ],
+        [
+          'Required empty',
+          "Copy from a linked record (the form's cross-record defaults) · the layout's default · restore the value it held before someone or an import blanked it · the one value every linked record agrees on (project → its region) · choose from the options the form would offer. Required links (M2M) get the same treatment and are created as junction rows."
+        ],
+        [
+          'Validation',
+          "The rule's boundary (minimum, maximum, N days from the creation date) or a normalized form of the current value (trimmed, upper/lower-cased, stripped) — only when it passes every rule on the field."
+        ],
+        [
+          'Lines missing rule inputs',
+          "Set the missing input from what sibling lines carry (lines with the same CIFA elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, Oracle category, PO line type, price) in the same write."
+        ],
+        [
+          'Lines off their rules',
+          'Re-run the rules on the drifted lines, previewing every change.'
+        ],
+        ['Broken display label', 'Regenerate the id from its pattern.'],
+        [
+          'Always',
+          '"Ask <owner> to resolve it" creates a task on the record for its current workflow owner (or creator) with the finding text — for when nothing on the record can derive a value. "Ask AI for a suggestion" (opt-in, needs the AI key) has the model pick from the SAME candidate list; it is marked AI, ranked last, and never applied on its own.'
+        ]
+      ]
+    },
     {
       type: 'ul',
       items: [
-        'On the record: the integrity banner at the top of the form lists the record\'s findings; a "Fix" button appears where the repair is mechanical. For "Lines off their rules" the fix re-runs the row rules on every line of the record — the same pass as the grid\'s "re-run rules" button — writing only the lines whose values change, each revisioned and attributed to you.',
-        'On the run: filter by the rule and the field, and the bulk-fix bar offers "Re-run rules…" across every affected record in the run (cap 1,000 records). Clearing stale cascade values and regenerating ids work the same way.',
-        'Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the line.'
+        'On the run: filter by rule and field, and the bulk bar offers "Apply confident fixes…" — for each affected record the top proposal is applied only when its confidence is high; everything else is counted as "needs a person". "Re-run rules…" and "Clear values…" remain for their rules (cap 1,000 records).',
+        'Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the record.'
       ]
     },
     { type: 'h3', text: 'API' },
@@ -965,7 +999,11 @@ export const dataIntegrityGuide: DocSection = {
         ],
         [
           '`POST /api/config-conformance/runs/:id/remediate`',
-          '`{action:"clear"|"rederive", field, rule}` — bulk fix across the run\'s affected records.'
+          '`{action:"apply-high"|"clear"|"rederive", field, rule}` — bulk fix across the run\'s affected records.'
+        ],
+        [
+          '`POST /api/config-conformance/record/:collection/:id/proposals`',
+          '`{field, rule, message}` → ranked proposals for one finding (read permission; writes nothing). `/proposals/ai` returns one AI suggestion from the same candidates.'
         ],
         [
           '`GET /api/config-conformance/record/:collection/:id`',
@@ -973,7 +1011,7 @@ export const dataIntegrityGuide: DocSection = {
         ],
         [
           '`POST /api/config-conformance/record/:collection/:id/fix`',
-          '`{field, rule}` — repair one finding on one record.'
+          '`{field, rule, proposal_id, choice?}` applies one proposal (the server re-derives the list and matches by id); `{undo: writes}` reverses a previous apply. Without proposal_id the legacy one-click fix runs (clear / regenerate / re-derive).'
         ]
       ]
     }

@@ -7140,11 +7140,21 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>Lines off their rules</td><td>An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \"X\" — rules derive \"Y\"".</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Row-rule checks read the rules on the collection's ACTIVE grouped layout — the same layout the API applies on line creates. Rules configured only on a slugged or role-conditional layout are a per-audience view and are not swept.</div>
-          <h3 class="doc-h3">Fixing findings</h3>
+          <h3 class="doc-h3">Fixing findings — proposals</h3>
+          <p class="doc-p">On the record, the integrity banner lists the record's findings and every one has a "Fix…" button. It opens a list of PROPOSALS — concrete repairs the server worked out from the record, ranked by confidence, each showing the exact writes it would make (field: old → new), the basis it rests on, and a confidence: Confident (an only option, a rule-derived value), Likely (history, siblings, links), Manual (you decide). Nothing is written until you pick one; every apply goes through the normal write path and can be undone for 30 seconds.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Finding</th><th>Proposals it can make</th></tr></thead>
+            <tbody><tr><tr><td>Not an available option</td><td>Set the only option under the current parent · replace with the same-named option under the current parent · keep the value and set the PARENT it belongs to (shows who last changed the parent) · choose from the options that qualify · clear.</td></tr>
+              <tr><td>Required empty</td><td>Copy from a linked record (the form's cross-record defaults) · the layout's default · restore the value it held before someone or an import blanked it · the one value every linked record agrees on (project → its region) · choose from the options the form would offer. Required links (M2M) get the same treatment and are created as junction rows.</td></tr>
+              <tr><td>Validation</td><td>The rule's boundary (minimum, maximum, N days from the creation date) or a normalized form of the current value (trimmed, upper/lower-cased, stripped) — only when it passes every rule on the field.</td></tr>
+              <tr><td>Lines missing rule inputs</td><td>Set the missing input from what sibling lines carry (lines with the same CIFA elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, Oracle category, PO line type, price) in the same write.</td></tr>
+              <tr><td>Lines off their rules</td><td>Re-run the rules on the drifted lines, previewing every change.</td></tr>
+              <tr><td>Broken display label</td><td>Regenerate the id from its pattern.</td></tr>
+              <tr><td>Always</td><td>"Ask &lt;owner&gt; to resolve it" creates a task on the record for its current workflow owner (or creator) with the finding text — for when nothing on the record can derive a value. "Ask AI for a suggestion" (opt-in, needs the AI key) has the model pick from the SAME candidate list; it is marked AI, ranked last, and never applied on its own.</td></tr></tr></tbody>
+          </table></div>
           <ul class="doc-ul">
-            <li>On the record: the integrity banner at the top of the form lists the record's findings; a "Fix" button appears where the repair is mechanical. For "Lines off their rules" the fix re-runs the row rules on every line of the record — the same pass as the grid's "re-run rules" button — writing only the lines whose values change, each revisioned and attributed to you.</li>
-            <li>On the run: filter by the rule and the field, and the bulk-fix bar offers "Re-run rules…" across every affected record in the run (cap 1,000 records). Clearing stale cascade values and regenerating ids work the same way.</li>
-            <li>Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the line.</li>
+            <li>On the run: filter by rule and field, and the bulk bar offers "Apply confident fixes…" — for each affected record the top proposal is applied only when its confidence is high; everything else is counted as "needs a person". "Re-run rules…" and "Clear values…" remain for their rules (cap 1,000 records).</li>
+            <li>Every write goes through the items service, so RBAC, validation, locks, hooks, and rollup recalcs apply exactly as if someone had edited the record.</li>
           </ul>
           <h3 class="doc-h3">API</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -7152,9 +7162,10 @@ Authorization: Bearer &lt;token&gt;
             <tbody><tr><tr><td><code class="doc-code">GET /api/config-conformance/collections</code></td><td>Collections with anything to check, with per-kind counts (including grids with row rules).</td></tr>
               <tr><td><code class="doc-code">POST /api/config-conformance/:collection/run</code></td><td>Start a run (<code class="doc-code">{limit}</code> — newest N records, 0 = whole collection). 202 + run id; 409 while one is running.</td></tr>
               <tr><td><code class="doc-code">GET /api/config-conformance/runs/:id</code></td><td>Run status + paged findings; <code class="doc-code">rule=</code> and <code class="doc-code">field=</code> facets.</td></tr>
-              <tr><td><code class="doc-code">POST /api/config-conformance/runs/:id/remediate</code></td><td><code class="doc-code">{action:"clear"|"rederive", field, rule}</code> — bulk fix across the run's affected records.</td></tr>
+              <tr><td><code class="doc-code">POST /api/config-conformance/runs/:id/remediate</code></td><td><code class="doc-code">{action:"apply-high"|"clear"|"rederive", field, rule}</code> — bulk fix across the run's affected records.</td></tr>
+              <tr><td><code class="doc-code">POST /api/config-conformance/record/:collection/:id/proposals</code></td><td><code class="doc-code">{field, rule, message}</code> → ranked proposals for one finding (read permission; writes nothing). <code class="doc-code">/proposals/ai</code> returns one AI suggestion from the same candidates.</td></tr>
               <tr><td><code class="doc-code">GET /api/config-conformance/record/:collection/:id</code></td><td>Findings for one record from the latest completed run (drives the form banner).</td></tr>
-              <tr><td><code class="doc-code">POST /api/config-conformance/record/:collection/:id/fix</code></td><td><code class="doc-code">{field, rule}</code> — repair one finding on one record.</td></tr></tr></tbody>
+              <tr><td><code class="doc-code">POST /api/config-conformance/record/:collection/:id/fix</code></td><td><code class="doc-code">{field, rule, proposal_id, choice?}</code> applies one proposal (the server re-derives the list and matches by id); <code class="doc-code">{undo: writes}</code> reverses a previous apply. Without proposal_id the legacy one-click fix runs (clear / regenerate / re-derive).</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:data-integrity -->
         </div>

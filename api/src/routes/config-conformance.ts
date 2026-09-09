@@ -3,6 +3,15 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { runConformance, summarizeAllCollections } from '../services/config-conformance.js'
+import {
+  AUTO_APPLY_KINDS,
+  aiProposal,
+  applyProposal,
+  applyUndo,
+  materializePick,
+  type ProposalWrite,
+  proposeFixes
+} from '../services/integrity-proposals.js'
 import { updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import {
@@ -15,6 +24,32 @@ import {
  *  fire-and-forget run, pollable status, findings paged per run. */
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+// A repaired finding must vanish immediately — the stored rows belong to
+// the LAST run and would otherwise show until the next nightly sweep.
+async function clearFinding(
+  collection: string,
+  id: string,
+  field: string,
+  rule: string,
+  message?: string | null
+) {
+  const run = (await db('nivaro_conformance_runs')
+    .where({ collection, status: 'completed' })
+    .orderBy('id', 'desc')
+    .first('id')) as { id: number } | undefined
+  if (!run) return
+  // Per-line findings (row-input / row-rule) share field + rule across every
+  // line of the record — clear only the one whose message matches, or fixing
+  // line 4 would silently erase lines 1-11 from the banner.
+  await db('nivaro_conformance_findings')
+    .where({ run: run.id, item_id: String(id), field, rule })
+    .modify((qb) => {
+      if (message) qb.where('message', message.slice(0, 1000))
+    })
+    .del()
+    .catch(() => {})
+}
 
 /** Record-scoped integrity lookup — authenticated (not admin): the banner on
  *  a record form is for whoever can read the record. Separate plugin because
@@ -72,11 +107,13 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
           checked_at: run.finished_at,
           findings: findings.map((f) => ({
             ...f,
-            fixable:
+            // Every finding opens the proposal picker now (at worst it offers
+            // routing the issue to the record's owner); `legacy_fixable` keeps
+            // the old one-click semantics for clients that predate proposals.
+            fixable: !!f.field,
+            legacy_fixable:
               (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
               (f.rule === 'display' && !!f.field && autoIds.has(f.field)) ||
-              // Row-rule drift re-derives the lines through the same planner
-              // the grid's "re-run rules" uses — always repairable.
               (f.rule === 'row-rule' && !!f.field)
           }))
         }
@@ -84,24 +121,61 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     }
   )
 
+  /** Ranked fix proposals for one finding — what would repair it and why.
+   *  Read-gated: proposing writes nothing. */
+  app.post<{
+    Params: { collection: string; id: string }
+    Body: { field?: string; rule?: string; message?: string | null }
+  }>('/record/:collection/:id/proposals', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, id } = req.params
+    const field = String(req.body?.field ?? '')
+    const rule = String(req.body?.rule ?? '')
+    if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
+      return reply.code(400).send({ error: 'Invalid collection or field' })
+    }
+    if (!(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const proposals = await proposeFixes(collection, id, {
+      field,
+      rule,
+      message: req.body?.message
+    })
+    return { data: { proposals } }
+  })
+
+  /** Opt-in AI suggestion — the model picks from the SAME candidate list the
+   *  engine offers (never invents a value); always marked as AI, never
+   *  auto-applied. */
+  app.post<{
+    Params: { collection: string; id: string }
+    Body: { field?: string; rule?: string; message?: string | null }
+  }>('/record/:collection/:id/proposals/ai', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, id } = req.params
+    const field = String(req.body?.field ?? '')
+    const rule = String(req.body?.rule ?? '')
+    if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
+      return reply.code(400).send({ error: 'Invalid collection or field' })
+    }
+    if (!(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const proposal = await aiProposal(collection, id, { field, rule, message: req.body?.message })
+    if (!proposal) {
+      return reply.code(404).send({
+        error: 'No AI suggestion — the assistant is not configured or no option stood out.'
+      })
+    }
+    // Prefixed so the apply route knows to re-mint the AI suggestion instead
+    // of looking for it in the deterministic list.
+    return { data: { proposal: { ...proposal, id: `ai:${proposal.id}` } } }
+  })
+
   /** Auto-fix one finding (#record-integrity ask): cascade → clear the stale
    *  value; display+auto_id → regenerate the id (fresh sequence when empty,
    *  prefix recompute otherwise). Both write THROUGH updateOne so RBAC,
    *  validation, hooks, and revisions all apply. */
 
-  // A repaired finding must vanish immediately — the stored rows belong to
-  // the LAST run and would otherwise show until the next nightly sweep.
-  const clearFinding = async (collection: string, id: string, field: string, rule: string) => {
-    const run = (await db('nivaro_conformance_runs')
-      .where({ collection, status: 'completed' })
-      .orderBy('id', 'desc')
-      .first('id')) as { id: number } | undefined
-    if (!run) return
-    await db('nivaro_conformance_findings')
-      .where({ run: run.id, item_id: String(id), field, rule })
-      .del()
-      .catch(() => {})
-  }
   app.post<{
     Params: { collection: string; id: string }
     Body: { field?: string; rule?: string }
@@ -114,6 +188,66 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     }
     if (!(await can(req.user!, 'update', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const body = (req.body ?? {}) as {
+      proposal_id?: string
+      choice?: string
+      message?: string | null
+      undo?: ProposalWrite[]
+    }
+    // Undo of a previous apply: the reverse writes the apply returned.
+    if (Array.isArray(body.undo) && body.undo.length > 0) {
+      for (const w of body.undo) {
+        if (
+          !IDENT.test(String(w.collection)) ||
+          /^nivaro_|^directus_/i.test(String(w.collection))
+        ) {
+          return reply.code(400).send({ error: 'Invalid undo write' })
+        }
+        if (!(await can(req.user!, w.op === 'delete' ? 'delete' : 'update', w.collection))) {
+          return reply.code(403).send({ error: 'Forbidden' })
+        }
+      }
+      const r = await applyUndo(req.user!, body.undo, req)
+      return { data: { ...r, fixed: r.failed.length === 0, action: 'undo' } }
+    }
+    // Proposal-driven fix: regenerate the list server-side and match by id so
+    // a client can only apply what the engine proposed.
+    if (body.proposal_id) {
+      const finding = { field, rule, message: body.message }
+      const proposals = await proposeFixes(collection, id, finding)
+      let chosen = proposals.find((p) => p.id === body.proposal_id) ?? null
+      if (!chosen && body.proposal_id.startsWith('ai:')) {
+        // AI proposals are minted per request; re-mint and compare.
+        const ai = await aiProposal(collection, id, finding)
+        if (ai && `ai:${ai.id}` === body.proposal_id) chosen = ai
+      }
+      if (!chosen) {
+        return reply.code(409).send({
+          error: 'That proposal is no longer valid — the record changed. Reload the proposals.'
+        })
+      }
+      if (chosen.kind === 'pick') {
+        if (!body.choice) return reply.code(400).send({ error: 'Pick a value first' })
+        const mat = await materializePick(collection, chosen, String(body.choice))
+        if (!mat)
+          return reply.code(400).send({ error: 'That choice is not one of the offered options' })
+        chosen = mat
+      }
+      if (chosen.kind === 'regenerate') {
+        // Falls through to the display branch below (same id-pattern logic).
+      } else {
+        for (const w of chosen.writes) {
+          const action = w.op === 'delete' ? 'delete' : w.op === 'create' ? 'create' : 'update'
+          if (!(await can(req.user!, action, w.collection))) {
+            return reply.code(403).send({ error: `Forbidden: ${action} on ${w.collection}` })
+          }
+        }
+        const r = await applyProposal(req.server, req.user!, collection, id, chosen, finding, req)
+        if (r.failed.length === 0 && chosen.kind !== 'notify')
+          await clearFinding(collection, id, field, rule, body.message)
+        return { data: { fixed: r.failed.length === 0, ...r } }
+      }
     }
     if (rule === 'cascade') {
       const isPhysical =
@@ -320,6 +454,65 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
     const run = await db('nivaro_conformance_runs').where('id', req.params.id).first()
     if (!run) return reply.code(404).send({ error: 'Not found' })
     const b = req.body as { field?: string; rule?: string; action?: string }
+    if (b.action === 'apply-high') {
+      // Apply the top HIGH-confidence proposal of an unattended-safe kind per
+      // affected record; everything else is reported, never guessed.
+      if (!b.field || !IDENT.test(b.field) || !b.rule) {
+        return reply.code(400).send({ error: 'action=apply-high needs field and rule' })
+      }
+      const findings = (await db('nivaro_conformance_findings')
+        .where({ run: run.id, field: b.field, rule: b.rule })
+        .select('item_id', 'message')) as Array<{ item_id: string; message: string }>
+      const byItem = new Map<string, string>()
+      for (const f of findings) if (!byItem.has(f.item_id)) byItem.set(f.item_id, f.message)
+      const ids = [...byItem.keys()].slice(0, 500)
+      let applied = 0
+      let skipped = 0
+      let failed = 0
+      const byKind: Record<string, number> = {}
+      for (const id of ids) {
+        try {
+          const finding = { field: b.field, rule: b.rule, message: byItem.get(id) }
+          const proposals = await proposeFixes(String(run.collection), id, finding)
+          const pick = proposals.find(
+            (p) => p.confidence === 'high' && AUTO_APPLY_KINDS.includes(p.kind)
+          )
+          if (!pick) {
+            skipped++
+            continue
+          }
+          if (pick.kind === 'regenerate') {
+            skipped++
+            continue
+          }
+          const r = await applyProposal(
+            req.server,
+            req.user!,
+            String(run.collection),
+            id,
+            pick,
+            finding,
+            req
+          )
+          if (r.failed.length > 0) failed++
+          else {
+            applied++
+            byKind[pick.kind] = (byKind[pick.kind] ?? 0) + 1
+            await clearFinding(String(run.collection), id, b.field, b.rule, finding.message)
+          }
+        } catch {
+          failed++
+        }
+      }
+      await logActivity({
+        action: 'conformance-remediate',
+        user: req.user?.id,
+        collection: String(run.collection),
+        comment: `applied confident fixes for ${b.rule}/${b.field}: ${applied} record(s), ${skipped} needed a person, ${failed} failed (run #${run.id})`,
+        req
+      })
+      return { data: { applied, skipped, failed, total: ids.length, by_kind: byKind } }
+    }
     if (b.action === 'rederive') {
       if (!b.field || !IDENT.test(b.field) || b.rule !== 'row-rule') {
         return reply
