@@ -218,6 +218,11 @@ export const importTemplatesGuide: DocSection = {
         ]
       ]
     },
+    { type: 'h3', text: 'Rule-aware review' },
+    {
+      type: 'p',
+      text: 'When the target grid carries row auto-fill rules, the review dialog ("Update this record from file") runs them over the new lines before you apply and shows one chip per column: **from file** for columns the sheet controls, **set by rule (N)** in amber for columns a rule writes on N lines — the file\'s value does not apply there. Staged lines keep the same fact per cell (dotted amber underline, hover names the rule-set field) until they are saved. A new record prefilled from a file gets the same per-cell marks. If a rule could not be evaluated for some lines, a warning says so and those lines carry the file\'s values.'
+    },
     { type: 'h3', text: 'Caps and resilience' },
     {
       type: 'ul',

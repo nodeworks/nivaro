@@ -5982,8 +5982,26 @@ export function InlineTableField({
                                 : isEditing
                                   ? editState!.draft[c.field]
                                   : row[c.field]
+                              // A staged import line: cells an auto-fill rule wrote
+                              // (not the file) say so on hover.
+                              const ruleSet = Array.isArray(row.__rule_set)
+                                ? (row.__rule_set as string[]).includes(c.field)
+                                : false
                               return (
-                                <td key={c.field} className='px-2 py-1 align-top'>
+                                <td
+                                  key={c.field}
+                                  className={cn(
+                                    'px-2 py-1 align-top',
+                                    ruleSet &&
+                                      !isEditing &&
+                                      '[&>div]:underline [&>div]:decoration-dotted [&>div]:decoration-amber-400 [&>div]:underline-offset-2'
+                                  )}
+                                  data-tip={
+                                    ruleSet && !isEditing
+                                      ? `${c.label || titleCase(c.field)} · set by an auto-fill rule, not the file`
+                                      : undefined
+                                  }
+                                >
                                   {isComputedWrite ? (
                                     <div className='py-0.5 overflow-hidden text-slate-500 italic'>
                                       {renderCell(c, displayVal)}

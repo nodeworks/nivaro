@@ -3,6 +3,10 @@ export interface ReimportLineDiff {
   updates: { id: string; changes: Record<string, unknown> }[]
   deletes: string[]
   matchedUnchanged: number
+  /** The review dialog already ran the grid's row rules over `creates`. */
+  rulesEvaluated?: boolean
+  /** Per field: how many new lines a rule wrote it on (vs the file). */
+  ruleFields?: Record<string, number>
 }
 
 const O2M_PREFIX = '__o2m_'
