@@ -12,7 +12,7 @@ import {
   type ProposalWrite,
   proposeFixes
 } from '../services/integrity-proposals.js'
-import { updateOne } from '../services/items.js'
+import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import {
   gridRuleConfigsFor,
@@ -49,6 +49,53 @@ async function clearFinding(
     })
     .del()
     .catch(() => {})
+}
+
+/** The record must be visible to the caller through the items service —
+ *  collection-level read is not enough when row filters or user scopes hide
+ *  it. Returns false on 403/404. */
+async function recordVisible(
+  user: NonNullable<FastifyRequest['user']>,
+  collection: string,
+  id: string
+): Promise<boolean> {
+  try {
+    const row = await readOne(user, collection, id, undefined, ['id'])
+    return !!row
+  } catch {
+    return false
+  }
+}
+
+/** Drop proposals that would show or touch collections the caller cannot
+ *  read (previews carry the line's values) or write. */
+async function filterProposalsForUser(
+  user: NonNullable<FastifyRequest['user']>,
+  proposals: Awaited<ReturnType<typeof proposeFixes>>
+) {
+  const cache = new Map<string, boolean>()
+  const allowed = async (action: 'read' | 'update' | 'create' | 'delete', c: string) => {
+    const k = `${action}|${c}`
+    if (!cache.has(k)) cache.set(k, await can(user, action, c))
+    return cache.get(k) ?? false
+  }
+  const out: typeof proposals = []
+  for (const p of proposals) {
+    let ok = true
+    const touched = new Set<string>([
+      ...p.writes.map((w) => w.collection),
+      ...p.preview.map((pv) => pv.collection),
+      ...(p.pick ? [p.pick.collection] : [])
+    ])
+    for (const c of touched) if (!(await allowed('read', c))) ok = false
+    for (const w of p.writes) {
+      const action = w.op === 'delete' ? 'delete' : w.op === 'create' ? 'create' : 'update'
+      if (!(await allowed(action, w.collection))) ok = false
+    }
+    if (p.pick && !(await allowed('update', p.pick.collection))) ok = false
+    if (ok) out.push(p)
+  }
+  return out
 }
 
 /** Record-scoped integrity lookup — authenticated (not admin): the banner on
@@ -136,11 +183,13 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     if (!(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    const proposals = await proposeFixes(collection, id, {
-      field,
-      rule,
-      message: req.body?.message
-    })
+    if (!(await recordVisible(req.user!, collection, id))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const proposals = await filterProposalsForUser(
+      req.user!,
+      await proposeFixes(collection, id, { field, rule, message: req.body?.message })
+    )
     return { data: { proposals } }
   })
 
@@ -160,7 +209,11 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     if (!(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    const proposal = await aiProposal(collection, id, { field, rule, message: req.body?.message })
+    if (!(await recordVisible(req.user!, collection, id))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const raw = await aiProposal(collection, id, { field, rule, message: req.body?.message })
+    const proposal = raw ? ((await filterProposalsForUser(req.user!, [raw]))[0] ?? null) : null
     if (!proposal) {
       return reply.code(404).send({
         error: 'No AI suggestion — the assistant is not configured or no option stood out.'
@@ -195,16 +248,23 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
       message?: string | null
       undo?: ProposalWrite[]
     }
-    // Undo of a previous apply: the reverse writes the apply returned.
+    if (!(await recordVisible(req.user!, collection, id))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    // Undo of a previous apply: the reverse writes the apply returned. An
+    // apply only ever yields update (prior values) and delete (of a created
+    // junction row) reversals — anything else is not an undo.
     if (Array.isArray(body.undo) && body.undo.length > 0) {
       for (const w of body.undo) {
         if (
           !IDENT.test(String(w.collection)) ||
-          /^nivaro_|^directus_/i.test(String(w.collection))
+          /^nivaro_|^directus_/i.test(String(w.collection)) ||
+          (w.op !== 'update' && w.op !== 'delete') ||
+          !w.item_id
         ) {
           return reply.code(400).send({ error: 'Invalid undo write' })
         }
-        if (!(await can(req.user!, w.op === 'delete' ? 'delete' : 'update', w.collection))) {
+        if (!(await can(req.user!, w.op, w.collection))) {
           return reply.code(403).send({ error: 'Forbidden' })
         }
       }
@@ -215,12 +275,16 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     // a client can only apply what the engine proposed.
     if (body.proposal_id) {
       const finding = { field, rule, message: body.message }
-      const proposals = await proposeFixes(collection, id, finding)
+      const proposals = await filterProposalsForUser(
+        req.user!,
+        await proposeFixes(collection, id, finding)
+      )
       let chosen = proposals.find((p) => p.id === body.proposal_id) ?? null
       if (!chosen && body.proposal_id.startsWith('ai:')) {
         // AI proposals are minted per request; re-mint and compare.
         const ai = await aiProposal(collection, id, finding)
-        if (ai && `ai:${ai.id}` === body.proposal_id) chosen = ai
+        if (ai && `ai:${ai.id}` === body.proposal_id)
+          chosen = (await filterProposalsForUser(req.user!, [ai]))[0] ?? null
       }
       if (!chosen) {
         return reply.code(409).send({
