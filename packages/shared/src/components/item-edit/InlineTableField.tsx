@@ -5059,7 +5059,11 @@ export function InlineTableField({
           <div className='flex flex-wrap items-center gap-3 text-[11px]'>
             {(
               [
-                ['empty-only', 'Fill blanks only', 'Only fields that are empty today are written.'],
+                [
+                  'empty-only',
+                  'Fill blanks only',
+                  'Empty fields are written, plus any field a rule locks on that line (those belong to the rules).'
+                ],
                 [
                   'all',
                   'Re-derive everything',

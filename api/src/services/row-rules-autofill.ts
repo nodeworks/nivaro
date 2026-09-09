@@ -169,14 +169,30 @@ export async function applyRowLocksOnWrite(
         if (parent) for (const f of wanted) parentContext[f] = parent[f] ?? null
       }
       const locks = new Set<string>()
-      await evaluateRowRules(db, collection, { ...merged }, parentContext, cfg.rowRules, undefined, {
-        locks,
-        locksOnly: true
-      })
+      await evaluateRowRules(
+        db,
+        collection,
+        { ...merged },
+        parentContext,
+        cfg.rowRules,
+        undefined,
+        {
+          locks,
+          locksOnly: true
+        }
+      )
       for (const field of locks) {
         if (!(field in payload)) continue
         // Re-sending the stored value is harmless; only a CHANGE is refused.
         if (existing && String(payload[field] ?? '') === String(existing[field] ?? '')) continue
+        // A write that IS the rules' own answer is not an override — the
+        // bulk re-derive and the grid both send exactly that ("labor → price
+        // 1"), and refusing it left locked fields permanently stale.
+        const derived: Record<string, unknown> = { ...merged, [field]: null }
+        await evaluateRowRules(db, collection, derived, parentContext, cfg.rowRules, undefined, {
+          targetFields: [field]
+        })
+        if (String(derived[field] ?? '') === String(payload[field] ?? '')) continue
         delete payload[field]
         callerFields.delete(field)
         dropped.push(field)
@@ -222,7 +238,9 @@ export async function applyRowRulesOnCreate(
       const working = { ...payload }
       const cache = new RowRuleLookupCache(db)
       const startedAt = Date.now()
-      await evaluateRowRules(db, collection, working, parentContext, cfg.rowRules, undefined, { cache })
+      await evaluateRowRules(db, collection, working, parentContext, cfg.rowRules, undefined, {
+        cache
+      })
       recordRuleEvalSample(collection, {
         at: Date.now(),
         ms: Date.now() - startedAt,

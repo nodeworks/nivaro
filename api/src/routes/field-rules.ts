@@ -407,9 +407,21 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     }> = []
     const fields: Record<string, number> = {}
     const startedAt = Date.now()
+    const hasLocks = rules.some((r) => r.target_type === 'lock')
     for (const row of rows) {
+      // Fields a rule LOCKS on this row belong to the rules — nobody could
+      // have typed them — so even fill-blanks mode re-derives those.
+      const locked = new Set<string>()
+      if (hasLocks) {
+        await evaluateRowRules(db, collection, { ...row }, parentContext, rules, undefined, {
+          cache,
+          locks: locked,
+          locksOnly: true
+        })
+      }
       const working: Record<string, unknown> = { ...row }
       if (mode === 'all') for (const t of targets) working[t] = null
+      else for (const t of locked) if (targets.has(t)) working[t] = null
       await evaluateRowRules(db, collection, working, parentContext, rules, undefined, { cache })
       const patch: Record<string, unknown> = {}
       const before: Record<string, unknown> = {}
@@ -417,7 +429,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         const was = row[t]
         const now = working[t]
         if (String(now ?? '') === String(was ?? '')) continue
-        if (mode === 'empty-only' && !isEmpty(was)) continue
+        if (mode === 'empty-only' && !isEmpty(was) && !locked.has(t)) continue
         // 'all' mode blanked the target — a rule that derives nothing must
         // not erase a value the row already had.
         if (mode === 'all' && isEmpty(now) && !isEmpty(was)) continue
@@ -450,7 +462,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const failed: Array<{ id: string; error: string }> = []
     for (const c of changes) {
       try {
-        await updateOne(req.user!, collection, c.id, c.patch, req)
+        // updateOne mutates its payload (computed columns ride along) — hand
+        // it a copy so the response still reports the planned patch.
+        await updateOne(req.user!, collection, c.id, { ...c.patch }, req)
         applied += 1
       } catch (err) {
         const e = err as { message?: string; code?: string }
