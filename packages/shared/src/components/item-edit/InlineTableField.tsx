@@ -110,6 +110,7 @@ import {
 } from './RowHistorySheet'
 import {
   RowMatchDot,
+  rowFromCandidate,
   RowMatchPanel,
   type RowMatchPanelConfig,
   useRowMatches
@@ -3186,9 +3187,18 @@ export function InlineTableField({
   // Row ↔ related-record matching (options.row_match_panel): resolved once
   // for every saved row so the grid can show a per-row dot and the editor the
   // full reason; no-op when the option is absent.
+  const stagedRowsForMatch = useMemo(
+    () =>
+      rowMatchPanel?.unmatched_banner
+        ? pendingRows.map((r) => applyComputedFields({ ...r }))
+        : undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rowMatchPanel?.unmatched_banner, pendingRows]
+  )
   const rowMatches = useRowMatches({
     config: rowMatchPanel,
     rows,
+    stagedRows: stagedRowsForMatch,
     relatedCollection,
     childRelations,
     parentDraft: parentDraftCtx?.draft,
@@ -3813,6 +3823,35 @@ export function InlineTableField({
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* ignore */
+    } finally {
+      setBulkAdding(false)
+    }
+  }
+
+  /** One new row per unmatched candidate (PO line with no workflow line),
+   *  built from the banner's field_map — staged in pending/new mode,
+   *  written now otherwise. Same order stamping as any bulk add. */
+  async function addUnmatchedCandidates() {
+    const cfg = rowMatchPanel?.unmatched_banner
+    if (!cfg || rowMatches.unmatchedCandidates.length === 0) return
+    const rowsData = rowMatches.unmatchedCandidates.map((c) => ({
+      ...rowDefaultSeed,
+      ...rowFromCandidate(cfg, c as Record<string, unknown>)
+    }))
+    if ((isNew || isPendingMode) && staging) {
+      for (const rd of withNextOrders(rowsData)) staging.queueRow(relatedCollection, manyField, rd)
+      return
+    }
+    setBulkAdding(true)
+    try {
+      for (const rd of withNextOrders(rowsData)) {
+        await client.request(
+          post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
+        )
+      }
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    } catch (err) {
+      toast.error(`Could not add rows: ${(err as Error)?.message ?? 'unknown error'}`)
     } finally {
       setBulkAdding(false)
     }
@@ -5024,6 +5063,58 @@ export function InlineTableField({
           )}
         </div>
       )}
+
+      {rowMatchPanel?.unmatched_banner &&
+        !readOnly &&
+        rowMatches.unmatchedCandidates.length > 0 &&
+        (() => {
+          const n = rowMatches.unmatchedCandidates.length
+          const noun = rowMatchPanel.unmatched_banner?.label ?? 'related line'
+          const plural = n === 1 ? noun : `${noun}s`
+          const primary =
+            rowMatchPanel.candidates?.primary ?? rowMatchPanel.candidates?.keys?.[0]?.row
+          const primaryCandidate = rowMatchPanel.candidates?.keys?.find(
+            (k) => k.row === primary
+          )?.candidate
+          const numbers = primaryCandidate
+            ? rowMatches.unmatchedCandidates
+                .map((c) => String((c as Record<string, unknown>)[primaryCandidate] ?? ''))
+                .filter(Boolean)
+                .slice(0, 8)
+            : []
+          return (
+            <div className='flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'>
+              <AlertTriangle className='h-3.5 w-3.5 shrink-0' aria-hidden='true' />
+              <span>
+                <span className='font-medium'>
+                  {n} {plural} {n === 1 ? 'has' : 'have'} no matching row here
+                </span>
+                {numbers.length > 0 && (
+                  <span className='text-amber-700/80 dark:text-amber-300/80'>
+                    {' '}
+                    · line{numbers.length === 1 ? '' : 's'} {numbers.join(', ')}
+                    {n > numbers.length ? ` +${n - numbers.length}` : ''}
+                  </span>
+                )}
+              </span>
+              <button
+                type='button'
+                disabled={bulkAdding}
+                onClick={() => void addUnmatchedCandidates()}
+                className='ml-auto h-6 rounded border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-800 hover:border-amber-400 disabled:opacity-50 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-200'
+                data-tip={
+                  isNew || isPendingMode
+                    ? 'Stages one row per missing line — saved with the record'
+                    : 'Adds one row per missing line now'
+                }
+              >
+                {bulkAdding
+                  ? 'Adding…'
+                  : `Add ${n === 1 ? 'it' : `all ${n}`} as ${n === 1 ? 'a row' : 'rows'}`}
+              </button>
+            </div>
+          )
+        })()}
 
       {isPrefilling && (
         <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>

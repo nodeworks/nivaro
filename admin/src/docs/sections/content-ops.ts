@@ -1836,6 +1836,18 @@ export const contentOpsGridPresets: DocSection = {
   }
 }`
     },
+    { type: 'h3', text: 'Unmatched related lines' },
+    {
+      type: 'p',
+      text: 'Add `unmatched_banner` to a `row_match_panel` and the grid shows a banner when candidates exist that no row accounts for — "2 PO lines have no matching row here · lines 3, 4" — with one click that adds a row per missing line, built from `field_map` (row field ← candidate column or dotted path; `defaults` for literals). Rows stage in pending mode and write immediately otherwise, ordered like any bulk add. A candidate already linked to a row of this record, or agreeing with one on every match key (the next import will link it), does not count as missing.'
+    },
+    {
+      type: 'pre',
+      code: `"unmatched_banner": {
+  "label": "PO line",
+  "field_map": { "line_number": "line_number", "line_type": "line_type", "price": "unit_price", "quantity": "quantity", "item_description": "description" }
+}`
+    },
     { type: 'h3', text: 'Lines timeline and cell history' },
     {
       type: 'p',

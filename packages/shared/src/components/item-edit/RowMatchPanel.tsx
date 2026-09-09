@@ -26,7 +26,12 @@ export interface RowMatchPanelConfig {
   title?: string
   /** Shown per matched record. `path` is a column or dotted M2O path on the
    *  target; `formula` is `{{col}}` arithmetic over the target row. */
-  columns: Array<{ path?: string; formula?: string; label: string; format?: 'currency' | 'number' | 'text' }>
+  columns: Array<{
+    path?: string
+    formula?: string
+    label: string
+    format?: 'currency' | 'number' | 'text'
+  }>
   /** How to explain a miss, and which keys a match is judged on. */
   candidates?: {
     /** Filter over the target collection; `$parent.<field>` tokens resolve
@@ -51,6 +56,16 @@ export interface RowMatchPanelConfig {
   }
   no_parent_message?: string
   empty_message?: string
+  /** Banner above the grid for candidates no row matches ("2 PO lines have
+   *  no workflow line") with a one-click add that stages rows from them. */
+  unmatched_banner?: {
+    /** "PO line" — used in "2 PO lines have no workflow line". */
+    label?: string
+    /** Row field ← candidate column or dotted path (`purchase_order.number`). */
+    field_map: Record<string, string>
+    /** Literal values every added row gets. */
+    defaults?: Record<string, unknown>
+  }
 }
 
 export type RowMatchStatus = 'loading' | 'matched' | 'matched-warn' | 'unmatched' | 'no-parent'
@@ -70,10 +85,13 @@ interface Client {
 }
 
 const walk = (obj: unknown, path: string): unknown =>
-  path.split('.').reduce<unknown>(
-    (cur, seg) => (cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined),
-    obj
-  )
+  path
+    .split('.')
+    .reduce<unknown>(
+      (cur, seg) =>
+        cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined,
+      obj
+    )
 
 const isEmpty = (v: unknown) => v === null || v === undefined || v === ''
 
@@ -90,12 +108,14 @@ function fmt(v: unknown, format?: string): string {
 }
 
 /** An expanded M2O (display path requested) compares by its id. */
-const rawOf = (v: unknown) => (v && typeof v === 'object' ? ((v as Record<string, unknown>).id ?? v) : v)
+const rawOf = (v: unknown) =>
+  v && typeof v === 'object' ? ((v as Record<string, unknown>).id ?? v) : v
 
 function keysAgree(a: unknown, b: unknown): boolean {
   if (isEmpty(a) && isEmpty(b)) return true
   if (isEmpty(a) || isEmpty(b)) return false
-  if (Number.isFinite(Number(a)) && Number.isFinite(Number(b))) return Math.abs(Number(a) - Number(b)) < 0.005
+  if (Number.isFinite(Number(a)) && Number.isFinite(Number(b)))
+    return Math.abs(Number(a) - Number(b)) < 0.005
   return String(a) === String(b)
 }
 
@@ -104,19 +124,39 @@ const CHUNK = 150
 export function useRowMatches(args: {
   config: RowMatchPanelConfig | undefined
   rows: Record<string, unknown>[]
+  /** Unsaved rows (pending mode / new record) — they count as accounting for
+   *  a candidate too, so the banner doesn't invite adding a line twice. */
+  stagedRows?: Record<string, unknown>[]
   relatedCollection: string
   childRelations: CMSRelation[]
   parentDraft: Record<string, unknown> | undefined
   m2oRelMap: Map<string, CMSRelation>
   m2oDisplays: Record<string, Record<string, string>>
   client: Client
-}): { byRow: Map<string, RowMatchResult>; loading: boolean } {
-  const { config, rows, relatedCollection, childRelations, parentDraft, m2oRelMap, m2oDisplays, client } = args
+}): {
+  byRow: Map<string, RowMatchResult>
+  loading: boolean
+  unmatchedCandidates: Record<string, unknown>[]
+} {
+  const {
+    config,
+    rows,
+    stagedRows,
+    relatedCollection,
+    childRelations,
+    parentDraft,
+    m2oRelMap,
+    m2oDisplays,
+    client
+  } = args
   const rel = useMemo(
     () =>
       config
         ? (childRelations.find(
-            (r) => r.one_collection === relatedCollection && r.one_field === config.relation && !r.junction_field
+            (r) =>
+              r.one_collection === relatedCollection &&
+              r.one_field === config.relation &&
+              !r.junction_field
           ) ?? null)
         : null,
     [childRelations, relatedCollection, config]
@@ -140,11 +180,17 @@ export function useRowMatches(args: {
       }
     }
     if (config.candidates?.parent_path) set.add(config.candidates.parent_path)
+    // The banner builds rows from candidate columns the panel never shows.
+    for (const path of Object.values(config.unmatched_banner?.field_map ?? {})) set.add(path)
     return [...set].join(',')
   }, [config, fk])
 
   const rowIds = useMemo(
-    () => rows.map((r) => r.id).filter((id) => id !== null && id !== undefined).map(String),
+    () =>
+      rows
+        .map((r) => r.id)
+        .filter((id) => id !== null && id !== undefined)
+        .map(String),
     [rows]
   )
   const idsKey = rowIds.join(',')
@@ -176,16 +222,56 @@ export function useRowMatches(args: {
   }, [config, parentDraft])
 
   const candidates = useQuery<Record<string, unknown>[]>({
-    queryKey: ['row-match-candidates', target, JSON.stringify(candidateFilter ?? null), fieldsParam],
+    queryKey: [
+      'row-match-candidates',
+      target,
+      JSON.stringify(candidateFilter ?? null),
+      fieldsParam
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${target}`, { filter: JSON.stringify(candidateFilter), fields: fieldsParam, limit: 500 })
+          get(`/items/${target}`, {
+            filter: JSON.stringify(candidateFilter),
+            fields: fieldsParam,
+            limit: 500
+          })
         )
         .then((r) => r.data ?? []),
-    enabled: !!config?.candidates && !!target && candidateFilter !== undefined && rowIds.length > 0,
+    // Also fetched with ZERO rows when a banner is configured — every
+    // candidate is unmatched then, which is exactly what the banner says.
+    enabled:
+      !!config?.candidates &&
+      !!target &&
+      candidateFilter !== undefined &&
+      (rowIds.length > 0 || !!config?.unmatched_banner),
     staleTime: 30_000
   })
+
+  // Candidates no row accounts for: not linked to any line of this record,
+  // and not agreeing with any row on every match key (those the next import
+  // will link — they are not "missing").
+  const unmatchedCandidates = useMemo<Record<string, unknown>[]>(() => {
+    if (!config?.unmatched_banner || !config.candidates || !fk || !candidates.isSuccess) return []
+    const keys = config.candidates.keys ?? []
+    const rowIdSet = new Set(rowIds)
+    // A staged row built FROM a candidate accounts for it even when the
+    // order stamp renumbered it (line 1 was taken) and the keys no longer agree.
+    const fromCandidate = new Set(
+      (stagedRows ?? []).map((r) => String(r.__from_candidate ?? '')).filter(Boolean)
+    )
+    return candidates.data.filter((c) => {
+      if (fromCandidate.has(String(c.id ?? ''))) return false
+      const linkedTo = c[fk]
+      if (!isEmpty(linkedTo) && rowIdSet.has(String(linkedTo))) return false
+      if (keys.length === 0) return isEmpty(linkedTo)
+      const all = stagedRows?.length ? [...rows, ...stagedRows] : rows
+      const agrees = all.some((row) =>
+        keys.every((k) => keysAgree(row[k.row], rawOf(c[k.candidate])))
+      )
+      return !agrees
+    })
+  }, [config, fk, candidates.isSuccess, candidates.data, rows, stagedRows, rowIds])
 
   const byRow = useMemo(() => {
     const map = new Map<string, RowMatchResult>()
@@ -202,18 +288,27 @@ export function useRowMatches(args: {
     }
     const rowValueLabel = (field: string, v: unknown, format?: string) => {
       const r = m2oRelMap.get(field)
-      if (r?.one_collection && !isEmpty(v)) return m2oDisplays[r.one_collection]?.[String(v)] ?? `#${String(v)}`
+      if (r?.one_collection && !isEmpty(v))
+        return m2oDisplays[r.one_collection]?.[String(v)] ?? `#${String(v)}`
       return fmt(v, format)
     }
-    const diffsAgainst = (row: Record<string, unknown>, c: Record<string, unknown>, skipPrimary: boolean) => {
+    const diffsAgainst = (
+      row: Record<string, unknown>,
+      c: Record<string, unknown>,
+      skipPrimary: boolean
+    ) => {
       const diffs: string[] = []
       for (const k of keys) {
         if (skipPrimary && k === primaryKey) continue
         const rv = row[k.row]
         const cv = rawOf(c[k.candidate])
         if (keysAgree(rv, cv)) continue
-        const cLabel = k.candidate_display ? fmt(walk(c, k.candidate_display), k.format) : fmt(cv, k.format)
-        diffs.push(`${k.label}: ${rowValueLabel(k.row, rv, k.format)} here vs ${cLabel} on the ${parentLabel}`)
+        const cLabel = k.candidate_display
+          ? fmt(walk(c, k.candidate_display), k.format)
+          : fmt(cv, k.format)
+        diffs.push(
+          `${k.label}: ${rowValueLabel(k.row, rv, k.format)} here vs ${cLabel} on the ${parentLabel}`
+        )
       }
       return diffs
     }
@@ -229,7 +324,9 @@ export function useRowMatches(args: {
       if (mine.length > 0) {
         // Linked — but does it still agree with the row? Amounts drift after
         // a match; say so instead of showing a green dot over a stale link.
-        const reasons = mine.flatMap((c) => diffsAgainst(row, c, false).map((d) => `${where(c)} differs — ${d}`))
+        const reasons = mine.flatMap((c) =>
+          diffsAgainst(row, c, false).map((d) => `${where(c)} differs — ${d}`)
+        )
         map.set(id, {
           status: reasons.length > 0 ? 'matched-warn' : 'matched',
           linked: mine,
@@ -255,7 +352,9 @@ export function useRowMatches(args: {
       if (pool.length === 0) reasons.push(`The linked ${parentLabel} has no lines.`)
       else if (primaryKey) {
         const rowPrimary = row[primaryKey.row]
-        const nearest = pool.filter((c) => String(rawOf(c[primaryKey.candidate]) ?? '') === String(rowPrimary ?? ''))
+        const nearest = pool.filter(
+          (c) => String(rawOf(c[primaryKey.candidate]) ?? '') === String(rowPrimary ?? '')
+        )
         if (nearest.length === 0) {
           const have = [...new Set(pool.map((c) => String(rawOf(c[primaryKey.candidate]) ?? '')))]
             .filter(Boolean)
@@ -269,8 +368,11 @@ export function useRowMatches(args: {
             const diffs = diffsAgainst(row, c, true)
             const linkedElsewhere = !isEmpty(c[fk]) && String(c[fk]) !== id
             if (diffs.length === 0 && !linkedElsewhere)
-              reasons.push(`${where(c)} matches on every key but is not linked yet — the next import will link it.`)
-            else if (diffs.length === 0) reasons.push(`${where(c)} is already linked to another line.`)
+              reasons.push(
+                `${where(c)} matches on every key but is not linked yet — the next import will link it.`
+              )
+            else if (diffs.length === 0)
+              reasons.push(`${where(c)} is already linked to another line.`)
             else
               reasons.push(
                 `${where(c)} differs — ${diffs.join(' · ')}${linkedElsewhere ? ' (and is linked to another line)' : ''}.`
@@ -281,24 +383,71 @@ export function useRowMatches(args: {
       map.set(id, { status: 'unmatched', linked: [], reasons, summary: null })
     }
     return map
-  }, [config, rel, fk, rows, linked.isSuccess, linked.data, candidates.isSuccess, candidates.data, candidateFilter, m2oRelMap, m2oDisplays])
+  }, [
+    config,
+    rel,
+    fk,
+    rows,
+    linked.isSuccess,
+    linked.data,
+    candidates.isSuccess,
+    candidates.data,
+    candidateFilter,
+    m2oRelMap,
+    m2oDisplays
+  ])
 
-  return { byRow, loading: linked.isFetching || candidates.isFetching }
+  return { byRow, loading: linked.isFetching || candidates.isFetching, unmatchedCandidates }
+}
+
+/** Build a new row from a candidate per the banner's field_map. */
+export function rowFromCandidate(
+  cfg: NonNullable<RowMatchPanelConfig['unmatched_banner']>,
+  candidate: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(cfg.defaults ?? {}) }
+  if (!isEmpty(candidate.id)) out.__from_candidate = String(candidate.id)
+  for (const [rowField, path] of Object.entries(cfg.field_map)) {
+    const v = rawOf(walk(candidate, path))
+    if (!isEmpty(v)) out[rowField] = v
+  }
+  return out
 }
 
 const PILL: Record<RowMatchStatus, { text: string; cls: string }> = {
-  loading: { text: 'Checking…', cls: 'bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400' },
-  matched: { text: 'Matched', cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300' },
-  'matched-warn': { text: 'Matched · differs', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' },
-  unmatched: { text: 'Not matched', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' },
-  'no-parent': { text: 'Nothing to match', cls: 'bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400' }
+  loading: {
+    text: 'Checking…',
+    cls: 'bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400'
+  },
+  matched: {
+    text: 'Matched',
+    cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300'
+  },
+  'matched-warn': {
+    text: 'Matched · differs',
+    cls: 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
+  },
+  unmatched: {
+    text: 'Not matched',
+    cls: 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
+  },
+  'no-parent': {
+    text: 'Nothing to match',
+    cls: 'bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400'
+  }
 }
 
 /** The per-row indicator (view mode): a small link glyph — green when
  *  matched, amber when matched-but-differs or unmatched while candidates
  *  exist; nothing when the parent has nothing to match against. The full
  *  reason rides the instant tooltip. */
-export function RowMatchDot({ result, title }: { result: RowMatchResult | undefined; title?: string }) {
+export function RowMatchDot({
+  result,
+  title
+}: {
+  result: RowMatchResult | undefined
+  title?: string
+}) {
   if (!result || result.status === 'loading' || result.status === 'no-parent') return null
   const label = title ?? 'Match'
   if (result.status === 'matched')
@@ -318,7 +467,9 @@ export function RowMatchDot({ result, title }: { result: RowMatchResult | undefi
     <span
       className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 dark:bg-amber-400/10 dark:text-amber-300'
       data-tip={tip}
-      aria-label={result.status === 'matched-warn' ? `${label} matched but differs` : `${label} not matched`}
+      aria-label={
+        result.status === 'matched-warn' ? `${label} matched but differs` : `${label} not matched`
+      }
     >
       {result.status === 'matched-warn' ? (
         <Link2 className='h-2.5 w-2.5' aria-hidden='true' />
@@ -329,7 +480,13 @@ export function RowMatchDot({ result, title }: { result: RowMatchResult | undefi
   )
 }
 
-export function RowMatchPanel({ config, result }: { config: RowMatchPanelConfig; result: RowMatchResult | undefined }) {
+export function RowMatchPanel({
+  config,
+  result
+}: {
+  config: RowMatchPanelConfig
+  result: RowMatchResult | undefined
+}) {
   const title = config.title ?? 'Match'
   const status: RowMatchStatus = result?.status ?? 'loading'
   const pill = PILL[status]
@@ -340,8 +497,12 @@ export function RowMatchPanel({ config, result }: { config: RowMatchPanelConfig;
       data-row-match-panel=''
     >
       <div className='flex items-center gap-2'>
-        <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>{title}</span>
-        <span className={cn('rounded-full px-2 py-px text-[10.5px] font-medium', pill.cls)}>{pill.text}</span>
+        <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+          {title}
+        </span>
+        <span className={cn('rounded-full px-2 py-px text-[10.5px] font-medium', pill.cls)}>
+          {pill.text}
+        </span>
       </div>
 
       {(status === 'matched' || status === 'matched-warn') &&
@@ -356,7 +517,12 @@ export function RowMatchPanel({ config, result }: { config: RowMatchPanelConfig;
               return (
                 <div key={i} className='flex items-baseline gap-1.5'>
                   <dt className='text-[10.5px] text-slate-400'>{c.label}</dt>
-                  <dd className={cn('font-medium text-foreground', (c.format === 'currency' || c.format === 'number') && 'tabular-nums')}>
+                  <dd
+                    className={cn(
+                      'font-medium text-foreground',
+                      (c.format === 'currency' || c.format === 'number') && 'tabular-nums'
+                    )}
+                  >
                     {fmt(raw, c.format)}
                   </dd>
                 </div>
