@@ -1,10 +1,59 @@
 {
-  "generated_at": "2026-09-09T00:46:09.482Z",
+  "generated_at": "2026-09-09T02:10:27.432Z",
   "releases": [
+    {
+      "version": "0.1.233",
+      "tag": "v0.1.233",
+      "date": "2026-09-08T22:10:20-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "addendum line diff + comparison; opt-in line-level SLA",
+              "hash": "f522c31b"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "unmatched related lines banner",
+              "hash": "7e69cfc4"
+            },
+            {
+              "section": "Added",
+              "scope": "import",
+              "text": "rule-aware review — from-file vs set-by-rule columns",
+              "hash": "24132979"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "header summary chip + line import provenance",
+              "hash": "eda26096"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "re-run row rules over existing lines",
+              "hash": "6ae5b440"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "lines timeline + cell history",
+              "hash": "29011a8a"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.1.232",
       "tag": "v0.1.232",
-      "date": "2026-09-08T20:46:01-04:00",
+      "date": "2026-09-08T20:46:09-04:00",
       "sections": [
         {
           "label": "Added",
