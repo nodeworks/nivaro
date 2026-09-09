@@ -1,11 +1,15 @@
 import { playNotificationSound } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, ExternalLink } from 'lucide-react'
+import { Bell, Check, ExternalLink, KeyRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '@nivaro/react'
+import {
+  resolveNotificationTarget,
+  runNotificationTarget,
+  type NotificationRouteMap
+} from '@nivaro/react'
 
 /** Where a notification's click lands in the admin app. */
 const NOTIF_ROUTES: NotificationRouteMap = {
@@ -27,6 +31,7 @@ import {
   markRead,
   markReadBatch
 } from '@/lib/api'
+import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -55,14 +60,19 @@ export function NotificationBell({
   // watermark ref means a mount never chimes for existing unread.
   const prevUnreadRef = useRef<number | null>(null)
   useEffect(() => {
-    const prefs = (user as { preferences?: { notification_sound?: { enabled?: boolean; volume?: number } } } | null)
-      ?.preferences?.notification_sound
+    const prefs = (
+      user as {
+        preferences?: { notification_sound?: { enabled?: boolean; volume?: number } }
+      } | null
+    )?.preferences?.notification_sound
     const prev = prevUnreadRef.current
     prevUnreadRef.current = unread
     if (prev === null || unread <= prev) return
     if (!prefs?.enabled) return
     try {
-      const AC = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      const AC =
+        window.AudioContext ??
+        (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
       if (!AC) return
       const ctx = new AC()
       const vol = Math.min(1, Math.max(0.05, prefs.volume ?? 0.4))
@@ -85,6 +95,23 @@ export function NotificationBell({
       /* audio blocked pre-gesture — silent */
     }
   }, [unread, user])
+
+  // Access requests waiting on an admin (#19). Non-admins get a 403 → 0, so
+  // no client-side role check is needed; the badge counts them with unread.
+  const { data: pendingAccess = 0 } = useQuery<number>({
+    queryKey: ['access-requests-pending-count'],
+    queryFn: () =>
+      api
+        .get('/access-requests', { params: { status: 'pending' } })
+        .then((r: { data?: { data?: unknown[] } }) =>
+          Array.isArray(r.data?.data) ? r.data.data.length : 0
+        )
+        .catch(() => 0),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: false
+  })
+  const badge = unread + pendingAccess
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', 'list'],
@@ -143,10 +170,18 @@ export function NotificationBell({
     [notifications, tab]
   )
   const groups = useMemo(() => {
-    const map = new Map<string, { key: string; collection: string | null; item: string | null; rows: CMSNotification[] }>()
+    const map = new Map<
+      string,
+      { key: string; collection: string | null; item: string | null; rows: CMSNotification[] }
+    >()
     for (const n of shown) {
       const key = n.collection && n.item ? `${n.collection}:${n.item}` : `single:${n.id}`
-      const g = map.get(key) ?? { key, collection: n.collection ?? null, item: n.item ?? null, rows: [] }
+      const g = map.get(key) ?? {
+        key,
+        collection: n.collection ?? null,
+        item: n.item ?? null,
+        rows: []
+      }
       g.rows.push(n)
       map.set(key, g)
     }
@@ -166,9 +201,9 @@ export function NotificationBell({
         >
           <span className='relative flex'>
             <Bell className='h-[15px] w-[15px] shrink-0' />
-            {unread > 0 && (
+            {badge > 0 && (
               <span className='absolute -right-1.5 -top-1.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white'>
-                {unread > 99 ? '99+' : unread}
+                {badge > 99 ? '99+' : badge}
               </span>
             )}
           </span>
@@ -176,6 +211,20 @@ export function NotificationBell({
         </button>
       </PopoverTrigger>
       <PopoverContent side='right' align='end' sideOffset={12} className='w-[340px] p-0'>
+        {pendingAccess > 0 && (
+          <button
+            type='button'
+            onClick={() => navigate('/access-requests')}
+            className='flex w-full items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
+          >
+            <KeyRound className='h-3.5 w-3.5 shrink-0' />
+            <span className='flex-1'>
+              <span className='font-semibold'>{pendingAccess}</span> access{' '}
+              {pendingAccess === 1 ? 'request' : 'requests'} waiting on an admin
+            </span>
+            <span className='text-[11px] font-medium underline decoration-dotted'>Review</span>
+          </button>
+        )}
         <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-border'>
           <div className='flex items-center gap-1 rounded-md bg-slate-100 p-0.5 dark:bg-muted'>
             {(['unread', 'all'] as const).map((t) => (

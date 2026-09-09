@@ -65,6 +65,20 @@ async function snapshotDefinition(key: string, note: string, userId: string | nu
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/** `{enabled: boolean}` (object or JSON string); anything else = off. */
+function parseReceipt(v: unknown): { enabled: boolean } | null {
+  let o: unknown = v
+  if (typeof v === 'string') {
+    try {
+      o = JSON.parse(v)
+    } catch {
+      return null
+    }
+  }
+  if (!o || typeof o !== 'object') return null
+  return { enabled: (o as { enabled?: unknown }).enabled === true }
+}
+
 export async function stagedImportRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
@@ -340,6 +354,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       loader?: 'bulk' | 'insert'
       sort?: number
       post_run_flows?: unknown
+      receipt?: unknown
     }
     const key = String(b.key ?? '').trim()
     if (!key) return reply.code(400).send({ error: 'key is required' })
@@ -356,7 +371,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       sort: Number(b.sort ?? 0),
       is_active: true,
       post_run_flows:
-        b.post_run_flows === undefined ? null : JSON.stringify(parsePostRunFlows(b.post_run_flows))
+        b.post_run_flows === undefined ? null : JSON.stringify(parsePostRunFlows(b.post_run_flows)),
+      receipt:
+        b.receipt === undefined
+          ? null
+          : (() => {
+              const rc = parseReceipt(b.receipt)
+              return rc ? JSON.stringify(rc) : null
+            })()
     })
     await snapshotDefinition(key, 'created', req.user?.id ?? null)
     await logActivity({
@@ -410,6 +432,11 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (b.procedure_body !== undefined) {
         patch.procedure_body =
           b.procedure_body === null || b.procedure_body === '' ? null : String(b.procedure_body)
+      }
+      // Post-run receipt (#25): { enabled } — OFF unless enabled.
+      if (b.receipt !== undefined) {
+        const rc = parseReceipt(b.receipt)
+        patch.receipt = rc ? JSON.stringify(rc) : null
       }
       // Processor mode: null/'proc' = staging table + stored procedure,
       // 'service' = items-service writes (requires a valid service_config —

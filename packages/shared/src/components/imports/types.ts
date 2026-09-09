@@ -55,6 +55,7 @@ export interface ImportDefinition {
   service_config?: string | null
   /** JSON array of flow ids run in order after a successful run (migration 294). */
   post_run_flows?: string | null
+  receipt?: string | null
 }
 
 export interface ImportValidationIssue {

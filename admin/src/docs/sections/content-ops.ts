@@ -1876,6 +1876,16 @@ export const contentOpsGridPresets: DocSection = {
       type: 'p',
       text: 'Clicking the chip lists the contributing rows biggest-first (named by `row_label`, e.g. "Line {{line_number}} · {{item_description}}") and opens whichever you pick. Rollup header fields carry their own explainer beneath the value — "= 5 lines · 1 excluded (line type is not 4)" — whose popover lists the contributors, the rows the source filter left out with the reason, and per-source subtotals.'
     },
+    { type: 'h3', text: 'Row lints' },
+    {
+      type: 'p',
+      text: 'An inline-table field may carry `options.row_lints` (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (`{label, when: {field, op, value}, expect: {field, op, value}}`, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. Workflow lines check that a Labor line carries a Services PO line type and a Materials line a Goods one.'
+    },
+    { type: 'h3', text: 'Header freshness' },
+    {
+      type: 'p',
+      text: 'Plain header fields show when they were last changed and by whom under the value ("3d ago", "2h ago · import (Bid Import)"), from the newest revision that touched that field; a value written by an import, an integration identity or the system is tinted amber so a stale figure reads as stale. Fields nobody changed since creation show nothing. Rollup header fields carry their explainer instead.'
+    },
     { type: 'h3', text: 'Line provenance from imports' },
     {
       type: 'p',

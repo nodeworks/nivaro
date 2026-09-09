@@ -17,6 +17,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
+import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import {
@@ -4802,6 +4803,21 @@ export function ItemEditForm({
     return out
   }, [fieldConfig])
 
+  // Plain header fields (not rollups — those explain themselves): one
+  // freshness read covers all of them.
+  const headerTouchFields = useMemo(
+    () =>
+      (activeLayoutData?.assignments ?? [])
+        .filter(
+          (a) =>
+            !a.field.startsWith('__') &&
+            !a.field.includes('.') &&
+            (a.group_key ?? null) === '__header__'
+        )
+        .map((a) => a.field),
+    [activeLayoutData]
+  )
+
   const headerFields = useMemo(
     () =>
       (activeLayoutData?.assignments ?? [])
@@ -8594,6 +8610,16 @@ export function ItemEditForm({
                                                           collection={collection}
                                                           itemId={itemId}
                                                           field={f.cmsField.field}
+                                                        />
+                                                      )}
+                                                    {f.cmsField.computed_type !== 'rollup' &&
+                                                      !isNew &&
+                                                      !viewingAddendum && (
+                                                        <HeaderFreshness
+                                                          collection={collection}
+                                                          itemId={itemId}
+                                                          field={f.cmsField.field}
+                                                          fields={headerTouchFields}
                                                         />
                                                       )}
                                                   </>

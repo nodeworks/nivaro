@@ -12067,6 +12067,7 @@ function FieldSettingsPopover({
   const [rowMatchPanelLocal, setRowMatchPanelLocal] = useState<string>('')
   const [headerSummaryLocal, setHeaderSummaryLocal] = useState<string>('')
   const [lineSlaLocal, setLineSlaLocal] = useState<string>('')
+  const [rowLintsLocal, setRowLintsLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -12487,6 +12488,7 @@ function FieldSettingsPopover({
           opts.header_summary ? JSON.stringify(opts.header_summary, null, 2) : ''
         )
         setLineSlaLocal(opts.line_sla ? JSON.stringify(opts.line_sla, null, 2) : '')
+        setRowLintsLocal(opts.row_lints ? JSON.stringify(opts.row_lints, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -12664,6 +12666,16 @@ function FieldSettingsPopover({
                             : { line_sla: undefined }
                         } catch {
                           return { line_sla: undefined }
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = rowLintsLocal.trim() ? JSON.parse(rowLintsLocal) : null
+                          return Array.isArray(parsed) && parsed.length
+                            ? { row_lints: parsed }
+                            : { row_lints: undefined }
+                        } catch {
+                          return { row_lints: undefined }
                         }
                       })()
                     })
@@ -13858,6 +13870,27 @@ function FieldSettingsPopover({
                       after_state (or since its workflow started) get an amber clock, the
                       record&apos;s owners an in-app notification once a day, and a line in the
                       daily digest. Nothing runs until enabled is true.
+                    </p>
+                  </div>
+                )}
+
+                {/* Row lints (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Row lints (JSON)</Label>
+                    <Textarea
+                      value={rowLintsLocal}
+                      onChange={(e) => setRowLintsLocal(e.target.value)}
+                      placeholder={
+                        '[\n  { "label": "Labor line with a Goods PO line type", "when": { "field": "category_type", "value": "1" }, "expect": { "field": "po_line_type", "value": "1" } }\n]'
+                      }
+                      rows={5}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Per-row consistency checks judged in the browser: when the first condition
+                      holds, the second must too (ops eq / neq / in / null / nnull; M2O values are
+                      ids). Rows that fail get an amber marker naming the lint. Empty = none.
                     </p>
                   </div>
                 )}
@@ -19546,6 +19579,7 @@ function FieldGroupsTab({
     'row_match_panel',
     'header_summary',
     'line_sla',
+    'row_lints',
     'picker_facets',
     'option_sort',
     'option_filter',

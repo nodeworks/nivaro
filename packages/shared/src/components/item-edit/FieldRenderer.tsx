@@ -36,7 +36,7 @@ import { FileM2MField, FilePickerField } from './FilePickerField'
 import { formatDisplayValue } from './GroupSection'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
-import { InlineTableField } from './InlineTableField'
+import { InlineTableField, type RowLint } from './InlineTableField'
 import type { RowMatchPanelConfig } from './RowMatchPanel'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import {
@@ -877,6 +877,7 @@ export function FieldRenderer({
             uploadTemplate={uploadTemplate}
             rowMatchPanel={rowMatchPanel}
             lineSla={(opts.line_sla ?? null) as { enabled?: boolean; field?: string } | null}
+            rowLints={(Array.isArray(opts.row_lints) ? opts.row_lints : null) as RowLint[] | null}
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
             parentFieldKey={field.field}

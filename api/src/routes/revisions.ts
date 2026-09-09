@@ -392,6 +392,86 @@ export async function revisionsRoutes(app: FastifyInstance) {
     return reply.send({ data: out, created })
   })
 
+  // GET /revisions/field-touch?collection=&item=&fields=a,b — per field, the
+  // newest revision whose delta touched it: when, who, and whether an import
+  // or integration wrote it. Header chips render it as a freshness stamp so a
+  // figure last written by last week's import is visibly last week's.
+  app.get('/field-touch', async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string; fields?: string }
+    const fields = String(q.fields ?? '')
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => f && /^[A-Za-z0-9_]+$/.test(f))
+      .slice(0, 40)
+    if (!q.collection || !q.item || fields.length === 0) {
+      return reply.code(400).send({ error: 'collection, item and fields are required' })
+    }
+    if (!(await can(req.user!, 'read', q.collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const rows = (await db('nivaro_revisions as r')
+      .join('nivaro_activity as a', 'r.activity', 'a.id')
+      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+      .where('r.collection', q.collection)
+      .where('r.item', String(q.item))
+      .whereNotNull('r.delta')
+      .orderBy('r.id', 'desc')
+      .limit(300)
+      .select(
+        'r.delta',
+        'a.action',
+        'a.timestamp',
+        'a.comment',
+        'a.user as user_id',
+        'u.first_name',
+        'u.last_name',
+        'u.email',
+        'u.status'
+      )) as Array<Record<string, unknown>>
+    const wanted = new Set(fields)
+    const out: Record<
+      string,
+      { at: string; who: string; via: 'import' | 'integration' | 'system' | 'user' }
+    > = {}
+    for (const row of rows) {
+      if (wanted.size === 0) break
+      let delta: Record<string, unknown> | null = null
+      try {
+        delta =
+          typeof row.delta === 'string'
+            ? JSON.parse(row.delta)
+            : (row.delta as Record<string, unknown>)
+      } catch {
+        delta = null
+      }
+      if (!delta) continue
+      for (const f of Object.keys(delta)) {
+        if (!wanted.has(f)) continue
+        wanted.delete(f)
+        const comment = String(row.comment ?? '')
+        const email = String(row.email ?? '').toLowerCase()
+        const via: 'import' | 'integration' | 'system' | 'user' = /^import:/i.test(comment)
+          ? 'import'
+          : !row.user_id
+            ? 'system'
+            : /@nivaro\.local$|@invalid\.local$/.test(email) ||
+                String(row.status ?? '') === 'suspended'
+              ? 'integration'
+              : 'user'
+        const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
+        out[f] = {
+          at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
+          who:
+            via === 'import'
+              ? `import (${comment.split(':')[1] || 'file'})`
+              : [row.first_name, row.last_name].filter(Boolean).join(' ') || email || 'system',
+          via
+        }
+      }
+    }
+    return reply.send({ data: out })
+  })
+
   // POST /revisions/o2m-restore — bulk-replace O2M rows with a snapshot.
   // Two modes: explicit rows[] OR target_timestamp (server reconstructs from revision history).
   app.post('/o2m-restore', async (req, reply) => {

@@ -1157,6 +1157,19 @@ export async function buildServer() {
       // rollups don't cascade; recalc failures are swallowed by design), and
       // nothing ever went back to check. Nightly sample-compare, drift lands as
       // deduped nivaro_issues rows. Manual run: POST /api/cron/rollup-drift-sweep/run.
+      // Access requests (#19): admins' daily digest carries the pending queue;
+      // requests nobody acted on in 14 days expire with a note to the requester.
+      {
+        const { registerAccessRequestDigest, expireStaleAccessRequests } = await import(
+          './routes/access-requests.js'
+        )
+        registerAccessRequestDigest()
+        app.cron.schedule('access-requests-expire', '10 6 * * *', async () => {
+          const n = await expireStaleAccessRequests(app)
+          if (n > 0) app.log.info(`access-requests: ${n} stale request(s) expired`)
+        })
+      }
+
       // Line-level SLA (backlog #16): lines still missing a required id N
       // days after a state — OFF until a grid enables options.line_sla.
       // Notifies owners once a day; the daily digest carries a section.

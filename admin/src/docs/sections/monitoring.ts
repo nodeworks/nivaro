@@ -187,7 +187,7 @@ export const dataImportGuide: DocSection = {
     { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
     {
       type: 'p',
-      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked.'
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — the EFP purchase-order import reports linked PO number, matched and unmatched line counts).'
     },
     {
       type: 'warn',
@@ -219,7 +219,10 @@ export const slaTrackingGuide: DocSection = {
           'Warning Threshold %',
           'Notification fires when this % of duration has elapsed. Default 80%.'
         ],
-        ['Business Hours Only', 'When enabled, only counts working hours towards elapsed time — the days, hours and holidays from Settings → SLA, evaluated in the SLA timezone (or the record\'s regional clock when its region is mapped).'],
+        [
+          'Business Hours Only',
+          "When enabled, only counts working hours towards elapsed time — the days, hours and holidays from Settings → SLA, evaluated in the SLA timezone (or the record's regional clock when its region is mapped)."
+        ],
         ['Notify on Warning', 'Send in-app notification to escalation user at warning threshold.'],
         ['Notify on Breach', 'Send in-app notification to escalation user on full breach.'],
         ['Escalation User', 'Optional. User to notify on warning/breach.']
@@ -242,7 +245,7 @@ export const slaTrackingGuide: DocSection = {
     },
     {
       type: 'note',
-      text: 'SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours use the schedule and timezone configured in Settings → SLA (default Mon–Fri, 09:00–17:00) — the zone matters: an empty timezone means the API server\'s clock, which is UTC in a deployed container. Regional clocks can override the zone per record.'
+      text: "SLA elapsed time is computed on-demand from workflow history timestamps — no background job required. Business hours use the schedule and timezone configured in Settings → SLA (default Mon–Fri, 09:00–17:00) — the zone matters: an empty timezone means the API server's clock, which is UTC in a deployed container. Regional clocks can override the zone per record."
     }
   ]
 }

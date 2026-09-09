@@ -17,6 +17,47 @@ import {
   changeReasonChallenge
 } from './ChangeReasonDialog'
 
+/** A per-row consistency check: when `when` matches, `expect` must too.
+ *  Ops: eq | neq | in | null | nnull; values compared as strings (ids for M2O). */
+export interface RowLint {
+  label: string
+  when: { field: string; op?: 'eq' | 'neq' | 'in' | 'null' | 'nnull'; value?: unknown }
+  expect: { field: string; op?: 'eq' | 'neq' | 'in' | 'null' | 'nnull'; value?: unknown }
+}
+
+function lintCondition(row: Record<string, unknown>, c: RowLint['when']): boolean {
+  const v = row[c.field]
+  const empty = v === null || v === undefined || v === ''
+  const op = c.op ?? 'eq'
+  if (op === 'null') return empty
+  if (op === 'nnull') return !empty
+  if (empty) return false
+  const sv =
+    typeof v === 'object' && v ? String((v as Record<string, unknown>).id ?? '') : String(v)
+  if (op === 'in') {
+    const list = Array.isArray(c.value) ? c.value : String(c.value ?? '').split(',')
+    return list.map((x) => String(x).trim()).includes(sv)
+  }
+  const cv = String(c.value ?? '')
+  return op === 'neq' ? sv !== cv : sv === cv
+}
+
+/** Labels of the lints a row fails. */
+export function failingLints(
+  row: Record<string, unknown>,
+  lints: RowLint[] | null | undefined
+): string[] {
+  if (!lints?.length) return []
+  const out: string[] = []
+  for (const l of lints) {
+    if (!l?.when?.field || !l?.expect?.field) continue
+    if (!lintCondition(row, l.when)) continue
+    if (lintCondition(row, l.expect)) continue
+    out.push(l.label || `${l.when.field} vs ${l.expect.field}`)
+  }
+  return out
+}
+
 export interface RowRule {
   trigger_field?: string | null
   trigger_op?: string
@@ -1235,6 +1276,7 @@ export function InlineTableField({
   uploadTemplate,
   rowMatchPanel,
   lineSla,
+  rowLints,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1294,6 +1336,8 @@ export function InlineTableField({
   rowMatchPanel?: RowMatchPanelConfig
   /** options.line_sla — OFF unless enabled; the server reads the real config. */
   lineSla?: { enabled?: boolean; field?: string } | null
+  /** options.row_lints — "when X, expect Y" checks judged per row on the client. */
+  rowLints?: RowLint[] | null
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -5491,6 +5535,16 @@ export function InlineTableField({
                                     data-tip={lineOverdueTip}
                                   />
                                 )}
+                                {(() => {
+                                  const fails = failingLints(displayRow, rowLints)
+                                  return fails.length ? (
+                                    <AlertTriangle
+                                      className='h-2.5 w-2.5 text-amber-500'
+                                      aria-label='Line needs attention'
+                                      data-tip={fails.join(' · ')}
+                                    />
+                                  ) : null
+                                })()}
                               </span>
                             </td>
                           )}
@@ -5516,6 +5570,17 @@ export function InlineTableField({
                                   data-tip={lineOverdueTip}
                                 />
                               )}
+                              {!showLineNumbers &&
+                                (() => {
+                                  const fails = failingLints(displayRow, rowLints)
+                                  return fails.length ? (
+                                    <AlertTriangle
+                                      className='mr-1 inline h-2.5 w-2.5 text-amber-500'
+                                      aria-label='Line needs attention'
+                                      data-tip={fails.join(' · ')}
+                                    />
+                                  ) : null
+                                })()}
                               {isPendingDelete ? (
                                 <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
                                   Delete
@@ -6155,7 +6220,22 @@ export function InlineTableField({
                         showed "1" beside the saved row already numbered 1. */}
                           {showLineNumbers && (
                             <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
-                              {rows.length + ri + 1}
+                              <span className='inline-flex items-center gap-1'>
+                                {rows.length + ri + 1}
+                                {(() => {
+                                  const fails = failingLints(
+                                    isEditing ? (editState?.draft ?? row) : row,
+                                    rowLints
+                                  )
+                                  return fails.length ? (
+                                    <AlertTriangle
+                                      className='h-2.5 w-2.5 text-amber-500'
+                                      aria-label='Line needs attention'
+                                      data-tip={fails.join(' · ')}
+                                    />
+                                  ) : null
+                                })()}
+                              </span>
                             </td>
                           )}
                           <td className='px-3 py-1 align-middle w-16'>

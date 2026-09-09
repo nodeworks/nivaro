@@ -31,6 +31,7 @@ type Draft = {
   processor: '' | 'service'
   service_config: string
   post_run_flows: string[]
+  receipt_enabled: boolean
 }
 
 const parseIdList = (raw: string | null | undefined): string[] => {
@@ -67,7 +68,15 @@ function toDraft(d: ImportDefinition | null): Draft {
     procedure_body: d?.procedure_body ?? '',
     processor: d?.processor === 'service' ? 'service' : '',
     service_config: prettyJson(d?.service_config),
-    post_run_flows: parseIdList(d?.post_run_flows)
+    post_run_flows: parseIdList(d?.post_run_flows),
+    receipt_enabled: (() => {
+      try {
+        const r = d?.receipt ? JSON.parse(String(d.receipt)) : null
+        return !!r && r.enabled === true
+      } catch {
+        return false
+      }
+    })()
   }
 }
 
@@ -257,7 +266,8 @@ export function DefinitionsPanel({
         procedure_body: draft.procedure_body.trim() || null,
         processor: draft.processor || null,
         service_config: draft.service_config.trim() || null,
-        post_run_flows: draft.post_run_flows
+        post_run_flows: draft.post_run_flows,
+        receipt: { enabled: draft.receipt_enabled }
       }
       if (selectedId === NEW) {
         return client.request(
@@ -441,6 +451,15 @@ export function DefinitionsPanel({
                   className='h-8 font-mono text-[12px]'
                 />
                 {keyProblem && <Problem>{keyProblem}</Problem>}
+              </Field>
+              <Field
+                label='Receipt to owners after each run'
+                hint='Off by default. When on, each record the run touched sends its current owners ONE in-app message summarising what the import did for it (e.g. "PO 12345 linked · 2 lines matched · 1 unmatched"). The import&apos;s post-run handler decides what "touched" and the summary mean; a definition whose handler has no receipt step sends nothing.'
+              >
+                <Switch
+                  checked={draft.receipt_enabled}
+                  onCheckedChange={(v) => setDraft((d) => ({ ...d, receipt_enabled: v }))}
+                />
               </Field>
 
               <Field label='Label' hint='What operators see. Falls back to the key.'>

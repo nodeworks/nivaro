@@ -4,6 +4,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { type AccessReason, explainAccess } from '../services/access-explain.js'
 import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { type DigestSection, registerDigestSection } from '../services/daily-digest.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
 import { bustUserScopeCache, listScopeDimensions } from '../services/user-scopes.js'
 
@@ -338,4 +339,75 @@ export async function accessRequestRoutes(app: FastifyInstance) {
       return { data: { status: decision, applied: done, policy_added: policyAdded, remaining: [] } }
     }
   )
+}
+
+const EXPIRE_AFTER_DAYS = 14
+
+/** Daily digest: "Access requests waiting on you" for admins. */
+let digestRegistered = false
+export function registerAccessRequestDigest(): void {
+  if (digestRegistered) return
+  digestRegistered = true
+  registerDigestSection(async (userId): Promise<DigestSection | null> => {
+    const me = (await db('nivaro_users as u')
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .where('u.id', userId)
+      .first('r.admin_access')) as { admin_access?: boolean } | undefined
+    if (!me?.admin_access) return null
+    const rows = (await db('nivaro_access_requests as a')
+      .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+      .where('a.status', 'pending')
+      .orderBy('a.id', 'desc')
+      .limit(25)
+      .select(
+        'a.id',
+        'a.collection',
+        'a.item',
+        'a.created_at',
+        db.raw(
+          "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,'')))) as who"
+        )
+      )) as Array<Record<string, unknown>>
+    if (rows.length === 0) return null
+    const lines = []
+    for (const r of rows) {
+      const item = r.item == null ? null : String(r.item)
+      const label = item
+        ? await resolveFriendlyId(String(r.collection), item).catch(() => item)
+        : null
+      const days = Math.floor((Date.now() - new Date(String(r.created_at)).getTime()) / 86_400_000)
+      lines.push({
+        text: `${String(r.who || 'Someone')} → ${String(r.collection).replace(/_/g, ' ')}${label ? ` ${label}` : ''}`,
+        sub: `waiting ${days} ${days === 1 ? 'day' : 'days'}`,
+        url: '/access-requests'
+      })
+    }
+    return { title: `Access requests waiting on you (${rows.length})`, lines }
+  })
+}
+
+/** Pending requests older than 14 days close as 'expired' — the requester is
+ *  told to ask again if it still matters, so the queue never silts up. */
+export async function expireStaleAccessRequests(app: FastifyInstance): Promise<number> {
+  const cutoff = new Date(Date.now() - EXPIRE_AFTER_DAYS * 86_400_000)
+  const rows = (await db('nivaro_access_requests')
+    .where('status', 'pending')
+    .where('created_at', '<', cutoff)
+    .select('id', 'user', 'collection', 'item')) as Array<Record<string, unknown>>
+  for (const r of rows) {
+    await db('nivaro_access_requests')
+      .where({ id: r.id })
+      .update({ status: 'expired', resolved_at: new Date() })
+    const item = r.item == null ? null : String(r.item)
+    const label = item
+      ? await resolveFriendlyId(String(r.collection), item).catch(() => item)
+      : null
+    await notifyUser(app, String(r.user), {
+      subject: `Access request expired: ${String(r.collection).replace(/_/g, ' ')}${label ? ` ${label}` : ''}`,
+      message: `Nobody acted on your request within ${EXPIRE_AFTER_DAYS} days, so it was closed. If you still need it, open the record and request access again.`,
+      collection: String(r.collection),
+      item
+    }).catch(() => {})
+  }
+  return rows.length
 }
