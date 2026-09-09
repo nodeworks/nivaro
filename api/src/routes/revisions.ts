@@ -308,6 +308,39 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!ids.length) return reply.send({ data: {} })
     type Entry = { at: string; who: string; revision_id: number }
     const out: Record<string, Record<string, Entry>> = {}
+    // Where each row CAME from: the create activity's comment, which an
+    // import stamps as "import:<template>:<file id>". Only rows with a
+    // comment are returned — a plain add says nothing.
+    const created: Record<string, { at: string; who: string; comment: string }> = {}
+    for (const chunk of chunkArray(ids, 1000)) {
+      const part = (await db('nivaro_activity as a')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .where('a.collection', collection)
+        .where('a.action', 'create')
+        .whereIn('a.item', chunk)
+        .whereNotNull('a.comment')
+        .select(
+          'a.item as item_id',
+          'a.timestamp',
+          'a.comment',
+          'u.first_name',
+          'u.last_name',
+          'u.email as user_email'
+        )) as Array<Record<string, unknown>>
+      for (const row of part) {
+        const comment = String(row.comment ?? '').trim()
+        if (!comment) continue
+        const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
+        created[String(row.item_id)] = {
+          at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
+          who:
+            [row.first_name, row.last_name].filter(Boolean).join(' ') ||
+            String(row.user_email ?? '') ||
+            'System',
+          comment
+        }
+      }
+    }
     for (const chunk of chunkArray(ids, 1000)) {
       const part = (await db('nivaro_revisions as r')
         .join('nivaro_activity as a', 'r.activity', 'a.id')
@@ -356,7 +389,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         }
       }
     }
-    return reply.send({ data: out })
+    return reply.send({ data: out, created })
   })
 
   // POST /revisions/o2m-restore — bulk-replace O2M rows with a snapshot.

@@ -534,6 +534,78 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
   })
 
+  // POST /items/:collection/:id/child-summary {field, formula, positive_only?}
+  // A header chip's number: evaluate a formula over every child row of one
+  // O2M alias ("item.amount - item.allocated_total" per line) and return the
+  // total, how many rows contribute, and the first contributing row so the
+  // chip can open it. Rows are read AS THE CALLER (RBAC/RLS apply); the
+  // formula runs through the same expr-eval parser write-computed fields use.
+  app.post('/:collection/:id/child-summary', async (req, reply) => {
+    const { collection, id } = req.params as { collection: string; id: string }
+    const body = (req.body ?? {}) as { field?: string; formula?: string; positive_only?: boolean }
+    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    const field = String(body.field ?? '')
+    const formula = String(body.formula ?? '').trim()
+    if (!/^[A-Za-z0-9_]+$/.test(field) || !formula || formula.length > 500) {
+      return reply.code(400).send({ error: 'field and formula are required' })
+    }
+    const rel = (await db('nivaro_relations')
+      .where({ one_collection: collection, one_field: field })
+      .whereNotNull('many_collection')
+      .first()) as { many_collection?: string; many_field?: string } | undefined
+    if (!rel?.many_collection || !rel.many_field) {
+      return reply.code(400).send({ error: `${field} is not a to-many relation on ${collection}` })
+    }
+    let expr: import('expr-eval').Expression
+    try {
+      const { Parser } = await import('expr-eval')
+      expr = new Parser({ operators: { logical: true, comparison: true } }).parse(formula)
+    } catch {
+      return reply.code(400).send({ error: 'Formula does not parse' })
+    }
+    try {
+      const parent = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id'])
+      if (!parent) return reply.code(404).send({ error: 'Not found' })
+      const { data: rows } = await readItems(
+        req.user!,
+        rel.many_collection,
+        { filter: { [rel.many_field]: { _eq: id } }, limit: 1000 },
+        req,
+        req.workspaceId ?? undefined
+      )
+      const positiveOnly = body.positive_only !== false
+      const contributing: Array<{ id: string; value: number }> = []
+      let total = 0
+      for (const row of rows as Record<string, unknown>[]) {
+        let v: unknown = null
+        try {
+          // expr-eval's Value type is narrower than a row; nested objects work at runtime
+          v = expr.evaluate({ item: row } as unknown as import('expr-eval').Value)
+        } catch {
+          v = null
+        }
+        const num = typeof v === 'number' && Number.isFinite(v) ? v : Number(v)
+        if (!Number.isFinite(num)) continue
+        if (positiveOnly && num <= 0) continue
+        if (num === 0) continue
+        total += num
+        contributing.push({ id: String(row.id), value: num })
+      }
+      return reply.send({
+        data: {
+          total: Math.round(total * 100) / 100,
+          count: contributing.length,
+          rows: rows.length,
+          first_id: contributing[0]?.id ?? null,
+          child_collection: rel.many_collection,
+          fk_field: rel.many_field
+        }
+      })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
+
   // GET /items/:collection/resolve-paths?ids=1,2&paths=a.b.c — bulk variant for
   // inline tables (one call per table, all rows × all dotted columns).
   // Registered as a static segment so it wins over GET /:collection/:id.

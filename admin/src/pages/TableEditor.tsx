@@ -10904,14 +10904,23 @@ function lintRowRules(rules: RowRuleItem[], childFieldNames: Set<string>): RowRu
   for (const { r, idx } of sorted) {
     if (!r.target_field) out.push({ tone: 'error', text: `${num(idx)} has no target field.` })
     else if (!fieldExists(r.target_field))
-      out.push({ tone: 'error', text: `${num(idx)} targets "${r.target_field}", which is not a field on this collection.` })
+      out.push({
+        tone: 'error',
+        text: `${num(idx)} targets "${r.target_field}", which is not a field on this collection.`
+      })
     if (!r.trigger_field && !(r.trigger_fields ?? []).length)
       out.push({ tone: 'warn', text: `${num(idx)} has no trigger — it fires on every pass.` })
     for (const t of [r.trigger_field, ...(r.trigger_fields ?? [])])
       if (t && !fieldExists(t))
-        out.push({ tone: 'error', text: `${num(idx)} is triggered by "${t}", which is not a field on this collection.` })
+        out.push({
+          tone: 'error',
+          text: `${num(idx)} is triggered by "${t}", which is not a field on this collection.`
+        })
     if (r.target_type === 'precedence' && !(r.sources ?? []).length)
-      out.push({ tone: 'warn', text: `${num(idx)} is a precedence rule with no sources — it always writes empty.` })
+      out.push({
+        tone: 'warn',
+        text: `${num(idx)} is a precedence rule with no sources — it always writes empty.`
+      })
   }
   // Same target written by several rules: order decides; only-if-empty
   // silently loses to a later unconditional writer.
@@ -10926,7 +10935,12 @@ function lintRowRules(rules: RowRuleItem[], childFieldNames: Set<string>): RowRu
     const writers = list.filter((e) => e.r.target_type !== 'lock')
     const locks = list.filter((e) => e.r.target_type === 'lock')
     if (writers.length > 1) {
-      const sameTrigger = new Set(writers.map((e) => `${e.r.trigger_field ?? ''}|${e.r.trigger_op ?? ''}|${e.r.trigger_value ?? ''}|${e.r.trigger_related_field ?? ''}`))
+      const sameTrigger = new Set(
+        writers.map(
+          (e) =>
+            `${e.r.trigger_field ?? ''}|${e.r.trigger_op ?? ''}|${e.r.trigger_value ?? ''}|${e.r.trigger_related_field ?? ''}`
+        )
+      )
       if (sameTrigger.size < writers.length)
         out.push({
           tone: 'warn',
@@ -10957,7 +10971,13 @@ function lintRowRules(rules: RowRuleItem[], childFieldNames: Set<string>): RowRu
   return out
 }
 
-function RowRuleLint({ rules, childFieldNames }: { rules: RowRuleItem[]; childFieldNames: Set<string> }) {
+function RowRuleLint({
+  rules,
+  childFieldNames
+}: {
+  rules: RowRuleItem[]
+  childFieldNames: Set<string>
+}) {
   const findings = useMemo(() => lintRowRules(rules, childFieldNames), [rules, childFieldNames])
   if (findings.length === 0)
     return (
@@ -11068,7 +11088,9 @@ function RowRuleTester({
     <div className='mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2 dark:border-border dark:bg-muted/30'>
       <div className='flex items-center justify-between'>
         <Label className='text-[11px] text-slate-600'>Test rules against a record</Label>
-        <span className='text-[10px] text-slate-400'>Uses the rules as edited above · nothing is saved</span>
+        <span className='text-[10px] text-slate-400'>
+          Uses the rules as edited above · nothing is saved
+        </span>
       </div>
       <div className='mt-1.5 flex items-center gap-1.5'>
         <Input
@@ -11087,7 +11109,13 @@ function RowRuleTester({
           className='h-7 w-44 text-[11px]'
           title='Simulate a live edit of this field; blank = the create-time pass where every rule gets its chance'
         />
-        <Button size='sm' variant='outline' className='h-7 text-[11px]' onClick={() => void run()} disabled={running || !recordId.trim()}>
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-7 text-[11px]'
+          onClick={() => void run()}
+          disabled={running || !recordId.trim()}
+        >
           {running ? 'Running…' : 'Run'}
         </Button>
       </div>
@@ -11096,10 +11124,16 @@ function RowRuleTester({
         <div className='mt-2 space-y-2'>
           <div className='flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-500'>
             <span>
-              record <span className='font-mono text-slate-700 dark:text-slate-300'>{result.record_id}</span>
+              record{' '}
+              <span className='font-mono text-slate-700 dark:text-slate-300'>
+                {result.record_id}
+              </span>
             </span>
             <span>
-              parent <span className='font-mono text-slate-700 dark:text-slate-300'>{result.parent_id ?? '—'}</span>
+              parent{' '}
+              <span className='font-mono text-slate-700 dark:text-slate-300'>
+                {result.parent_id ?? '—'}
+              </span>
             </span>
             <span>
               {result.queries} {result.queries === 1 ? 'query' : 'queries'} · {result.ms} ms
@@ -11138,11 +11172,15 @@ function RowRuleTester({
                       {t.trigger_field ?? '—'} → {fmt(t.trigger_value)}
                     </td>
                     <td className='px-2 py-1'>
-                      <span className={cn('rounded px-1 py-px font-medium', outcomeTone(t.outcome))}>
+                      <span
+                        className={cn('rounded px-1 py-px font-medium', outcomeTone(t.outcome))}
+                      >
                         {t.outcome}
                       </span>
                     </td>
-                    <td className='px-2 py-1 font-mono'>{t.outcome === 'wrote' ? fmt(t.value) : ''}</td>
+                    <td className='px-2 py-1 font-mono'>
+                      {t.outcome === 'wrote' ? fmt(t.value) : ''}
+                    </td>
                     <td className='px-2 py-1 text-right tabular-nums text-slate-500'>{t.ms}</td>
                   </tr>
                 ))}
@@ -11157,7 +11195,9 @@ function RowRuleTester({
                 .join(' · ')}
             </div>
           ) : (
-            <div className='text-[10.5px] text-slate-500'>No field would change on this record.</div>
+            <div className='text-[10.5px] text-slate-500'>
+              No field would change on this record.
+            </div>
           )}
         </div>
       )}
@@ -12025,6 +12065,7 @@ function FieldSettingsPopover({
   const [sectionGroupByLocal, setSectionGroupByLocal] = useState<string>('')
   const [catalogModeLocal, setCatalogModeLocal] = useState<string>('')
   const [rowMatchPanelLocal, setRowMatchPanelLocal] = useState<string>('')
+  const [headerSummaryLocal, setHeaderSummaryLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -12438,7 +12479,12 @@ function FieldSettingsPopover({
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setSectionGroupByLocal((opts.section_group_by as string) ?? '')
         setCatalogModeLocal(opts.catalog_mode ? JSON.stringify(opts.catalog_mode, null, 2) : '')
-        setRowMatchPanelLocal(opts.row_match_panel ? JSON.stringify(opts.row_match_panel, null, 2) : '')
+        setRowMatchPanelLocal(
+          opts.row_match_panel ? JSON.stringify(opts.row_match_panel, null, 2) : ''
+        )
+        setHeaderSummaryLocal(
+          opts.header_summary ? JSON.stringify(opts.header_summary, null, 2) : ''
+        )
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -12594,6 +12640,18 @@ function FieldSettingsPopover({
                             : { row_match_panel: undefined }
                         } catch {
                           return { row_match_panel: undefined }
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = headerSummaryLocal.trim()
+                            ? JSON.parse(headerSummaryLocal)
+                            : null
+                          return parsed?.label && parsed?.formula
+                            ? { header_summary: parsed }
+                            : { header_summary: undefined }
+                        } catch {
+                          return { header_summary: undefined }
                         }
                       })()
                     })
@@ -13740,9 +13798,30 @@ function FieldSettingsPopover({
                       className='font-mono text-[11px]'
                     />
                     <p className='text-[10px] text-slate-400'>
-                      In the row editor, shows the related record this row is matched to
-                      (through the child's O2M "relation") and, when there is none, which
-                      match key disagrees with the nearest candidate. Empty = no panel.
+                      In the row editor, shows the related record this row is matched to (through
+                      the child's O2M "relation") and, when there is none, which match key disagrees
+                      with the nearest candidate. Empty = no panel.
+                    </p>
+                  </div>
+                )}
+
+                {/* Header summary chip (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Header summary chip (JSON)</Label>
+                    <Textarea
+                      value={headerSummaryLocal}
+                      onChange={(e) => setHeaderSummaryLocal(e.target.value)}
+                      placeholder={
+                        '{\n  "label": "Unallocated",\n  "formula": "item.amount - item.allocated_total",\n  "format": "currency",\n  "positive_only": true,\n  "count_label": "lines"\n}'
+                      }
+                      rows={5}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      A number over this grid's rows shown in the record header — the formula runs
+                      per row on the server (expr-eval, {'`item.<column>`'}), summed where positive.
+                      Clicking the chip opens the first contributing row. Empty = no chip.
                     </p>
                   </div>
                 )}
@@ -19429,6 +19508,7 @@ function FieldGroupsTab({
     'row_bulk_actions',
     'catalog_mode',
     'row_match_panel',
+    'header_summary',
     'picker_facets',
     'option_sort',
     'option_filter',

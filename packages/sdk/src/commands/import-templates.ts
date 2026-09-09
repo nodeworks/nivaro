@@ -35,6 +35,9 @@ export interface ImportParseResponse {
     message: string
   }[]
   file_id: string | null
+  /** The template that parsed the file — stamped onto imported lines as provenance. */
+  template_id?: string
+  template_name?: string
   line_target_field: string | null
   nested_relation: { collection: string; fk_field: string } | null
   m2m: Record<string, Array<string | number>>

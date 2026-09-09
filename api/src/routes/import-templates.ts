@@ -969,6 +969,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         lines: result.lines,
         issues,
         file_id,
+        template_id: String(template.id),
+        template_name: String(template.name ?? ''),
         line_target_field: config.line_map?.target_field ?? null,
         nested_relation: nestedRelation,
         m2m

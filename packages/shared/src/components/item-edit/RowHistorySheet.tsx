@@ -101,12 +101,27 @@ const MACHINE_PREFIXES: Array<[string, string]> = [
   ['invoice-decision:', 'Invoice decision']
 ]
 
+export function parseImportStamp(
+  comment: string | null | undefined
+): { template: string; fileId: string | null } | null {
+  const t = String(comment ?? '').trim()
+  if (!/^import:/i.test(t)) return null
+  const rest = t.slice('import:'.length)
+  const cut = rest.lastIndexOf(':')
+  const template = (cut >= 0 ? rest.slice(0, cut) : rest).trim() || 'a file'
+  const fileId = cut >= 0 ? rest.slice(cut + 1).trim() : ''
+  return { template, fileId: fileId || null }
+}
+
 function provenanceOf(comment: string | null | undefined): {
   kind: 'none' | 'machine' | 'reason'
   text: string
+  fileId?: string | null
 } {
   const t = String(comment ?? '').trim()
   if (!t) return { kind: 'none', text: '' }
+  const imp = parseImportStamp(t)
+  if (imp) return { kind: 'machine', text: `Imported via ${imp.template}`, fileId: imp.fileId }
   const lower = t.toLowerCase()
   if (MACHINE_COMMENTS[lower]) return { kind: 'machine', text: MACHINE_COMMENTS[lower] }
   for (const [prefix, label] of MACHINE_PREFIXES)
@@ -542,7 +557,22 @@ export function RowHistorySheet({
     return (
       <>
         {v.provenance.kind === 'machine' && (
-          <p className='mt-0.5 text-[11.5px] text-muted-foreground'>{v.provenance.text}</p>
+          <p className='mt-0.5 text-[11.5px] text-muted-foreground'>
+            {v.provenance.text}
+            {v.provenance.fileId && (
+              <>
+                {' · '}
+                <a
+                  href={`/api/files/${v.provenance.fileId}?download=1`}
+                  target='_blank'
+                  rel='noreferrer'
+                  className='underline decoration-dotted underline-offset-2 hover:text-foreground'
+                >
+                  source file
+                </a>
+              </>
+            )}
+          </p>
         )}
         {v.provenance.kind === 'reason' && (
           <p className='mt-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[12px] leading-5 text-foreground'>

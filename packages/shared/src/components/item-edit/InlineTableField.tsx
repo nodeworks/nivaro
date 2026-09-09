@@ -1,5 +1,13 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ChevronRight, GripVertical, History, Loader2, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronRight,
+  FileUp,
+  GripVertical,
+  History,
+  Loader2,
+  X
+} from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -94,7 +102,12 @@ import {
 } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
-import { type RestoreContext, RowHistorySheet, type RowRevisionEntry } from './RowHistorySheet'
+import {
+  parseImportStamp,
+  type RestoreContext,
+  RowHistorySheet,
+  type RowRevisionEntry
+} from './RowHistorySheet'
 import {
   RowMatchDot,
   RowMatchPanel,
@@ -1779,22 +1792,38 @@ export function InlineTableField({
   // Who last changed each cell — deltas only, one small map per grid. Keyed
   // on the rows query's freshness so a save refreshes it without every
   // write site having to remember to.
-  const { data: cellProvenance = {} } = useQuery<CellProvenance>({
+  const { data: provenanceResp } = useQuery<{
+    data: CellProvenance
+    created: Record<string, { at: string; who: string; comment: string }>
+  }>({
     queryKey: ['o2m-cell-provenance', relatedCollection, manyField, parentId, rowsUpdatedAt],
     queryFn: () =>
       client
-        .request<{ data: CellProvenance }>(
+        .request<{
+          data: CellProvenance
+          created?: Record<string, { at: string; who: string; comment: string }>
+        }>(
           get('/revisions/o2m-cell-provenance', {
             collection: relatedCollection,
             many_field: manyField,
             parent_id: parentId
           })
         )
-        .then((r) => r.data ?? {}),
+        .then((r) => ({ data: r.data ?? {}, created: r.created ?? {} })),
     enabled: !!showRowRevisions && !isNew && rawRows.length > 0,
     staleTime: 60_000,
     placeholderData: (prev) => prev
   })
+  const cellProvenance: CellProvenance = provenanceResp?.data ?? {}
+  const rowOrigins = provenanceResp?.created ?? {}
+  /** "From Bid Import · Sep 8 by Robert" for a line an import created. */
+  const importOriginTip = (id: string): string | null => {
+    const o = rowOrigins[id]
+    if (!o) return null
+    const imp = parseImportStamp(o.comment)
+    if (!imp) return null
+    return `From ${imp.template} · ${formatRelative(o.at)} by ${o.who}`
+  }
 
   // ── Cascade parent → child field filters ──────────────────────────────────
   const cascadeRules = parentCascades ?? []
@@ -3284,6 +3313,32 @@ export function InlineTableField({
     setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(id, draft)
   }
+
+  // A header chip (or anything else) can ask this grid to open one row:
+  // window event 'nvr:grid-open-row' {collection, field, rowId}. The row
+  // opens in its editor and scrolls into view; a rowId the grid doesn't
+  // hold (filtered out, deleted) is ignored.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ collection?: string; field?: string; rowId?: string }>).detail
+      if (!d || d.collection !== relatedCollection || d.field !== manyField || !d.rowId) return
+      const row = rows.find((r) => String(r.id) === String(d.rowId))
+      if (!row) return
+      startEdit(row)
+      window.setTimeout(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-o2m-row="${relatedCollection}:${String(d.rowId)}"]`
+        )
+        if (!el) return
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        el.classList.add('nvr-row-flash')
+        window.setTimeout(() => el.classList.remove('nvr-row-flash'), 2500)
+      }, 120)
+    }
+    window.addEventListener('nvr:grid-open-row', onOpen)
+    return () => window.removeEventListener('nvr:grid-open-row', onOpen)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relatedCollection, manyField, rows])
 
   function startPendingEdit(row: Record<string, unknown>, ri: number) {
     if (readOnly) return
@@ -5207,6 +5262,13 @@ export function InlineTableField({
                                     title={rowMatchPanel.title}
                                   />
                                 )}
+                                {importOriginTip(id) && (
+                                  <FileUp
+                                    className='h-2.5 w-2.5 text-slate-300 dark:text-slate-500'
+                                    aria-label='Imported line'
+                                    data-tip={importOriginTip(id) ?? undefined}
+                                  />
+                                )}
                               </span>
                             </td>
                           )}
@@ -5216,6 +5278,13 @@ export function InlineTableField({
                                 <RowMatchDot
                                   result={rowMatches.byRow.get(id)}
                                   title={rowMatchPanel.title}
+                                />
+                              )}
+                              {!showLineNumbers && importOriginTip(id) && (
+                                <FileUp
+                                  className='mr-1 inline h-2.5 w-2.5 text-slate-300 dark:text-slate-500'
+                                  aria-label='Imported line'
+                                  data-tip={importOriginTip(id) ?? undefined}
                                 />
                               )}
                               {isPendingDelete ? (

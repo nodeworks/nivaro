@@ -1844,6 +1844,16 @@ export const contentOpsGridPresets: DocSection = {
     {
       type: 'p',
       text: 'Any cell whose value someone changed after the line was created carries **cell history**: hovering shows "Price · changed 7m ago by Robert", and a small clock in the cell opens that row\'s history landed on the very version that changed it. Values a line was born with are left quiet, so the marks point at edits rather than at every filled field.'
+    },
+    { type: 'h3', text: 'Header summary chip' },
+    {
+      type: 'p',
+      text: 'An inline-table field may carry `options.header_summary` (layout-local): a formula evaluated per child row on the server (expr-eval, `item.<column>` — "item.amount - item.allocated_total"), summed over the rows where it is positive, shown in the record header as a chip ("Unallocated · $1,240 · across 3 lines"). Clicking the chip switches to the step holding the grid and opens the first contributing row. The figure refreshes whenever a grid on the record saves. Keys: `label`, `formula`, `format` (currency | number), `positive_only` (default true), `count_label` ("lines"), `hide_when_zero` (default true).'
+    },
+    { type: 'h3', text: 'Line provenance from imports' },
+    {
+      type: 'p',
+      text: 'A line that came in through a file import keeps that fact: the import stamps `import:<template>:<file id>` as the create\'s change reason, so the line\'s history reads "Imported via Bid Import" with a link to the source file, and the grid marks the row with a small file glyph whose tip says which import created it, when, and by whom. API clients get the same by sending `_change_reason` on a create.'
     }
   ]
 }

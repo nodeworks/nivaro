@@ -34,13 +34,15 @@ async function auditLevel(collection: string): Promise<AuditLevel> {
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.level
   let level: AuditLevel = 'all'
   try {
-    const row = (await db('nivaro_collections')
-      .where({ collection })
-      .first('accountability')) as { accountability?: string | null } | undefined
+    const row = (await db('nivaro_collections').where({ collection }).first('accountability')) as
+      | { accountability?: string | null }
+      | undefined
     // An unregistered collection keeps the historic default rather than going
     // silent — never lose audit coverage through a lookup miss.
     if (row) {
-      const raw = String(row.accountability ?? '').trim().toLowerCase()
+      const raw = String(row.accountability ?? '')
+        .trim()
+        .toLowerCase()
       level = raw === 'activity' ? 'activity' : raw === 'all' ? 'all' : 'none'
     }
   } catch {
@@ -63,6 +65,9 @@ export function registerActivityHooks() {
       user: ctx.user?.id,
       collection: ctx.collection,
       item: ctx.keys?.[0] != null ? String(ctx.keys[0]) : undefined,
+      // A create's provenance note ("import:<template>:<file>") rides the same
+      // slot an update's change reason does.
+      comment: ctx.changeReason,
       req: ctx.req
     })
     if (level === 'all' && activityId && ctx.result && ctx.keys?.[0] != null) {

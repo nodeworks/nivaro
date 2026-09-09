@@ -17,6 +17,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
+import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import {
   type ReactNode,
   useCallback,
@@ -1805,8 +1806,13 @@ export function ItemEditForm({
           }
         }
 
+        // Provenance: each imported line's create carries where it came
+        // from ("import:<template>:<file id>") — the items service stores it
+        // on the activity row, so history and the grid can say "from Bid
+        // Import" with a link to the file.
+        const importStamp = `import:${result.template_name || 'file'}:${result.file_id ?? ''}`
         for (const row of creates) {
-          o2mStagingCtx.queueRow(lineCollection, lineField, row)
+          o2mStagingCtx.queueRow(lineCollection, lineField, { ...row, _change_reason: importStamp })
         }
         for (const upd of diff.updates) {
           o2mStagingCtx.queueEdit(lineCollection, lineField, upd.id, upd.changes)
@@ -4413,7 +4419,7 @@ export function ItemEditForm({
     // source_layout_id names a dedicated PDF (file-type) layout to render —
     // the document's design is rarely the edit form's design. Falls back to
     // the layout being edited.
-    const renderLayoutId = (opts?.sourceLayoutId ?? pdfSourceLayoutId) ?? layoutId
+    const renderLayoutId = opts?.sourceLayoutId ?? pdfSourceLayoutId ?? layoutId
     if (pdfAttaching || !attachField || !renderLayoutId || !targetItem) return
     setPdfAttaching(true)
     try {
@@ -4772,6 +4778,27 @@ export function ItemEditForm({
     () => subtitleParts.map((p) => p.value).join(subtitleConfig?.separator ?? ' | '),
     [subtitleParts, subtitleConfig]
   )
+
+  // Header summaries: inline-table fields carrying options.header_summary.
+  const headerSummaries = useMemo(() => {
+    const out: Array<{ field: string; config: HeaderSummaryConfig }> = []
+    for (const f of fieldConfig ?? []) {
+      const raw = (f as { options?: unknown }).options
+      let opts: Record<string, unknown> | null = null
+      try {
+        opts =
+          typeof raw === 'string'
+            ? (JSON.parse(raw) as Record<string, unknown>)
+            : ((raw as Record<string, unknown>) ?? null)
+      } catch {
+        opts = null
+      }
+      const hs = opts?.header_summary as HeaderSummaryConfig | undefined
+      if (hs && typeof hs.formula === 'string' && typeof hs.label === 'string')
+        out.push({ field: f.field, config: hs })
+    }
+    return out
+  }, [fieldConfig])
 
   const headerFields = useMemo(
     () =>
@@ -5516,7 +5543,10 @@ export function ItemEditForm({
             stepId,
             problems.length > 0
               ? { status: 'error', detail: undefined, error: problems.join('. ') }
-              : { status: 'done', detail: `${rowList.length} line${rowList.length !== 1 ? 's' : ''} saved` }
+              : {
+                  status: 'done',
+                  detail: `${rowList.length} line${rowList.length !== 1 ? 's' : ''} saved`
+                }
           )
         } catch (err) {
           // Only a failure OUTSIDE the per-line guard lands here (e.g. the
@@ -8299,6 +8329,12 @@ export function ItemEditForm({
                                         sort: f.sort,
                                         key: f.field,
                                         data: f
+                                      })),
+                                      ...headerSummaries.map((h) => ({
+                                        type: 'summary' as const,
+                                        sort: 9_000,
+                                        key: `__summary__${h.field}`,
+                                        data: h
                                       }))
                                     ]
                                       .sort((a, b) => a.sort - b.sort)
@@ -8326,6 +8362,39 @@ export function ItemEditForm({
                                           }
                                         }
 
+                                        if (item.type === 'summary') {
+                                          const h = item.data
+                                          return (
+                                            <HeaderSummaryChip
+                                              key={item.key}
+                                              collection={collection}
+                                              itemId={itemId}
+                                              field={h.field}
+                                              config={h.config}
+                                              onOpen={(t) => {
+                                                jumpToField(h.field)
+                                                // The grid may only mount after the tab
+                                                // switch above — ask a few times.
+                                                const detail = {
+                                                  collection: t.childCollection,
+                                                  field: t.fkField,
+                                                  rowId: t.rowId
+                                                }
+                                                for (const ms of [150, 500, 1100]) {
+                                                  window.setTimeout(
+                                                    () =>
+                                                      window.dispatchEvent(
+                                                        new CustomEvent('nvr:grid-open-row', {
+                                                          detail
+                                                        })
+                                                      ),
+                                                    ms
+                                                  )
+                                                }
+                                              }}
+                                            />
+                                          )
+                                        }
                                         if (item.type === 'widget') {
                                           const w = item.data
                                           const isBtnGroup =

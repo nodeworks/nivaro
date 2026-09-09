@@ -1571,7 +1571,7 @@ async function applyConditions(
     // Virtual path: addendum presence — 'active' = an addendum still in flight
     // (draft/submitted/review), 'none' = no active addendum, 'any' = ever had one.
     if (cond.path[0] === '$addendums' && cond.path.length === 1) {
-      const want = String(Array.isArray(cond.value) ? cond.value[0] : cond.value ?? 'active')
+      const want = String(Array.isArray(cond.value) ? cond.value[0] : (cond.value ?? 'active'))
       const activeOnly = want !== 'any'
       const cb = function (this: QB) {
         this.select(db.raw('1'))
@@ -2435,6 +2435,15 @@ export async function createOne(
   // or computed pass mutates the payload — explicit values always win over
   // layout autofill, and validation only ever judges what the caller wrote.
   const callerFields = new Set(Object.keys(data))
+  callerFields.delete('_change_reason')
+  // A create may carry a provenance note the same way an update carries a
+  // change reason ("import:Bid Import:<file>") — stripped before any column
+  // write, stored on the activity row so history can say where a line came from.
+  const createReason =
+    typeof (data as Record<string, unknown>)._change_reason === 'string'
+      ? String((data as Record<string, unknown>)._change_reason).trim()
+      : ''
+  delete (data as Record<string, unknown>)._change_reason
 
   const allowed = await can(user, 'create', collection)
   if (!allowed) throw new ForbiddenError()
@@ -2547,7 +2556,12 @@ export async function createOne(
     (result ?? ctx.payload) as Record<string, unknown>
   )
 
-  await hooks.trigger('after', { ...ctx, keys: [returnedId as string | number], result })
+  await hooks.trigger('after', {
+    ...ctx,
+    keys: [returnedId as string | number],
+    result,
+    changeReason: createReason || undefined
+  })
 
   // Auto-watch (#400): creators subscribe to their own records when the
   // preference says so — fire-and-forget.
