@@ -569,6 +569,11 @@ export interface RowRuleTraceEntry {
 export interface RowRuleEvalOptions {
   /** Collects the target fields of triggered 'lock' rules. */
   locks?: Set<string>
+  /** Per locked target: the trigger that locked it (for "why is this locked"). */
+  lockReasons?: Map<
+    string,
+    { field: string | null; related_field: string | null; op: string; value: string | null }
+  >
   /** Evaluate ONLY lock rules — used when a row editor opens, so 'set' rules
    *  don't re-fire over values the user already has. */
   locksOnly?: boolean
@@ -650,7 +655,9 @@ export class RowRuleLookupCache {
   /** One record by id. */
   record(collection: string, id: unknown) {
     return this.memo(this.recs, `${collection}|${String(id)}`, () =>
-      this.database(collection).where({ id: String(id) }).first()
+      this.database(collection)
+        .where({ id: String(id) })
+        .first()
     )
   }
 }
@@ -716,7 +723,12 @@ export async function evaluateRowRules(
     if (!isParentTrigger) {
       // Lock rules re-evaluate on EVERY pass — a lock follows the row's current
       // state, not only the keystroke that changed its trigger.
-      if (!isLock && changedField && allTriggerFields.length > 0 && !allTriggerFields.includes(changedField)) {
+      if (
+        !isLock &&
+        changedField &&
+        allTriggerFields.length > 0 &&
+        !allTriggerFields.includes(changedField)
+      ) {
         note('skipped:other-field-changed')
         continue
       }
@@ -816,7 +828,15 @@ export async function evaluateRowRules(
         triggered = triggerField ? val != null : true
     }
     if (isLock) {
-      if (triggered) evalOpts?.locks?.add(rule.target_field)
+      if (triggered) {
+        evalOpts?.locks?.add(rule.target_field)
+        evalOpts?.lockReasons?.set(rule.target_field, {
+          field: rule.trigger_field ?? null,
+          related_field: rule.trigger_related_field ?? null,
+          op: rule.trigger_op ?? 'eq',
+          value: rule.trigger_value ?? null
+        })
+      }
       note(triggered ? 'lock' : 'not-triggered')
       continue
     }
@@ -901,7 +921,8 @@ async function resolvePrecedenceSource(
     const rel = await cache.o2mRel(collection, src.source_field)
     if (!rel?.many_collection) return null
     cache.queries += 1
-    const firstRec = (await cache.database(rel.many_collection)
+    const firstRec = (await cache
+      .database(rel.many_collection)
       .where({ [rel.many_field]: String(rowId) })
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined
@@ -924,7 +945,8 @@ async function resolvePrecedenceSource(
       const rel = await cache.o2mRel(collection, src.source_field)
       if (!rel?.many_collection) return null
       cache.queries += 1
-      const firstRec = (await cache.database(rel.many_collection)
+      const firstRec = (await cache
+        .database(rel.many_collection)
         .where({ [rel.many_field]: String(rowId) })
         .orderBy('id', 'asc')
         .first()) as Record<string, unknown> | undefined
@@ -937,7 +959,8 @@ async function resolvePrecedenceSource(
     if (!fkRel?.many_field) return null
     const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
     cache.queries += 1
-    const matchRec = (await cache.database(src.o2m_collection)
+    const matchRec = (await cache
+      .database(src.o2m_collection)
       .where({ [fkRel.many_field]: intermediateId, [src.filter_field]: resolvedFilter })
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined

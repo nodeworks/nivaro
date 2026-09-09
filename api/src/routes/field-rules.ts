@@ -287,6 +287,10 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const working = { ...body.data }
     const parentContext = body.parent_context ?? {}
     const locks = new Set<string>()
+    const lockReasons = new Map<
+      string,
+      { field: string | null; related_field: string | null; op: string; value: string | null }
+    >()
 
     let expected: Record<string, unknown> | undefined
     if (Array.isArray(body.row_rules) && body.row_rules.length > 0) {
@@ -307,7 +311,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         parentContext,
         rules,
         targetFields?.length ? undefined : body.changed_field,
-        { locks, locksOnly: body.locks_only === true, cache, targetFields }
+        { locks, lockReasons, locksOnly: body.locks_only === true, cache, targetFields }
       )
       if (body.probe === true) {
         // Second pass over a copy with EVERY rule target cleared: what the
@@ -341,7 +345,12 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       if (value !== before[key]) updates[key] = value
     }
 
-    return reply.send({ updates, locks: [...locks], ...(expected ? { expected } : {}) })
+    return reply.send({
+      updates,
+      locks: [...locks],
+      lock_reasons: Object.fromEntries(lockReasons),
+      ...(expected ? { expected } : {})
+    })
   })
 
   /** Rule health: recent evaluate timings per child collection (this replica). */

@@ -1457,7 +1457,7 @@ export const contentOpsAddendums: DocSection = {
     { type: 'h3', text: 'Reading an addendum' },
     {
       type: 'p',
-      text: 'An addendum card lists scalar changes as current → proposed with a ± chip, and any child rows it proposes as a line-by-line block: rows it adds, rows it removes (with what they held), and for a changed row each cell as "was → will be" with foreign keys shown by label and money formatted as money. When a record carries two or more addendums, the panel header\'s **Compare** toggle swaps the cards for one table, oldest first: what each addendum moves the amount by, which fields it touches, how many lines it adds / changes / removes (judged against the record\'s current rows, so an approved addendum\'s lines read as landed), and the running total with rejected ones struck out and an approved-only subtotal beneath.'
+      text: "An addendum card lists scalar changes as current → proposed with a ± chip, and any child rows it proposes as a line-by-line block: rows it adds, rows it removes (with what they held), and for a changed row each cell as \"was → will be\" with foreign keys shown by label and money formatted as money. When a record carries two or more addendums, the panel header's **Compare** toggle swaps the cards for one table, oldest first: what each addendum moves the amount by, which fields it touches, how many lines it adds / changes / removes (judged against the record's current rows, so an approved addendum's lines read as landed), and the running total with rejected ones struck out and an approved-only subtotal beneath."
     },
     { type: 'h3', text: 'API' },
     {
@@ -1871,6 +1871,10 @@ export const contentOpsGridPresets: DocSection = {
     {
       type: 'p',
       text: 'An inline-table field may carry `options.header_summary` (layout-local): a formula evaluated per child row on the server (expr-eval, `item.<column>` — "item.amount - item.allocated_total"), summed over the rows where it is positive, shown in the record header as a chip ("Unallocated · $1,240 · across 3 lines"). Clicking the chip switches to the step holding the grid and opens the first contributing row. The figure refreshes whenever a grid on the record saves. Keys: `label`, `formula`, `format` (currency | number), `positive_only` (default true), `count_label` ("lines"), `hide_when_zero` (default true).'
+    },
+    {
+      type: 'p',
+      text: 'Clicking the chip lists the contributing rows biggest-first (named by `row_label`, e.g. "Line {{line_number}} · {{item_description}}") and opens whichever you pick. Rollup header fields carry their own explainer beneath the value — "= 5 lines · 1 excluded (line type is not 4)" — whose popover lists the contributors, the rows the source filter left out with the reason, and per-source subtotals.'
     },
     { type: 'h3', text: 'Line provenance from imports' },
     {

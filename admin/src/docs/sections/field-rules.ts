@@ -90,6 +90,11 @@ export const fieldRulesGuide: DocSection = {
       type: 'p',
       text: 'Row rules run on API creates and, by default, on API updates too: a PATCH that changes one of a rule\'s trigger fields re-derives its target, the same way the form does when you edit. A target the caller sends explicitly in the same request always wins. Untick "Re-run on API updates when a trigger field changes" on a rule to run it on creates only.'
     },
+    { type: 'h3', text: 'Why is this cell locked?' },
+    {
+      type: 'p',
+      text: 'A cell a `lock` rule holds is read-only in both the inline editor and the row panel, and hovering it says which trigger locked it, using the row\'s own value: "Locked — Category is Installation - Labor". The evaluate call returns `lock_reasons` (trigger field, operator, value) beside `locks`.'
+    },
     { type: 'h3', text: 'Re-running rules over existing lines' },
     {
       type: 'p',

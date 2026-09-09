@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { post } from '../../lib/commands'
 import { useNivaroClient } from '../../context'
 import { cn } from '../../lib/utils'
@@ -21,6 +22,8 @@ export interface HeaderSummaryConfig {
   count_label?: string
   /** Hide the chip when nothing contributes (default true). */
   hide_when_zero?: boolean
+  /** How a contributing row is named in the list: "Line {{line_number}} · {{item_description}}". */
+  row_label?: string
 }
 
 interface Props {
@@ -41,6 +44,7 @@ interface Summary {
   count: number
   rows: number
   first_id: string | null
+  items?: Array<{ id: string; value: number; label: string }>
   child_collection: string
   fk_field: string
 }
@@ -82,7 +86,8 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
           post(`/items/${collection}/${itemId}/child-summary`, {
             field,
             formula: config.formula,
-            positive_only: config.positive_only !== false
+            positive_only: config.positive_only !== false,
+            row_label: config.row_label
           })
         )
         .then((r) => r.data),
@@ -100,44 +105,83 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
     : '—'
   const countLabel = config.count_label ?? 'rows'
   const canOpen = !!data?.first_id
+  const [open, setOpen] = useState(false)
+  const fmt = (n: number) =>
+    config.format === 'number'
+      ? n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+      : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  const openRow = (rowId: string) => {
+    if (!data) return
+    setOpen(false)
+    onOpen({ childCollection: data.child_collection, fkField: data.fk_field, rowId, field })
+  }
+  const items = data?.items ?? []
   return (
-    <button
-      type='button'
-      disabled={!canOpen}
-      onClick={() =>
-        data?.first_id &&
-        onOpen({
-          childCollection: data.child_collection,
-          fkField: data.fk_field,
-          rowId: data.first_id,
-          field
-        })
-      }
-      className={cn(
-        'group relative flex flex-col justify-start border-r border-slate-200 px-4 py-2 text-left min-w-0 transition-colors dark:border-border',
-        canOpen ? 'cursor-pointer hover:bg-white/60 dark:hover:bg-white/[0.025]' : 'cursor-default'
-      )}
-      data-tip={
-        canOpen ? `Open the first ${countLabel.replace(/s$/, '')} that contributes` : undefined
-      }
-      data-header-summary={field}
-    >
-      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
-        {config.label}
-      </span>
-      <span
-        className={cn(
-          'mt-1 text-[13px] font-semibold tabular-nums leading-none',
-          isLoading && !data && 'text-slate-300'
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          disabled={!canOpen}
+          className={cn(
+            'group relative flex flex-col justify-start border-r border-slate-200 px-4 py-2 text-left min-w-0 transition-colors dark:border-border',
+            canOpen
+              ? 'cursor-pointer hover:bg-white/60 dark:hover:bg-white/[0.025]'
+              : 'cursor-default'
+          )}
+          data-tip={canOpen ? `Which ${countLabel} contribute` : undefined}
+          data-header-summary={field}
+        >
+          <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+            {config.label}
+          </span>
+          <span
+            className={cn(
+              'mt-1 text-[13px] font-semibold tabular-nums leading-none',
+              isLoading && !data && 'text-slate-300'
+            )}
+          >
+            {value}
+          </span>
+          {data && (
+            <span className='mt-1 text-[10.5px] leading-none text-slate-500 dark:text-slate-400'>
+              across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[360px] p-2 text-[11.5px]'>
+        <p className='mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+          {config.label} — {data?.count ?? 0} {countLabel}
+        </p>
+        <div className='max-h-[260px] space-y-px overflow-y-auto'>
+          {items.map((it) => (
+            <button
+              key={it.id}
+              type='button'
+              onClick={() => openRow(it.id)}
+              className='flex w-full items-baseline gap-2 rounded px-1.5 py-1 text-left hover:bg-slate-50 dark:hover:bg-muted'
+              data-tip='Open this line'
+            >
+              <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
+                {it.label}
+              </span>
+              <span className='shrink-0 font-mono tabular-nums text-slate-900 dark:text-slate-100'>
+                {fmt(it.value)}
+              </span>
+            </button>
+          ))}
+          {data && data.count > items.length && (
+            <p className='px-1.5 py-1 text-[10.5px] text-slate-400'>
+              +{data.count - items.length} more
+            </p>
+          )}
+        </div>
+        {data && (
+          <p className='border-t border-slate-100 px-1.5 pt-1.5 text-right font-medium text-slate-700 dark:border-border dark:text-slate-200'>
+            {fmt(data.total)}
+          </p>
         )}
-      >
-        {value}
-      </span>
-      {data && (
-        <span className='mt-1 text-[10.5px] leading-none text-slate-500 dark:text-slate-400'>
-          across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
-        </span>
-      )}
-    </button>
+      </PopoverContent>
+    </Popover>
   )
 }

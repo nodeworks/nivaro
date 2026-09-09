@@ -1532,10 +1532,18 @@ export function InlineTableField({
   // locks = fields the layout's 'lock' row rules currently make read-only for
   // this row (server-evaluated, so they can follow M2O hops like
   // category → sub_category → entity). Refreshed on open and on every edit.
+  type LockReason = {
+    field: string | null
+    related_field: string | null
+    op: string
+    value: string | null
+  }
   type GridEditState = {
     rowId: string
     draft: Record<string, unknown>
     locks?: string[]
+    /** Per locked field: the trigger that locked it (server-evaluated). */
+    lockReasons?: Record<string, LockReason>
     /** Lock rules exist but their first evaluation for this row hasn't
      *  answered yet — lock TARGETS render disabled until it does, so a field
      *  that is about to lock never accepts a keystroke it will then drop. */
@@ -3357,7 +3365,11 @@ export function InlineTableField({
   function refreshRuleState(rowId: string, draft: Record<string, unknown>) {
     if (!client || !rowRules || rowRules.length === 0) return
     client
-      .request<{ locks?: string[]; expected?: Record<string, unknown> }>(
+      .request<{
+        locks?: string[]
+        lock_reasons?: Record<string, LockReason>
+        expected?: Record<string, unknown>
+      }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
           data: draft,
@@ -3373,6 +3385,7 @@ export function InlineTableField({
             ? {
                 ...s,
                 locks: res.locks ?? [],
+                lockReasons: res.lock_reasons ?? s.lockReasons,
                 locksPending: false,
                 expected: res.expected ?? s.expected
               }
@@ -3426,6 +3439,39 @@ export function InlineTableField({
     const draft = applyComputedFields({ ...row })
     setEditState({ rowId, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(rowId, draft)
+  }
+
+  /** "Locked — Category is Labor": the trigger that locked a field on this
+   *  row, with the trigger field labelled and an M2O value shown by label. */
+  function lockReasonText(field: string): string {
+    const r = editStateRef.current?.lockReasons?.[field]
+    if (!r) return 'Set automatically for this row'
+    const col = r.field ? cols.find((c) => c.field === r.field) : undefined
+    const triggerLabel = col?.label || (r.field ? titleCase(r.field) : 'a rule')
+    // The lock fired for THIS row, so the row's own trigger value (shown by
+    // label) explains it better than the rule's raw comparison value.
+    const rowVal = r.field ? editStateRef.current?.draft[r.field] : undefined
+    const rel = r.field ? m2oRelMap.get(r.field) : undefined
+    const shown =
+      rowVal == null || rowVal === ''
+        ? null
+        : rel?.one_collection
+          ? (m2oDisplays[rel.one_collection]?.[String(rowVal)] ?? String(rowVal))
+          : String(rowVal)
+    if (shown) return `Locked — ${triggerLabel} is ${shown}`
+    const opWord =
+      r.op === 'neq'
+        ? 'is not'
+        : r.op === 'null'
+          ? 'is empty'
+          : r.op === 'nnull'
+            ? 'is set'
+            : r.op === 'in'
+              ? 'is one of'
+              : r.op === 'contains'
+                ? 'contains'
+                : 'is'
+    return `Locked — ${triggerLabel} ${opWord}${r.op === 'null' || r.op === 'nnull' ? '' : ` ${r.value ?? ''}`}`
   }
 
   /** Provenance of a rule-target value in the open editor: 'auto' when it
@@ -3483,7 +3529,12 @@ export function InlineTableField({
   function applyEvalResponse(
     rowId: string,
     seq: number,
-    res: { updates?: Record<string, unknown>; locks?: string[]; expected?: Record<string, unknown> }
+    res: {
+      updates?: Record<string, unknown>
+      locks?: string[]
+      lock_reasons?: Record<string, LockReason>
+      expected?: Record<string, unknown>
+    }
   ) {
     if (editStateRef.current?.rowId !== rowId || draftKeySeqRef.current.rowId !== rowId) return
     const seqs = draftKeySeqRef.current.seqs
@@ -3500,6 +3551,7 @@ export function InlineTableField({
         ...s,
         draft: hasUpdates ? applyComputedFields({ ...s.draft, ...fresh }) : s.draft,
         locks: res.locks ?? s.locks,
+        lockReasons: res.lock_reasons ?? s.lockReasons,
         locksPending: false,
         expected: res.expected ?? s.expected
       }
@@ -3580,6 +3632,7 @@ export function InlineTableField({
         .request<{
           updates: Record<string, unknown>
           locks?: string[]
+          lock_reasons?: Record<string, LockReason>
           expected?: Record<string, unknown>
         }>(
           post('/field-rules/evaluate', {
@@ -4713,10 +4766,8 @@ export function InlineTableField({
                   ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
                     <div
                       className='text-[12px] text-slate-500'
-                      title={
-                        editState?.locks?.includes(c.field)
-                          ? 'Set automatically for this row'
-                          : undefined
+                      data-tip={
+                        editState?.locks?.includes(c.field) ? lockReasonText(c.field) : undefined
                       }
                     >
                       {renderCell(c, args.draft[c.field], args.rowId)}
@@ -5546,7 +5597,16 @@ export function InlineTableField({
                                       {renderCell(c, computedDisplayVal)}
                                     </div>
                                   ) : (isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
-                                    <div onClick={(e) => e.stopPropagation()}>
+                                    // A field a rule LOCKS on this row is read-only here too
+                                    // (the server drops the write anyway) and says why on hover.
+                                    <div
+                                      onClick={(e) => e.stopPropagation()}
+                                      data-tip={
+                                        isEditing && editState?.locks?.includes(c.field)
+                                          ? lockReasonText(c.field)
+                                          : undefined
+                                      }
+                                    >
                                       <FieldRenderer
                                         field={
                                           { ...c, sort: c.sort ?? 0 } as Parameters<
@@ -5559,7 +5619,11 @@ export function InlineTableField({
                                         collection={relatedCollection}
                                         itemId={id}
                                         cascadeFilter={fieldCascadeFilters[c.field]}
-                                        displayOnly={!isEditing || isPendingDelete}
+                                        displayOnly={
+                                          !isEditing ||
+                                          isPendingDelete ||
+                                          (isEditing && !!editState?.locks?.includes(c.field))
+                                        }
                                       />
                                     </div>
                                   ) : c.interface === 'formula-column' ? (

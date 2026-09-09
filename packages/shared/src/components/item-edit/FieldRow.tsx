@@ -186,6 +186,69 @@ function FieldSparkline({
  * each) and whether their sum still matches the stored figure; a
  * write-computed field shows its formula and the current inputs.
  */
+export interface LineageData {
+  kind: 'rollup' | 'write'
+  stored_value?: unknown
+  formula?: string
+  inputs?: Record<string, unknown>
+  sources?: Array<{
+    collection: string
+    aggregate?: string
+    value_field?: string | null
+    value_formula?: string | null
+    filtered?: boolean
+    filter?: Record<string, unknown> | null
+    note?: string
+    error?: string
+    subtotal?: number
+    truncated?: boolean
+    rows: Array<{
+      id: string
+      label: string
+      value: number | null
+      updated_at: string | null
+      updated_by: string | null
+    }>
+    /** Rows the source filter left out, with the reason. */
+    excluded?: Array<{ id: string; label: string; value: number | null; reason: string }>
+  }>
+}
+
+/** Lineage of a computed field, fetched only while `enabled`. */
+export function useFieldLineage(
+  collection: string,
+  itemId: string,
+  field: string,
+  enabled: boolean
+) {
+  const client = useNivaroClient()
+  return useQuery<LineageData>({
+    queryKey: ['field-lineage', collection, itemId, field],
+    queryFn: () =>
+      client
+        .request<{ data: LineageData }>(
+          get(`/lineage/${collection}/${encodeURIComponent(itemId)}/${field}`)
+        )
+        .then((r) => r.data),
+    enabled,
+    staleTime: 30_000
+  })
+}
+
+/** One-line summary for a rollup: "= 5 lines · 1 excluded (line type is not 4)". */
+export function lineageSummary(data: LineageData | undefined, noun = 'rows'): string | null {
+  if (!data || data.kind !== 'rollup') return null
+  const rows = (data.sources ?? []).reduce((a, s) => a + s.rows.length, 0)
+  const excluded = (data.sources ?? []).reduce((a, s) => a + (s.excluded?.length ?? 0), 0)
+  const reason = (data.sources ?? []).find((s) => s.excluded?.length)?.excluded?.[0]?.reason
+  const parts = [`= ${rows} ${rows === 1 ? noun.replace(/s$/, '') : noun}`]
+  if (excluded)
+    parts.push(
+      `${excluded} excluded${reason ? ` (${reason.replace(/^does not match: /, '')})` : ''}`
+    )
+  return parts.join(' · ')
+}
+
 function FieldLineageButton({
   collection,
   itemId,
@@ -195,43 +258,9 @@ function FieldLineageButton({
   itemId: string
   field: string
 }) {
-  const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  const { data, isLoading } = useQuery<{
-    kind: 'rollup' | 'write'
-    stored_value?: unknown
-    formula?: string
-    inputs?: Record<string, unknown>
-    sources?: Array<{
-      collection: string
-      aggregate?: string
-      value_field?: string | null
-      value_formula?: string | null
-      filtered?: boolean
-      note?: string
-      error?: string
-      subtotal?: number
-      truncated?: boolean
-      rows: Array<{
-        id: string
-        label: string
-        value: number | null
-        updated_at: string | null
-        updated_by: string | null
-      }>
-    }>
-  }>({
-    queryKey: ['field-lineage', collection, itemId, field],
-    queryFn: () =>
-      client
-        .request<{ data: never }>(
-          get(`/lineage/${collection}/${encodeURIComponent(itemId)}/${field}`)
-        )
-        .then((r) => r.data),
-    enabled: open,
-    staleTime: 30_000
-  })
+  const { data, isLoading } = useFieldLineage(collection, itemId, field, open)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -330,6 +359,30 @@ function FieldLineageButton({
                   <p className='border-t border-slate-100 px-1 pt-1 text-right text-[11.5px] font-medium text-slate-700 dark:border-border dark:text-slate-200'>
                     subtotal {num(src.subtotal)}
                   </p>
+                )}
+                {(src.excluded?.length ?? 0) > 0 && (
+                  <div className='mt-1 rounded bg-slate-50 px-1 py-1 dark:bg-muted/40'>
+                    <p className='text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+                      {src.excluded!.length} excluded —{' '}
+                      {src.excluded![0].reason.replace(/^does not match: /, '')}
+                    </p>
+                    {src.excluded!.slice(0, 8).map((r) => (
+                      <div
+                        key={r.id}
+                        className='flex items-baseline gap-2 px-0.5 text-[11px] text-slate-400'
+                      >
+                        <span className='min-w-0 flex-1 truncate line-through decoration-slate-300'>
+                          {r.label}
+                        </span>
+                        <span className='shrink-0 font-mono tabular-nums'>{num(r.value)}</span>
+                      </div>
+                    ))}
+                    {src.excluded!.length > 8 && (
+                      <p className='px-0.5 text-[10.5px] text-slate-400'>
+                        +{src.excluded!.length - 8} more
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             ))}

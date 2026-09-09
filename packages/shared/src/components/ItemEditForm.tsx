@@ -17,6 +17,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
+import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import {
   type ReactNode,
@@ -8577,14 +8578,25 @@ export function ItemEditForm({
                                                   )
                                                 }
                                                 const inner = f.cmsField ? (
-                                                  <StripFieldValue
-                                                    field={f.cmsField}
-                                                    val={raw}
-                                                    relations={relations}
-                                                    collection={collection}
-                                                    displayFormat={f.displayFormat}
-                                                    textClassName={textCls}
-                                                  />
+                                                  <>
+                                                    <StripFieldValue
+                                                      field={f.cmsField}
+                                                      val={raw}
+                                                      relations={relations}
+                                                      collection={collection}
+                                                      displayFormat={f.displayFormat}
+                                                      textClassName={textCls}
+                                                    />
+                                                    {f.cmsField.computed_type === 'rollup' &&
+                                                      !isNew &&
+                                                      !viewingAddendum && (
+                                                        <HeaderRollupExplainer
+                                                          collection={collection}
+                                                          itemId={itemId}
+                                                          field={f.cmsField.field}
+                                                        />
+                                                      )}
+                                                  </>
                                                 ) : (
                                                   <span className={`text-[13px] ${textCls}`}>
                                                     {formatHeaderFieldValue(raw, f.displayFormat)}

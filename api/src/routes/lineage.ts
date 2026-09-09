@@ -35,7 +35,11 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item, field } = req.params
-      if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
+      if (
+        !IDENT.test(collection) ||
+        /^nivaro_|^directus_/i.test(collection) ||
+        !IDENT.test(field)
+      ) {
         return reply.code(400).send({ error: 'Invalid collection or field' })
       }
       if (!(await can(req.user!, 'read', collection))) {
@@ -133,7 +137,8 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
               const v = src.value_field ? Number(r[src.value_field]) : null
               return {
                 id: String(r.id),
-                label: labels[`${src.related_collection}:${r.id}`] ?? labels[String(r.id)] ?? `#${r.id}`,
+                label:
+                  labels[`${src.related_collection}:${r.id}`] ?? labels[String(r.id)] ?? `#${r.id}`,
                 value: v != null && Number.isFinite(v) ? v : null,
                 updated_at: t?.at ?? null,
                 updated_by: t?.by ?? null,
@@ -141,15 +146,82 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
               }
             })
             const subtotal =
-              src.aggregate === 'count'
-                ? rows.length
-                : rows.reduce((a, r) => a + (r.value ?? 0), 0)
+              src.aggregate === 'count' ? rows.length : rows.reduce((a, r) => a + (r.value ?? 0), 0)
+            // Rows the source FILTER left out ("1 excluded — line type 4"):
+            // the same read without the filter, minus the contributors.
+            let excluded: Array<{
+              id: string
+              label: string
+              value: number | null
+              reason: string
+            }> = []
+            if (src.filter && Object.keys(src.filter).length > 0) {
+              try {
+                const all = await readItems(req.user!, src.related_collection, {
+                  filter: { [src.fk_field]: { _eq: item } },
+                  fields: src.value_field ? ['id', src.value_field] : ['id'],
+                  limit: 200
+                })
+                const allRows = ((all as { data?: Array<Record<string, unknown>> }).data ??
+                  []) as Array<Record<string, unknown>>
+                const have = new Set(ids)
+                const out = allRows.filter((r) => !have.has(String(r.id)))
+                if (out.length) {
+                  const exLabels = await getLabels(
+                    new Map([[src.related_collection, new Set(out.map((r) => String(r.id)))]])
+                  ).catch(() => ({}) as Record<string, string>)
+                  const reason = Object.entries(src.filter)
+                    .map(([col, cond]) => {
+                      if (cond && typeof cond === 'object') {
+                        const [op, v] = Object.entries(cond as Record<string, unknown>)[0] ?? [
+                          '_eq',
+                          null
+                        ]
+                        const word =
+                          op === '_neq'
+                            ? 'is not'
+                            : op === '_in'
+                              ? 'in'
+                              : op === '_null'
+                                ? 'is empty'
+                                : op === '_nnull'
+                                  ? 'is set'
+                                  : op === '_gt'
+                                    ? '>'
+                                    : op === '_gte'
+                                      ? '≥'
+                                      : op === '_lt'
+                                        ? '<'
+                                        : op === '_lte'
+                                          ? '≤'
+                                          : 'is'
+                        return `${col.replace(/_/g, ' ')} ${word}${v == null || op === '_null' || op === '_nnull' ? '' : ` ${Array.isArray(v) ? v.join(', ') : String(v)}`}`
+                      }
+                      return `${col.replace(/_/g, ' ')} is ${String(cond)}`
+                    })
+                    .join(' and ')
+                  excluded = out.map((r) => {
+                    const v = src.value_field ? Number(r[src.value_field]) : null
+                    return {
+                      id: String(r.id),
+                      label: exLabels[`${src.related_collection}:${r.id}`] ?? `#${r.id}`,
+                      value: v != null && Number.isFinite(v) ? v : null,
+                      reason: `does not match: ${reason}`
+                    }
+                  })
+                }
+              } catch {
+                excluded = []
+              }
+            }
             return {
               collection: src.related_collection,
               aggregate: src.aggregate,
               value_field: src.value_field ?? null,
               value_formula: src.value_formula ?? null,
               filtered: !!src.filter,
+              filter: src.filter ?? null,
+              excluded,
               rows,
               subtotal: Math.round(subtotal * 100) / 100,
               truncated: raw.length === 200
@@ -190,7 +262,10 @@ async function lastTouches(
                 ROW_NUMBER() OVER (PARTITION BY a.item ORDER BY a.id DESC) AS rn
          FROM nivaro_activity a
          LEFT JOIN nivaro_users u ON u.id = a.[user]
-         WHERE a.collection = ? AND a.item IN (${ids.slice(0, 200).map(() => '?').join(',')})
+         WHERE a.collection = ? AND a.item IN (${ids
+           .slice(0, 200)
+           .map(() => '?')
+           .join(',')})
            AND a.action IN ('create', 'update')
        ) t WHERE rn = 1`,
       [collection, ...ids.slice(0, 200)]

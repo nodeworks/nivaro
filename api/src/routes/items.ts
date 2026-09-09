@@ -542,7 +542,13 @@ export async function itemsRoutes(app: FastifyInstance) {
   // formula runs through the same expr-eval parser write-computed fields use.
   app.post('/:collection/:id/child-summary', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
-    const body = (req.body ?? {}) as { field?: string; formula?: string; positive_only?: boolean }
+    const body = (req.body ?? {}) as {
+      field?: string
+      formula?: string
+      positive_only?: boolean
+      /** "Line {{line_number}} · {{item_description}}" — plain child columns. */
+      row_label?: string
+    }
     if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
     const field = String(body.field ?? '')
     const formula = String(body.formula ?? '').trim()
@@ -591,12 +597,38 @@ export async function itemsRoutes(app: FastifyInstance) {
         total += num
         contributing.push({ id: String(row.id), value: num })
       }
+      // The chip's popover lists who contributes: labelled, biggest first.
+      const byId = new Map((rows as Record<string, unknown>[]).map((r) => [String(r.id), r]))
+      const top = [...contributing].sort((a, b) => b.value - a.value).slice(0, 50)
+      const tmpl =
+        typeof body.row_label === 'string' && body.row_label.trim() ? body.row_label.trim() : null
+      let labels: Record<string, string> = {}
+      if (!tmpl && top.length) {
+        const { getLabels } = await import('../services/queues.js')
+        labels = await getLabels(
+          new Map([[rel.many_collection, new Set(top.map((t) => t.id))]])
+        ).catch(() => ({}) as Record<string, string>)
+      }
+      const items = top.map((t) => {
+        const row = byId.get(t.id) ?? {}
+        const label = tmpl
+          ? tmpl
+              .replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_, k: string) => {
+                const v = row[k]
+                return v == null || v === '' ? '' : String(v)
+              })
+              .replace(/\s+·\s*$/, '')
+              .trim()
+          : (labels[`${rel.many_collection}:${t.id}`] ?? `#${t.id}`)
+        return { id: t.id, value: Math.round(t.value * 100) / 100, label: label || `#${t.id}` }
+      })
       return reply.send({
         data: {
           total: Math.round(total * 100) / 100,
           count: contributing.length,
           rows: rows.length,
           first_id: contributing[0]?.id ?? null,
+          items,
           child_collection: rel.many_collection,
           fk_field: rel.many_field
         }
