@@ -2,6 +2,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ChevronRight,
+  Clock,
   FileUp,
   GripVertical,
   History,
@@ -1233,6 +1234,7 @@ export function InlineTableField({
   rowBulkActions,
   uploadTemplate,
   rowMatchPanel,
+  lineSla,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1290,6 +1292,8 @@ export function InlineTableField({
   /** "Which related record is this row matched to, and if not, why" — see
    *  RowMatchPanel (options.row_match_panel). Rendered in the row editor. */
   rowMatchPanel?: RowMatchPanelConfig
+  /** options.line_sla — OFF unless enabled; the server reads the real config. */
+  lineSla?: { enabled?: boolean; field?: string } | null
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -1815,6 +1819,57 @@ export function InlineTableField({
     staleTime: 60_000,
     placeholderData: (prev) => prev
   })
+  // Line-level SLA (opt-in): which rows still lack the required field and
+  // whether the record's clock is past the threshold. Config is read on the
+  // server from the grid's own options — the client only asks.
+  const lineSlaOn = !!lineSla?.enabled && typeof lineSla?.field === 'string'
+  const { data: lineAging } = useQuery<{
+    started_at: string | null
+    days: number
+    overdue: boolean
+    missing_ids: string[]
+    overdue_ids: string[]
+    threshold_days: number
+    label: string
+  } | null>({
+    queryKey: [
+      'line-aging',
+      parentCollection ?? '',
+      parentFieldKey ?? manyField,
+      parentId,
+      rowsUpdatedAt
+    ],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            started_at: string | null
+            days: number
+            overdue: boolean
+            missing_ids: string[]
+            overdue_ids: string[]
+            threshold_days: number
+            label: string
+          } | null
+        }>(
+          get('/sla/line-aging', {
+            collection: parentCollection ?? '',
+            field: parentFieldKey ?? manyField,
+            parent_id: parentId
+          })
+        )
+        .then((r) => r.data ?? null),
+    enabled: lineSlaOn && !isNew && !!parentCollection,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev
+  })
+  const lineOverdue = useMemo(
+    () => new Set(lineAging?.overdue ? lineAging.overdue_ids : []),
+    [lineAging]
+  )
+  const lineOverdueTip = lineAging?.overdue
+    ? `${lineAging.label} still missing · ${lineAging.days} ${lineAging.days === 1 ? 'day' : 'days'} on the clock (limit ${lineAging.threshold_days})`
+    : undefined
   const cellProvenance: CellProvenance = provenanceResp?.data ?? {}
   const rowOrigins = provenanceResp?.created ?? {}
   /** "From Bid Import · Sep 8 by Robert" for a line an import created. */
@@ -5360,6 +5415,13 @@ export function InlineTableField({
                                     data-tip={importOriginTip(id) ?? undefined}
                                   />
                                 )}
+                                {lineOverdue.has(id) && (
+                                  <Clock
+                                    className='h-2.5 w-2.5 text-amber-500'
+                                    aria-label='Line overdue'
+                                    data-tip={lineOverdueTip}
+                                  />
+                                )}
                               </span>
                             </td>
                           )}
@@ -5376,6 +5438,13 @@ export function InlineTableField({
                                   className='mr-1 inline h-2.5 w-2.5 text-slate-300 dark:text-slate-500'
                                   aria-label='Imported line'
                                   data-tip={importOriginTip(id) ?? undefined}
+                                />
+                              )}
+                              {!showLineNumbers && lineOverdue.has(id) && (
+                                <Clock
+                                  className='mr-1 inline h-2.5 w-2.5 text-amber-500'
+                                  aria-label='Line overdue'
+                                  data-tip={lineOverdueTip}
                                 />
                               )}
                               {isPendingDelete ? (

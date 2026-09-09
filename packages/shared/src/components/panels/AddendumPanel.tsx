@@ -14,6 +14,8 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from '../item-edit/live-rollups'
+import { AddendumCompare } from './AddendumCompare'
+import { AddendumLinesDiff } from './AddendumLinesDiff'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import { O2MStagingContext, useLiveRows } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
@@ -1302,7 +1304,9 @@ function AddendumCard({
   )
   const derivedChildCollections = useMemo(
     () => [
-      ...new Set(derivedRollupFields.flatMap((f) => rollupSourcesOf(f).map((s) => s.related_collection)))
+      ...new Set(
+        derivedRollupFields.flatMap((f) => rollupSourcesOf(f).map((s) => s.related_collection))
+      )
     ],
     [derivedRollupFields]
   )
@@ -1361,13 +1365,18 @@ function AddendumCard({
         .then((r) => r.data ?? null)
         .catch(() => null),
     enabled:
-      !!parentCollection && !!parentId && (scalarChanged.length > 0 || derivedRollupFields.length > 0),
+      !!parentCollection &&
+      !!parentId &&
+      (scalarChanged.length > 0 || derivedRollupFields.length > 0),
     staleTime: 15_000
   })
   const derivedRollupValues = useMemo(() => {
     const out = new Map<string, number>()
     const cfgByCollection = new Map(
-      derivedChildCollections.map((c, i) => [c, derivedChildCfgs[i]?.data as CMSField[] | undefined])
+      derivedChildCollections.map((c, i) => [
+        c,
+        derivedChildCfgs[i]?.data as CMSField[] | undefined
+      ])
     )
     for (const f of derivedRollupFields) {
       const pf = parseRollupParentFilter(f.computed_formula)
@@ -1419,10 +1428,15 @@ function AddendumCard({
   const visibleChanges = changedFields.filter((a) => {
     const v = proposedData[a.field]
     if (v == null || v === '') return false
-    if (Array.isArray(v)) return modifiedRowCount(v as Record<string, unknown>[], originalO2MMap[a.field]) > 0
+    if (Array.isArray(v))
+      return modifiedRowCount(v as Record<string, unknown>[], originalO2MMap[a.field]) > 0
     const meta = fieldMap[a.field]
     if (meta?.computed_type === 'rollup' || meta?.computed_type === 'write') return false
-    if (currentRecord && a.field in currentRecord && String(currentRecord[a.field] ?? '') === String(v))
+    if (
+      currentRecord &&
+      a.field in currentRecord &&
+      String(currentRecord[a.field] ?? '') === String(v)
+    )
       return false
     return true
   })
@@ -1434,7 +1448,13 @@ function AddendumCard({
     })),
     ...derivedRollupFields.flatMap((f) =>
       derivedRollupValues.has(f.field)
-        ? [{ field: f.field, label_override: f.label ?? null, value: derivedRollupValues.get(f.field) }]
+        ? [
+            {
+              field: f.field,
+              label_override: f.label ?? null,
+              value: derivedRollupValues.get(f.field)
+            }
+          ]
         : []
     )
   ]
@@ -1524,9 +1544,7 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
-          {(changeCount > 0 ||
-            addendum.previous_amount != null ||
-            addendum.new_amount != null) && (
+          {(changeCount > 0 || addendum.previous_amount != null || addendum.new_amount != null) && (
             <div className='px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
                 Proposed changes
@@ -1637,6 +1655,9 @@ function AddendumCard({
                   } else {
                     displayVal = String(rawVal)
                   }
+                  // Lines get their own line-by-line block below — the summary
+                  // row would only repeat its heading.
+                  if (Array.isArray(rawVal) && originalO2MMap[a.field]) return null
                   return (
                     <div key={a.field} className='flex items-baseline gap-2 text-[12px]'>
                       <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>
@@ -1646,6 +1667,29 @@ function AddendumCard({
                         {displayVal}
                       </span>
                     </div>
+                  )
+                })}
+                {o2mRelations.map(({ field, rel }) => {
+                  const proposedRows = proposedData[field]
+                  const orig = originalO2MMap[field]
+                  if (
+                    !Array.isArray(proposedRows) ||
+                    !orig ||
+                    !rel?.many_collection ||
+                    !rel.many_field
+                  )
+                    return null
+                  const a = configuredFields.find((x) => x.field === field)
+                  return (
+                    <AddendumLinesDiff
+                      key={`lines-${field}`}
+                      client={client}
+                      childCollection={rel.many_collection}
+                      fkField={rel.many_field}
+                      proposed={proposedRows as Record<string, unknown>[]}
+                      original={orig}
+                      label={a?.label_override ?? fieldMap[field]?.label ?? titleCase(field)}
+                    />
                   )
                 })}
               </div>
@@ -1857,6 +1901,7 @@ export function AddendumPanel({
   const qc = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(!defaultExpanded)
+  const [compare, setCompare] = useState(false)
 
   const {
     data: addendums = [],
@@ -1963,7 +2008,9 @@ export function AddendumPanel({
   const configuredFields = assignments.filter(
     (a) => !String(a.field).startsWith('__') && (a.is_visible || a.is_visible === 1)
   )
-  const activeCount = addendums.filter((a) => !['approved', 'rejected', 'reverted'].includes(a.status)).length
+  const activeCount = addendums.filter(
+    (a) => !['approved', 'rejected', 'reverted'].includes(a.status)
+  ).length
 
   const onActiveCountChangeRef = useRef(onActiveCountChange)
   onActiveCountChangeRef.current = onActiveCountChange
@@ -2007,6 +2054,25 @@ export function AddendumPanel({
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse' />
                 {activeCount} in review
               </span>
+            )}
+            {addendums.length >= 2 && !collapsed && (
+              <button
+                type='button'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setCompare((v) => !v)
+                }}
+                className={cn(
+                  'ml-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors',
+                  compare
+                    ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#0b7ea6] dark:text-nvr-cyan'
+                    : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-border dark:text-slate-400'
+                )}
+                data-tip='Every addendum side by side — amount moved, fields touched, lines changed, running total'
+                aria-pressed={compare}
+              >
+                {compare ? 'Cards' : 'Compare'}
+              </button>
             )}
           </div>
           <div className='flex items-center gap-2'>
@@ -2056,6 +2122,17 @@ export function AddendumPanel({
               <p className='mt-0.5 text-[11px] text-slate-300 dark:text-slate-600'>
                 Addendums propose changes that go through a review process before being applied.
               </p>
+            </div>
+          ) : compare && addendums.length >= 2 ? (
+            <div className='p-3'>
+              <AddendumCompare
+                client={client}
+                addendums={addendums}
+                parentCollection={collection}
+                parentId={item}
+                relations={relations}
+                fieldMap={Object.fromEntries(collectionFields.map((f) => [f.field, f]))}
+              />
             </div>
           ) : (
             <div className='p-3 space-y-2'>

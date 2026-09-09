@@ -1454,6 +1454,11 @@ export const contentOpsAddendums: DocSection = {
         ['rejected', 'Declined. May be edited and resubmitted.']
       ]
     },
+    { type: 'h3', text: 'Reading an addendum' },
+    {
+      type: 'p',
+      text: 'An addendum card lists scalar changes as current → proposed with a ± chip, and any child rows it proposes as a line-by-line block: rows it adds, rows it removes (with what they held), and for a changed row each cell as "was → will be" with foreign keys shown by label and money formatted as money. When a record carries two or more addendums, the panel header\'s **Compare** toggle swaps the cards for one table, oldest first: what each addendum moves the amount by, which fields it touches, how many lines it adds / changes / removes (judged against the record\'s current rows, so an approved addendum\'s lines read as landed), and the running total with rejected ones struck out and an approved-only subtotal beneath.'
+    },
     { type: 'h3', text: 'API' },
     {
       type: 'table',
@@ -1847,6 +1852,11 @@ export const contentOpsGridPresets: DocSection = {
   "label": "PO line",
   "field_map": { "line_number": "line_number", "line_type": "line_type", "price": "unit_price", "quantity": "quantity", "item_description": "description" }
 }`
+    },
+    { type: 'h3', text: 'Line-level SLA' },
+    {
+      type: 'p',
+      text: "Optional and off by default: `options.line_sla` on an inline-table field names a child column that must be filled (`field`), how many calendar days a record gets (`days`) counted from the newest entry into `after_state` (or from its workflow start when absent), and a `label` for messages. Once `enabled` is true, rows still missing the field past the threshold carry an amber clock in the grid (hover says how long), the record's current owners get one in-app notification per day, and the daily digest lists the records. Completed records are never swept. The grid asks `GET /sla/line-aging?collection=&field=&parent_id=`; the sweep runs at 07:15 as `line-sla-sweep`."
     },
     { type: 'h3', text: 'Lines timeline and cell history' },
     {

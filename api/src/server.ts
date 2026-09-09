@@ -269,7 +269,8 @@ export async function buildServer() {
     if (row?.cron_overrides) {
       const parsed = JSON.parse(row.cron_overrides) as Record<string, { expression?: string }>
       const map: Record<string, string> = {}
-      for (const [id, v] of Object.entries(parsed ?? {})) if (v?.expression) map[id] = String(v.expression)
+      for (const [id, v] of Object.entries(parsed ?? {}))
+        if (v?.expression) map[id] = String(v.expression)
       app.cron.setOverrides(map)
     }
   } catch {
@@ -455,10 +456,12 @@ export async function buildServer() {
           if (row?.activity_retention_days) {
             const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
             // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
-            const q = db('nivaro_activity')
-              .where('timestamp', '<', cutoff)
-              .whereNull('legacy_id')
-            if (overrides.length > 0) q.whereNotIn('collection', overrides.map((o) => o.collection))
+            const q = db('nivaro_activity').where('timestamp', '<', cutoff).whereNull('legacy_id')
+            if (overrides.length > 0)
+              q.whereNotIn(
+                'collection',
+                overrides.map((o) => o.collection)
+              )
             await q.delete()
           }
 
@@ -789,7 +792,10 @@ export async function buildServer() {
           )
           for (const r of fresh) {
             const xml = String(r.graph ?? '')
-            const stmt = xml.match(/<inputbuf>([\s\S]*?)<\/inputbuf>/)?.[1]?.trim().slice(0, 200)
+            const stmt = xml
+              .match(/<inputbuf>([\s\S]*?)<\/inputbuf>/)?.[1]
+              ?.trim()
+              .slice(0, 200)
             await trackError({
               source: 'server',
               route: 'deadlock-sweep',
@@ -856,14 +862,17 @@ export async function buildServer() {
             try {
               const ids = subs.map((x) => x.filter_value)
               const existing = new Set(
-                ((await db(col).whereIn('id', ids).select('id')) as Array<{ id: unknown }>).map((x) =>
-                  String(x.id)
+                ((await db(col).whereIn('id', ids).select('id')) as Array<{ id: unknown }>).map(
+                  (x) => String(x.id)
                 )
               )
               const dead = subs.filter((x) => !existing.has(String(x.filter_value)))
               if (dead.length > 0) {
                 await db('nivaro_notification_subscriptions')
-                  .whereIn('id', dead.map((x) => x.id))
+                  .whereIn(
+                    'id',
+                    dead.map((x) => x.id)
+                  )
                   .update({ is_active: false })
                 cleaned += dead.length
               }
@@ -878,7 +887,10 @@ export async function buildServer() {
             .select('vs.id')) as Array<{ id: number }>
           if (viewSubs.length > 0) {
             await db('nivaro_view_subscriptions')
-              .whereIn('id', viewSubs.map((x) => x.id))
+              .whereIn(
+                'id',
+                viewSubs.map((x) => x.id)
+              )
               .update({ is_active: false })
             cleaned += viewSubs.length
           }
@@ -995,7 +1007,10 @@ export async function buildServer() {
           message: `${rows.length} session(s) blocked (worst ${Math.round(worst / 1000)}s) behind ${heads.length} head blocker(s)`,
           stack: `Head blocker statement(s): ${headText}\nBlocked: ${rows
             .slice(0, 10)
-            .map((r) => `#${r.session_id} waits ${Math.round(r.wait_time / 1000)}s (${r.wait_type ?? '?'}) on #${r.blocking_session_id}`)
+            .map(
+              (r) =>
+                `#${r.session_id} waits ${Math.round(r.wait_time / 1000)}s (${r.wait_type ?? '?'}) on #${r.blocking_session_id}`
+            )
             .join('\n')}`,
           severity: worst > 120_000 ? 'critical' : 'high'
         })
@@ -1042,83 +1057,93 @@ export async function buildServer() {
       // so file chips and the Files page render dead links honestly.
       // Manual: POST /api/cron/file-integrity-sweep/run.
       app.cron.schedule('file-integrity-sweep', '50 3 * * *', async () => {
-
-    // Nightly config-conformance runs for scheduled collections, with a
-    // regression note when a collection's issue count grew since last run.
-    app.cron.schedule('conformance-nightly', '40 2 * * *', async () => {
-      const { runConformance } = await import('./services/config-conformance.js')
-      const schedules = (await db('nivaro_conformance_schedules').where('is_active', true)) as Array<{
-        collection: string
-        row_cap: number
-        created_by: string | null
-      }>
-      for (const sch of schedules) {
-        const running = await db('nivaro_conformance_runs')
-          .where({ collection: sch.collection, status: 'running' })
-          .first('id')
-        if (running) continue
-        const prev = (await db('nivaro_conformance_runs')
-          .where({ collection: sch.collection, status: 'completed' })
-          .orderBy('id', 'desc')
-          .first('violation_count')) as { violation_count: number } | undefined
-        const [inserted] = await db('nivaro_conformance_runs')
-          .insert({ collection: sch.collection, status: 'running', started_at: new Date() })
-          .returning('id')
-        const runId = Number(typeof inserted === 'object' ? (inserted as { id: number }).id : inserted)
-        await runConformance(runId, sch.collection, sch.row_cap > 0 ? sch.row_cap : Number.MAX_SAFE_INTEGER)
-        const done = (await db('nivaro_conformance_runs').where('id', runId).first()) as
-          | { status: string; violation_count: number }
-          | undefined
-        if (
-          done?.status === 'completed' &&
-          prev &&
-          done.violation_count > prev.violation_count &&
-          sch.created_by
-        ) {
-          const { notifyUser } = await import('./services/notification-channels.js')
-          await notifyUser(app, sch.created_by, {
-            subject: `Data integrity regression: ${sch.collection}`,
-            message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
-            collection: 'nivaro_conformance_runs',
-            item: String(runId)
-          }).catch(() => {})
-        }
-      }
-    })
-
-    // Daily readiness score snapshot — the trend line toward cutover.
-    // Presence janitor — the socket's disconnect bookkeeping is per-process,
-    // so restarts strand is_online=true bits; anything raw /items readers see
-    // must self-heal even if no client ever beats again.
-    app.cron.schedule('presence-janitor', '*/5 * * * *', async () => {
-      const has = await db.schema.hasTable('user_presence')
-      if (!has) return
-      await db('user_presence')
-        .where('is_online', true)
-        .where('last_seen', '<', new Date(Date.now() - 10 * 60_000))
-        .update({ is_online: false, is_idle: true })
-        .catch(() => {})
-    })
-
-    app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
-      const { runReadinessChecks } = await import('./services/readiness.js')
-      const report = await runReadinessChecks()
-      if (report.checks.length === 0) return
-      const today = new Date().toISOString().slice(0, 10)
-      const exists = await db('nivaro_readiness_snapshots').where('snapshot_date', today).first('id')
-      if (exists) {
-        await db('nivaro_readiness_snapshots')
-          .where('snapshot_date', today)
-          .update({ score: report.score, counts: JSON.stringify(report.counts) })
-      } else {
-        await db('nivaro_readiness_snapshots').insert({
-          snapshot_date: today,
-          score: report.score,
-          counts: JSON.stringify(report.counts),
-          created_at: new Date()
+        // Nightly config-conformance runs for scheduled collections, with a
+        // regression note when a collection's issue count grew since last run.
+        app.cron.schedule('conformance-nightly', '40 2 * * *', async () => {
+          const { runConformance } = await import('./services/config-conformance.js')
+          const schedules = (await db('nivaro_conformance_schedules').where(
+            'is_active',
+            true
+          )) as Array<{
+            collection: string
+            row_cap: number
+            created_by: string | null
+          }>
+          for (const sch of schedules) {
+            const running = await db('nivaro_conformance_runs')
+              .where({ collection: sch.collection, status: 'running' })
+              .first('id')
+            if (running) continue
+            const prev = (await db('nivaro_conformance_runs')
+              .where({ collection: sch.collection, status: 'completed' })
+              .orderBy('id', 'desc')
+              .first('violation_count')) as { violation_count: number } | undefined
+            const [inserted] = await db('nivaro_conformance_runs')
+              .insert({ collection: sch.collection, status: 'running', started_at: new Date() })
+              .returning('id')
+            const runId = Number(
+              typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
+            )
+            await runConformance(
+              runId,
+              sch.collection,
+              sch.row_cap > 0 ? sch.row_cap : Number.MAX_SAFE_INTEGER
+            )
+            const done = (await db('nivaro_conformance_runs').where('id', runId).first()) as
+              | { status: string; violation_count: number }
+              | undefined
+            if (
+              done?.status === 'completed' &&
+              prev &&
+              done.violation_count > prev.violation_count &&
+              sch.created_by
+            ) {
+              const { notifyUser } = await import('./services/notification-channels.js')
+              await notifyUser(app, sch.created_by, {
+                subject: `Data integrity regression: ${sch.collection}`,
+                message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
+                collection: 'nivaro_conformance_runs',
+                item: String(runId)
+              }).catch(() => {})
+            }
+          }
         })
-      }
-    })
+
+        // Daily readiness score snapshot — the trend line toward cutover.
+        // Presence janitor — the socket's disconnect bookkeeping is per-process,
+        // so restarts strand is_online=true bits; anything raw /items readers see
+        // must self-heal even if no client ever beats again.
+        app.cron.schedule('presence-janitor', '*/5 * * * *', async () => {
+          const has = await db.schema.hasTable('user_presence')
+          if (!has) return
+          await db('user_presence')
+            .where('is_online', true)
+            .where('last_seen', '<', new Date(Date.now() - 10 * 60_000))
+            .update({ is_online: false, is_idle: true })
+            .catch(() => {})
+        })
+
+        app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
+          const { runReadinessChecks } = await import('./services/readiness.js')
+          const report = await runReadinessChecks()
+          if (report.checks.length === 0) return
+          const today = new Date().toISOString().slice(0, 10)
+          const exists = await db('nivaro_readiness_snapshots')
+            .where('snapshot_date', today)
+            .first('id')
+          if (exists) {
+            await db('nivaro_readiness_snapshots')
+              .where('snapshot_date', today)
+              .update({ score: report.score, counts: JSON.stringify(report.counts) })
+          } else {
+            await db('nivaro_readiness_snapshots').insert({
+              snapshot_date: today,
+              score: report.score,
+              counts: JSON.stringify(report.counts),
+              created_at: new Date()
+            })
+          }
+        })
         const { fileIntegritySweep } = await import('./services/file-integrity.js')
         const r = await fileIntegritySweep()
         if (r.newly_missing > 0) {
@@ -1132,6 +1157,19 @@ export async function buildServer() {
       // rollups don't cascade; recalc failures are swallowed by design), and
       // nothing ever went back to check. Nightly sample-compare, drift lands as
       // deduped nivaro_issues rows. Manual run: POST /api/cron/rollup-drift-sweep/run.
+      // Line-level SLA (backlog #16): lines still missing a required id N
+      // days after a state — OFF until a grid enables options.line_sla.
+      // Notifies owners once a day; the daily digest carries a section.
+      {
+        const { registerLineSlaDigest, runLineSlaSweep } = await import('./services/line-sla.js')
+        registerLineSlaDigest()
+        app.cron.schedule('line-sla-sweep', '15 7 * * *', async () => {
+          const r = await runLineSlaSweep(app)
+          if (r.findings > 0)
+            app.log.info(`line-sla: ${r.findings} record(s) overdue, ${r.notified} notified`)
+        })
+      }
+
       app.cron.schedule('rollup-drift-sweep', '20 3 * * *', async () => {
         const { detectRollupDrift } = await import('./services/rollup-drift.js')
         const report = await detectRollupDrift()
@@ -1338,7 +1376,10 @@ export async function buildServer() {
           .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
         if (stranded.length > 0) {
           await db('nivaro_job_runs')
-            .whereIn('id', stranded.map((r) => r.id))
+            .whereIn(
+              'id',
+              stranded.map((r) => r.id)
+            )
             .update({ status: 'interrupted', finished_at: new Date() })
           const { trackError } = await import('./services/error-tracking.js')
           await trackError({

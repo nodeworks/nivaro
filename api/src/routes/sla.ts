@@ -80,9 +80,7 @@ async function computeStatus(collection: string, item: string) {
 
   // instance.current_state is the state's uuid; rules are keyed by the state
   // KEY string — translate before matching or no rule ever matches.
-  const stateRow = await db('nivaro_workflow_states')
-    .where({ id: instance.current_state })
-    .first()
+  const stateRow = await db('nivaro_workflow_states').where({ id: instance.current_state }).first()
   const stateKey = stateRow?.key ? String(stateRow.key) : null
   if (!stateKey) {
     return { status: 'none' }
@@ -518,7 +516,12 @@ export async function slaRoutes(app: FastifyInstance) {
         currentCounts.unruled++
       }
       if (current !== proposed && flips.length < 50)
-        flips.push({ collection: inst.collection, item: String(inst.item), from: current, to: proposed })
+        flips.push({
+          collection: inst.collection,
+          item: String(inst.item),
+          from: current,
+          to: proposed
+        })
     }
     return reply.send({
       data: { total: instances.length, current: currentCounts, proposed: proposedCounts, flips }
@@ -773,7 +776,8 @@ export async function slaRoutes(app: FastifyInstance) {
     const b = req.body as { collection?: string; item?: string; note?: string }
     const collection = String(b.collection ?? '')
     const item = String(b.item ?? '')
-    if (!collection || !item) return reply.code(400).send({ error: 'collection and item are required' })
+    if (!collection || !item)
+      return reply.code(400).send({ error: 'collection and item are required' })
     // Acking silences the escalation ladder — only someone who can actually
     // SEE the record may do it. readOne is the full gate (RBAC, row filters,
     // user scopes, tree permissions), so a record the caller can't open can't
@@ -813,6 +817,37 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
     return { data: { acked: true } }
+  })
+
+  // GET /sla/line-aging?collection=&field=&parent_id= — the grid's aging
+  // marker: which child rows still lack the configured field and whether
+  // the record's clock (state entry / instance start) is past the threshold.
+  // The config is read server-side from the grid's own options so a client
+  // cannot invent a threshold; OFF unless line_sla.enabled.
+  app.get('/line-aging', { preHandler: requireAuth }, async (req, reply) => {
+    const q = req.query as { collection?: string; field?: string; parent_id?: string }
+    if (!q.collection || !q.field || !q.parent_id) {
+      return reply.code(400).send({ error: 'collection, field and parent_id are required' })
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(q.collection) || !/^[A-Za-z0-9_]+$/.test(q.field)) {
+      return reply.code(400).send({ error: 'Invalid collection or field' })
+    }
+    const { enabledLineSlaGrids, lineAgingFor } = await import('../services/line-sla.js')
+    const grid = (await enabledLineSlaGrids()).find(
+      (g) => g.parentCollection === q.collection && g.aliasField === q.field
+    )
+    if (!grid) return reply.send({ data: null })
+    if (!(await can(req.user!, 'read', grid.childCollection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const aging = await lineAgingFor(grid, String(q.parent_id))
+    return reply.send({
+      data: {
+        ...aging,
+        threshold_days: grid.config.days,
+        label: grid.config.label ?? grid.config.field
+      }
+    })
   })
 
   app.get('/status/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {

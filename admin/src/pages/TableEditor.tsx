@@ -12066,6 +12066,7 @@ function FieldSettingsPopover({
   const [catalogModeLocal, setCatalogModeLocal] = useState<string>('')
   const [rowMatchPanelLocal, setRowMatchPanelLocal] = useState<string>('')
   const [headerSummaryLocal, setHeaderSummaryLocal] = useState<string>('')
+  const [lineSlaLocal, setLineSlaLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -12485,6 +12486,7 @@ function FieldSettingsPopover({
         setHeaderSummaryLocal(
           opts.header_summary ? JSON.stringify(opts.header_summary, null, 2) : ''
         )
+        setLineSlaLocal(opts.line_sla ? JSON.stringify(opts.line_sla, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -12652,6 +12654,16 @@ function FieldSettingsPopover({
                             : { header_summary: undefined }
                         } catch {
                           return { header_summary: undefined }
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = lineSlaLocal.trim() ? JSON.parse(lineSlaLocal) : null
+                          return parsed?.field && Number.isFinite(Number(parsed?.days))
+                            ? { line_sla: parsed }
+                            : { line_sla: undefined }
+                        } catch {
+                          return { line_sla: undefined }
                         }
                       })()
                     })
@@ -13822,6 +13834,30 @@ function FieldSettingsPopover({
                       A number over this grid's rows shown in the record header — the formula runs
                       per row on the server (expr-eval, {'`item.<column>`'}), summed where positive.
                       Clicking the chip opens the first contributing row. Empty = no chip.
+                    </p>
+                  </div>
+                )}
+
+                {/* Line-level SLA (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>
+                      Line SLA (JSON) — off by default
+                    </Label>
+                    <Textarea
+                      value={lineSlaLocal}
+                      onChange={(e) => setLineSlaLocal(e.target.value)}
+                      placeholder={
+                        '{\n  "enabled": false,\n  "field": "requisition_id",\n  "days": 5,\n  "after_state": "oracle_submission",\n  "label": "REQ ID"\n}'
+                      }
+                      rows={6}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Rows still missing the field N calendar days after the record entered
+                      after_state (or since its workflow started) get an amber clock, the
+                      record&apos;s owners an in-app notification once a day, and a line in the
+                      daily digest. Nothing runs until enabled is true.
                     </p>
                   </div>
                 )}
@@ -19509,6 +19545,7 @@ function FieldGroupsTab({
     'catalog_mode',
     'row_match_panel',
     'header_summary',
+    'line_sla',
     'picker_facets',
     'option_sort',
     'option_filter',

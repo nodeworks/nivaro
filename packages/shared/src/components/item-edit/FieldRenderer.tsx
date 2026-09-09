@@ -876,6 +876,7 @@ export function FieldRenderer({
             rowBulkActions={rowBulkActions}
             uploadTemplate={uploadTemplate}
             rowMatchPanel={rowMatchPanel}
+            lineSla={(opts.line_sla ?? null) as { enabled?: boolean; field?: string } | null}
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
             parentFieldKey={field.field}
