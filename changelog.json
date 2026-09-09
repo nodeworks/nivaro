@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-09T19:44:39.726Z",
+  "generated_at": "2026-09-09T19:53:54.746Z",
   "releases": [
+    {
+      "version": "0.1.239",
+      "tag": "v0.1.239",
+      "date": "2026-09-09T15:53:48-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "row-rules",
+              "text": "an empty trigger FK no longer fires related-field rules; sweep reports missing inputs",
+              "hash": "09a3e184"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.238",
       "tag": "v0.1.238",
-      "date": "2026-09-09T15:44:32-04:00",
+      "date": "2026-09-09T15:44:39-04:00",
       "sections": [
         {
           "label": "Added",
