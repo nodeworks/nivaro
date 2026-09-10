@@ -347,6 +347,7 @@
           <a class="docs-nav-item" data-section="picker-filter" href="#picker-filter">Relation Picker Filter</a>
           <a class="docs-nav-item" data-section="picker-exclusions" href="#picker-exclusions">Record Picker Exclusions</a>
           <a class="docs-nav-item" data-section="content-ops-validation" href="#content-ops-validation">Validation Rules</a>
+          <a class="docs-nav-item" data-section="content-ops-change-reasons" href="#content-ops-change-reasons">Change Reasons</a>
           <a class="docs-nav-item" data-section="content-ops-defaults" href="#content-ops-defaults">Computed Defaults</a>
           <a class="docs-nav-item" data-section="content-ops-cross-record-defaults" href="#content-ops-cross-record-defaults">Cross-Record Defaults</a>
           <a class="docs-nav-item" data-section="content-ops-remote-options" href="#content-ops-remote-options">Remote Option Sources</a>
@@ -9819,6 +9820,29 @@ Authorization: Bearer &lt;token&gt;
   ]
 }</code></pre>
           <!-- /SYNC:content-ops-validation -->
+        </div>
+
+        <div class="doc-section" id="s-content-ops-change-reasons" data-toc='[{"id":"content-ops-change-reasons","label":"Change Reasons"}]'>
+          <!-- SYNC:content-ops-change-reasons -->
+          <h1 class="doc-h1" id="content-ops-change-reasons">Change Reasons</h1>
+          <p class="doc-p">A collection can require a short justification whenever certain fields change (a forecast's months, a budget figure). The requirement is <code class="doc-code">nivaro_collections.change_reason_config</code> (Table Editor → Settings → Change reason) and is enforced in the items service: a write that changes a listed field without a <code class="doc-code">_change_reason</code> is refused with <code class="doc-code">422 CHANGE_REASON_REQUIRED</code>, and the reason a client then supplies is stripped from the payload and stored on the activity row, so it shows in the revision history and on the record's Notes.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">fields</code></td><td>Fields whose change demands a reason (judged on the caller's own payload — machine-derived writes never prompt).</td></tr>
+              <tr><td><code class="doc-code">reasons</code></td><td>Preset reasons offered as a pick list.</td></tr>
+              <tr><td><code class="doc-code">allow_free_text</code></td><td>Whether a typed reason is accepted (default true).</td></tr>
+              <tr><td><code class="doc-code">context_fields</code></td><td>Identity fields echoed into the challenge so the prompt names WHICH record: <code class="doc-code">["year"]</code> on forecasts makes the dialog read "You changed January for Year 2026".</td></tr>
+              <tr><td><code class="doc-code">on_create</code></td><td>Also demand a reason when a NEW record arrives with any flagged field filled — a new forecast year on an existing workflow prompts like an edited month.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">The shared <code class="doc-code">ChangeReasonDialog</code> handles the 422 everywhere records are edited — the record form, inline grids (edits and new rows), and headless apps built on @nivaro/react — and retries the same write with the reason attached. Natural-key upserts (a create that matched an existing row) supply their own stated reason instead of prompting, since the caller could not know it was editing.</p>
+          <pre class="doc-pre"><code>{
+  "fields": ["january", "february", "…", "december"],
+  "reasons": ["Material lead time shifted", "Vendor or contractor delay", "Correcting a data entry error"],
+  "allow_free_text": true,
+  "context_fields": ["year"],
+  "on_create": true
+}</code></pre>
+          <!-- /SYNC:content-ops-change-reasons -->
         </div>
 
         <div class="doc-section" id="s-content-ops-defaults" data-toc='[{"id":"content-ops-defaults","label":"Computed Default Values"}]'>

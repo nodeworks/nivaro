@@ -163,6 +163,13 @@ export interface ChangeReasonConfig {
   fields: string[]
   reasons?: string[]
   allow_free_text?: boolean
+  /** Identity fields echoed back in the challenge so the prompt can say
+   *  WHICH record is changing ("Year 2026" for a forecast whose months are
+   *  the flagged fields). Read from the stored row (or the payload on create). */
+  context_fields?: string[]
+  /** Also demand a reason on CREATE when any flagged field arrives non-empty
+   *  — a new forecast year is as much a forecast change as an edited month. */
+  on_create?: boolean
 }
 
 export function parseChangeReasonConfig(raw: unknown): ChangeReasonConfig | null {
@@ -173,7 +180,11 @@ export function parseChangeReasonConfig(raw: unknown): ChangeReasonConfig | null
     return {
       fields: cfg.fields.map(String),
       reasons: Array.isArray(cfg.reasons) ? cfg.reasons.map(String).filter(Boolean) : [],
-      allow_free_text: cfg.allow_free_text !== false
+      allow_free_text: cfg.allow_free_text !== false,
+      context_fields: Array.isArray(cfg.context_fields)
+        ? cfg.context_fields.map(String).filter((f: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(f))
+        : [],
+      on_create: cfg.on_create === true
     }
   } catch {
     return null
@@ -183,14 +194,26 @@ export function parseChangeReasonConfig(raw: unknown): ChangeReasonConfig | null
 export class ChangeReasonRequiredError extends Error {
   statusCode = 422
   code = 'CHANGE_REASON_REQUIRED'
-  violations: { fields_changed: string[]; reasons: string[]; allow_free_text: boolean }
-  constructor(fieldsChanged: string[], cfg: ChangeReasonConfig) {
+  violations: {
+    fields_changed: string[]
+    reasons: string[]
+    allow_free_text: boolean
+    context: Array<{ field: string; value: unknown }>
+  }
+  constructor(
+    fieldsChanged: string[],
+    cfg: ChangeReasonConfig,
+    row?: Record<string, unknown> | null
+  ) {
     super(`A reason is required when changing: ${fieldsChanged.join(', ')}`)
     this.name = 'ChangeReasonRequiredError'
     this.violations = {
       fields_changed: fieldsChanged,
       reasons: cfg.reasons ?? [],
-      allow_free_text: cfg.allow_free_text !== false
+      allow_free_text: cfg.allow_free_text !== false,
+      context: (cfg.context_fields ?? [])
+        .filter((f) => row && row[f] != null && row[f] !== '')
+        .map((f) => ({ field: f, value: row?.[f] }))
     }
   }
 }
@@ -2469,6 +2492,22 @@ export async function createOne(
     return updateOne(user, collection, upsertTarget, patch, req, workspaceId)
   }
 
+  // Change reason on CREATE (config on_create): judged on the caller's raw
+  // payload, same as the update path — only fields the caller wrote count.
+  const crCreateConfig = parseChangeReasonConfig(
+    (col as unknown as { change_reason_config?: string | null }).change_reason_config
+  )
+  if (crCreateConfig?.on_create && !createReason) {
+    const flagged = crCreateConfig.fields.filter(
+      (f) =>
+        callerFields.has(f) &&
+        (data as Record<string, unknown>)[f] != null &&
+        (data as Record<string, unknown>)[f] !== ''
+    )
+    if (flagged.length > 0)
+      throw new ChangeReasonRequiredError(flagged, crCreateConfig, data as Record<string, unknown>)
+  }
+
   // Workspace item quota — checked against the active workspace (default when unscoped)
   const quotaWorkspace = workspaceId ?? (await fetchDefaultWorkspaceId())
   const quota = await checkQuota(quotaWorkspace, 'items')
@@ -2710,7 +2749,8 @@ export async function updateOne(
         f in (data as Record<string, unknown>) &&
         String((data as Record<string, unknown>)[f] ?? '') !== String(previousData[f] ?? '')
     )
-    if (flaggedChanged.length > 0) throw new ChangeReasonRequiredError(flaggedChanged, crConfig)
+    if (flaggedChanged.length > 0)
+      throw new ChangeReasonRequiredError(flaggedChanged, crConfig, previousData)
   }
 
   // before_update rules — may mutate the payload (e.g. set_field)

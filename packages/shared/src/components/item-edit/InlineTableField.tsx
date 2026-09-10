@@ -3950,12 +3950,37 @@ export function InlineTableField({
             ([k]) => !k.startsWith('__m2m_') && !k.startsWith('__o2m_')
           )
         )
-        const newRowRes = await client.request<{ data: { id: unknown } }>(
-          post(`/items/${relatedCollection}${pCtx}`, {
-            ...withNextOrder(cleanDraft),
-            [manyField]: parentId
-          })
-        )
+        const createBody = { ...withNextOrder(cleanDraft), [manyField]: parentId }
+        let newRowRes: { data: { id: unknown } } | null = null
+        try {
+          newRowRes = await client.request<{ data: { id: unknown } }>(
+            post(`/items/${relatedCollection}${pCtx}`, createBody)
+          )
+        } catch (err) {
+          // A create can demand a change reason too (a new forecast year):
+          // prompt, then retry the same create with the reason attached.
+          const challenge = changeReasonChallenge(err)
+          if (challenge) {
+            setCrChallenge({
+              challenge,
+              retry: async (reason: string) => {
+                await client.request(
+                  post(`/items/${relatedCollection}${pCtx}`, {
+                    ...createBody,
+                    _change_reason: reason
+                  })
+                )
+                qc.invalidateQueries({
+                  queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+                })
+                clearIfStillEditing()
+              }
+            })
+            setSaving(false)
+            return
+          }
+          throw err
+        }
         const newRowId = newRowRes?.data?.id
         if (newRowId != null && m2mEntries.length) {
           await Promise.all(

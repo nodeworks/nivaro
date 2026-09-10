@@ -9,6 +9,8 @@ export interface ChangeReasonChallenge {
   fields_changed: string[]
   reasons: string[]
   allow_free_text: boolean
+  /** Identity of the record being changed (config context_fields) — "Year 2026". */
+  context?: Array<{ field: string; value: unknown }>
 }
 
 /**
@@ -18,7 +20,11 @@ export interface ChangeReasonChallenge {
  */
 export function changeReasonChallenge(err: unknown): ChangeReasonChallenge | null {
   const e = err as {
-    response?: { data?: { code?: string; violations?: ChangeReasonChallenge }; code?: string; violations?: ChangeReasonChallenge }
+    response?: {
+      data?: { code?: string; violations?: ChangeReasonChallenge }
+      code?: string
+      violations?: ChangeReasonChallenge
+    }
   }
   const body = e?.response?.data ?? e?.response
   if (body?.code === 'CHANGE_REASON_REQUIRED' && body.violations) return body.violations
@@ -58,7 +64,12 @@ export function ChangeReasonDialog({
   const canSubmit = reason.length > 0
 
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) onCancel() }}>
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (!o) onCancel()
+      }}
+    >
       <DialogContent className='max-w-md space-y-3 p-5'>
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
@@ -66,9 +77,35 @@ export function ChangeReasonDialog({
             Reason for change
           </DialogTitle>
         </DialogHeader>
+        {(challenge.context?.length ?? 0) > 0 && (
+          <div className='flex flex-wrap gap-1.5' data-nvr-change-context>
+            {challenge.context?.map((c) => (
+              <span
+                key={c.field}
+                className='rounded bg-slate-100 px-2 py-0.5 text-[11.5px] font-medium text-slate-700 dark:bg-muted dark:text-foreground'
+              >
+                {fieldLabel ? fieldLabel(c.field) : titleCase(c.field)} {String(c.value)}
+              </span>
+            ))}
+          </div>
+        )}
         <p className='text-[12.5px] text-slate-600 dark:text-slate-300'>
-          You changed {labels.length === 1 ? <b>{labels[0]}</b> : <b>{labels.join(', ')}</b>} — a short
-          justification is required and will be recorded in the change history.
+          You changed {labels.length === 1 ? <b>{labels[0]}</b> : <b>{labels.join(', ')}</b>}
+          {(challenge.context?.length ?? 0) > 0 && (
+            <>
+              {' '}
+              for{' '}
+              <b>
+                {challenge.context
+                  ?.map(
+                    (c) =>
+                      `${fieldLabel ? fieldLabel(c.field) : titleCase(c.field)} ${String(c.value)}`
+                  )
+                  .join(', ')}
+              </b>
+            </>
+          )}{' '}
+          — a short justification is required and will be recorded in the change history.
         </p>
         {challenge.reasons.length > 0 && (
           <div className='flex flex-col gap-1.5' data-nvr-change-reasons>
@@ -93,7 +130,11 @@ export function ChangeReasonDialog({
             value={freeText}
             onChange={(e) => setFreeText(e.target.value)}
             rows={2}
-            placeholder={challenge.reasons.length > 0 ? 'Additional detail (optional unless no reason selected)…' : 'Why is this changing?'}
+            placeholder={
+              challenge.reasons.length > 0
+                ? 'Additional detail (optional unless no reason selected)…'
+                : 'Why is this changing?'
+            }
             className='w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-[12.5px] text-slate-800 outline-none focus:border-nvr-cyan dark:border-border dark:bg-card dark:text-slate-100'
           />
         )}

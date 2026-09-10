@@ -1893,3 +1893,40 @@ export const contentOpsGridPresets: DocSection = {
     }
   ]
 }
+
+export const contentOpsChangeReasons: DocSection = {
+  id: 'content-ops-change-reasons',
+  label: 'Change Reasons',
+  content: [
+    { type: 'h1', id: 'content-ops-change-reasons', text: 'Change Reasons' },
+    {
+      type: 'p',
+      text: 'A collection can require a short justification whenever certain fields change (a forecast\'s months, a budget figure). The requirement is `nivaro_collections.change_reason_config` (Table Editor → Settings → Change reason) and is enforced in the items service: a write that changes a listed field without a `_change_reason` is refused with `422 CHANGE_REASON_REQUIRED`, and the reason a client then supplies is stripped from the payload and stored on the activity row, so it shows in the revision history and on the record\'s Notes.'
+    },
+    {
+      type: 'table',
+      head: ['Key', 'Meaning'],
+      rows: [
+        ['`fields`', 'Fields whose change demands a reason (judged on the caller\'s own payload — machine-derived writes never prompt).'],
+        ['`reasons`', 'Preset reasons offered as a pick list.'],
+        ['`allow_free_text`', 'Whether a typed reason is accepted (default true).'],
+        ['`context_fields`', 'Identity fields echoed into the challenge so the prompt names WHICH record: `["year"]` on forecasts makes the dialog read "You changed January for Year 2026".'],
+        ['`on_create`', 'Also demand a reason when a NEW record arrives with any flagged field filled — a new forecast year on an existing workflow prompts like an edited month.']
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The shared `ChangeReasonDialog` handles the 422 everywhere records are edited — the record form, inline grids (edits and new rows), and headless apps built on @nivaro/react — and retries the same write with the reason attached. Natural-key upserts (a create that matched an existing row) supply their own stated reason instead of prompting, since the caller could not know it was editing.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "fields": ["january", "february", "…", "december"],
+  "reasons": ["Material lead time shifted", "Vendor or contractor delay", "Correcting a data entry error"],
+  "allow_free_text": true,
+  "context_fields": ["year"],
+  "on_create": true
+}`
+    }
+  ]
+}

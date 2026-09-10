@@ -17,9 +17,6 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import { HeaderFreshness } from './item-edit/HeaderFreshness'
-import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
-import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import {
   type ReactNode,
   useCallback,
@@ -48,11 +45,11 @@ import { setFiscalStartMonth } from '../lib/fiscal'
 import { extSlotKey } from '../lib/layout-slots'
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
+import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
+import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
-import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
-import { ImportColumnChips } from './import/ImportColumnChips'
 import {
   AddendumFieldContext,
   type AddendumFieldMap,
@@ -76,6 +73,9 @@ import {
   OwnersInlineCompact,
   StripFieldValue
 } from './item-edit/GroupSection'
+import { HeaderFreshness } from './item-edit/HeaderFreshness'
+import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
+import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderTools } from './item-edit/HeaderTools'
 import {
   applyDisplayTemplate,
@@ -5504,10 +5504,25 @@ export function ItemEditForm({
               let res: { data: { id: unknown } } | null = null
               try {
                 res = await client.request<{ data: { id: unknown } }>(
-                  post(`/items/${rc}`, { ...cleanData, [mf]: savedId })
+                  post(`/items/${rc}`, {
+                    ...cleanData,
+                    [mf]: savedId,
+                    // The record's change reason covers the lines it stages
+                    // (a new forecast year on an existing workflow).
+                    ...(changeReasonRef.current ? { _change_reason: changeReasonRef.current } : {})
+                  })
                 )
               } catch (err) {
-                failedLines.push({ label: lineLabel(data, rowIdx), error: errMsg(err) })
+                const challenge = changeReasonChallenge(err)
+                if (challenge) {
+                  flushChallenge = challenge
+                  failedLines.push({
+                    label: lineLabel(data, rowIdx),
+                    error: 'Waiting for a change reason'
+                  })
+                } else {
+                  failedLines.push({ label: lineLabel(data, rowIdx), error: errMsg(err) })
+                }
                 remaining.push(data)
                 return
               }
