@@ -390,7 +390,9 @@ export async function runAnomalyChecks(
         })
         .returning('id')) as Array<{ id: number } | number>
       const logId =
-        typeof inserted[0] === 'object' ? (inserted[0] as { id: number }).id : (inserted[0] as number)
+        typeof inserted[0] === 'object'
+          ? (inserted[0] as { id: number }).id
+          : (inserted[0] as number)
       results.detected++
 
       const subject = `Anomaly Detected: ${rule.name}`
@@ -404,6 +406,7 @@ export async function runAnomalyChecks(
       if (rule.delivery_in_app && rule.created_by) {
         await notifyUser(app, rule.created_by, {
           subject,
+          category: 'anomaly',
           message,
           collection: 'nivaro_anomaly_log',
           item: String(logId)
@@ -413,6 +416,7 @@ export async function runAnomalyChecks(
         await sendMail({
           to: rule.creator_email,
           subject,
+          category: 'anomaly',
           template: 'alert_notification',
           data: {
             rule_name: rule.name,

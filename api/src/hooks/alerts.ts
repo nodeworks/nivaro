@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
-import { sendRawMail } from '../services/mail.js'
 import { type AnomalyResult, evaluateAnomalyAlert } from '../services/anomaly.js'
+import { sendRawMail } from '../services/mail.js'
 import { hooks } from './registry.js'
 
 let _app: FastifyInstance | null = null
@@ -113,11 +113,13 @@ async function notifyAlertSubscribers(
       const esc = (v: unknown) =>
         String(v ?? '').replace(
           /[&<>"']/g,
-          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
+          (c) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
         )
       void sendRawMail({
         to: sub.email as string,
         subject,
+        category: 'alerts',
         html: `<p>${esc(message)}</p><p style="color:#64748b;font-size:12px">Alert definition: ${esc(def.name)} · ${esc(def.collection)}</p>`,
         collection: def.collection,
         item

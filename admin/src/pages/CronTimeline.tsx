@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { describeCron } from '@/lib/cron-text'
 import { cn } from '@/lib/utils'
 
 // ─── Cron overlap timeline (#654) ────────────────────────────────────────────
@@ -246,7 +247,7 @@ export function CronTimelinePage() {
                   <div className='flex w-[240px] shrink-0 items-center gap-1.5 overflow-hidden px-3 py-2'>
                     <code
                       className='truncate font-mono text-[11.5px] text-slate-700 dark:text-slate-200'
-                      title={`${job.id} — ${job.expression}${job.next_run ? ` · next ${new Date(job.next_run).toLocaleString()}` : ''}`}
+                      title={`${job.id} — ${job.expression}${describeCron(job.expression) ? ` (${describeCron(job.expression)})` : ''}${job.next_run ? ` · next ${new Date(job.next_run).toLocaleString()}` : ''}`}
                     >
                       {job.id}
                     </code>
@@ -263,7 +264,10 @@ export function CronTimelinePage() {
                       </Badge>
                     )}
                     {job.paused && (
-                      <Badge variant='outline' className='h-4 shrink-0 px-1 text-[9px] text-slate-400'>
+                      <Badge
+                        variant='outline'
+                        className='h-4 shrink-0 px-1 text-[9px] text-slate-400'
+                      >
                         paused
                       </Badge>
                     )}

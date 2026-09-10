@@ -3,6 +3,7 @@ import { Activity, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { describeCron } from '@/lib/cron-text'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 
@@ -332,6 +333,11 @@ export default function BackgroundJobs() {
                       {preview.ok ? `next: ${preview.text}` : preview.text}
                     </span>
                   )}
+                  {describeCron(editExpr) && (
+                    <span className='font-sans text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+                      {describeCron(editExpr)}
+                    </span>
+                  )}
                   {c.default_expression && c.default_expression !== editExpr.trim() && (
                     <span className='font-sans text-[10.5px] text-slate-400'>
                       default {c.default_expression}
@@ -345,8 +351,15 @@ export default function BackgroundJobs() {
                   title='Edit schedule — an override survives restarts and binds even when an extension registers the job'
                   className='group/sched inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-slate-100 dark:hover:bg-muted'
                 >
-                  <span className={c.overridden ? 'text-slate-700 dark:text-foreground' : ''}>
-                    {c.expression}
+                  <span className='flex flex-col items-start leading-tight'>
+                    <span className={c.overridden ? 'text-slate-700 dark:text-foreground' : ''}>
+                      {c.expression}
+                    </span>
+                    {describeCron(c.expression) && (
+                      <span className='font-sans text-[10.5px] font-normal text-slate-500 dark:text-muted-foreground'>
+                        {describeCron(c.expression)}
+                      </span>
+                    )}
                   </span>
                   {c.overridden && (
                     <span

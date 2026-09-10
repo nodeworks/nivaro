@@ -95,6 +95,11 @@ export interface NotifyUserOptions {
   sender?: string | null
   /** Defaults: inapp true, email false, sms false. */
   channels?: { inapp?: boolean; email?: boolean; sms?: boolean }
+  /** Explicit notification-rules category. Senders whose subjects carry no
+   *  recognisable keyword (scheduled reports, view digests, flow ops) set it so
+   *  the recipient's matrix row for that category applies; otherwise the
+   *  category is sniffed from the subject. */
+  category?: NotifyCategory
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
 }
@@ -118,6 +123,7 @@ export type NotifyCategory =
   | 'watch'
   | 'alerts'
   | 'anomaly'
+  | 'reports'
   | 'system'
   | 'other'
 
@@ -128,6 +134,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'watch',
   'alerts',
   'anomaly',
+  'reports',
   'system',
   'other'
 ]
@@ -139,6 +146,7 @@ export function classifyNotification(subject: string): NotifyCategory {
   // the keyword sniffing below gets a look.
   if (s.startsWith('anomaly')) return 'anomaly'
   if (s.startsWith('alert') || s.startsWith('report alert')) return 'alerts'
+  if (s.includes('report') || s.startsWith('view "')) return 'reports'
   if (s.includes('mention')) return 'mentions'
   if (s.startsWith('sla') || s.includes('escalation') || s.includes('breach')) return 'sla'
   if (s.includes('watch') || (s.includes('field') && s.includes('changed'))) return 'watch'
@@ -274,7 +282,7 @@ export async function notifyUser(
     }
   }
 
-  const category = classifyNotification(opts.subject)
+  const category = opts.category ?? classifyNotification(opts.subject)
   const prefs = await getNotifyPrefs(userId)
   const matrixRow = prefs?.matrix?.[category]
   const critical = CRITICAL_SUBJECTS.test(opts.subject)

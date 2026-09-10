@@ -2,10 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { resolveWidgetDataFull } from './report-studio.js'
 import { canSeeRoom } from './chat.js'
-import { sendTeamsNotification } from './microsoft.js'
 import { sendRawMail } from './mail.js'
+import { sendTeamsNotification } from './microsoft.js'
 import { notifyUser } from './notification-channels.js'
 import {
   type DateRange,
@@ -13,6 +12,7 @@ import {
   parseJson,
   renderReportEmailHtml,
   resolveWidgetData,
+  resolveWidgetDataFull,
   type WidgetData,
   type WidgetQueryConfig,
   type WidgetRow
@@ -134,9 +134,9 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
     try {
       const creator = await loadUser(alert.created_by)
       if (!creator) continue
-      const widget = (await db('nivaro_report_widgets')
-        .where({ id: alert.widget })
-        .first()) as WidgetRow | undefined
+      const widget = (await db('nivaro_report_widgets').where({ id: alert.widget }).first()) as
+        | WidgetRow
+        | undefined
       if (!widget) continue
 
       const report = await db('nivaro_report_defs').where({ id: alert.report }).first()
@@ -194,6 +194,7 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
           await sendRawMail({
             to: creator.email,
             subject: `Report alert: ${alert.name}`,
+            category: 'alerts',
             html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
               <h2 style="color:#172940;font-size:16px">${esc(alert.name)}</h2>
               <p style="font-size:13px;color:#111827">"${esc(widget.title)}" crossed your threshold.</p>
@@ -276,7 +277,9 @@ export async function runReportSubscriptions(
 
       if (sub.delivery_email && user.email) {
         const html = renderReportEmailHtml(report.name, resolved, config.ADMIN_URL, report.id)
-        let attachments: Array<{ filename: string; content: Buffer; contentType?: string }> | undefined
+        let attachments:
+          | Array<{ filename: string; content: Buffer; contentType?: string }>
+          | undefined
         if (sub.attach_pdf) {
           try {
             const { htmlToPdf } = await import('./pdf-layout.js')
@@ -285,7 +288,9 @@ export async function runReportSubscriptions(
             )
             attachments = [
               {
-                filename: `${String(report.name).replace(/[^\w-]+/g, '_').slice(0, 60)}.pdf`,
+                filename: `${String(report.name)
+                  .replace(/[^\w-]+/g, '_')
+                  .slice(0, 60)}.pdf`,
                 content: pdf,
                 contentType: 'application/pdf'
               }
@@ -297,6 +302,7 @@ export async function runReportSubscriptions(
         await sendRawMail({
           to: user.email,
           subject: `${report.name} — your ${cadence} report`,
+          category: 'reports',
           html,
           ...(attachments ? { attachments } : {})
         })
@@ -304,6 +310,7 @@ export async function runReportSubscriptions(
       if (sub.delivery_inapp) {
         await notifyUser(app, user.id, {
           subject: `${report.name} is ready`,
+          category: 'reports',
           message: `Your ${cadence} report digest is ready to view.`,
           collection: 'nivaro_report_defs',
           item: String(report.id),
@@ -349,7 +356,12 @@ export async function runReportSubscriptions(
 /** Compact per-widget summary lines posted into a chat room on cadence. */
 async function deliverReportToRoom(
   app: FastifyInstance,
-  user: { id: string; first_name?: string | null; last_name?: string | null; email?: string | null },
+  user: {
+    id: string
+    first_name?: string | null
+    last_name?: string | null
+    email?: string | null
+  },
   room: string,
   reportName: string,
   reportId: string,

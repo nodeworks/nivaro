@@ -5,6 +5,7 @@ import { assertSafeUrl } from '../lib/ssrf.js'
 import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
+import { NOTIFY_CATEGORIES } from './notification-channels.js'
 
 interface FlowOperation {
   id: string
@@ -230,10 +231,14 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
     // Record context (present on event / workflow-transition flow payloads)
     // rides into the mail log so the record's Mail tab sees flow sends.
     const dataRec = data as Record<string, unknown>
+    // Optional `category` op option pins the recipient's notification-rules
+    // row (reports / workflow / alerts …) instead of sniffing the subject.
+    const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
     await sendRawMail({
       to,
       subject,
       html: body,
+      ...(category ? { category } : {}),
       collection: typeof dataRec.collection === 'string' ? dataRec.collection : undefined,
       item:
         dataRec.item != null

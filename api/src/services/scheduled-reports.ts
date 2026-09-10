@@ -81,17 +81,33 @@ async function renderCollectionReport(report: ScheduledReport): Promise<string> 
   const fields = parseArr<string>(report.fields).filter((f) => validCols.has(f))
   const cols = fields.length > 0 ? fields : [...validCols].slice(0, 8)
 
-  let q = db(collection).select(cols).limit(Math.min(500, report.row_limit || 100))
+  let q = db(collection)
+    .select(cols)
+    .limit(Math.min(500, report.row_limit || 100))
   for (const f of parseArr<{ field: string; op: string; value?: unknown }>(report.filters)) {
     if (!validCols.has(f.field)) continue
     switch (f.op) {
-      case 'eq': q = q.where(f.field, f.value as never); break
-      case 'neq': q = q.whereNot(f.field, f.value as never); break
-      case 'gt': q = q.where(f.field, '>', f.value as never); break
-      case 'lt': q = q.where(f.field, '<', f.value as never); break
-      case 'contains': q = q.where(f.field, 'like', `%${String(f.value)}%`); break
-      case 'null': q = q.whereNull(f.field); break
-      case 'nnull': q = q.whereNotNull(f.field); break
+      case 'eq':
+        q = q.where(f.field, f.value as never)
+        break
+      case 'neq':
+        q = q.whereNot(f.field, f.value as never)
+        break
+      case 'gt':
+        q = q.where(f.field, '>', f.value as never)
+        break
+      case 'lt':
+        q = q.where(f.field, '<', f.value as never)
+        break
+      case 'contains':
+        q = q.where(f.field, 'like', `%${String(f.value)}%`)
+        break
+      case 'null':
+        q = q.whereNull(f.field)
+        break
+      case 'nnull':
+        q = q.whereNotNull(f.field)
+        break
     }
   }
   const rows = (await q) as Array<Record<string, unknown>>
@@ -141,7 +157,6 @@ async function renderQueueReport(report: ScheduledReport, runAs: User): Promise<
   )
 }
 
-
 // ─── AI ops brief ─────────────────────────────────────────────────────────────
 
 /** Simple markdown → HTML for the brief body (headings, lists, bold, paras). */
@@ -151,18 +166,29 @@ function miniMarkdown(md: string): string {
   let inList = false
   for (const raw of lines) {
     const line = raw.trimEnd()
-    const inline = (t: string) =>
-      esc(t).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    const inline = (t: string) => esc(t).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     if (/^#{1,3} /.test(line)) {
-      if (inList) { out.push('</ul>'); inList = false }
+      if (inList) {
+        out.push('</ul>')
+        inList = false
+      }
       out.push(`<h2>${inline(line.replace(/^#{1,3} /, ''))}</h2>`)
     } else if (/^[-*] /.test(line)) {
-      if (!inList) { out.push('<ul>'); inList = true }
+      if (!inList) {
+        out.push('<ul>')
+        inList = true
+      }
       out.push(`<li>${inline(line.slice(2))}</li>`)
     } else if (line.trim() === '') {
-      if (inList) { out.push('</ul>'); inList = false }
+      if (inList) {
+        out.push('</ul>')
+        inList = false
+      }
     } else {
-      if (inList) { out.push('</ul>'); inList = false }
+      if (inList) {
+        out.push('</ul>')
+        inList = false
+      }
       out.push(`<p>${inline(line)}</p>`)
     }
   }
@@ -188,7 +214,15 @@ async function gatherOpsFacts(): Promise<Record<string, unknown>> {
     .join('nivaro_queues as q', 'q.id', 's.queue_id')
     .where('s.snapshot_date', '>=', twoWeeksAgo)
     .orderBy('s.snapshot_date', 'desc')
-    .select('q.name', 's.snapshot_date', 's.total', 's.unowned', 's.sla_warning', 's.sla_breached', 's.at_risk')
+    .select(
+      'q.name',
+      's.snapshot_date',
+      's.total',
+      's.unowned',
+      's.sla_warning',
+      's.sla_breached',
+      's.at_risk'
+    )
     .catch(() => [])) as Array<Record<string, unknown>>
   const latestByQueue = new Map<string, Record<string, unknown>>()
   const weekAgoByQueue = new Map<string, Record<string, unknown>>()
@@ -253,7 +287,10 @@ async function gatherOpsFacts(): Promise<Record<string, unknown>> {
 
   return {
     period: 'last 7 days',
-    workflow_transitions: { this_week: Number(thisWeek[0]?.n ?? 0), prior_week: Number(lastWeek[0]?.n ?? 0) },
+    workflow_transitions: {
+      this_week: Number(thisWeek[0]?.n ?? 0),
+      prior_week: Number(lastWeek[0]?.n ?? 0)
+    },
     queues,
     predictively_stuck_records: stuck,
     new_issues: Number((issuesRow as { n?: number })?.n ?? 0)
@@ -317,16 +354,19 @@ export async function runScheduledReport(
   await sendRawMail({
     to: recipients,
     subject: `${report.name} — ${stamp}`,
+    category: 'reports',
     html: `<p>Attached: <strong>${esc(report.name)}</strong>, generated ${new Date().toLocaleString('en-US')}.</p>`,
     attachments: [
       { filename: `${safeName}-${stamp}.pdf`, content: pdf, contentType: 'application/pdf' }
     ]
   })
 
-  await db('nivaro_scheduled_reports').where({ id: report.id }).update({
-    last_run_at: new Date(),
-    last_run_status: `sent to ${recipients.length} recipient(s)`,
-    updated_at: new Date()
-  })
+  await db('nivaro_scheduled_reports')
+    .where({ id: report.id })
+    .update({
+      last_run_at: new Date(),
+      last_run_status: `sent to ${recipients.length} recipient(s)`,
+      updated_at: new Date()
+    })
   return { sent: recipients.length }
 }

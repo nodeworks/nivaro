@@ -465,7 +465,7 @@ export const collabNotificationsCenter: DocSection = {
     { type: 'h3', text: 'Notification rules (per-category channels)' },
     {
       type: 'p',
-      text: 'Profile → Notification rules is one matrix over the notification categories (mentions, workflow & approvals, SLA & escalations, field watches, alerts, anomaly detections, system & digests, everything else) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel, and the one beside each category name lists what that category covers.'
+      text: 'Profile → Notification rules is one matrix over the notification categories (mentions, workflow & approvals, SLA & escalations, field watches, alerts, anomaly detections, reports, system & digests, everything else) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel, and the one beside each category name lists what that category covers.'
     },
     {
       type: 'ul',
@@ -473,7 +473,8 @@ export const collabNotificationsCenter: DocSection = {
         'Email per category is Individual email (sent as it happens, deferred only during your quiet hours), Daily summary (held and delivered once in the daily action summary), or No email (dropped — the in-app row still lands).',
         'The Daily action summary block on the same card sets the delivery hour (Eastern time), a compact layout, and a "send me a test summary now" button. Anyone with at least one category on Daily summary receives the digest.',
         'Critical subjects (SLA escalations, maintenance notices, failing monitors) always email immediately regardless of the matrix.',
-        'The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.'
+        'The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.',
+        'Every email leaves through the same sender, so cron-driven mail (scheduled reports, report and view digests, alert checks, anomaly sweeps, SLA escalations, coverage notices, flow mail ops) follows the same rules. Senders pass an explicit category; a flow mail op can set `category` in its options.'
       ]
     },
     {

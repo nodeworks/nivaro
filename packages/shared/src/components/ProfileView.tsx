@@ -281,6 +281,11 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
     help: 'Anomaly rules you created flag an outlier, spike, or duplicate pattern.'
   },
   {
+    key: 'reports',
+    label: 'Reports',
+    help: 'Scheduled report emails, Report Studio subscription digests, and saved-view change digests.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, and the daily/weekly digests. Maintenance and monitor failures always email immediately.'

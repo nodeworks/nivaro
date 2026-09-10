@@ -4,6 +4,7 @@ import { Liquid } from 'liquidjs'
 import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -296,7 +297,8 @@ async function applyDigestDeferral(
   recipients: string[],
   subject: string,
   htmlOrText: string,
-  skip?: boolean
+  skip?: boolean,
+  explicitCategory?: NotifyCategory
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -314,7 +316,7 @@ async function applyDigestDeferral(
     const { inQuietHours, classifyNotification, emailModeFor, isCriticalSubject } = await import(
       './notification-channels.js'
     )
-    const category = classifyNotification(subject)
+    const category = explicitCategory ?? classifyNotification(subject)
     const critical = isCriticalSubject(subject)
     for (const u of users) {
       let prefs: Record<string, unknown> | null = null
@@ -415,6 +417,8 @@ export interface MailOptions {
   text?: string
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
+  /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
+  category?: NotifyCategory
 }
 
 /** Outbound mail log (#71): every send ATTEMPT gets a row — sent, failed
@@ -505,7 +509,13 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     .filter(Boolean)
   const active = await dropInactiveRecipients(original)
   if (active.length === 0) return
-  const afterDigest = await applyDigestDeferral(active, opts.subject, html, opts.skipDigest)
+  const afterDigest = await applyDigestDeferral(
+    active,
+    opts.subject,
+    html,
+    opts.skipDigest,
+    opts.category
+  )
   if (afterDigest.length < active.length) {
     logMail(
       active.filter((a) => !afterDigest.includes(a)),
@@ -561,6 +571,8 @@ export async function sendRawMail(opts: {
   wrap?: boolean
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
+  /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
+  category?: NotifyCategory
   /** Record context (#261) — logged, powers the record communications view. */
   collection?: string | null
   item?: string | number | null
@@ -596,7 +608,13 @@ export async function sendRawMail(opts: {
     .filter(Boolean)
   const active2 = await dropInactiveRecipients(original)
   if (active2.length === 0) return
-  const afterDigest = await applyDigestDeferral(active2, opts.subject, opts.html, opts.skipDigest)
+  const afterDigest = await applyDigestDeferral(
+    active2,
+    opts.subject,
+    opts.html,
+    opts.skipDigest,
+    opts.category
+  )
   if (afterDigest.length < active2.length) {
     logMail(
       active2.filter((a) => !afterDigest.includes(a)),

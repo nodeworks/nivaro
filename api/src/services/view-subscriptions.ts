@@ -122,7 +122,6 @@ export interface ViewDigestEntry {
   prev_total: number
 }
 
-
 // Every interpolated value below is model data — the view NAME is typed by
 // whoever saved the view, and record labels render business fields. A view
 // named `<img onerror=…>` must arrive in the digest as text, not markup.
@@ -197,7 +196,9 @@ export async function runViewSubscriptionDigests(
     await db('nivaro_view_subscriptions')
       .where({ id: sub.id })
       .update({
-        last_ids: current.ids ? JSON.stringify(current.ids) : JSON.stringify({ count: current.total }),
+        last_ids: current.ids
+          ? JSON.stringify(current.ids)
+          : JSON.stringify({ count: current.total }),
         last_run_at: new Date()
       })
 
@@ -253,9 +254,7 @@ export async function runViewSubscriptionDigests(
 
   let notified = 0
   for (const [userId, entries] of perUser) {
-    const user = (await db<User>('nivaro_users').where({ id: userId }).first()) as
-      | User
-      | undefined
+    const user = (await db<User>('nivaro_users').where({ id: userId }).first()) as User | undefined
     if (!user?.email) continue
 
     const subject = `Your watched views: ${entries.reduce((n, e) => n + (e.count_only ? 0 : e.entered.length), 0) || 'changes'} new record(s)`
@@ -286,6 +285,7 @@ export async function runViewSubscriptionDigests(
     if (app) {
       for (const e of entries) {
         await notifyUser(app, userId, {
+          category: 'reports',
           subject: e.count_only
             ? `View "${e.view}": ${e.prev_total.toLocaleString()} → ${e.total.toLocaleString()} records`
             : `View "${e.view}": ${e.entered.length} new record(s)`,

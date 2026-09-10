@@ -1,5 +1,5 @@
-import { db } from '../db/index.js'
 import { config } from '../config.js'
+import { db } from '../db/index.js'
 
 /**
  * Delegation coverage helpers: #338 OOO conflict warnings, #414 delegation
@@ -71,7 +71,8 @@ export async function sendDelegateBriefing(userId: string, delegateId: string): 
     db('nivaro_users').where({ id: delegateId }).first('first_name', 'last_name', 'email')
   ])
   if (!delegate?.email) return
-  const myName = [me?.first_name, me?.last_name].filter(Boolean).join(' ') || me?.email || 'A colleague'
+  const myName =
+    [me?.first_name, me?.last_name].filter(Boolean).join(' ') || me?.email || 'A colleague'
   const count = await countOwnedApprovals(userId)
   const seats = (await db('nivaro_pipeline_owner_group_users as gu')
     .join('nivaro_pipeline_owner_groups as g', 'gu.group', 'g.id')
@@ -83,13 +84,12 @@ export async function sendDelegateBriefing(userId: string, delegateId: string): 
     template: string
     state: string
   }>
-  const seatList = seats
-    .map((x) => `<li>${x.template} — ${x.state}</li>`)
-    .join('')
+  const seatList = seats.map((x) => `<li>${x.template} — ${x.state}</li>`).join('')
   const { sendRawMail } = await import('./mail.js')
   await sendRawMail({
     to: delegate.email,
     subject: `You're covering for ${myName}`,
+    category: 'workflow',
     html: `<p><b>${myName}</b> is out of office and named you their delegate — their approvals now resolve to you.</p>
 <p>Roughly <b>${count}</b> open record(s) sit in steps they own.</p>
 ${seatList ? `<p>Approval steps they sit in:</p><ul>${seatList}</ul>` : ''}

@@ -209,6 +209,7 @@ export async function runDigests(frequency: 'daily' | 'weekly'): Promise<void> {
         await sendRawMail({
           to: user.email,
           subject,
+          category: 'system',
           html: buildDigestHtml(user.first_name, frequency, grouped, totalCount, now, queueSections)
         })
       }

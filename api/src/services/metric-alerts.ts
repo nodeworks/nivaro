@@ -189,7 +189,9 @@ export async function runMetricAlertChecks(
         })
         .returning('id')) as Array<{ id: number } | number>
       const logId =
-        typeof inserted[0] === 'object' ? (inserted[0] as { id: number }).id : (inserted[0] as number)
+        typeof inserted[0] === 'object'
+          ? (inserted[0] as { id: number }).id
+          : (inserted[0] as number)
       results.fired++
       await notifyImmediateSubscribers(app, rule, value, threshold, logId)
     } else if (!isFiring && openLog) {
@@ -214,7 +216,9 @@ const OPERATOR_LABELS: Record<string, string> = {
 
 function fmtValue(value: number, unit: string): string {
   const n = Number(value)
-  const num = Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  const num = Number.isInteger(n)
+    ? n.toLocaleString()
+    : n.toLocaleString(undefined, { maximumFractionDigits: 2 })
   if (unit === 'dollar') return `$${num}`
   if (unit === 'percent') return `${num}%`
   if (unit === 'days') return `${num}d`
@@ -250,6 +254,7 @@ async function notifyImmediateSubscribers(
     if (sub.delivery_in_app) {
       await notifyUser(app, sub.user, {
         subject,
+        category: 'alerts',
         message,
         collection: 'nivaro_metric_alert_log',
         item: String(logId)
@@ -259,6 +264,7 @@ async function notifyImmediateSubscribers(
       await sendMail({
         to: sub.email,
         subject,
+        category: 'alerts',
         template: 'alert_notification',
         data: {
           rule_name: rule.name,
@@ -269,7 +275,9 @@ async function notifyImmediateSubscribers(
         }
       }).catch((e) => console.warn('[metric-alerts] email failed:', (e as Error).message))
     }
-    await db('nivaro_metric_alert_subscriptions').where({ id: sub.id }).update({ last_notified: now })
+    await db('nivaro_metric_alert_subscriptions')
+      .where({ id: sub.id })
+      .update({ last_notified: now })
   }
 }
 
@@ -362,6 +370,7 @@ export async function runMetricAlertDigest(
     if (wantsInApp) {
       await notifyUser(app, userId, {
         subject,
+        category: 'alerts',
         message: lines.join('\n'),
         collection: 'nivaro_metric_alert_log',
         item: String(firing[0].id)
@@ -372,6 +381,7 @@ export async function runMetricAlertDigest(
       await sendMail({
         to: email,
         subject,
+        category: 'alerts',
         template: 'alert_digest',
         data: {
           frequency,
