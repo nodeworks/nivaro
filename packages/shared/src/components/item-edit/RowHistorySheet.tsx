@@ -351,6 +351,121 @@ export function RowHistorySheet({
     return out
   }, [versions, isTimeline])
 
+  // Alias (M2M / O2M) fields on this collection: a legacy snapshot stores
+  // them as arrays of junction objects ([{"region": 2}, …]) or ids. Each
+  // resolves to the TARGET collection's label through the junction's other
+  // leg, so history reads "BLT, HRT" instead of JSON.
+  const aliasRels = useMemo(() => {
+    const m = new Map<string, CMSRelation>()
+    for (const r of relations) {
+      if (r.one_collection === collection && r.one_field) m.set(r.one_field, r)
+    }
+    return m
+  }, [relations, collection])
+  /** Element → target id: `{region: 2}` (junction object keyed by the target
+   *  FK), `{id: 2}` (O2M child), or a bare id. */
+  const aliasElementId = (rel: CMSRelation, el: unknown): string | null => {
+    if (el == null) return null
+    if (typeof el !== 'object') return String(el)
+    const o = el as Record<string, unknown>
+    if (rel.junction_field && o[rel.junction_field] != null) return String(o[rel.junction_field])
+    const single = Object.keys(o).filter((k) => k !== 'id' && k !== rel.many_field)
+    if (single.length === 1 && o[single[0]] != null && typeof o[single[0]] !== 'object')
+      return String(o[single[0]])
+    if (o.id != null) return String(o.id)
+    return null
+  }
+  const aliasWanted = useMemo(() => {
+    const wanted = new Map<string, Set<string>>() // alias field → element ids
+    const consider = (field: string, v: unknown) => {
+      if (!Array.isArray(v)) return
+      const rel = aliasRels.get(field)
+      if (!rel) return
+      const set = wanted.get(field) ?? new Set<string>()
+      for (const el of v) {
+        const id = aliasElementId(rel, el)
+        if (id != null) set.add(id)
+      }
+      if (set.size) wanted.set(field, set)
+    }
+    for (const v of versions) {
+      for (const c of v.changes) {
+        consider(c.field, c.before)
+        consider(c.field, c.after)
+      }
+      for (const s of v.snapshot) consider(s.field, s.value)
+    }
+    return wanted
+  }, [versions, aliasRels])
+  const aliasKey = useMemo(
+    () =>
+      [...aliasWanted.entries()]
+        .map(([f, ids]) => `${f}:${[...ids].sort().join(',')}`)
+        .sort()
+        .join('|'),
+    [aliasWanted]
+  )
+  const { data: aliasLabels = {} } = useQuery<Record<string, Record<string, string>>>({
+    queryKey: ['row-history-alias-labels', collection, aliasKey],
+    queryFn: async () => {
+      const out: Record<string, Record<string, string>> = {}
+      const metaFor = (c: string) =>
+        qc.fetchQuery({
+          queryKey: ['collection-meta', c],
+          queryFn: () =>
+            client
+              .request<{
+                data: { display_template?: string | null; relations?: CMSRelation[] }
+              }>(get(`/collections/${c}`))
+              .then((r) => r.data),
+          staleTime: 10 * 60_000
+        })
+      await Promise.all(
+        [...aliasWanted.entries()].map(async ([field, ids]) => {
+          const rel = aliasRels.get(field)
+          if (!rel) return
+          let target: string | null = null
+          if (rel.junction_field && rel.many_collection) {
+            const jm = await metaFor(rel.many_collection).catch(() => null)
+            const leg = (jm?.relations ?? []).find(
+              (x) =>
+                x.many_collection === rel.many_collection && x.many_field === rel.junction_field
+            )
+            target = leg?.one_collection ?? null
+          } else {
+            target = rel.many_collection ?? null
+          }
+          if (!target) return
+          const tm = await metaFor(target).catch(() => null)
+          const tmpl = tm?.display_template ?? undefined
+          const tmplFields = tmpl ? [...tmpl.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]) : []
+          const fieldsParam = tmplFields.some((f) => f.includes('.'))
+            ? ['id', ...tmplFields].join(',')
+            : undefined
+          const rows = await client
+            .request<{ data: Record<string, unknown>[] }>(
+              get(`/items/${target}`, {
+                filter: JSON.stringify({ id: { _in: [...ids] } }),
+                limit: ids.size,
+                ...(fieldsParam ? { fields: fieldsParam } : {})
+              })
+            )
+            .then((r) => r.data ?? [])
+            .catch(() => [])
+          out[field] = {}
+          for (const row of rows) {
+            const label = tmpl ? applyDisplayTemplate(tmpl, row) : ''
+            out[field][String(row.id)] =
+              label || String(row.name ?? row.title ?? row.label ?? row.short_name ?? row.id ?? '')
+          }
+        })
+      )
+      return out
+    },
+    enabled: open && aliasWanted.size > 0,
+    staleTime: 5 * 60_000
+  })
+
   // Foreign keys that appear in history but not in the grid's current rows
   // (the task this line USED to have) — resolve their labels once per open.
   const missingLookups = useMemo(() => {
@@ -441,6 +556,27 @@ export function RowHistorySheet({
     }
     if (typeof v === 'boolean' || col?.type === 'boolean')
       return { text: v === true || v === 1 || v === '1' || v === 'true' ? 'Yes' : 'No' }
+    if (Array.isArray(v)) {
+      const rel = aliasRels.get(field)
+      if (rel) {
+        const names = v.map((el) => {
+          const id = aliasElementId(rel, el)
+          if (id == null) return null
+          return aliasLabels[field]?.[id] ?? `#${id}`
+        })
+        const clean = names.filter((n): n is string => !!n)
+        return clean.length ? { text: clean.join(', ') } : { text: '—' }
+      }
+      // A plain list (tags, repeater rows): readable, not JSON.
+      if (v.every((el) => el == null || typeof el !== 'object'))
+        return {
+          text:
+            v
+              .filter((el) => el != null)
+              .map(String)
+              .join(', ') || '—'
+        }
+    }
     if (typeof v === 'object') return { text: JSON.stringify(v), mono: true }
     const type = col?.type ?? ''
     if (opts.format === 'currency' && Number.isFinite(Number(v))) {

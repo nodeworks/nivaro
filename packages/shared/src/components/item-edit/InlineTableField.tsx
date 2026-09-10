@@ -5318,14 +5318,16 @@ export function InlineTableField({
       )}
 
       {applyOpen && applyValuesCols.length > 0 && (
-        <div className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2'>
-          <p className='text-[11px] font-medium text-amber-700'>
+        <div className='rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2 dark:border-amber-500/30 dark:bg-amber-400/10'>
+          <p className='text-[11px] font-medium text-amber-700 dark:text-amber-300'>
             Apply values to all {rows.length + pendingRows.length} rows
           </p>
           <div className='flex flex-wrap gap-2 items-end'>
             {applyValuesCols.map((c) => (
               <div key={c.field} className='min-w-[160px]'>
-                <p className='text-[10px] text-slate-500 mb-0.5'>{c.label ?? titleCase(c.field)}</p>
+                <p className='text-[10px] text-slate-500 mb-0.5 dark:text-slate-400'>
+                  {c.label ?? titleCase(c.field)}
+                </p>
                 <FieldRenderer
                   field={c}
                   value={applyValues[c.field] ?? null}
@@ -5557,18 +5559,23 @@ export function InlineTableField({
           <tbody>
             {/* Defaults row */}
             {defaultsOpen && (
-              <tr className='border-b border-[#00ceff]/20 bg-[#00ceff]/5'>
+              <tr className='border-b border-nvr-cyan/20 bg-nvr-cyan/5'>
                 {enableReorder && (rowOrderField || isNew || isPendingMode) && (
                   <td className='w-6' />
                 )}
                 {showLineNumbers && <td className='w-8' />}
                 {(isNew || isPendingMode) && (
-                  <td className='px-3 py-1 align-middle w-20'>
-                    <span className='text-[10px] font-medium text-[#009abe]'>Defaults</span>
+                  <td className='px-3 py-0.5 align-middle w-20'>
+                    <span className='text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                      Defaults
+                    </span>
                   </td>
                 )}
                 {defaultsCols.map((c) => (
-                  <td key={c.field} className='px-2 py-1 align-top'>
+                  <td
+                    key={c.field}
+                    className='px-2 py-0.5 align-middle text-[11px] [&_button]:h-7 [&_button]:min-h-0 [&_button]:text-[11px] [&_input]:h-7 [&_input]:text-[11px] [&_textarea]:min-h-[28px] [&_label]:hidden'
+                  >
                     <FieldRenderer
                       field={c}
                       value={defaultValues[c.field] ?? null}
@@ -5579,12 +5586,12 @@ export function InlineTableField({
                     />
                   </td>
                 ))}
-                <td className='px-1 py-1 align-top'>
+                <td className='px-1 py-0.5 align-middle'>
                   <button
                     type='button'
                     disabled={bulkAdding}
                     onClick={() => addBulkRows(true)}
-                    className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
+                    className='rounded px-2 h-7 bg-nvr-cyan text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
                   >
                     {bulkAdding ? '…' : `Add ${bulkCount}`}
                   </button>

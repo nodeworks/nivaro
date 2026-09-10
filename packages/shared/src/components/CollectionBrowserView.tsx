@@ -1,7 +1,20 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useOptionalRealtime } from '../lib/realtime'
-import { useElapsedLoading } from '../hooks/useElapsedLoading'
-import { Bell, BellOff, ChevronDown, ChevronsLeft, ChevronsRight, Pin, Rows2, Rows3, RotateCw, Search, Sparkles, X, Map as MapIcon, FileDiff } from 'lucide-react'
+import {
+  Bell,
+  BellOff,
+  ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
+  FileDiff,
+  Map as MapIcon,
+  Pin,
+  RotateCw,
+  Rows2,
+  Rows3,
+  Search,
+  Sparkles,
+  X
+} from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -13,21 +26,33 @@ import {
   useOverlayState
 } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
+import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { del, get, patch, post } from '../lib/commands'
-import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
-import { countFromResolved, type ColumnFormatConfig, formatMultiValue, formatValue } from '../lib/format-value'
+import {
+  type ColumnFormatConfig,
+  countFromResolved,
+  formatMultiValue,
+  formatValue
+} from '../lib/format-value'
+import { useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass } from '../lib/row-highlight'
-import { cn } from '../lib/utils'
+import {
+  effectiveScopeSeedIds,
+  matchScopeDimension,
+  translateScopeValues,
+  useMyScopes
+} from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
-import { RowHighlightLegend } from './RowHighlightLegend'
+import { cn } from '../lib/utils'
+import { CellCopyLayer } from './CellCopyLayer'
 import { HScrollProxy } from './HScrollProxy'
-import { MapView } from './MapView'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
+import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
-import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
-import { CellCopyLayer } from './CellCopyLayer'
+import { RowHighlightLegend } from './RowHighlightLegend'
 import { TipLayer } from './TipLayer'
+import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
  * CollectionBrowserView — the admin `/collections/:collection` browser as an
@@ -347,8 +372,6 @@ function formatRelative(value: unknown): string {
 
 const fmtNum = (n: number) => n.toLocaleString('en-US')
 
-
-
 const USER_SYSTEM_COLS = new Set(['nivaro_users', 'directus_users'])
 const isSystemCol = (c: string) => c.startsWith('directus_') || c.startsWith('nivaro_')
 
@@ -361,7 +384,11 @@ const isSystemCol = (c: string) => c.startsWith('directus_') || c.startsWith('ni
  *  cache stays per-record and survives paging); only the transport is shared. */
 const relBatches = new Map<
   string,
-  { ids: Set<string>; waiters: Array<() => void>; promise: Promise<Map<string, Record<string, unknown>>> | null }
+  {
+    ids: Set<string>
+    waiters: Array<() => void>
+    promise: Promise<Map<string, Record<string, unknown>>> | null
+  }
 >()
 
 function fetchRelationRow(
@@ -433,7 +460,9 @@ function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | unde
     cost != null && cost !== 0
       ? `${cost > 0 ? '+' : '−'}$${Math.abs(cost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : null
-  const tip = latest ? `${latest.title ?? 'Addendum'} — ${status}${summary.total > 1 ? ` (${summary.total} total)` : ''}` : undefined
+  const tip = latest
+    ? `${latest.title ?? 'Addendum'} — ${status}${summary.total > 1 ? ` (${summary.total} total)` : ''}`
+    : undefined
   return (
     <span
       data-tip={tip}
@@ -447,7 +476,9 @@ function AddendumSummaryPill({ summary }: { summary: AddendumSummaryEntry | unde
         aria-hidden
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-amber-500' : 'bg-slate-400'}`}
       />
-      {active ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status || 'active'}` : `${summary.total} ${status}`}
+      {active
+        ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status || 'active'}`
+        : `${summary.total} ${status}`}
       {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
     </span>
   )
@@ -473,9 +504,7 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
     queryKey: ['cbv-relation-item', relatedCollection, String(id)],
     queryFn: () =>
       userCol
-        ? client
-            .request<{ data: Record<string, unknown> }>(get(`/users/${id}`))
-            .then((r) => r.data)
+        ? client.request<{ data: Record<string, unknown> }>(get(`/users/${id}`)).then((r) => r.data)
         : fetchRelationRow(client, relatedCollection, String(id)),
     enabled: hasId && (userCol || !isSystemCol(relatedCollection)),
     staleTime: 30 * 60_000,
@@ -484,7 +513,9 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
 
   if (!hasId) return <span className='text-[12px] text-slate-300'>—</span>
   if (isLoading)
-    return <span className='inline-block h-3.5 w-24 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+    return (
+      <span className='inline-block h-3.5 w-24 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+    )
   if (!item) return <span className='font-mono text-[12px] text-slate-400'>{String(id)}</span>
   const label = userCol
     ? String(
@@ -615,7 +646,11 @@ export function RowActionsMenu({
     const target = t.to_state ? stateById.get(t.to_state) : null
     return target?.color ?? t.color ?? '#94a3b8'
   }
-  const [confirm, setConfirm] = useState<{ label: string; options: RowTransition[]; picked: string | null } | null>(null)
+  const [confirm, setConfirm] = useState<{
+    label: string
+    options: RowTransition[]
+    picked: string | null
+  } | null>(null)
   const [reason, setReason] = useState('')
   useEffect(() => {
     if (!open) {
@@ -659,8 +694,7 @@ export function RowActionsMenu({
       void qc.invalidateQueries({ queryKey: ['cbv-row-instance', collection, String(id)] })
       onAfterTransition?.()
     },
-    onError: (err: unknown) =>
-      toast.error(err instanceof Error ? err.message : 'Transition failed')
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Transition failed')
   })
 
   const item = (label: string, onClick: () => void, danger = false) => (
@@ -763,80 +797,80 @@ export function RowActionsMenu({
               </div>
             ) : (
               <>
-            {item('Open', () => {
-              setOpen(false)
-              onOpen()
-            })}
-            {item('Open in new tab', () => {
-              setOpen(false)
-              window.open(urlFor({ collection, itemId: String(id) }), '_blank')
-            })}
-            {onPeek &&
-              item('Peek details', () => {
-                setOpen(false)
-                onPeek()
-              })}
-            {onAudit &&
-              item('Audit log', () => {
-                setOpen(false)
-                onAudit()
-              })}
-            {hasPipeline && transitionEntries.length > 0 && (
-              <>
+                {item('Open', () => {
+                  setOpen(false)
+                  onOpen()
+                })}
+                {item('Open in new tab', () => {
+                  setOpen(false)
+                  window.open(urlFor({ collection, itemId: String(id) }), '_blank')
+                })}
+                {onPeek &&
+                  item('Peek details', () => {
+                    setOpen(false)
+                    onPeek()
+                  })}
+                {onAudit &&
+                  item('Audit log', () => {
+                    setOpen(false)
+                    onAudit()
+                  })}
+                {hasPipeline && transitionEntries.length > 0 && (
+                  <>
+                    {divider}
+                    <p className='px-3 pb-0.5 pt-1 text-[9.5px] font-bold uppercase tracking-wider text-slate-400'>
+                      Transitions
+                    </p>
+                    {transitionEntries.map((entry) => (
+                      <button
+                        key={entry.key}
+                        type='button'
+                        onClick={() =>
+                          setConfirm({
+                            label: entry.label,
+                            options: entry.options,
+                            picked: entry.options.length === 1 ? entry.options[0].id : null
+                          })
+                        }
+                        className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                      >
+                        <span
+                          aria-hidden
+                          className='h-1.5 w-1.5 shrink-0 rounded-full'
+                          style={{ backgroundColor: entry.options[0]?.color ?? '#94a3b8' }}
+                        />
+                        <span className='min-w-0 flex-1 truncate'>{entry.label}</span>
+                        {entry.options.length > 1 && (
+                          <span aria-hidden className='text-[10px] text-slate-400'>
+                            ▸ {entry.options.length}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </>
+                )}
                 {divider}
-                <p className='px-3 pb-0.5 pt-1 text-[9.5px] font-bold uppercase tracking-wider text-slate-400'>
-                  Transitions
-                </p>
-                {transitionEntries.map((entry) => (
-                  <button
-                    key={entry.key}
-                    type='button'
-                    onClick={() =>
-                      setConfirm({
-                        label: entry.label,
-                        options: entry.options,
-                        picked: entry.options.length === 1 ? entry.options[0].id : null
-                      })
-                    }
-                    className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
-                  >
-                    <span
-                      aria-hidden
-                      className='h-1.5 w-1.5 shrink-0 rounded-full'
-                      style={{ backgroundColor: entry.options[0]?.color ?? '#94a3b8' }}
-                    />
-                    <span className='min-w-0 flex-1 truncate'>{entry.label}</span>
-                    {entry.options.length > 1 && (
-                      <span aria-hidden className='text-[10px] text-slate-400'>
-                        ▸ {entry.options.length}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </>
-            )}
-            {divider}
-            {item('Copy ID', () => {
-              setOpen(false)
-              void navigator.clipboard?.writeText(String(id))
-              toast.success('ID copied')
-            })}
-            {item('Copy link', () => {
-              setOpen(false)
-              void navigator.clipboard?.writeText(
-                window.location.origin + urlFor({ collection, itemId: String(id) })
-              )
-              toast.success('Link copied')
-            })}
-            {divider}
-            {item(
-              'Delete',
-              () => {
-                setOpen(false)
-                if (window.confirm(`Delete record ${id}? It moves to trash.`)) onDeleted()
-              },
-              true
-            )}
+                {item('Copy ID', () => {
+                  setOpen(false)
+                  void navigator.clipboard?.writeText(String(id))
+                  toast.success('ID copied')
+                })}
+                {item('Copy link', () => {
+                  setOpen(false)
+                  void navigator.clipboard?.writeText(
+                    window.location.origin + urlFor({ collection, itemId: String(id) })
+                  )
+                  toast.success('Link copied')
+                })}
+                {divider}
+                {item(
+                  'Delete',
+                  () => {
+                    setOpen(false)
+                    if (window.confirm(`Delete record ${id}? It moves to trash.`)) onDeleted()
+                  },
+                  true
+                )}
               </>
             )}
           </div>,
@@ -871,7 +905,8 @@ function CellValue({
   relations: CMSRelation[]
 }) {
   const rel = findM2ORelation(relations, collection, field)
-  if (rel?.one_collection) return <RelationLabel relatedCollection={rel.one_collection} id={value} />
+  if (rel?.one_collection)
+    return <RelationLabel relatedCollection={rel.one_collection} id={value} />
   if (value == null) return <span className='text-[12px] text-slate-300'>—</span>
   if (fieldType === 'boolean') {
     return (
@@ -900,9 +935,7 @@ function CellValue({
     }
     // Rendered as human text ("2 days ago", "08/05/2026"), so it reads as prose;
     // tabular figures keep the column's digits aligned.
-    return (
-      <span className='text-[12px] tabular-nums text-slate-400'>{formatRelative(value)}</span>
-    )
+    return <span className='text-[12px] tabular-nums text-slate-400'>{formatRelative(value)}</span>
   }
   if (typeof value === 'string') {
     // Long text (names, descriptions) ellipses at a sane width — the full
@@ -926,7 +959,9 @@ function CellValue({
   if (typeof value === 'object') {
     // Genuinely machine output — the one place mono is the right answer.
     return (
-      <span className='font-mono text-[12px] text-slate-400'>{JSON.stringify(value).slice(0, 40)}</span>
+      <span className='font-mono text-[12px] text-slate-400'>
+        {JSON.stringify(value).slice(0, 40)}
+      </span>
     )
   }
   return (
@@ -951,13 +986,18 @@ function MultiPick({
   loading,
   block,
   onOpenChange,
-  badge
+  badge,
+  onSearch
 }: {
   label: string
   options: Array<{ value: string | number; label: string }>
   selected: Array<string | number>
   onChange: (vals: Array<string | number>) => void
   loading?: boolean
+  /** Server-driven search: the parent refetches `options` for the typed text
+   *  and the list is shown as-is (no client narrowing) — for relation targets
+   *  too big to page alphabetically (40k purchase orders). */
+  onSearch?: (q: string) => void
   /** Full-width trigger (column filter rows). */
   block?: boolean
   /** Fires when the dropdown opens — lets the parent defer its option fetch
@@ -977,6 +1017,12 @@ function MultiPick({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   const [q, setQ] = useState('')
+  useEffect(() => {
+    if (!onSearch) return
+    const t = setTimeout(() => onSearch(q.trim()), 250)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q])
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
@@ -986,11 +1032,19 @@ function MultiPick({
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
   }, [open])
-  const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q.toLowerCase())) : options
+  const shown =
+    q && !onSearch
+      ? options.filter((o) => o.label.toLowerCase().includes(q.toLowerCase()))
+      : options
   const selSet = new Set(selected.map(String))
-  const firstLabel = options.find((o) => String(o.value) === String(selected[0]))?.label ?? String(selected[0] ?? '')
+  const firstLabel =
+    options.find((o) => String(o.value) === String(selected[0]))?.label ?? String(selected[0] ?? '')
   const summary =
-    selected.length === 0 ? label : selected.length === 1 ? firstLabel : `${firstLabel} +${selected.length - 1}`
+    selected.length === 0
+      ? label
+      : selected.length === 1
+        ? firstLabel
+        : `${firstLabel} +${selected.length - 1}`
   return (
     <div ref={ref} className={block ? 'relative w-full' : 'relative'}>
       <button
@@ -1080,18 +1134,26 @@ function RelationColFilter({
   target,
   label,
   selected,
-  onChange
+  onChange,
+  preferIds
 }: {
   target: string
   label?: string
   selected: Array<string | number>
   onChange: (vals: Array<string | number>) => void
+  /** Ids present on the CURRENT page — offered first, so the dropdown opens
+   *  on values the person is looking at instead of the alphabetical head of
+   *  a 40k-row table (every purchase order numbered "1"). Typing searches
+   *  the whole target server-side. */
+  preferIds?: Array<string | number>
 }) {
   const client = useNivaroClient()
   // Nothing here is needed until the dropdown opens — except when a value is
   // already selected, since MultiPick renders the raw id without its label.
   const [armed, setArmed] = useState(false)
   const active = armed || selected.length > 0
+  const [search, setSearch] = useState('')
+  const preferKey = (preferIds ?? []).map(String).sort().join(',')
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', target],
     queryFn: () =>
@@ -1103,13 +1165,19 @@ function RelationColFilter({
   const labelField = labelFieldFor(meta)
   const template = meta?.display_template ?? null
   const { data: options = [], isLoading } = useQuery({
-    queryKey: ['cbv-filter-options', target, labelField, template ?? ''],
+    queryKey: ['cbv-filter-options', target, labelField, template ?? '', search, preferKey],
     queryFn: () => {
       const fields = optionFieldsFor(template, labelField)
+      const params: Record<string, string | number> = {
+        limit: search ? 60 : 500,
+        sort: labelField,
+        ...(fields ? { fields } : {})
+      }
+      if (search) params.search = search
+      else if (preferIds && preferIds.length > 0)
+        params.filter = JSON.stringify({ id: { _in: preferIds.slice(0, 500) } })
       return client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${target}`, { limit: 500, sort: labelField, ...(fields ? { fields } : {}) })
-        )
+        .request<{ data: Array<Record<string, unknown>> }>(get(`/items/${target}`, params))
         .then((r) =>
           (r.data ?? [])
             .map((row) => ({
@@ -1156,7 +1224,10 @@ function RelationColFilter({
   })
   const mergedOptions =
     selectedOpts.length > 0
-      ? [...options, ...selectedOpts.filter((o) => !options.some((x) => String(x.value) === String(o.value)))]
+      ? [
+          ...options,
+          ...selectedOpts.filter((o) => !options.some((x) => String(x.value) === String(o.value)))
+        ]
       : options
   return (
     <MultiPick
@@ -1166,6 +1237,7 @@ function RelationColFilter({
       selected={selected}
       onChange={onChange}
       loading={isLoading}
+      onSearch={setSearch}
       onOpenChange={(o) => {
         if (o) setArmed(true)
       }}
@@ -1615,7 +1687,11 @@ function RelatedFieldRows({
                       return next
                     })
                   } else {
-                    onPick([...path, f.field], [...pathLabels, titleCase(f.field)], f.type ?? 'string')
+                    onPick(
+                      [...path, f.field],
+                      [...pathLabels, titleCase(f.field)],
+                      f.type ?? 'string'
+                    )
                   }
                 }}
                 className='flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
@@ -1759,7 +1835,9 @@ function FieldLevel({
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
     queryFn: () =>
-      client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
+      client
+        .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
     staleTime: 10 * 60_000,
     retry: false
   })
@@ -1803,7 +1881,8 @@ function FieldLevel({
     )
 
   const q = search.trim().toLowerCase()
-  const match = (label: string) => !q || label.toLowerCase().includes(q) || label.toLowerCase().replace(/ /g, '_').includes(q)
+  const match = (label: string) =>
+    !q || label.toLowerCase().includes(q) || label.toLowerCase().replace(/ /g, '_').includes(q)
 
   type Row = {
     key: string
@@ -1827,8 +1906,16 @@ function FieldLevel({
           key: f.field,
           label,
           hint: 'relation',
-          drillTo: depth < 2 ? { collection: rel.one_collection, path: fullPath, pathLabels: fullLabels } : undefined,
-          leaf: { path: fullPath, pathLabels: fullLabels, fieldType: 'relation', relTarget: rel.one_collection }
+          drillTo:
+            depth < 2
+              ? { collection: rel.one_collection, path: fullPath, pathLabels: fullLabels }
+              : undefined,
+          leaf: {
+            path: fullPath,
+            pathLabels: fullLabels,
+            fieldType: 'relation',
+            relTarget: rel.one_collection
+          }
         })
     } else if (alias) {
       const child = alias.relation.many_collection
@@ -1837,7 +1924,8 @@ function FieldLevel({
           key: f.field,
           label,
           hint: alias.kind === 'm2m' ? 'list' : 'items',
-          drillTo: depth < 2 ? { collection: child, path: fullPath, pathLabels: fullLabels } : undefined,
+          drillTo:
+            depth < 2 ? { collection: child, path: fullPath, pathLabels: fullLabels } : undefined,
           leaf:
             alias.kind === 'm2m'
               ? { path: fullPath, pathLabels: fullLabels, fieldType: 'relation', relTarget: '' }
@@ -1896,7 +1984,8 @@ function FieldLevel({
             type='button'
             onClick={() => {
               if (r.leaf) onPick(r.leaf)
-              else if (r.drillTo) onDrill(r.drillTo.collection, r.drillTo.path, r.drillTo.pathLabels)
+              else if (r.drillTo)
+                onDrill(r.drillTo.collection, r.drillTo.path, r.drillTo.pathLabels)
             }}
             className='flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-1.5 text-left text-[12.5px] text-slate-700 dark:text-slate-200'
           >
@@ -2002,7 +2091,11 @@ function RelationValueList({
       </div>
       {selected.length > 0 && (
         <p className='shrink-0 border-t border-slate-100 px-3 py-1 text-[11px] text-slate-400 dark:border-slate-800'>
-          {selected.length} selected · {selected.map((v) => labels[String(v)] ?? v).slice(0, 3).join(', ')}
+          {selected.length} selected ·{' '}
+          {selected
+            .map((v) => labels[String(v)] ?? v)
+            .slice(0, 3)
+            .join(', ')}
           {selected.length > 3 ? '…' : ''}
         </p>
       )}
@@ -2107,7 +2200,13 @@ function FilterBar({
   }
   const applyScalar = (op: string, val: string) => {
     if (!picked) return
-    commit({ path: picked.path, pathLabels: picked.pathLabels, fieldType: picked.fieldType, op, value: val })
+    commit({
+      path: picked.path,
+      pathLabels: picked.pathLabels,
+      fieldType: picked.fieldType,
+      op,
+      value: val
+    })
   }
   const applyRelation = () => {
     if (!picked || relSel.length === 0) return
@@ -2130,7 +2229,12 @@ function FilterBar({
       // Relation chip: reconstruct the target from the picked path — we stored
       // no target, so reopen as a fresh relation pick isn't possible; fall back
       // to keeping selection editable via labels only.
-      setPicked({ path: f.path, pathLabels: f.pathLabels, fieldType: 'relation', relTarget: f.relTarget })
+      setPicked({
+        path: f.path,
+        pathLabels: f.pathLabels,
+        fieldType: 'relation',
+        relTarget: f.relTarget
+      })
       setRelSel(f.value)
       const labels: Record<string, string> = {}
       f.value.forEach((v, i) => {
@@ -2209,10 +2313,16 @@ function FilterBar({
             >
               NOT
             </button>
-            <button type='button' onClick={() => editChip(f)} className='inline-flex items-center gap-1.5'>
+            <button
+              type='button'
+              onClick={() => editChip(f)}
+              className='inline-flex items-center gap-1.5'
+            >
               <span className='text-slate-500'>{chip.field}</span>
               <span className='font-semibold text-slate-700 dark:text-slate-200'>{chip.op}</span>
-              {chip.value && <span className='text-[#00a5cc] dark:text-[#00ceff]'>{chip.value}</span>}
+              {chip.value && (
+                <span className='text-[#00a5cc] dark:text-[#00ceff]'>{chip.value}</span>
+              )}
             </button>
             <button
               type='button'
@@ -2307,7 +2417,9 @@ function FilterBar({
                     onPick={(leaf) => {
                       setPicked(leaf)
                       setPickedOp(
-                        leaf.fieldType === 'integer' || leaf.fieldType === 'decimal' || leaf.fieldType === 'float'
+                        leaf.fieldType === 'integer' ||
+                          leaf.fieldType === 'decimal' ||
+                          leaf.fieldType === 'float'
                           ? '_eq'
                           : '_contains'
                       )
@@ -2366,7 +2478,12 @@ function FilterBar({
                       <button
                         key={b.op}
                         type='button'
-                        onClick={() => applyScalar(b.op.includes(':') ? b.op.split(':')[0] : b.op, b.op.includes(':') ? b.op.split(':')[1] : '')}
+                        onClick={() =>
+                          applyScalar(
+                            b.op.includes(':') ? b.op.split(':')[0] : b.op,
+                            b.op.includes(':') ? b.op.split(':')[1] : ''
+                          )
+                        }
                         className='h-8 flex-1 rounded-md border border-slate-200 text-[12.5px] text-slate-600 hover:border-[#00ceff66] hover:bg-[#00ceff0d] dark:border-slate-700 dark:text-slate-300'
                       >
                         {b.label}
@@ -2428,27 +2545,29 @@ function FilterBar({
                     onSubmit={(e) => {
                       e.preventDefault()
                       if (leafKind === 'number' && pickedOp === '_between') {
-                        if (value !== '' && value2 !== '') applyScalar('_between', `${value}..${value2}`)
+                        if (value !== '' && value2 !== '')
+                          applyScalar('_between', `${value}..${value2}`)
                       } else if (value.trim()) applyScalar(pickedOp, value.trim())
                     }}
                   >
                     <div className='flex flex-wrap gap-1'>
-                      {(leafKind === 'number' ? [...numberOps, { value: '_between', label: 'Between' }] : stringOps).map(
-                        (o) => (
-                          <button
-                            key={o.value}
-                            type='button'
-                            onClick={() => setPickedOp(o.value)}
-                            className={`rounded-md border px-2 py-1 text-[11.5px] ${
-                              pickedOp === o.value
-                                ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
-                                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-                            }`}
-                          >
-                            {o.label}
-                          </button>
-                        )
-                      )}
+                      {(leafKind === 'number'
+                        ? [...numberOps, { value: '_between', label: 'Between' }]
+                        : stringOps
+                      ).map((o) => (
+                        <button
+                          key={o.value}
+                          type='button'
+                          onClick={() => setPickedOp(o.value)}
+                          className={`rounded-md border px-2 py-1 text-[11.5px] ${
+                            pickedOp === o.value
+                              ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
                       <button
                         type='button'
                         onClick={() => applyScalar('_null', '')}
@@ -2488,7 +2607,9 @@ function FilterBar({
                     </div>
                     <button
                       type='submit'
-                      disabled={pickedOp === '_between' ? value === '' || value2 === '' : !value.trim()}
+                      disabled={
+                        pickedOp === '_between' ? value === '' || value2 === '' : !value.trim()
+                      }
                       className='h-8 w-full rounded-md bg-[#00ceff] text-[13px] font-medium text-white disabled:opacity-40'
                     >
                       {editingId ? 'Update' : 'Apply'}
@@ -2597,7 +2718,11 @@ function RecordMergeForm({
     let alive = true
     void client
       .request<{ data: { references: Record<string, number> } }>(
-        post(`/record-merge/${collection}`, { survivor_id: survivor, merged_id: merged, dry_run: true })
+        post(`/record-merge/${collection}`, {
+          survivor_id: survivor,
+          merged_id: merged,
+          dry_run: true
+        })
       )
       .then((r) => {
         if (alive) setPreview(r.data)
@@ -2666,7 +2791,11 @@ function RecordMergeForm({
       >
         {busy ? 'Merging…' : 'Merge'}
       </button>
-      <button type='button' onClick={onCancel} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+      <button
+        type='button'
+        onClick={onCancel}
+        className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+      >
         Cancel
       </button>
     </span>
@@ -2741,15 +2870,30 @@ function MessageStakeholdersForm({
       }}
     >
       <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
-        <input type='checkbox' checked={owners} onChange={(e) => setOwners(e.target.checked)} className='h-3.5 w-3.5' />
+        <input
+          type='checkbox'
+          checked={owners}
+          onChange={(e) => setOwners(e.target.checked)}
+          className='h-3.5 w-3.5'
+        />
         Owners
       </label>
       <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
-        <input type='checkbox' checked={creators} onChange={(e) => setCreators(e.target.checked)} className='h-3.5 w-3.5' />
+        <input
+          type='checkbox'
+          checked={creators}
+          onChange={(e) => setCreators(e.target.checked)}
+          className='h-3.5 w-3.5'
+        />
         Creators
       </label>
       <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
-        <input type='checkbox' checked={email} onChange={(e) => setEmail(e.target.checked)} className='h-3.5 w-3.5' />
+        <input
+          type='checkbox'
+          checked={email}
+          onChange={(e) => setEmail(e.target.checked)}
+          className='h-3.5 w-3.5'
+        />
         Also email
       </label>
       <span
@@ -2779,7 +2923,11 @@ function MessageStakeholdersForm({
       >
         {busy ? 'Sending…' : 'Send'}
       </button>
-      <button type='button' onClick={onCancel} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+      <button
+        type='button'
+        onClick={onCancel}
+        className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+      >
         Cancel
       </button>
     </form>
@@ -2913,7 +3061,12 @@ function BulkBar({
       data-cbv-bulkbar
       className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white shadow-[0_-2px_12px_rgba(0,0,0,0.25)]'
     >
-      <button type='button' onClick={onClear} aria-label='Clear selection' className='text-slate-400 hover:text-white'>
+      <button
+        type='button'
+        onClick={onClear}
+        aria-label='Clear selection'
+        className='text-slate-400 hover:text-white'
+      >
         ✕
       </button>
       <span className='text-[13px] font-medium text-[#00ceff]'>
@@ -2936,7 +3089,11 @@ function BulkBar({
             <span key={r.id} className='group/recipe relative inline-flex'>
               <button
                 type='button'
-                disabled={busy || (r.action_type === 'transition' && !transitions.some((t) => t.label === r.config?.transition_label))}
+                disabled={
+                  busy ||
+                  (r.action_type === 'transition' &&
+                    !transitions.some((t) => t.label === r.config?.transition_label))
+                }
                 onClick={() => runRecipe(r)}
                 title={
                   r.action_type === 'update'
@@ -3069,7 +3226,11 @@ function BulkBar({
             placeholder='value'
             className='h-8 w-32 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
           />
-          <button type='submit' disabled={busy} className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'>
+          <button
+            type='submit'
+            disabled={busy}
+            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+          >
             Apply
           </button>
           <button
@@ -3084,7 +3245,11 @@ function BulkBar({
           >
             ☆ Save recipe
           </button>
-          <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+          <button
+            type='button'
+            onClick={() => setMode('actions')}
+            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+          >
             Cancel
           </button>
         </form>
@@ -3118,7 +3283,11 @@ function BulkBar({
             ariaLabel='Choose transition'
             className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white focus:ring-0'
           />
-          <button type='submit' disabled={busy || !transitionId} className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'>
+          <button
+            type='submit'
+            disabled={busy || !transitionId}
+            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+          >
             Run
           </button>
           <button
@@ -3135,7 +3304,11 @@ function BulkBar({
           >
             ☆ Save recipe
           </button>
-          <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+          <button
+            type='button'
+            onClick={() => setMode('actions')}
+            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+          >
             Cancel
           </button>
         </form>
@@ -3194,7 +3367,11 @@ function BulkBar({
           >
             {busy ? 'Deleting…' : 'Delete'}
           </button>
-          <button type='button' onClick={() => setMode('actions')} className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'>
+          <button
+            type='button'
+            onClick={() => setMode('actions')}
+            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+          >
             Cancel
           </button>
         </span>
@@ -3355,7 +3532,14 @@ export function CollectionBrowserView({
     cellText: string
   } | null>(null)
   const [cellExcludes, setCellExcludes] = useState<
-    Array<{ id: string; path: string[]; op: '_neq' | '_ncontains'; value: unknown; label: string; field: string }>
+    Array<{
+      id: string
+      path: string[]
+      op: '_neq' | '_ncontains'
+      value: unknown
+      label: string
+      field: string
+    }>
   >([])
   useEffect(() => {
     if (!cellMenu) return
@@ -3441,7 +3625,9 @@ export function CollectionBrowserView({
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
     queryFn: () =>
-      client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
+      client
+        .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
     staleTime: 10 * 60_000,
     retry: false
   })
@@ -3571,13 +3757,18 @@ export function CollectionBrowserView({
       effectiveColumns
         .filter((k) => !k.includes('.'))
         .map((k) => ({ field: k, info: aliasRelationFor(relations, collection, k) }))
-        .filter((x): x is { field: string; info: NonNullable<ReturnType<typeof aliasRelationFor>> } => !!x.info),
+        .filter(
+          (x): x is { field: string; info: NonNullable<ReturnType<typeof aliasRelationFor>> } =>
+            !!x.info
+        ),
     [effectiveColumns, fieldByName, relations, collection]
   )
   // Metas needed to derive each alias target's label field: the O2M child
   // collection directly, plus junction metas (to find the M2M sibling).
   const neededMetaCols = useMemo(
-    () => [...new Set(aliasInfos.map((a) => a.info.relation.many_collection ?? '').filter(Boolean))],
+    () => [
+      ...new Set(aliasInfos.map((a) => a.info.relation.many_collection ?? '').filter(Boolean))
+    ],
     [aliasInfos]
   )
   const neededMetaQueries = useQueries({
@@ -3595,22 +3786,22 @@ export function CollectionBrowserView({
     return m
   }, [neededMetaCols, neededMetaQueries])
   const m2mTargetCols = useMemo(
-    () =>
-      [
-        ...new Set(
-          aliasInfos
-            .filter((a) => a.info.kind === 'm2m')
-            .map((a) => {
-              const junction = a.info.relation.many_collection ?? ''
-              const jm = metaMap.get(junction)
-              const sibling = jm?.relations.find(
-                (r) => r.many_collection === junction && r.many_field === a.info.relation.junction_field
-              )
-              return sibling?.one_collection ?? ''
-            })
-            .filter(Boolean)
-        )
-      ],
+    () => [
+      ...new Set(
+        aliasInfos
+          .filter((a) => a.info.kind === 'm2m')
+          .map((a) => {
+            const junction = a.info.relation.many_collection ?? ''
+            const jm = metaMap.get(junction)
+            const sibling = jm?.relations.find(
+              (r) =>
+                r.many_collection === junction && r.many_field === a.info.relation.junction_field
+            )
+            return sibling?.one_collection ?? ''
+          })
+          .filter(Boolean)
+      )
+    ],
     [aliasInfos, metaMap]
   )
   const targetMetaQueries = useQueries({
@@ -3671,7 +3862,8 @@ export function CollectionBrowserView({
   const conditionsParam = useMemo(() => {
     const conds: Array<{ path: string[]; op: string; value: unknown }> = []
     for (const f of filters) {
-      const isDateType = f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
+      const isDateType =
+        f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
       if (f.op === '_between') {
         const [a, b] = String(f.value).split('..')
         if (f.not) {
@@ -3710,7 +3902,8 @@ export function CollectionBrowserView({
       }
       let op = f.op.includes(':') ? f.op.split(':')[0] : f.op
       let value: unknown = f.op.includes(':') ? f.op.split(':')[1] : f.value || null
-      if (f.fieldType === 'boolean' && (value === 'true' || value === 'false')) value = value === 'true'
+      if (f.fieldType === 'boolean' && (value === 'true' || value === 'false'))
+        value = value === 'true'
       if (f.not) op = NEGATED_OPS[op] ?? op
       conds.push({ path: f.path, op, value })
     }
@@ -3718,7 +3911,9 @@ export function CollectionBrowserView({
       const vals = appliedQuick[qf.key] ?? []
       if (vals.length === 0) continue
       if (qf.or_paths?.length) {
-        ;(conds as unknown[]).push({ or: qf.or_paths.map((p) => ({ path: p, op: '_in', value: vals })) })
+        ;(conds as unknown[]).push({
+          or: qf.or_paths.map((p) => ({ path: p, op: '_in', value: vals }))
+        })
       } else {
         conds.push({ path: qf.path, op: '_in', value: vals })
       }
@@ -3726,7 +3921,8 @@ export function CollectionBrowserView({
     for (const [key, f] of Object.entries(debouncedColFilters)) {
       if (!f) continue
       if (f.kind === 'in' && f.value.length) conds.push({ path: [key], op: '_in', value: f.value })
-      else if (f.kind === 'state' && f.value.length) conds.push({ path: ['$state'], op: '_in', value: f.value })
+      else if (f.kind === 'state' && f.value.length)
+        conds.push({ path: ['$state'], op: '_in', value: f.value })
       else if (f.kind === 'text' && f.value.trim())
         conds.push({ path: f.path, op: '_contains', value: f.value.trim() })
       else if (f.kind === 'num' && f.value !== '' && !Number.isNaN(Number(f.value)))
@@ -3804,7 +4000,16 @@ export function CollectionBrowserView({
     refetch,
     error
   } = useQuery({
-    queryKey: ['cbv-items', collection, appliedSearch, sort, groupBy ? 'grouped' : page, groupBy ? 500 : effPageSize, conditionsParam, aggParam],
+    queryKey: [
+      'cbv-items',
+      collection,
+      appliedSearch,
+      sort,
+      groupBy ? 'grouped' : page,
+      groupBy ? 500 : effPageSize,
+      conditionsParam,
+      aggParam
+    ],
     queryFn: () =>
       client.request<{
         data: Array<Record<string, unknown>>
@@ -3871,9 +4076,7 @@ export function CollectionBrowserView({
                 prev
                   ? {
                       ...prev,
-                      data: prev.data.map((r) =>
-                        String(r.id) === id ? { ...r, ...fresh } : r
-                      )
+                      data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
                     }
                   : prev
             )
@@ -3896,9 +4099,7 @@ export function CollectionBrowserView({
     queryKey: ['cbv-risk-rules', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number }> }>(
-          get('/at-risk/rules/active', { collection })
-        )
+        .request<{ data: Array<{ id: number }> }>(get('/at-risk/rules/active', { collection }))
         .then((r) => r.data ?? [])
         .catch(() => []),
     enabled: !!collection,
@@ -3906,8 +4107,9 @@ export function CollectionBrowserView({
     retry: false
   })
   const riskIdsKey = rows.map((r) => String(r.id)).join(',')
-  const { data: riskMap = {} as Record<string, { at_risk: boolean; rule: string; color: string }> } =
-    useQuery({
+  const {
+    data: riskMap = {} as Record<string, { at_risk: boolean; rule: string; color: string }>
+  } = useQuery({
     queryKey: ['cbv-risk', collection, riskIdsKey],
     queryFn: () =>
       client
@@ -3994,7 +4196,10 @@ export function CollectionBrowserView({
   })
 
   // ── Bulk resolve of dotted + alias column values for the current page ─────
-  const dottedCols = useMemo(() => effectiveColumns.filter((k) => k.includes('.')), [effectiveColumns])
+  const dottedCols = useMemo(
+    () => effectiveColumns.filter((k) => k.includes('.')),
+    [effectiveColumns]
+  )
   const resolveList = useMemo(
     () => [...new Set([...dottedCols, ...Object.values(aliasPathByField)])].slice(0, 20),
     [dottedCols, aliasPathByField]
@@ -4009,7 +4214,12 @@ export function CollectionBrowserView({
             rows: Record<string, Record<string, { value: string; ids?: string[] }>>
             targets?: Record<string, string | null>
           }
-        }>(get(`/items/${collection}/resolve-paths`, { ids: rowIdsKey, paths: resolveList.join(',') }))
+        }>(
+          get(`/items/${collection}/resolve-paths`, {
+            ids: rowIdsKey,
+            paths: resolveList.join(',')
+          })
+        )
         .then((r) => r.data ?? { rows: {}, targets: {} }),
     enabled: rows.length > 0 && resolveList.length > 0,
     staleTime: 30_000,
@@ -4064,7 +4274,8 @@ export function CollectionBrowserView({
     if (f.computed_formula && !f.computed_store) return null
     if (f.type === 'integer' || f.type === 'decimal' || f.type === 'float') return { kind: 'num' }
     if (f.type === 'boolean') return { kind: 'bool' }
-    if (f.type === 'date' || f.type === 'datetime' || f.type === 'timestamp') return { kind: 'date' }
+    if (f.type === 'date' || f.type === 'datetime' || f.type === 'timestamp')
+      return { kind: 'date' }
     if (f.interface === 'select-dropdown') return { kind: 'enum' }
     if (f.type === 'string' || f.type === 'text') return { kind: 'text', path: [key] }
     return null
@@ -4114,7 +4325,8 @@ export function CollectionBrowserView({
       return
     }
     if (cls.kind === 'text') {
-      const v = key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
+      const v =
+        key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
       if (v && v !== '—') setColFilter(key, { kind: 'text', value: v, path: cls.path })
       return
     }
@@ -4156,8 +4368,10 @@ export function CollectionBrowserView({
     } else if ((cls.kind === 'enum' || cls.kind === 'num') && row[key] != null && row[key] !== '') {
       entry = { id: eid, path: [key], op: '_neq', value: row[key], label: cellText, field: key }
     } else if (cls.kind === 'text') {
-      const v = key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
-      if (v && v !== '—') entry = { id: eid, path: cls.path, op: '_ncontains', value: v, label: v, field: key }
+      const v =
+        key.includes('.') || key in aliasPathByField ? resolvedFor(id, key) : String(row[key] ?? '')
+      if (v && v !== '—')
+        entry = { id: eid, path: cls.path, op: '_ncontains', value: v, label: v, field: key }
     }
     if (entry) setCellExcludes((prev) => [...prev, entry])
   }
@@ -4165,14 +4379,30 @@ export function CollectionBrowserView({
     const cls = classifyColFilter(key)
     if (!cls) return null
     const cur = colFilters[key]
-    if (cls.kind === 'in')
+    if (cls.kind === 'in') {
+      // Values on this page: an M2O column's FK per row, or an alias column's
+      // resolved related ids.
+      const pageIds = new Set<string | number>()
+      const aliasPath = aliasPathByField[key]
+      for (const r of rows as Array<Record<string, unknown>>) {
+        if (aliasPath) {
+          for (const id of (resolvedData?.rows?.[String(r.id)]?.[aliasPath]?.ids ?? []) as Array<
+            string | number
+          >)
+            pageIds.add(id)
+        } else if (r[key] != null && r[key] !== '' && typeof r[key] !== 'object') {
+          pageIds.add(r[key] as string | number)
+        }
+      }
       return (
         <RelationColFilter
           target={cls.target}
           selected={cur?.kind === 'in' ? cur.value : []}
           onChange={(vals) => setColFilter(key, vals.length ? { kind: 'in', value: vals } : null)}
+          preferIds={[...pageIds]}
         />
       )
+    }
     if (cls.kind === 'enum')
       return (
         <EnumColFilter
@@ -4187,7 +4417,10 @@ export function CollectionBrowserView({
         <input
           value={cur?.kind === 'text' ? cur.value : ''}
           onChange={(e) =>
-            setColFilter(key, e.target.value ? { kind: 'text', value: e.target.value, path: cls.path } : null)
+            setColFilter(
+              key,
+              e.target.value ? { kind: 'text', value: e.target.value, path: cls.path } : null
+            )
           }
           placeholder='Filter…'
           aria-label={`Filter ${key}`}
@@ -4258,7 +4491,8 @@ export function CollectionBrowserView({
     if (cfg?.type === 'count') {
       // Relation-count column (#142): count the related records, not their labels.
       const path = key.includes('.') ? key : aliasPathByField[key]
-      const ids = rowId != null && path ? resolvedData?.rows?.[String(rowId)]?.[path]?.ids : undefined
+      const ids =
+        rowId != null && path ? resolvedData?.rows?.[String(rowId)]?.[path]?.ids : undefined
       const n = countFromResolved(val === '—' ? '' : val, ids)
       return String(n)
     }
@@ -4275,7 +4509,9 @@ export function CollectionBrowserView({
   const { data: views = [] } = useQuery({
     queryKey: ['cbv-views', collection],
     queryFn: () =>
-      client.request<{ data: SavedView[] }>(get('/saved-views', { collection })).then((r) => r.data ?? []),
+      client
+        .request<{ data: SavedView[] }>(get('/saved-views', { collection }))
+        .then((r) => r.data ?? []),
     staleTime: 30_000
   })
   const invalidateViews = () => qc.invalidateQueries({ queryKey: ['cbv-views', collection] })
@@ -4501,7 +4737,10 @@ export function CollectionBrowserView({
           exportResolved = await client
             .request<{ data: { rows: Record<string, Record<string, { value: string }>> } }>(
               get(`/items/${collection}/resolve-paths`, {
-                ids: all.slice(0, 500).map((r) => String(r.id)).join(','),
+                ids: all
+                  .slice(0, 500)
+                  .map((r) => String(r.id))
+                  .join(','),
                 paths: resolveList.join(',')
               })
             )
@@ -4538,12 +4777,14 @@ export function CollectionBrowserView({
       }
       // Data-egress audit — fire-and-forget; the download must not wait on it.
       void client
-        .request(post('/activity/export-log', {
-          collection,
-          row_count: all.length,
-          format: 'csv',
-          filters: conditionsParam ? JSON.parse(conditionsParam) : undefined
-        }))
+        .request(
+          post('/activity/export-log', {
+            collection,
+            row_count: all.length,
+            format: 'csv',
+            filters: conditionsParam ? JSON.parse(conditionsParam) : undefined
+          })
+        )
         .catch(() => {})
       const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
@@ -4607,9 +4848,12 @@ export function CollectionBrowserView({
           queryKey: ['collection-meta', target],
           queryFn: () =>
             client
-              .request<{ data: { display_template?: string | null; fields?: Array<{ field: string; type?: string }> } }>(
-                get(`/collections/${target}`)
-              )
+              .request<{
+                data: {
+                  display_template?: string | null
+                  fields?: Array<{ field: string; type?: string }>
+                }
+              }>(get(`/collections/${target}`))
               .then((r) => r.data),
           staleTime: 60_000
         })
@@ -4619,7 +4863,9 @@ export function CollectionBrowserView({
           const names = (meta2?.fields ?? []).map((f) => f.field)
           const labelField =
             (plain && names.includes(plain) ? plain : null) ??
-            names.find((n) => ['name', 'title', 'label', 'short_name', 'subject'].includes(n.toLowerCase())) ??
+            names.find((n) =>
+              ['name', 'title', 'label', 'short_name', 'subject'].includes(n.toLowerCase())
+            ) ??
             null
           applyCycle(labelField ? `${field}.${labelField}` : field)
         })
@@ -4664,8 +4910,7 @@ export function CollectionBrowserView({
   const start = total === 0 ? 0 : (page - 1) * effPageSize + 1
   const end = Math.min(page * effPageSize, total)
   const hasPipeline = !!pipelineData?.instances
-  const extraCols =
-    (enableCheckboxes ? 1 : 0) + (hasPipeline ? 2 : 0) + (enableActions ? 1 : 0)
+  const extraCols = (enableCheckboxes ? 1 : 0) + (hasPipeline ? 2 : 0) + (enableActions ? 1 : 0)
 
   // ── Pinned-column layout ───────────────────────────────────────────────────
   // Left-pinned columns render first (checkbox always hard-left), right-pinned
@@ -4895,7 +5140,12 @@ export function CollectionBrowserView({
   }
 
   return (
-    <div data-cbv className={className ?? 'flex h-full min-h-0 flex-col bg-slate-50 text-[13px] dark:bg-slate-950'}>
+    <div
+      data-cbv
+      className={
+        className ?? 'flex h-full min-h-0 flex-col bg-slate-50 text-[13px] dark:bg-slate-950'
+      }
+    >
       {/* Persistent, prominent scrollbars for the table region — custom
           WebKit scrollbars opt out of the OS overlay auto-hide, so the
           horizontal bar stays visible whenever columns overflow. */}
@@ -4962,121 +5212,122 @@ export function CollectionBrowserView({
       <CellCopyLayer />
       {cellMenu &&
         createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            left: Math.min(cellMenu.x, window.innerWidth - 236),
-            top: Math.min(cellMenu.y, window.innerHeight - 380),
-            zIndex: 125
-          }}
-          className='nvr-pop-in w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {(cellMenu.key === '__state__' || classifyColFilter(cellMenu.key)) && cellMenu.cellText && cellMenu.cellText !== '—' && (
-            <button
-              type='button'
-              onClick={() => {
-                filterToCell(cellMenu)
-                setCellMenu(null)
-              }}
-              className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
-            >
-              Filter: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
-            </button>
-          )}
-          {canExcludeCell(cellMenu.key, cellMenu.row) && cellMenu.cellText && cellMenu.cellText !== '—' && (
-            <button
-              type='button'
-              onClick={() => {
-                excludeCell(cellMenu)
-                setCellMenu(null)
-              }}
-              className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
-            >
-              Exclude: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
-            </button>
-          )}
-          {(cellMenu.key === '__state__' || groupableCols.some((g) => g.key === cellMenu.key)) &&
-            groupBy !== cellMenu.key && (
-              <button
-                type='button'
-                onClick={() => {
-                  pickGroupBy(cellMenu.key)
-                  setCellMenu(null)
-                }}
-                className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
-              >
-                Group by {cellMenu.key === '__state__' ? 'State' : columnLabel(cellMenu.key)}
-              </button>
-            )}
-          {/* Row actions (#43): the ⋯ menu's core actions, reachable by
-              right-click anywhere on the row. */}
-          {cellMenu.row.id != null && (
-            <>
-              <div className='my-1 border-t border-slate-100 dark:border-slate-700' />
-              {[
-                {
-                  label: 'Open',
-                  run: () => openRow(cellMenu.row.id as string | number)
-                },
-                {
-                  label: 'Open in new tab',
-                  run: () =>
-                    window.open(
-                      urlFor({ collection, itemId: String(cellMenu.row.id) }),
-                      '_blank'
-                    )
-                },
-                {
-                  label: 'Peek',
-                  run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
-                },
-                {
-                  label: 'Copy ID',
-                  run: () => {
-                    void navigator.clipboard?.writeText(String(cellMenu.row.id))
-                    toast.success('ID copied')
-                  }
-                },
-                {
-                  label: 'Copy link',
-                  run: () => {
-                    void navigator.clipboard?.writeText(
-                      `${window.location.origin}${urlFor({ collection, itemId: String(cellMenu.row.id) })}`
-                    )
-                    toast.success('Link copied')
-                  }
-                }
-              ].map((a) => (
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.min(cellMenu.x, window.innerWidth - 236),
+              top: Math.min(cellMenu.y, window.innerHeight - 380),
+              zIndex: 125
+            }}
+            className='nvr-pop-in w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {(cellMenu.key === '__state__' || classifyColFilter(cellMenu.key)) &&
+              cellMenu.cellText &&
+              cellMenu.cellText !== '—' && (
                 <button
-                  key={a.label}
                   type='button'
                   onClick={() => {
-                    a.run()
+                    filterToCell(cellMenu)
                     setCellMenu(null)
                   }}
                   className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
                 >
-                  {a.label}
+                  Filter: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
                 </button>
-              ))}
-              <button
-                type='button'
-                onClick={() => {
-                  if (window.confirm('Delete this record? It moves to Trash for 30 days.')) {
-                    deleteRow.mutate(cellMenu.row.id as string | number)
+              )}
+            {canExcludeCell(cellMenu.key, cellMenu.row) &&
+              cellMenu.cellText &&
+              cellMenu.cellText !== '—' && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    excludeCell(cellMenu)
+                    setCellMenu(null)
+                  }}
+                  className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                >
+                  Exclude: <span className='font-medium'>{cellMenu.cellText.slice(0, 40)}</span>
+                </button>
+              )}
+            {(cellMenu.key === '__state__' || groupableCols.some((g) => g.key === cellMenu.key)) &&
+              groupBy !== cellMenu.key && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    pickGroupBy(cellMenu.key)
+                    setCellMenu(null)
+                  }}
+                  className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                >
+                  Group by {cellMenu.key === '__state__' ? 'State' : columnLabel(cellMenu.key)}
+                </button>
+              )}
+            {/* Row actions (#43): the ⋯ menu's core actions, reachable by
+              right-click anywhere on the row. */}
+            {cellMenu.row.id != null && (
+              <>
+                <div className='my-1 border-t border-slate-100 dark:border-slate-700' />
+                {[
+                  {
+                    label: 'Open',
+                    run: () => openRow(cellMenu.row.id as string | number)
+                  },
+                  {
+                    label: 'Open in new tab',
+                    run: () =>
+                      window.open(urlFor({ collection, itemId: String(cellMenu.row.id) }), '_blank')
+                  },
+                  {
+                    label: 'Peek',
+                    run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
+                  },
+                  {
+                    label: 'Copy ID',
+                    run: () => {
+                      void navigator.clipboard?.writeText(String(cellMenu.row.id))
+                      toast.success('ID copied')
+                    }
+                  },
+                  {
+                    label: 'Copy link',
+                    run: () => {
+                      void navigator.clipboard?.writeText(
+                        `${window.location.origin}${urlFor({ collection, itemId: String(cellMenu.row.id) })}`
+                      )
+                      toast.success('Link copied')
+                    }
                   }
-                  setCellMenu(null)
-                }}
-                className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20'
-              >
-                Delete
-              </button>
-            </>
-          )}
-        </div>,
-        document.body
-      )}
+                ].map((a) => (
+                  <button
+                    key={a.label}
+                    type='button'
+                    onClick={() => {
+                      a.run()
+                      setCellMenu(null)
+                    }}
+                    className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                  >
+                    {a.label}
+                  </button>
+                ))}
+                <button
+                  type='button'
+                  onClick={() => {
+                    if (window.confirm('Delete this record? It moves to Trash for 30 days.')) {
+                      deleteRow.mutate(cellMenu.row.id as string | number)
+                    }
+                    setCellMenu(null)
+                  }}
+                  className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20'
+                >
+                  Delete
+                </button>
+              </>
+            )}
+          </div>,
+          document.body
+        )}
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
         {meta?.color && /^#[0-9a-fA-F]{3,8}$/.test(meta.color) && (
@@ -5227,7 +5478,9 @@ export function CollectionBrowserView({
             <span className='min-w-0 truncate'>
               {aiResult.interpreted || 'AI result'} · {fmtNum(aiResult.total)} match
               {aiResult.total === 1 ? '' : 'es'}
-              {aiResult.total > aiResult.rows.length ? ` (showing first ${aiResult.rows.length})` : ''}
+              {aiResult.total > aiResult.rows.length
+                ? ` (showing first ${aiResult.rows.length})`
+                : ''}
             </span>
             <button
               type='button'
@@ -5310,253 +5563,265 @@ export function CollectionBrowserView({
                 </p>
                 {effectiveColumns.map((k, idx) => (
                   <div key={k}>
-                  <div
-                    draggable={renamingCol !== k}
-                    onDragStart={() => {
-                      dragIdxRef.current = idx
-                    }}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault()
-                      const from = dragIdxRef.current
-                      dragIdxRef.current = null
-                      if (from == null || from === idx) return
-                      const next = [...effectiveColumns]
-                      const [moved] = next.splice(from, 1)
-                      next.splice(idx, 0, moved)
-                      setDisplayColumns(next)
-                    }}
-                    className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
-                  >
-                    <span aria-hidden className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'>
-                      ⠿
-                    </span>
-                    {renamingCol === k ? (
-                      <input
-                        autoFocus
-                        value={columnLabels[k] ?? ''}
-                        placeholder={
-                          k.includes('.') ? k.split('.').map(titleCase).join(' › ') : titleCase(k)
-                        }
-                        onChange={(e) =>
-                          setColumnLabels((l) => {
-                            const next = { ...l }
-                            if (e.target.value) next[k] = e.target.value
-                            else delete next[k]
-                            return next
-                          })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === 'Escape') setRenamingCol(null)
-                        }}
-                        onBlur={() => setRenamingCol(null)}
-                        className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                      />
-                    ) : (
-                      <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                        {columnLabel(k)}
-                      </span>
-                    )}
-                    {renamingCol !== k && (
-                      <button
-                        type='button'
-                        onClick={() => setRenamingCol(k)}
-                        title='Rename column'
-                        aria-label={`Rename ${k}`}
-                        className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                      >
-                        ✎
-                      </button>
-                    )}
-                    <button
-                      type='button'
-                      onClick={() => setFormattingCol(formattingCol === k ? null : k)}
-                      title='Format column'
-                      aria-label={`Format ${k}`}
-                      className={
-                        columnFormats[k]
-                          ? 'text-[11px] font-bold text-[#00a5cc]'
-                          : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
-                      }
+                    <div
+                      draggable={renamingCol !== k}
+                      onDragStart={() => {
+                        dragIdxRef.current = idx
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        const from = dragIdxRef.current
+                        dragIdxRef.current = null
+                        if (from == null || from === idx) return
+                        const next = [...effectiveColumns]
+                        const [moved] = next.splice(from, 1)
+                        next.splice(idx, 0, moved)
+                        setDisplayColumns(next)
+                      }}
+                      className='group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-slate-50 dark:hover:bg-slate-800'
                     >
-                      $
-                    </button>
-                    {!k.includes('.') && !k.startsWith('__') && (
+                      <span
+                        aria-hidden
+                        className='cursor-grab text-[10px] leading-none text-slate-300 group-hover:text-slate-400'
+                      >
+                        ⠿
+                      </span>
+                      {renamingCol === k ? (
+                        <input
+                          autoFocus
+                          value={columnLabels[k] ?? ''}
+                          placeholder={
+                            k.includes('.') ? k.split('.').map(titleCase).join(' › ') : titleCase(k)
+                          }
+                          onChange={(e) =>
+                            setColumnLabels((l) => {
+                              const next = { ...l }
+                              if (e.target.value) next[k] = e.target.value
+                              else delete next[k]
+                              return next
+                            })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === 'Escape') setRenamingCol(null)
+                          }}
+                          onBlur={() => setRenamingCol(null)}
+                          className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                        />
+                      ) : (
+                        <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                          {columnLabel(k)}
+                        </span>
+                      )}
+                      {renamingCol !== k && (
+                        <button
+                          type='button'
+                          onClick={() => setRenamingCol(k)}
+                          title='Rename column'
+                          aria-label={`Rename ${k}`}
+                          className='text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                        >
+                          ✎
+                        </button>
+                      )}
                       <button
                         type='button'
-                        onClick={() =>
-                          setColumnAggs((a) => {
-                            const next = { ...a }
-                            if (next[k]) delete next[k]
-                            else next[k] = 'sum'
-                            return next
-                          })
-                        }
-                        title='Sum this column in a footer row (across all matching records)'
-                        aria-label={`Toggle sum for ${k}`}
+                        onClick={() => setFormattingCol(formattingCol === k ? null : k)}
+                        title='Format column'
+                        aria-label={`Format ${k}`}
                         className={
-                          columnAggs[k]
+                          columnFormats[k]
                             ? 'text-[11px] font-bold text-[#00a5cc]'
                             : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
                         }
                       >
-                        Σ
+                        $
                       </button>
-                    )}
-                    <button
-                      type='button'
-                      onClick={() => setDisplayColumns(effectiveColumns.filter((x) => x !== k))}
-                      title='Remove column'
-                      aria-label={`Remove ${k}`}
-                      className='text-slate-300 hover:text-slate-500'
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  {formattingCol === k && (
-                    <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
-                      <div className='flex flex-wrap gap-1'>
-                        {FORMAT_PRESETS.map((pz) => {
-                          const active = JSON.stringify(columnFormats[k] ?? null) === JSON.stringify(pz.cfg)
-                          return (
-                            <button
-                              key={pz.label}
-                              type='button'
-                              onClick={() => {
-                                setColumnFormats((f) => {
-                                  const next = { ...f }
-                                  if (pz.cfg) next[k] = pz.cfg
-                                  else delete next[k]
-                                  return next
-                                })
-                                setFormattingCol(null)
-                              }}
-                              className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
-                                active
-                                  ? 'border-[#00ceff66] bg-[#00ceff14] text-slate-800 dark:text-slate-100'
-                                  : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
-                              }`}
-                            >
-                              {pz.label}
-                            </button>
-                          )
-                        })}
-                      </div>
-                      <input
-                        placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
-                        defaultValue={
-                          columnFormats[k]?.type === 'datetime' ? (columnFormats[k] as { template: string }).template : ''
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            const t = (e.target as HTMLInputElement).value.trim()
-                            if (t) setColumnFormats((f) => ({ ...f, [k]: { type: 'datetime', template: t } }))
-                            setFormattingCol(null)
-                          }
-                          if (e.key === 'Escape') setFormattingCol(null)
-                        }}
-                        className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-                      />
-                      {/* Conditional tint (#84): first matching rule colors the cell. */}
-                      <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
-                        <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                          Conditional color
-                        </p>
-                        {(columnTints[k] ?? []).map((r, ri) => (
-                          <div
-                            // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
-                            key={ri}
-                            className='mb-1 flex items-center gap-1'
-                          >
-                            <SimpleSelectXs
-                              ariaLabel='Rule operator'
-                              value={r.op}
-                              onChange={(v) =>
-                                setColumnTints((t) => ({
-                                  ...t,
-                                  [k]: (t[k] ?? []).map((x, i) =>
-                                    i === ri ? { ...x, op: v as TintRule['op'] } : x
-                                  )
-                                }))
-                              }
-                              options={[
-                                { value: 'gt', label: '>' },
-                                { value: 'lt', label: '<' },
-                                { value: 'eq', label: '=' },
-                                { value: 'neq', label: '≠' },
-                                { value: 'contains', label: 'contains' },
-                                { value: 'empty', label: 'is empty' },
-                                { value: 'nempty', label: 'is set' }
-                              ]}
-                            />
-                            {!['empty', 'nempty'].includes(r.op) && (
-                              <input
-                                value={r.value ?? ''}
-                                onChange={(e) =>
-                                  setColumnTints((t) => ({
-                                    ...t,
-                                    [k]: (t[k] ?? []).map((x, i) =>
-                                      i === ri ? { ...x, value: e.target.value } : x
-                                    )
-                                  }))
-                                }
-                                placeholder='value'
-                                className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-                              />
-                            )}
-                            {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
-                              <button
-                                key={c}
-                                type='button'
-                                aria-label={c}
-                                onClick={() =>
-                                  setColumnTints((t) => ({
-                                    ...t,
-                                    [k]: (t[k] ?? []).map((x, i) => (i === ri ? { ...x, color: c } : x))
-                                  }))
-                                }
-                                className={cn(
-                                  'h-3.5 w-3.5 rounded-full border',
-                                  c === 'red' && 'bg-red-500',
-                                  c === 'amber' && 'bg-amber-400',
-                                  c === 'green' && 'bg-emerald-500',
-                                  c === 'blue' && 'bg-sky-500',
-                                  r.color === c
-                                    ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
-                                    : 'border-transparent opacity-50'
-                                )}
-                              />
-                            ))}
-                            <button
-                              type='button'
-                              aria-label='Remove rule'
-                              onClick={() =>
-                                setColumnTints((t) => ({
-                                  ...t,
-                                  [k]: (t[k] ?? []).filter((_, i) => i !== ri)
-                                }))
-                              }
-                              className='ml-auto text-slate-300 hover:text-slate-500'
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
+                      {!k.includes('.') && !k.startsWith('__') && (
                         <button
                           type='button'
                           onClick={() =>
-                            setColumnTints((t) => ({
-                              ...t,
-                              [k]: [...(t[k] ?? []), { op: 'gt', value: '', color: 'red' }]
-                            }))
+                            setColumnAggs((a) => {
+                              const next = { ...a }
+                              if (next[k]) delete next[k]
+                              else next[k] = 'sum'
+                              return next
+                            })
                           }
-                          className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                          title='Sum this column in a footer row (across all matching records)'
+                          aria-label={`Toggle sum for ${k}`}
+                          className={
+                            columnAggs[k]
+                              ? 'text-[11px] font-bold text-[#00a5cc]'
+                              : 'text-[11px] text-slate-300 opacity-0 hover:text-slate-500 group-hover:opacity-100'
+                          }
                         >
-                          ＋ Add color rule
+                          Σ
                         </button>
-                      </div>
+                      )}
+                      <button
+                        type='button'
+                        onClick={() => setDisplayColumns(effectiveColumns.filter((x) => x !== k))}
+                        title='Remove column'
+                        aria-label={`Remove ${k}`}
+                        className='text-slate-300 hover:text-slate-500'
+                      >
+                        ✕
+                      </button>
                     </div>
-                  )}
+                    {formattingCol === k && (
+                      <div className='mb-1 ml-5 mr-1 rounded-md border border-slate-100 bg-slate-50 p-1.5 dark:border-slate-800 dark:bg-slate-800/60'>
+                        <div className='flex flex-wrap gap-1'>
+                          {FORMAT_PRESETS.map((pz) => {
+                            const active =
+                              JSON.stringify(columnFormats[k] ?? null) === JSON.stringify(pz.cfg)
+                            return (
+                              <button
+                                key={pz.label}
+                                type='button'
+                                onClick={() => {
+                                  setColumnFormats((f) => {
+                                    const next = { ...f }
+                                    if (pz.cfg) next[k] = pz.cfg
+                                    else delete next[k]
+                                    return next
+                                  })
+                                  setFormattingCol(null)
+                                }}
+                                className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
+                                  active
+                                    ? 'border-[#00ceff66] bg-[#00ceff14] text-slate-800 dark:text-slate-100'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                }`}
+                              >
+                                {pz.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <input
+                          placeholder='Custom date… e.g. DD MMM YY hh:mm A — Enter'
+                          defaultValue={
+                            columnFormats[k]?.type === 'datetime'
+                              ? (columnFormats[k] as { template: string }).template
+                              : ''
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const t = (e.target as HTMLInputElement).value.trim()
+                              if (t)
+                                setColumnFormats((f) => ({
+                                  ...f,
+                                  [k]: { type: 'datetime', template: t }
+                                }))
+                              setFormattingCol(null)
+                            }
+                            if (e.key === 'Escape') setFormattingCol(null)
+                          }}
+                          className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                        />
+                        {/* Conditional tint (#84): first matching rule colors the cell. */}
+                        <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                          <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                            Conditional color
+                          </p>
+                          {(columnTints[k] ?? []).map((r, ri) => (
+                            <div
+                              // biome-ignore lint/suspicious/noArrayIndexKey: positional rule list
+                              key={ri}
+                              className='mb-1 flex items-center gap-1'
+                            >
+                              <SimpleSelectXs
+                                ariaLabel='Rule operator'
+                                value={r.op}
+                                onChange={(v) =>
+                                  setColumnTints((t) => ({
+                                    ...t,
+                                    [k]: (t[k] ?? []).map((x, i) =>
+                                      i === ri ? { ...x, op: v as TintRule['op'] } : x
+                                    )
+                                  }))
+                                }
+                                options={[
+                                  { value: 'gt', label: '>' },
+                                  { value: 'lt', label: '<' },
+                                  { value: 'eq', label: '=' },
+                                  { value: 'neq', label: '≠' },
+                                  { value: 'contains', label: 'contains' },
+                                  { value: 'empty', label: 'is empty' },
+                                  { value: 'nempty', label: 'is set' }
+                                ]}
+                              />
+                              {!['empty', 'nempty'].includes(r.op) && (
+                                <input
+                                  value={r.value ?? ''}
+                                  onChange={(e) =>
+                                    setColumnTints((t) => ({
+                                      ...t,
+                                      [k]: (t[k] ?? []).map((x, i) =>
+                                        i === ri ? { ...x, value: e.target.value } : x
+                                      )
+                                    }))
+                                  }
+                                  placeholder='value'
+                                  className='h-5 w-16 rounded border border-slate-200 bg-white px-1 text-[10.5px] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                                />
+                              )}
+                              {(['red', 'amber', 'green', 'blue'] as const).map((c) => (
+                                <button
+                                  key={c}
+                                  type='button'
+                                  aria-label={c}
+                                  onClick={() =>
+                                    setColumnTints((t) => ({
+                                      ...t,
+                                      [k]: (t[k] ?? []).map((x, i) =>
+                                        i === ri ? { ...x, color: c } : x
+                                      )
+                                    }))
+                                  }
+                                  className={cn(
+                                    'h-3.5 w-3.5 rounded-full border',
+                                    c === 'red' && 'bg-red-500',
+                                    c === 'amber' && 'bg-amber-400',
+                                    c === 'green' && 'bg-emerald-500',
+                                    c === 'blue' && 'bg-sky-500',
+                                    r.color === c
+                                      ? 'border-slate-700 ring-1 ring-slate-400 dark:border-white'
+                                      : 'border-transparent opacity-50'
+                                  )}
+                                />
+                              ))}
+                              <button
+                                type='button'
+                                aria-label='Remove rule'
+                                onClick={() =>
+                                  setColumnTints((t) => ({
+                                    ...t,
+                                    [k]: (t[k] ?? []).filter((_, i) => i !== ri)
+                                  }))
+                                }
+                                className='ml-auto text-slate-300 hover:text-slate-500'
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type='button'
+                            onClick={() =>
+                              setColumnTints((t) => ({
+                                ...t,
+                                [k]: [...(t[k] ?? []), { op: 'gt', value: '', color: 'red' }]
+                              }))
+                            }
+                            className='text-[10.5px] text-slate-400 hover:text-slate-600'
+                          >
+                            ＋ Add color rule
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
                 <p className='mt-2 border-t border-slate-100 px-1.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800'>
@@ -5571,7 +5836,9 @@ export function CollectionBrowserView({
                       onClick={() => setDisplayColumns([...effectiveColumns, f.field])}
                       className='flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                     >
-                      <span aria-hidden className='text-slate-400'>＋</span>
+                      <span aria-hidden className='text-slate-400'>
+                        ＋
+                      </span>
                       <span className='truncate'>{titleCase(f.field)}</span>
                     </button>
                   ))}
@@ -5746,8 +6013,9 @@ export function CollectionBrowserView({
             </div>
           )}
         </div>
-        {canCreate && !meta?.singleton && (
-          newItemLayouts ? (
+        {canCreate &&
+          !meta?.singleton &&
+          (newItemLayouts ? (
             <div className='relative' data-cbv-newitem-menu ref={newItemMenuRef}>
               <button
                 type='button'
@@ -5767,8 +6035,12 @@ export function CollectionBrowserView({
                     }}
                     className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                   >
-                    {newItemLayouts.active?.create_label ?? newItemLayouts.active?.name ?? 'Default layout'}
-                    <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>default</span>
+                    {newItemLayouts.active?.create_label ??
+                      newItemLayouts.active?.name ??
+                      'Default layout'}
+                    <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                      default
+                    </span>
                   </button>
                   {newItemLayouts.options.map((l) => (
                     <button
@@ -5796,15 +6068,16 @@ export function CollectionBrowserView({
             >
               + New item
             </button>
-          )
-        )}
+          ))}
       </div>
 
       {/* Deep-link context (dashboard tiles etc.) — visible + dismissable so a
           contextual landing never reads as "the list is mysteriously short". */}
       {linkConds.length > 0 && (
         <div className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-[#00ceff08] px-4 py-1.5 dark:border-slate-800'>
-          <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>Showing:</span>
+          <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+            Showing:
+          </span>
           {linkConds.map((c, i) => (
             <span
               key={i}
@@ -5920,7 +6193,12 @@ export function CollectionBrowserView({
                     <BellOff className='h-3 w-3' />
                   )}
                 </button>
-                <button type='button' onClick={() => updateView.mutate(v.id)} title='Update with current state' aria-label={`Update ${v.name}`}>
+                <button
+                  type='button'
+                  onClick={() => updateView.mutate(v.id)}
+                  title='Update with current state'
+                  aria-label={`Update ${v.name}`}
+                >
                   ↺
                 </button>
                 {isAdmin && (
@@ -5929,12 +6207,20 @@ export function CollectionBrowserView({
                     onClick={() => setDefaultView.mutate({ id: v.id, on: !v.is_default })}
                     title={v.is_default ? 'Unset collection default' : 'Make collection default'}
                     aria-label={`Toggle default ${v.name}`}
-                    className={v.is_default ? 'text-[#00a5cc]' : 'text-slate-400 hover:text-[#00a5cc]'}
+                    className={
+                      v.is_default ? 'text-[#00a5cc]' : 'text-slate-400 hover:text-[#00a5cc]'
+                    }
                   >
                     ★
                   </button>
                 )}
-                <button type='button' onClick={() => deleteView.mutate(v.id)} title='Delete view' aria-label={`Delete ${v.name}`} className='hover:text-red-500'>
+                <button
+                  type='button'
+                  onClick={() => deleteView.mutate(v.id)}
+                  title='Delete view'
+                  aria-label={`Delete ${v.name}`}
+                  className='hover:text-red-500'
+                >
                   ✕
                 </button>
               </>
@@ -5956,15 +6242,28 @@ export function CollectionBrowserView({
               placeholder='View name…'
               className='h-6 w-32 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
             />
-            <button type='submit' disabled={!saveName.trim()} className='rounded bg-[#00ceff] px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-40'>
+            <button
+              type='submit'
+              disabled={!saveName.trim()}
+              className='rounded bg-[#00ceff] px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-40'
+            >
               Save
             </button>
-            <button type='button' onClick={() => setSaveOpen(false)} aria-label='Cancel' className='text-slate-400'>
+            <button
+              type='button'
+              onClick={() => setSaveOpen(false)}
+              aria-label='Cancel'
+              className='text-slate-400'
+            >
               ✕
             </button>
           </form>
         ) : (
-          <button type='button' onClick={() => setSaveOpen(true)} className='text-[12px] font-medium text-slate-400 hover:text-[#00a5cc]'>
+          <button
+            type='button'
+            onClick={() => setSaveOpen(true)}
+            className='text-[12px] font-medium text-slate-400 hover:text-[#00a5cc]'
+          >
             ☆ Save view
           </button>
         )}
@@ -6053,306 +6352,426 @@ export function CollectionBrowserView({
                 ))}
               </div>
             ) : (
-            <table
-              data-copy-cells=''
-              className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
-              style={{ fontVariantNumeric: 'tabular-nums' }}
-            >
-              <thead>
-                <tr className='border-b border-slate-200 dark:border-slate-700'>
-                  {enableCheckboxes && (
-                    <th
-                      // Measured like any other pinned column — a hardcoded 36
-                      // would drift from the real width and reopen the gap.
-                      ref={pinRef('__checkbox__')}
-                      className='sticky left-0 top-0 z-[4] h-8 w-9 bg-slate-50 px-3 py-0 dark:bg-slate-800'
-                    >
-                      <input type='checkbox' checked={allSelected} onChange={toggleAll} aria-label='Select all' />
-                    </th>
-                  )}
-                  {orderedCols.map((col) => {
-                    const key = col.key
-                    const pinned = !!pinOf(key)
-                    const baseTh = `group/hcell sticky top-0 h-8 select-none whitespace-nowrap bg-slate-50 px-3 py-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${pinned ? 'z-[4]' : 'z-[2]'}`
-                    const pinPart = pinCls(key, '', '')
-                    if (col.kind !== 'data') {
-                      const label =
-                        col.kind === 'state'
-                          ? 'State'
-                          : col.kind === 'owners'
-                            ? 'Owners'
-                            : col.kind === 'addendums'
-                              ? 'Addendums'
-                              : ''
-                      return (
-                        <th
-                          key={key}
-                          ref={pinned ? pinRef(key) : undefined}
-                          style={pinStyle(key)}
-                          className={`${baseTh} text-left ${col.kind === 'actions' ? 'w-20 px-2' : ''} ${pinPart}`}
-                        >
-                          {label}
-                          {pinButton(key)}
-                        </th>
-                      )
-                    }
-                    const f0 = fieldByName.get(key)
-                    const resolved =
-                      isResolvedCol(key) || !!(f0?.computed_formula && !f0.computed_store)
-                    const active =
-                      !resolved &&
-                      (sort === key || sort === `-${key}` || sort.replace(/^-/, '').startsWith(`${key}.`))
-                    const desc = sort.startsWith('-')  && active
-                    const f = fieldByName.get(key)
-                    const label = columnLabel(key)
-                    return (
-                      <th
-                        key={key}
-                        ref={pinned ? pinRef(key) : undefined}
-                        style={{ ...widthStyle(key), ...pinStyle(key) }}
-                        onClick={() => {
-                          if (!resolved) nextSort(key)
-                        }}
-                        className={`${baseTh} relative ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600'} ${pinPart}`}
-                      >
-                        {label}
-                        {f?.computed_formula && (
-                          <span title={`Computed: ${f.computed_formula}`} className='ml-1 text-violet-400'>
-                            ƒ
-                          </span>
-                        )}
-                        {!resolved && (
-                          <span
-                            className={`ml-1 inline-block transition-[transform,color] duration-200 ${
-                              active ? 'text-[#00a5cc]' : 'text-slate-300'
-                            } ${active && desc ? 'rotate-180' : ''}`}
-                          >
-                            {active ? '▲' : '⇅'}
-                          </span>
-                        )}
-                        {pinButton(key)}
-                        {resizeHandle(key)}
-                      </th>
-                    )
-                  })}
-                </tr>
-                {/* Column-level filters — every control commits to the server
-                    conditions, so filtering covers the entire record set */}
-                {(anyColFilterable || hasPipeline) && (
+              <table
+                data-copy-cells=''
+                className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
+                style={{ fontVariantNumeric: 'tabular-nums' }}
+              >
+                <thead>
                   <tr className='border-b border-slate-200 dark:border-slate-700'>
                     {enableCheckboxes && (
-                      <th className='sticky left-0 top-8 z-[4] w-9 bg-slate-50 px-3 py-1 dark:bg-slate-800' />
+                      <th
+                        // Measured like any other pinned column — a hardcoded 36
+                        // would drift from the real width and reopen the gap.
+                        ref={pinRef('__checkbox__')}
+                        className='sticky left-0 top-0 z-[4] h-8 w-9 bg-slate-50 px-3 py-0 dark:bg-slate-800'
+                      >
+                        <input
+                          type='checkbox'
+                          checked={allSelected}
+                          onChange={toggleAll}
+                          aria-label='Select all'
+                        />
+                      </th>
                     )}
                     {orderedCols.map((col) => {
                       const key = col.key
                       const pinned = !!pinOf(key)
-                      const baseTh = `sticky top-8 bg-slate-50 px-2 py-1 text-left font-normal dark:bg-slate-800 ${pinned ? 'z-[4]' : 'z-[2]'} ${pinCls(key, '', '')}`
-                      if (col.kind === 'state') {
-                        return (
-                          <th key={key} style={pinStyle(key)} className={baseTh}>
-                            <MultiPick
-                              block
-                              label='All'
-                              options={(pipelineTemplate?.states ?? []).map((st) => ({
-                                value: st.key,
-                                label: st.label ?? st.key
-                              }))}
-                              selected={
-                                colFilters.__state__?.kind === 'state' ? colFilters.__state__.value : []
-                              }
-                              onChange={(vals) =>
-                                setColFilter(
-                                  '__state__',
-                                  vals.length ? { kind: 'state', value: vals.map(String) } : null
-                                )
-                              }
-                            />
-                          </th>
-                        )
-                      }
+                      const baseTh = `group/hcell sticky top-0 h-8 select-none whitespace-nowrap bg-slate-50 px-3 py-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${pinned ? 'z-[4]' : 'z-[2]'}`
+                      const pinPart = pinCls(key, '', '')
                       if (col.kind !== 'data') {
+                        const label =
+                          col.kind === 'state'
+                            ? 'State'
+                            : col.kind === 'owners'
+                              ? 'Owners'
+                              : col.kind === 'addendums'
+                                ? 'Addendums'
+                                : ''
                         return (
                           <th
                             key={key}
+                            ref={pinned ? pinRef(key) : undefined}
                             style={pinStyle(key)}
-                            className={`${baseTh} ${col.kind === 'actions' ? 'w-20' : ''}`}
-                          />
+                            className={`${baseTh} text-left ${col.kind === 'actions' ? 'w-20 px-2' : ''} ${pinPart}`}
+                          >
+                            {label}
+                            {pinButton(key)}
+                          </th>
                         )
                       }
+                      const f0 = fieldByName.get(key)
+                      const resolved =
+                        isResolvedCol(key) || !!(f0?.computed_formula && !f0.computed_store)
+                      const active =
+                        !resolved &&
+                        (sort === key ||
+                          sort === `-${key}` ||
+                          sort.replace(/^-/, '').startsWith(`${key}.`))
+                      const desc = sort.startsWith('-') && active
+                      const f = fieldByName.get(key)
+                      const label = columnLabel(key)
                       return (
-                        <th key={key} style={pinStyle(key)} className={baseTh}>
-                          {renderColFilter(key)}
+                        <th
+                          key={key}
+                          ref={pinned ? pinRef(key) : undefined}
+                          style={{ ...widthStyle(key), ...pinStyle(key) }}
+                          onClick={() => {
+                            if (!resolved) nextSort(key)
+                          }}
+                          className={`${baseTh} relative ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600'} ${pinPart}`}
+                        >
+                          {label}
+                          {f?.computed_formula && (
+                            <span
+                              title={`Computed: ${f.computed_formula}`}
+                              className='ml-1 text-violet-400'
+                            >
+                              ƒ
+                            </span>
+                          )}
+                          {!resolved && (
+                            <span
+                              className={`ml-1 inline-block transition-[transform,color] duration-200 ${
+                                active ? 'text-[#00a5cc]' : 'text-slate-300'
+                              } ${active && desc ? 'rotate-180' : ''}`}
+                            >
+                              {active ? '▲' : '⇅'}
+                            </span>
+                          )}
+                          {pinButton(key)}
+                          {resizeHandle(key)}
                         </th>
                       )
                     })}
                   </tr>
-                )}
-              </thead>
-              {/* Tabular figures (proportional ones leave numeric columns ragged)
-                  and an explicit 12px base — cells with no size of their own were
-                  inheriting the table's 13px and reading a step larger than the rest. */}
-              <tbody key={dataUpdatedAt} className='text-[12px] tabular-nums'>
-                {isLoading ? (
-                  Array.from({ length: 12 }, (_, i) => (
-                    <tr key={i} className='border-b border-slate-100 dark:border-slate-800'>
-                      <td className='px-3 py-2' colSpan={effectiveColumns.length + extraCols}>
-                        <span
-                          className='cbv-shimmer block h-3.5 rounded'
-                          style={{ width: `${55 + ((i * 17) % 40)}%` }}
-                        />
-                      </td>
-                    </tr>
-                  ))
-                ) : rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={effectiveColumns.length + extraCols} className='nvr-fade-in py-16'>
-                      {(() => {
-                        // #620 — a collection with zero rows and no active
-                        // narrowing shows its configured empty state (what this
-                        // collection is for + where to start), not a search tip.
-                        const noNarrowing =
-                          filters.length === 0 &&
-                          Object.keys(colFilters).length === 0 &&
-                          !Object.values(appliedQuick).some((v) => v.length > 0) &&
-                          !appliedSearch
-                        const es = meta?.empty_state
-                        if (noNarrowing && es && (es.title || es.message)) {
-                          const ctaHref = es.cta_url ?? ''
-                          const internal = ctaHref.startsWith('/')
-                          const safeExternal = /^https?:\/\//.test(ctaHref)
+                  {/* Column-level filters — every control commits to the server
+                    conditions, so filtering covers the entire record set */}
+                  {(anyColFilterable || hasPipeline) && (
+                    <tr className='border-b border-slate-200 dark:border-slate-700'>
+                      {enableCheckboxes && (
+                        <th className='sticky left-0 top-8 z-[4] w-9 bg-slate-50 px-3 py-1 dark:bg-slate-800' />
+                      )}
+                      {orderedCols.map((col) => {
+                        const key = col.key
+                        const pinned = !!pinOf(key)
+                        const baseTh = `sticky top-8 bg-slate-50 px-2 py-1 text-left font-normal dark:bg-slate-800 ${pinned ? 'z-[4]' : 'z-[2]'} ${pinCls(key, '', '')}`
+                        if (col.kind === 'state') {
                           return (
-                            <div className='flex flex-col items-center gap-2 text-center'>
-                              <p className='text-[14px] font-semibold text-slate-700 dark:text-slate-200'>
-                                {es.title || 'Nothing here yet'}
-                              </p>
-                              {es.message && (
-                                <p className='max-w-[52ch] text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-                                  {es.message}
-                                </p>
-                              )}
-                              {es.cta_label && (internal || safeExternal) && (
-                                <a
-                                  href={ctaHref}
-                                  target={internal ? undefined : '_blank'}
-                                  rel={internal ? undefined : 'noreferrer'}
-                                  className='mt-1 inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white'
-                                >
-                                  {es.cta_label}
-                                </a>
-                              )}
-                            </div>
+                            <th key={key} style={pinStyle(key)} className={baseTh}>
+                              <MultiPick
+                                block
+                                label='All'
+                                options={(pipelineTemplate?.states ?? []).map((st) => ({
+                                  value: st.key,
+                                  label: st.label ?? st.key
+                                }))}
+                                selected={
+                                  colFilters.__state__?.kind === 'state'
+                                    ? colFilters.__state__.value
+                                    : []
+                                }
+                                onChange={(vals) =>
+                                  setColFilter(
+                                    '__state__',
+                                    vals.length ? { kind: 'state', value: vals.map(String) } : null
+                                  )
+                                }
+                              />
+                            </th>
+                          )
+                        }
+                        if (col.kind !== 'data') {
+                          return (
+                            <th
+                              key={key}
+                              style={pinStyle(key)}
+                              className={`${baseTh} ${col.kind === 'actions' ? 'w-20' : ''}`}
+                            />
                           )
                         }
                         return (
-                      <div className='flex flex-col items-center gap-2 text-center'>
-                        <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
-                          <Search aria-hidden className='h-4.5 w-4.5 h-5 w-5 text-slate-400' />
-                        </span>
-                        <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
-                          No records match
-                        </p>
-                        <p className='text-[12px] text-slate-400'>
-                          Try adjusting your search or filters.
-                        </p>
-                        {(filters.length > 0 ||
-                          Object.keys(colFilters).length > 0 ||
-                          Object.values(appliedQuick).some((v) => v.length > 0) ||
-                          appliedSearch) && (
-                          <button
-                            type='button'
-                            onClick={() => {
-                              setFilters([])
-                              setColFilters({})
-                              setQuickSel({})
-                              setAppliedQuick({})
-                              setSearch('')
-                              setPage(1)
-                            }}
-                            className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-[#00ceff66] hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
-                          >
-                            Clear all filters
-                          </button>
-                        )}
-                      </div>
+                          <th key={key} style={pinStyle(key)} className={baseTh}>
+                            {renderColFilter(key)}
+                          </th>
                         )
-                      })()}
-                    </td>
-                  </tr>
-                ) : (
-                  renderList.map((entry, rowIdx) => {
-                    const enterStyle = { animationDelay: `${Math.min(rowIdx, 14) * 16}ms` }
-                    if (entry.kind === 'header') {
+                      })}
+                    </tr>
+                  )}
+                </thead>
+                {/* Tabular figures (proportional ones leave numeric columns ragged)
+                  and an explicit 12px base — cells with no size of their own were
+                  inheriting the table's 13px and reading a step larger than the rest. */}
+                <tbody key={dataUpdatedAt} className='text-[12px] tabular-nums'>
+                  {isLoading ? (
+                    Array.from({ length: 12 }, (_, i) => (
+                      <tr key={i} className='border-b border-slate-100 dark:border-slate-800'>
+                        <td className='px-3 py-2' colSpan={effectiveColumns.length + extraCols}>
+                          <span
+                            className='cbv-shimmer block h-3.5 rounded'
+                            style={{ width: `${55 + ((i * 17) % 40)}%` }}
+                          />
+                        </td>
+                      </tr>
+                    ))
+                  ) : rows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={effectiveColumns.length + extraCols}
+                        className='nvr-fade-in py-16'
+                      >
+                        {(() => {
+                          // #620 — a collection with zero rows and no active
+                          // narrowing shows its configured empty state (what this
+                          // collection is for + where to start), not a search tip.
+                          const noNarrowing =
+                            filters.length === 0 &&
+                            Object.keys(colFilters).length === 0 &&
+                            !Object.values(appliedQuick).some((v) => v.length > 0) &&
+                            !appliedSearch
+                          const es = meta?.empty_state
+                          if (noNarrowing && es && (es.title || es.message)) {
+                            const ctaHref = es.cta_url ?? ''
+                            const internal = ctaHref.startsWith('/')
+                            const safeExternal = /^https?:\/\//.test(ctaHref)
+                            return (
+                              <div className='flex flex-col items-center gap-2 text-center'>
+                                <p className='text-[14px] font-semibold text-slate-700 dark:text-slate-200'>
+                                  {es.title || 'Nothing here yet'}
+                                </p>
+                                {es.message && (
+                                  <p className='max-w-[52ch] text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+                                    {es.message}
+                                  </p>
+                                )}
+                                {es.cta_label && (internal || safeExternal) && (
+                                  <a
+                                    href={ctaHref}
+                                    target={internal ? undefined : '_blank'}
+                                    rel={internal ? undefined : 'noreferrer'}
+                                    className='mt-1 inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white'
+                                  >
+                                    {es.cta_label}
+                                  </a>
+                                )}
+                              </div>
+                            )
+                          }
+                          return (
+                            <div className='flex flex-col items-center gap-2 text-center'>
+                              <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
+                                <Search
+                                  aria-hidden
+                                  className='h-4.5 w-4.5 h-5 w-5 text-slate-400'
+                                />
+                              </span>
+                              <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
+                                No records match
+                              </p>
+                              <p className='text-[12px] text-slate-400'>
+                                Try adjusting your search or filters.
+                              </p>
+                              {(filters.length > 0 ||
+                                Object.keys(colFilters).length > 0 ||
+                                Object.values(appliedQuick).some((v) => v.length > 0) ||
+                                appliedSearch) && (
+                                <button
+                                  type='button'
+                                  onClick={() => {
+                                    setFilters([])
+                                    setColFilters({})
+                                    setQuickSel({})
+                                    setAppliedQuick({})
+                                    setSearch('')
+                                    setPage(1)
+                                  }}
+                                  className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-[#00ceff66] hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
+                                >
+                                  Clear all filters
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })()}
+                      </td>
+                    </tr>
+                  ) : (
+                    renderList.map((entry, rowIdx) => {
+                      const enterStyle = { animationDelay: `${Math.min(rowIdx, 14) * 16}ms` }
+                      if (entry.kind === 'header') {
+                        return (
+                          <tr
+                            key={`__group__${entry.gkey}`}
+                            onClick={() =>
+                              setCollapsedGroups((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(entry.gkey)) next.delete(entry.gkey)
+                                else next.add(entry.gkey)
+                                return next
+                              })
+                            }
+                            style={enterStyle}
+                            className='nvr-row-enter cursor-pointer border-b border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:border-slate-700 dark:bg-muted/40'
+                          >
+                            <td
+                              className='px-3 py-1.5'
+                              colSpan={effectiveColumns.length + extraCols}
+                            >
+                              <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-200'>
+                                <ChevronDown
+                                  className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+                                    collapsedGroups.has(entry.gkey) ? '-rotate-90' : ''
+                                  }`}
+                                />
+                                {entry.label}
+                                <span className='rounded-full bg-slate-200/70 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
+                                  {entry.count}
+                                </span>
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      }
+                      const row = entry.row
+                      const id = row.id as string | number
+                      const isSelected = selectedIds.includes(id)
+                      const state = pipelineData?.instances?.[String(id)]
+                      const risk = riskMap[String(id)]
+                      const riskTint =
+                        !isSelected && risk ? rowHighlightClass(risk.color) : undefined
+                      // Pinned cells need an OPAQUE bg — tinted rows carry the tint
+                      // into their sticky cells so pinned columns match the row.
+                      const stickyBg = isSelected
+                        ? 'bg-[#e6fafe] dark:bg-[#0c2a33]'
+                        : (riskTint ??
+                          'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
                       return (
                         <tr
-                          key={`__group__${entry.gkey}`}
-                          onClick={() =>
-                            setCollapsedGroups((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(entry.gkey)) next.delete(entry.gkey)
-                              else next.add(entry.gkey)
-                              return next
-                            })
-                          }
+                          key={String(id)}
+                          onClick={() => openRow(id)}
+                          onMouseEnter={() => prefetchRecord(id)}
+                          title={risk ? `At risk — ${risk.rule}` : undefined}
                           style={enterStyle}
-                          className='nvr-row-enter cursor-pointer border-b border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:border-slate-700 dark:bg-muted/40'
+                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
+                            isSelected ? 'bg-[#00ceff14]' : (riskTint ?? '')
+                          }`}
                         >
-                          <td className='px-3 py-1.5' colSpan={effectiveColumns.length + extraCols}>
-                            <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-200'>
-                              <ChevronDown
-                                className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
-                                  collapsedGroups.has(entry.gkey) ? '-rotate-90' : ''
-                                }`}
-                              />
-                              {entry.label}
-                              <span className='rounded-full bg-slate-200/70 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
-                                {entry.count}
-                              </span>
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    }
-                    const row = entry.row
-                    const id = row.id as string | number
-                    const isSelected = selectedIds.includes(id)
-                    const state = pipelineData?.instances?.[String(id)]
-                    const risk = riskMap[String(id)]
-                    const riskTint = !isSelected && risk ? rowHighlightClass(risk.color) : undefined
-                    // Pinned cells need an OPAQUE bg — tinted rows carry the tint
-                    // into their sticky cells so pinned columns match the row.
-                    const stickyBg = isSelected
-                      ? 'bg-[#e6fafe] dark:bg-[#0c2a33]'
-                      : (riskTint ??
-                        'bg-white group-hover:bg-[#f2fcff] dark:bg-slate-900 dark:group-hover:bg-[#0e2d3a]')
-                    return (
-                      <tr
-                        key={String(id)}
-                        onClick={() => openRow(id)}
-                        onMouseEnter={() => prefetchRecord(id)}
-                        title={risk ? `At risk — ${risk.rule}` : undefined}
-                        style={enterStyle}
-                        className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
-                          isSelected ? 'bg-[#00ceff14]' : (riskTint ?? '')
-                        }`}
-                      >
-                        {/* stopPropagation only — the checkbox's own onChange
+                          {/* stopPropagation only — the checkbox's own onChange
                             toggles; toggling here too would double-toggle. */}
-                        {enableCheckboxes && (
-                          <td
-                            className={`sticky left-0 z-[1] w-9 px-3 py-1.5 ${stickyBg}`}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <input
-                              type='checkbox'
-                              checked={isSelected}
-                              onChange={() => toggleRow(id)}
-                              aria-label={`Select ${id}`}
-                            />
-                          </td>
-                        )}
-                        {orderedCols.map((col) => {
-                          const key = col.key
-                          if (col.kind === 'state') {
+                          {enableCheckboxes && (
+                            <td
+                              className={`sticky left-0 z-[1] w-9 px-3 py-1.5 ${stickyBg}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type='checkbox'
+                                checked={isSelected}
+                                onChange={() => toggleRow(id)}
+                                aria-label={`Select ${id}`}
+                              />
+                            </td>
+                          )}
+                          {orderedCols.map((col) => {
+                            const key = col.key
+                            if (col.kind === 'state') {
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault()
+                                    setCellMenu({
+                                      x: e.clientX,
+                                      y: e.clientY,
+                                      key,
+                                      row,
+                                      cellText: (e.currentTarget as HTMLElement).innerText.trim()
+                                    })
+                                  }}
+                                  className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  {state ? (
+                                    <span
+                                      className='inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
+                                      style={{
+                                        backgroundColor: `${state.state_color ?? '#6b7280'}1f`
+                                      }}
+                                    >
+                                      <span
+                                        aria-hidden
+                                        className='h-1.5 w-1.5 shrink-0 rounded-full'
+                                        style={{ backgroundColor: state.state_color ?? '#6b7280' }}
+                                      />
+                                      {state.state_label ?? state.state_key ?? '?'}
+                                      {state.via_addendum && (
+                                        <span
+                                          data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
+                                          className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
+                                        >
+                                          Addendum
+                                        </span>
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <span className='text-[12px] text-slate-300'>—</span>
+                                  )}
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'owners') {
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <UserRosterCluster
+                                    users={ownersByItem?.[String(id)] ?? []}
+                                    showSingleName={false}
+                                  />
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'addendums') {
+                              const a = addendumSummary?.[String(id)]
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  <AddendumSummaryPill summary={a} />
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'actions') {
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`w-20 whitespace-nowrap px-2 py-1 text-right ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <RowActionsMenu
+                                    collection={collection}
+                                    id={id}
+                                    hasPipeline={hasPipeline}
+                                    onOpen={() => openRow(id)}
+                                    onPeek={() =>
+                                      recordDrill.push([{ collection, itemId: String(id) }])
+                                    }
+                                    onAudit={() => setAuditId(String(id))}
+                                    urlFor={urlFor}
+                                    onDeleted={() => deleteRow.mutate(id)}
+                                  />
+                                </td>
+                              )
+                            }
+                            const drill = isResolvedCol(key) ? resolvedDrill(id, key) : null
+                            const m2oRel = !isResolvedCol(key)
+                              ? isM2OField(relations, collection, key)
+                              : null
                             return (
                               <td
                                 key={key}
@@ -6367,187 +6786,115 @@ export function CollectionBrowserView({
                                     cellText: (e.currentTarget as HTMLElement).innerText.trim()
                                   })
                                 }}
-                                className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
                               >
-                                {state ? (
-                                  <span
-                                    className='inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-2.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200'
-                                    style={{ backgroundColor: `${state.state_color ?? '#6b7280'}1f` }}
-                                  >
-                                    <span
-                                      aria-hidden
-                                      className='h-1.5 w-1.5 shrink-0 rounded-full'
-                                      style={{ backgroundColor: state.state_color ?? '#6b7280' }}
-                                    />
-                                    {state.state_label ?? state.state_key ?? '?'}
-                                    {state.via_addendum && (
-                                      <span
-                                        data-tip={`Addendum "${state.via_addendum.title ?? ''}" in approval — record itself is ${state.record_state_label ?? 'unchanged'}`}
-                                        className='ml-0.5 rounded-sm bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300'
-                                      >
-                                        Addendum
-                                      </span>
-                                    )}
-                                  </span>
-                                ) : (
-                                  <span className='text-[12px] text-slate-300'>—</span>
-                                )}
-                              </td>
-                            )
-                          }
-                          if (col.kind === 'owners') {
-                            return (
-                              <td
-                                key={key}
-                                style={pinStyle(key)}
-                                className={`whitespace-nowrap px-3 py-1 ${pinCls(key, 'z-[1]', stickyBg)}`}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <UserRosterCluster
-                                  users={ownersByItem?.[String(id)] ?? []}
-                                  showSingleName={false}
-                                />
-                              </td>
-                            )
-                          }
-                          if (col.kind === 'addendums') {
-                            const a = addendumSummary?.[String(id)]
-                            return (
-                              <td
-                                key={key}
-                                style={pinStyle(key)}
-                                className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
-                              >
-                                <AddendumSummaryPill summary={a} />
-                              </td>
-                            )
-                          }
-                          if (col.kind === 'actions') {
-                            return (
-                              <td
-                                key={key}
-                                style={pinStyle(key)}
-                                className={`w-20 whitespace-nowrap px-2 py-1 text-right ${pinCls(key, 'z-[1]', stickyBg)}`}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <RowActionsMenu
-                                  collection={collection}
-                                  id={id}
-                                  hasPipeline={hasPipeline}
-                                  onOpen={() => openRow(id)}
-                                  onPeek={() => recordDrill.push([{ collection, itemId: String(id) }])}
-                                  onAudit={() => setAuditId(String(id))}
-                                  urlFor={urlFor}
-                                  onDeleted={() => deleteRow.mutate(id)}
-                                />
-                              </td>
-                            )
-                          }
-                          const drill = isResolvedCol(key) ? resolvedDrill(id, key) : null
-                          const m2oRel = !isResolvedCol(key) ? isM2OField(relations, collection, key) : null
-                          return (
-                            <td
-                              key={key}
-                              style={pinStyle(key)}
-                              onContextMenu={(e) => {
-                                e.preventDefault()
-                                setCellMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  key,
-                                  row,
-                                  cellText: (e.currentTarget as HTMLElement).innerText.trim()
-                                })
-                              }}
-                              className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
-                            >
-                              {isResolvedCol(key) ? (
-                                resolvedTargetFor(key) === 'nivaro_users' ? (
-                                  (() => {
-                                    const upath = key.includes('.') ? key : aliasPathByField[key]
-                                    const uids = resolvedData?.rows?.[String(id)]?.[upath]?.ids ?? []
-                                    const val = resolvedFor(id, key) ?? ''
-                                    if (uids.length === 0 || !val || val === '—')
-                                      return <span className='text-[12px] text-slate-300'>—</span>
-                                    if (uids.length === 1)
+                                {isResolvedCol(key) ? (
+                                  resolvedTargetFor(key) === 'nivaro_users' ? (
+                                    (() => {
+                                      const upath = key.includes('.') ? key : aliasPathByField[key]
+                                      const uids =
+                                        resolvedData?.rows?.[String(id)]?.[upath]?.ids ?? []
+                                      const val = resolvedFor(id, key) ?? ''
+                                      if (uids.length === 0 || !val || val === '—')
+                                        return <span className='text-[12px] text-slate-300'>—</span>
+                                      if (uids.length === 1)
+                                        return (
+                                          <span onClick={(e) => e.stopPropagation()}>
+                                            <UserChip userId={String(uids[0])} size='compact' />
+                                          </span>
+                                        )
+                                      const names = val.split(', ')
                                       return (
-                                        <span onClick={(e) => e.stopPropagation()}>
-                                          <UserChip userId={String(uids[0])} size='compact' />
-                                        </span>
+                                        <UserRosterCluster
+                                          users={uids.map((uid, i) => ({
+                                            id: String(uid),
+                                            name: names[i] ?? String(uid)
+                                          }))}
+                                          showSingleName={false}
+                                        />
                                       )
-                                    const names = val.split(', ')
-                                    return (
-                                      <UserRosterCluster
-                                        users={uids.map((uid, i) => ({
-                                          id: String(uid),
-                                          name: names[i] ?? String(uid)
-                                        }))}
-                                        showSingleName={false}
-                                      />
-                                    )
-                                  })()
-                                ) : drill && resolvedFor(id, key) !== '—' ? (
+                                    })()
+                                  ) : drill && resolvedFor(id, key) !== '—' ? (
+                                    <button
+                                      type='button'
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        recordDrill.push([
+                                          { collection: drill.target, itemId: drill.id }
+                                        ])
+                                      }}
+                                      data-tip={resolvedFor(id, key) ?? undefined}
+                                      className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
+                                    >
+                                      {columnFormats[key]?.type === 'count' && isFilesCol(key)
+                                        ? '📎 '
+                                        : ''}
+                                      {fmtCell(resolvedFor(id, key) ?? '', key, id)}
+                                    </button>
+                                  ) : (
+                                    <span
+                                      className='block max-w-[260px] truncate text-[12px] text-slate-700 dark:text-slate-200'
+                                      data-tip={resolvedFor(id, key) ?? undefined}
+                                    >
+                                      {resolvedFor(id, key) != null ? (
+                                        `${columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}${fmtCell(resolvedFor(id, key) ?? '', key, id)}`
+                                      ) : (
+                                        <span className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                                      )}
+                                    </span>
+                                  )
+                                ) : m2oRel?.one_collection === 'nivaro_users' &&
+                                  row[key] != null ? (
+                                  <span onClick={(e) => e.stopPropagation()}>
+                                    <UserChip userId={String(row[key])} size='compact' />
+                                  </span>
+                                ) : m2oRel?.one_collection &&
+                                  row[key] != null &&
+                                  !isSystemCol(m2oRel.one_collection) ? (
                                   <button
                                     type='button'
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      recordDrill.push([{ collection: drill.target, itemId: drill.id }])
+                                      recordDrill.push([
+                                        {
+                                          collection: m2oRel.one_collection as string,
+                                          itemId: String(row[key])
+                                        }
+                                      ])
                                     }}
-                                    data-tip={resolvedFor(id, key) ?? undefined}
-                                    className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
+                                    className='text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
                                   >
-                                    {columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}
-                                    {fmtCell(resolvedFor(id, key) ?? '', key, id)}
+                                    <RelationLabel
+                                      relatedCollection={m2oRel.one_collection as string}
+                                      id={row[key]}
+                                    />
                                   </button>
-                                ) : (
+                                ) : columnFormats[key] && row[key] != null ? (
                                   <span
-                                    className='block max-w-[260px] truncate text-[12px] text-slate-700 dark:text-slate-200'
-                                    data-tip={resolvedFor(id, key) ?? undefined}
-                                  >
-                                    {resolvedFor(id, key) != null ? (
-                                      `${columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}${fmtCell(resolvedFor(id, key) ?? '', key, id)}`
-                                    ) : (
-                                      <span className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                                    className={cn(
+                                      'text-[12px] tabular-nums text-slate-700 dark:text-slate-200',
+                                      tintFor(row[key], columnTints[key]) &&
+                                        TINT_TEXT[tintFor(row[key], columnTints[key])!]
                                     )}
+                                  >
+                                    {formatValue(String(row[key]), columnFormats[key])}
                                   </span>
-                                )
-                              ) : m2oRel?.one_collection === 'nivaro_users' && row[key] != null ? (
-                                <span onClick={(e) => e.stopPropagation()}>
-                                  <UserChip userId={String(row[key])} size='compact' />
-                                </span>
-                              ) : m2oRel?.one_collection && row[key] != null && !isSystemCol(m2oRel.one_collection) ? (
-                                <button
-                                  type='button'
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    recordDrill.push([
-                                      {
-                                        collection: m2oRel.one_collection as string,
-                                        itemId: String(row[key])
-                                      }
-                                    ])
-                                  }}
-                                  className='text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
-                                >
-                                  <RelationLabel relatedCollection={m2oRel.one_collection as string} id={row[key]} />
-                                </button>
-                              ) : columnFormats[key] && row[key] != null ? (
-                                <span
-                                  className={cn(
-                                    'text-[12px] tabular-nums text-slate-700 dark:text-slate-200',
-                                    tintFor(row[key], columnTints[key]) &&
+                                ) : tintFor(row[key], columnTints[key]) ? (
+                                  <span
+                                    className={cn(
+                                      'text-[12px]',
                                       TINT_TEXT[tintFor(row[key], columnTints[key])!]
-                                  )}
-                                >
-                                  {formatValue(String(row[key]), columnFormats[key])}
-                                </span>
-                              ) : tintFor(row[key], columnTints[key]) ? (
-                                <span
-                                  className={cn(
-                                    'text-[12px]',
-                                    TINT_TEXT[tintFor(row[key], columnTints[key])!]
-                                  )}
-                                >
+                                    )}
+                                  >
+                                    <CellValue
+                                      collection={collection}
+                                      field={key}
+                                      fieldType={fieldByName.get(key)?.type ?? null}
+                                      value={row[key]}
+                                      relations={relations}
+                                    />
+                                  </span>
+                                ) : (
                                   <CellValue
                                     collection={collection}
                                     field={key}
@@ -6555,62 +6902,53 @@ export function CollectionBrowserView({
                                     value={row[key]}
                                     relations={relations}
                                   />
-                                </span>
-                              ) : (
-                                <CellValue
-                                  collection={collection}
-                                  field={key}
-                                  fieldType={fieldByName.get(key)?.type ?? null}
-                                  value={row[key]}
-                                  relations={relations}
-                                />
-                              )}
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-              {aggregates && Object.keys(aggregates).length > 0 && !groupBy && (
-                <tfoot className='text-[12px] tabular-nums'>
-                  <tr className='sticky bottom-0 z-[2] border-t-2 border-slate-200 bg-slate-50 font-medium dark:border-slate-700 dark:bg-slate-800'>
-                    {enableCheckboxes && (
-                      <td className='sticky left-0 z-[3] w-9 bg-slate-50 px-3 py-1.5 dark:bg-slate-800' />
-                    )}
-                    {orderedCols.map((col, ci) => {
-                      const key = col.key
-                      const v = aggregates[key]
-                      return (
-                        <td
-                          key={key}
-                          className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[3]', 'bg-slate-50 dark:bg-slate-800')}`}
-                          style={pinStyle(key)}
-                          data-tip={
-                            v != null
-                              ? `Sum of ${columnLabel(key)} across all ${fmtNum(total)} matching records`
-                              : undefined
-                          }
-                        >
-                          {v != null ? (
-                            <span className='text-slate-700 dark:text-slate-200'>
-                              {columnFormats[key]
-                                ? formatValue(String(v), columnFormats[key])
-                                : fmtNum(Math.round(v * 100) / 100)}
-                            </span>
-                          ) : ci === 0 ? (
-                            <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                              Σ totals
-                            </span>
-                          ) : null}
-                        </td>
+                                )}
+                              </td>
+                            )
+                          })}
+                        </tr>
                       )
-                    })}
-                  </tr>
-                </tfoot>
-              )}
-            </table>
+                    })
+                  )}
+                </tbody>
+                {aggregates && Object.keys(aggregates).length > 0 && !groupBy && (
+                  <tfoot className='text-[12px] tabular-nums'>
+                    <tr className='sticky bottom-0 z-[2] border-t-2 border-slate-200 bg-slate-50 font-medium dark:border-slate-700 dark:bg-slate-800'>
+                      {enableCheckboxes && (
+                        <td className='sticky left-0 z-[3] w-9 bg-slate-50 px-3 py-1.5 dark:bg-slate-800' />
+                      )}
+                      {orderedCols.map((col, ci) => {
+                        const key = col.key
+                        const v = aggregates[key]
+                        return (
+                          <td
+                            key={key}
+                            className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[3]', 'bg-slate-50 dark:bg-slate-800')}`}
+                            style={pinStyle(key)}
+                            data-tip={
+                              v != null
+                                ? `Sum of ${columnLabel(key)} across all ${fmtNum(total)} matching records`
+                                : undefined
+                            }
+                          >
+                            {v != null ? (
+                              <span className='text-slate-700 dark:text-slate-200'>
+                                {columnFormats[key]
+                                  ? formatValue(String(v), columnFormats[key])
+                                  : fmtNum(Math.round(v * 100) / 100)}
+                              </span>
+                            ) : ci === 0 ? (
+                              <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                                Σ totals
+                              </span>
+                            ) : null}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
             )}
           </div>
           <HScrollProxy scrollerRef={tableScrollRef} />
@@ -6837,7 +7175,10 @@ function RecordCompareDialog({
   }
 
   return createPortal(
-    <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6' onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6'
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className='nvr-pop-in flex max-h-[85vh] w-full max-w-[980px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
         <div className='flex shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-border'>
           <span className='text-[13.5px] font-semibold text-slate-800 dark:text-foreground'>
@@ -6912,7 +7253,10 @@ function RecordCompareDialog({
                 ))}
                 {visible.length === 0 && (
                   <tr>
-                    <td colSpan={ids.length + 1} className='px-4 py-6 text-center text-[12px] text-slate-400'>
+                    <td
+                      colSpan={ids.length + 1}
+                      className='px-4 py-6 text-center text-[12px] text-slate-400'
+                    >
                       {diffOnly ? 'No differing fields.' : 'Nothing to compare.'}
                     </td>
                   </tr>

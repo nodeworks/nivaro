@@ -3149,6 +3149,8 @@ export function ItemEditForm({
     status: string
     fields_schema: string[] | null
     data: Record<string, unknown> | null
+    /** Pipeline state when the addendum runs a workflow (server-attached). */
+    workflow_state?: { key: string; label: string; color: string | null } | null
   }
 
   const { data: addendumData = [] } = useQuery<AddendumRecord[]>({
@@ -8305,16 +8307,29 @@ export function ItemEditForm({
                                                 <span
                                                   className={cn(
                                                     'h-1.5 w-1.5 shrink-0 rounded-full',
-                                                    a.status === 'approved'
-                                                      ? 'bg-emerald-400'
-                                                      : a.status === 'rejected'
-                                                        ? 'bg-red-400'
-                                                        : 'bg-amber-400'
+                                                    !a.workflow_state &&
+                                                      (a.status === 'approved'
+                                                        ? 'bg-emerald-400'
+                                                        : a.status === 'rejected'
+                                                          ? 'bg-red-400'
+                                                          : 'bg-amber-400')
                                                   )}
+                                                  style={
+                                                    a.workflow_state?.color
+                                                      ? { backgroundColor: a.workflow_state.color }
+                                                      : a.workflow_state
+                                                        ? { backgroundColor: '#f59e0b' }
+                                                        : undefined
+                                                  }
                                                 />
                                                 <span className='flex-1 truncate'>{a.title}</span>
-                                                <span className='text-[10px] capitalize text-slate-400'>
-                                                  {a.status}
+                                                <span
+                                                  className={cn(
+                                                    'text-[10px] text-slate-400',
+                                                    !a.workflow_state && 'capitalize'
+                                                  )}
+                                                >
+                                                  {a.workflow_state?.label ?? a.status}
                                                 </span>
                                               </button>
                                             ))}

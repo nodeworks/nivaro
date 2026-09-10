@@ -17,21 +17,48 @@ function parseJsonSafe(val: unknown): unknown {
 
 // Columns blocked on the nivaro_addendums table write path
 const RESERVED_COLUMNS = new Set([
-  'id', 'created_at', 'updated_at', 'created_by', 'status',
-  'parent_collection', 'parent_id', 'title', 'description',
-  'cost_impact', 'timeline_impact_days', 'workflow_template_id',
-  'addendum_layout_id', 'approved_by', 'approved_at',
-  'fields_schema', 'data'
+  'id',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'status',
+  'parent_collection',
+  'parent_id',
+  'title',
+  'description',
+  'cost_impact',
+  'timeline_impact_days',
+  'workflow_template_id',
+  'addendum_layout_id',
+  'approved_by',
+  'approved_at',
+  'fields_schema',
+  'data'
 ])
 
 // Columns blocked on the PARENT business table write path (apply-back on approve)
 const PARENT_WRITE_BLOCKED_COLUMNS = new Set([
-  'id', 'created_at', 'updated_at', 'created_by',
-  'password', 'password_hash', 'totp_secret', 'totp_enabled',
-  'static_token', 'admin_access', 'app_access',
-  'tenant_id', 'workspace_id', 'workspace', 'owner_id',
-  'deleted_at', 'is_deleted', 'is_redacted', 'redacted_at',
-  'external_id', 'role',
+  'id',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'password',
+  'password_hash',
+  'totp_secret',
+  'totp_enabled',
+  'static_token',
+  'admin_access',
+  'app_access',
+  'tenant_id',
+  'workspace_id',
+  'workspace',
+  'owner_id',
+  'deleted_at',
+  'is_deleted',
+  'is_redacted',
+  'redacted_at',
+  'external_id',
+  'role'
 ])
 
 async function getAllowedAddendumFields(
@@ -42,32 +69,30 @@ async function getAllowedAddendumFields(
 
   if (layoutId) {
     // Verify the provided layout belongs to this collection and is an addendum-type layout
-    const layout = await db('nivaro_collection_layouts')
+    const layout = (await db('nivaro_collection_layouts')
       .where({ id: layoutId })
       .select('id', 'collection', 'layout_type')
-      .first() as { id: number; collection: string; layout_type: string } | undefined
+      .first()) as { id: number; collection: string; layout_type: string } | undefined
     if (!layout || layout.collection !== collection || layout.layout_type !== 'addendum') {
       return new Set()
     }
   } else {
     // Find the default addendum-type layout for this collection
-    const defaultLayout = await db('nivaro_collection_layouts')
+    const defaultLayout = (await db('nivaro_collection_layouts')
       .where({ collection, layout_type: 'addendum' })
       .orderBy('sort', 'asc')
-      .first() as { id: number } | undefined
+      .first()) as { id: number } | undefined
     if (!defaultLayout) return new Set()
     layoutId = defaultLayout.id
   }
 
-  const assignments = await db('nivaro_layout_field_assignments')
+  const assignments = (await db('nivaro_layout_field_assignments')
     .where({ layout_id: layoutId })
-    .select('field') as Array<{ field: string }>
+    .select('field')) as Array<{ field: string }>
 
   // Exclude sentinel fields and reserved columns
   return new Set(
-    assignments
-      .map((a) => a.field)
-      .filter((k) => !k.startsWith('__') && !RESERVED_COLUMNS.has(k))
+    assignments.map((a) => a.field).filter((k) => !k.startsWith('__') && !RESERVED_COLUMNS.has(k))
   )
 }
 
@@ -119,7 +144,8 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if (!body.collection || !Array.isArray(body.ids)) {
       return reply.code(400).send({ error: 'collection and ids[] are required' })
     }
-    if (/^nivaro_/i.test(body.collection)) return reply.code(400).send({ error: 'Invalid collection' })
+    if (/^nivaro_/i.test(body.collection))
+      return reply.code(400).send({ error: 'Invalid collection' })
     if (!(await can(req.user!, 'read', body.collection)))
       return reply.code(403).send({ error: 'Forbidden' })
     const ids = body.ids.map(String).filter(Boolean).slice(0, 500)
@@ -137,7 +163,38 @@ export async function addendumsRoutes(app: FastifyInstance) {
       .where({ parent_collection: collection, parent_id: itemId })
       .orderBy('created_at', 'desc')) as Record<string, unknown>[]
 
-    return reply.send({ data: rows.map(formatAddendum) })
+    // An addendum on a workflow template lives in the PIPELINE — its own
+    // status column ('draft') is the legacy fallback. Attach the instance's
+    // current state so views name "Waiting on Manager Approval", not "draft".
+    const states = new Map<string, { key: string; label: string; color: string | null }>()
+    if (rows.length > 0) {
+      const insts = (await db('nivaro_workflow_instances as i')
+        .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+        .where('i.collection', 'nivaro_addendums')
+        .whereIn(
+          'i.item',
+          rows.map((r) => String(r.id))
+        )
+        .select('i.item', 's.key', 's.label', 's.color', 'i.started_at')
+        .orderBy('i.started_at', 'desc')
+        .catch(() => [])) as Array<{
+        item: string
+        key: string
+        label: string
+        color: string | null
+        started_at: unknown
+      }>
+      for (const x of insts) {
+        if (!states.has(String(x.item)))
+          states.set(String(x.item), { key: x.key, label: x.label, color: x.color })
+      }
+    }
+    return reply.send({
+      data: rows.map((r) => ({
+        ...formatAddendum(r),
+        workflow_state: states.get(String(r.id)) ?? null
+      }))
+    })
   })
 
   // GET /addendums/:id — get single addendum
@@ -189,7 +246,11 @@ export async function addendumsRoutes(app: FastifyInstance) {
     // Validate that the provided addendum_layout_id belongs to this collection
     if (body.addendum_layout_id != null) {
       const layout = await db('nivaro_collection_layouts')
-        .where({ id: body.addendum_layout_id, collection: body.parent_collection, layout_type: 'addendum' })
+        .where({
+          id: body.addendum_layout_id,
+          collection: body.parent_collection,
+          layout_type: 'addendum'
+        })
         .first()
       if (!layout) {
         return reply.code(400).send({ error: 'Invalid addendum_layout_id for this collection' })
@@ -200,7 +261,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
     // Deny-all when no layout configured (no valid addendum layout = no writable fields).
     let sanitizedData: Record<string, unknown> | null = null
     if (body.data != null) {
-      const allowedFields = await getAllowedAddendumFields(body.parent_collection, body.addendum_layout_id ?? null)
+      const allowedFields = await getAllowedAddendumFields(
+        body.parent_collection,
+        body.addendum_layout_id ?? null
+      )
       sanitizedData = Object.fromEntries(
         Object.entries(body.data).filter(([k]) => allowedFields.has(k))
       )
@@ -255,21 +319,22 @@ export async function addendumsRoutes(app: FastifyInstance) {
           // Configured start state (Settings → Addendums) wins over the
           // template's is_initial state; a stale key falls back to is_initial.
           let startState: { id: string } | undefined
-          const startRules = parseJsonSafe(col?.addendum_start_states ?? null) as
-            | Array<{ pipeline_id: string; state_key: string }>
-            | null
+          const startRules = parseJsonSafe(col?.addendum_start_states ?? null) as Array<{
+            pipeline_id: string
+            state_key: string
+          }> | null
           const startRule = Array.isArray(startRules)
             ? startRules.find((r) => r.pipeline_id === body.workflow_template_id)
             : null
           if (startRule?.state_key) {
-            startState = await db('nivaro_workflow_states')
+            startState = (await db('nivaro_workflow_states')
               .where({ template: body.workflow_template_id, key: startRule.state_key })
-              .first() as { id: string } | undefined
+              .first()) as { id: string } | undefined
           }
           if (!startState) {
-            startState = await db('nivaro_workflow_states')
+            startState = (await db('nivaro_workflow_states')
               .where({ template: body.workflow_template_id, is_initial: 1 })
-              .first() as { id: string } | undefined
+              .first()) as { id: string } | undefined
           }
           if (startState) {
             await db('nivaro_workflow_instances').insert({
@@ -380,9 +445,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
     // An approved addendum has already CHANGED the record — deleting the row
     // would erase the explanation while keeping the effects. Revert first.
     if (existing.status === 'approved') {
-      return reply
-        .code(409)
-        .send({ error: 'Approved addendums must be reverted first — revert undoes the applied changes, then the addendum can be deleted' })
+      return reply.code(409).send({
+        error:
+          'Approved addendums must be reverted first — revert undoes the applied changes, then the addendum can be deleted'
+      })
     }
 
     // The addendum's own approval workflow (pipeline-driven flow) goes with it.
@@ -470,9 +536,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       pdfAuthHeaders: {
         ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
         ...(req.headers.cookie ? { cookie: req.headers.cookie } : {}),
-        ...(req.headers['x-workspace']
-          ? { 'x-workspace': String(req.headers['x-workspace']) }
-          : {})
+        ...(req.headers['x-workspace'] ? { 'x-workspace': String(req.headers['x-workspace']) } : {})
       }
     })
     if (!result.ok) {
