@@ -1168,14 +1168,18 @@ function RelationColFilter({
     queryKey: ['cbv-filter-options', target, labelField, template ?? '', search, preferKey],
     queryFn: () => {
       const fields = optionFieldsFor(template, labelField)
+      const hasPage = !!preferIds && preferIds.length > 0
+      // Default list order: the page's own values; otherwise NEWEST records
+      // first — the alphabetical head of a big reference table is where the
+      // junk lives (thousands of purchase orders numbered "1"). Typing
+      // searches the whole table.
       const params: Record<string, string | number> = {
-        limit: search ? 60 : 500,
-        sort: labelField,
+        limit: search ? 60 : hasPage ? 500 : 100,
+        sort: search || hasPage ? labelField : '-id',
         ...(fields ? { fields } : {})
       }
       if (search) params.search = search
-      else if (preferIds && preferIds.length > 0)
-        params.filter = JSON.stringify({ id: { _in: preferIds.slice(0, 500) } })
+      else if (hasPage) params.filter = JSON.stringify({ id: { _in: preferIds.slice(0, 500) } })
       return client
         .request<{ data: Array<Record<string, unknown>> }>(get(`/items/${target}`, params))
         .then((r) =>
