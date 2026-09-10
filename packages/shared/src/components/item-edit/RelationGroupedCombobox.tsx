@@ -3,12 +3,19 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Search, X } f
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn , matchesAllTokens} from '../../lib/utils'
+import { cn, matchesAllTokens } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { useStaleTip } from './RelationCombobox'
 
 type Item = Record<string, unknown>
-type ColMeta = { display_template?: string | null; relations?: Array<{ many_field?: string; one_collection?: string; junction_field?: string | null }> }
+type ColMeta = {
+  display_template?: string | null
+  relations?: Array<{
+    many_field?: string
+    one_collection?: string
+    junction_field?: string | null
+  }>
+}
 
 export function RelationGroupedCombobox({
   collection,
@@ -18,7 +25,8 @@ export function RelationGroupedCombobox({
   optionField,
   disabled,
   placeholder,
-  extraFilter
+  extraFilter,
+  pinned
 }: {
   collection: string
   value: unknown
@@ -28,6 +36,9 @@ export function RelationGroupedCombobox({
   disabled?: boolean
   placeholder?: string
   extraFilter?: Record<string, unknown>
+  /** A floating option shown FIRST, above the groups (the project's default
+   *  category) — same contract as RelationCombobox `pinned`. */
+  pinned?: { id: unknown; tag?: string } | null
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -38,7 +49,10 @@ export function RelationGroupedCombobox({
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 30)
-    else { setQuery(''); setExpandedGroups(new Set()) }
+    else {
+      setQuery('')
+      setExpandedGroups(new Set())
+    }
   }, [open])
 
   useEffect(() => {
@@ -61,18 +75,26 @@ export function RelationGroupedCombobox({
 
   // Resolve one_collection for each grouping field from relations
   const groupRelCollection = useMemo(
-    () => (colMeta?.relations ?? []).find((r) => r.many_field === groupField && !r.junction_field)?.one_collection ?? null,
+    () =>
+      (colMeta?.relations ?? []).find((r) => r.many_field === groupField && !r.junction_field)
+        ?.one_collection ?? null,
     [colMeta, groupField]
   )
   const optionRelCollection = useMemo(
-    () => (colMeta?.relations ?? []).find((r) => r.many_field === optionField && !r.junction_field)?.one_collection ?? null,
+    () =>
+      (colMeta?.relations ?? []).find((r) => r.many_field === optionField && !r.junction_field)
+        ?.one_collection ?? null,
     [colMeta, optionField]
   )
 
   const { data: groupColMeta } = useQuery<{ display_template?: string | null }>({
     queryKey: ['col-meta', groupRelCollection],
     queryFn: () =>
-      client.request<{ data: { display_template?: string | null } }>(get(`/collections/${groupRelCollection}`)).then((r) => r.data),
+      client
+        .request<{ data: { display_template?: string | null } }>(
+          get(`/collections/${groupRelCollection}`)
+        )
+        .then((r) => r.data),
     enabled: !!groupRelCollection,
     staleTime: 300_000,
     retry: false
@@ -80,7 +102,11 @@ export function RelationGroupedCombobox({
   const { data: optionColMeta } = useQuery<{ display_template?: string | null }>({
     queryKey: ['col-meta', optionRelCollection],
     queryFn: () =>
-      client.request<{ data: { display_template?: string | null } }>(get(`/collections/${optionRelCollection}`)).then((r) => r.data),
+      client
+        .request<{ data: { display_template?: string | null } }>(
+          get(`/collections/${optionRelCollection}`)
+        )
+        .then((r) => r.data),
     enabled: !!optionRelCollection,
     staleTime: 300_000,
     retry: false
@@ -92,7 +118,16 @@ export function RelationGroupedCombobox({
   const { data: allItems, isFetching: isLoadingItems } = useQuery<Item[]>({
     queryKey: ['relation-grouped-opts', collection, groupField, optionField, filterStr],
     queryFn: () =>
-      client.request<{ data: Item[] }>(get(`/items/${collection}`, { limit: 1000, picker: '1', fields: fieldsParam, ...(filterStr ? { filter: filterStr } : {}) })).then((r) => r.data ?? []),
+      client
+        .request<{ data: Item[] }>(
+          get(`/items/${collection}`, {
+            limit: 1000,
+            picker: '1',
+            fields: fieldsParam,
+            ...(filterStr ? { filter: filterStr } : {})
+          })
+        )
+        .then((r) => r.data ?? []),
     enabled: open,
     staleTime: filterStr ? 0 : 30_000
   })
@@ -100,7 +135,9 @@ export function RelationGroupedCombobox({
   const { data: selectedItem, isLoading: isLoadingSelected } = useQuery<Item | null>({
     queryKey: ['relation-grouped-single', collection, String(value), groupField, optionField],
     queryFn: () =>
-      client.request<{ data: Item }>(get(`/items/${collection}/${value}`, { fields: fieldsParam })).then((r) => r.data),
+      client
+        .request<{ data: Item }>(get(`/items/${collection}/${value}`, { fields: fieldsParam }))
+        .then((r) => r.data),
     enabled: !!value,
     staleTime: 60_000
   })
@@ -114,7 +151,12 @@ export function RelationGroupedCombobox({
     queryFn: () =>
       client
         .request<{ data: Item[] }>(
-          get(`/items/${collection}`, { filter: availabilityFilter, picker: '1', limit: 1, fields: 'id' })
+          get(`/items/${collection}`, {
+            filter: availabilityFilter,
+            picker: '1',
+            limit: 1,
+            fields: 'id'
+          })
         )
         .then((r) => r.data ?? []),
     enabled: !!value && !!selectedItem,
@@ -161,6 +203,30 @@ export function RelationGroupedCombobox({
     })
   }
 
+  const pinnedId = pinned?.id != null && pinned.id !== '' ? String(pinned.id) : null
+  const { data: pinnedFetched } = useQuery<Item | null>({
+    queryKey: ['relation-grouped-single', collection, pinnedId ?? '', groupField, optionField],
+    queryFn: () =>
+      client
+        .request<{ data: Item }>(
+          get(`/items/${collection}/${pinnedId}`, { fields: `id,${groupField}.*,${optionField}.*` })
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: !!pinnedId && open && !(allItems ?? []).some((i) => String(i.id) === pinnedId),
+    staleTime: 60_000
+  })
+  const pinnedItem = pinnedId
+    ? ((allItems ?? []).find((i) => String(i.id) === pinnedId) ?? pinnedFetched ?? null)
+    : null
+  const labelOf = (item: Item) => {
+    const g = item[groupField] as Item | null
+    const o = item[optionField] as Item | null
+    const gl = g ? applyDisplayTemplate(groupTmpl, g) : null
+    const ol = o ? applyDisplayTemplate(optionTmpl, o) : null
+    return [gl, ol].filter(Boolean).join(' — ') || `#${String(item.id)}`
+  }
+
   // Trigger button label: "GroupLabel — OptionLabel"
   let triggerLabel: string | null = null
   if (selectedItem) {
@@ -187,7 +253,12 @@ export function RelationGroupedCombobox({
         {showLoader ? (
           <Loader2 className='h-3.5 w-3.5 animate-spin text-muted-foreground' />
         ) : (
-          <span className={cn('flex items-center gap-1.5 truncate min-w-0', !triggerLabel && 'text-muted-foreground')}>
+          <span
+            className={cn(
+              'flex items-center gap-1.5 truncate min-w-0',
+              !triggerLabel && 'text-muted-foreground'
+            )}
+          >
             {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
             <span className='truncate'>{triggerLabel ?? placeholder ?? 'Select…'}</span>
           </span>
@@ -212,11 +283,40 @@ export function RelationGroupedCombobox({
             {!!value && !disabled && (
               <button
                 type='button'
-                onClick={() => { onChange(null); setOpen(false) }}
+                onClick={() => {
+                  onChange(null)
+                  setOpen(false)
+                }}
                 className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
               >
                 <X className='h-3.5 w-3.5 text-slate-400' />
                 Clear selection
+              </button>
+            )}
+            {pinnedId && (
+              <button
+                type='button'
+                data-nvr-pinned-option
+                onClick={() => {
+                  onChange(pinnedItem?.id ?? pinned?.id)
+                  setOpen(false)
+                }}
+                className='flex w-full items-center gap-2 border-b border-slate-100 bg-nvr-cyan/5 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border'
+              >
+                <div
+                  className={cn(
+                    'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                    String(value) === pinnedId ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                  )}
+                >
+                  {String(value) === pinnedId && <Check className='h-2.5 w-2.5 text-white' />}
+                </div>
+                <span className='min-w-0 flex-1 truncate'>
+                  {pinnedItem ? labelOf(pinnedItem) : `#${pinnedId}`}
+                </span>
+                <span className='shrink-0 rounded bg-nvr-cyan/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:text-foreground'>
+                  {pinned?.tag ?? 'Default'}
+                </span>
               </button>
             )}
             {isLoadingItems ? (
@@ -235,33 +335,45 @@ export function RelationGroupedCombobox({
                       onClick={() => toggleGroup(group.id)}
                       className='flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 hover:bg-muted'
                     >
-                      {expanded
-                        ? <ChevronDown className='h-3 w-3 shrink-0' />
-                        : <ChevronRight className='h-3 w-3 shrink-0' />
-                      }
+                      {expanded ? (
+                        <ChevronDown className='h-3 w-3 shrink-0' />
+                      ) : (
+                        <ChevronRight className='h-3 w-3 shrink-0' />
+                      )}
                       {group.label}
                       <span className='ml-auto font-normal normal-case tracking-normal text-slate-400'>
                         {group.items.length}
                       </span>
                     </button>
-                    {expanded && group.items.map((item) => {
-                      const o = item[optionField] as Item | null
-                      const label = o ? applyDisplayTemplate(optionTmpl, o) : String(item.id ?? '')
-                      const sel = String(item.id) === String(value)
-                      return (
-                        <button
-                          key={String(item.id)}
-                          type='button'
-                          onClick={() => { onChange(item.id); setOpen(false) }}
-                          className='flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-muted'
-                        >
-                          <div className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors', sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300')}>
-                            {sel && <Check className='h-2.5 w-2.5 text-white' />}
-                          </div>
-                          {label}
-                        </button>
-                      )
-                    })}
+                    {expanded &&
+                      group.items.map((item) => {
+                        const o = item[optionField] as Item | null
+                        const label = o
+                          ? applyDisplayTemplate(optionTmpl, o)
+                          : String(item.id ?? '')
+                        const sel = String(item.id) === String(value)
+                        return (
+                          <button
+                            key={String(item.id)}
+                            type='button'
+                            onClick={() => {
+                              onChange(item.id)
+                              setOpen(false)
+                            }}
+                            className='flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-muted'
+                          >
+                            <div
+                              className={cn(
+                                'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                                sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                              )}
+                            >
+                              {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                            </div>
+                            {label}
+                          </button>
+                        )
+                      })}
                   </div>
                 )
               })

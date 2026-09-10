@@ -272,6 +272,7 @@ export function FieldRenderer({
             disabled={field.readonly}
             placeholder={field.placeholder ?? undefined}
             extraFilter={cascadeFilter}
+            pinned={pinnedOption}
           />
         )
       }

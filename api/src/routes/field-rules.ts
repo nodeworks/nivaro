@@ -396,12 +396,28 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       row_ids?: Array<string | number>
       /** dry_run: return EVERY row patch (a staged grid queues them all). */
       all_changes?: boolean
+      /** Unsaved rows (a new record's lines, staged additions): planned
+       *  alongside the saved ones, NEVER written here — the client stages
+       *  the returned patches. Each carries the client's own `id`
+       *  ("pending:3"). parent_id may be absent when the parent is new. */
+      rows?: Array<Record<string, unknown>>
+      /** Staged edits on saved rows ({id: patch}) overlaid before planning,
+       *  so a re-run sees what the grid shows, not what the DB holds. */
+      saved_overrides?: Record<string, Record<string, unknown>>
     }
     const { collection, fk_field } = body
-    if (!collection || !fk_field || body.parent_id == null || !Array.isArray(body.row_rules)) {
+    const pendingRows = Array.isArray(body.rows)
+      ? body.rows.filter((r) => r && typeof r === 'object').slice(0, 500)
+      : []
+    if (
+      !collection ||
+      !fk_field ||
+      (body.parent_id == null && pendingRows.length === 0) ||
+      !Array.isArray(body.row_rules)
+    ) {
       return reply
         .code(400)
-        .send({ error: 'collection, fk_field, parent_id and row_rules are required' })
+        .send({ error: 'collection, fk_field, row_rules and parent_id (or rows) are required' })
     }
     if (
       !/^[A-Za-z0-9_]+$/.test(collection) ||
@@ -424,12 +440,19 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     if (targets.size === 0)
       return reply.send({ data: { rows: 0, fields: {}, changes: [], applied: 0, failed: [] } })
 
-    let q = db(collection)
-      .where({ [fk_field]: String(body.parent_id) })
-      .orderBy('id')
-    if (Array.isArray(body.row_ids) && body.row_ids.length)
-      q = q.whereIn('id', body.row_ids.map(String))
-    const rows = (await q.limit(500)) as Array<Record<string, unknown>>
+    let saved: Array<Record<string, unknown>> = []
+    if (body.parent_id != null) {
+      let q = db(collection)
+        .where({ [fk_field]: String(body.parent_id) })
+        .orderBy('id')
+      if (Array.isArray(body.row_ids) && body.row_ids.length)
+        q = q.whereIn('id', body.row_ids.map(String))
+      saved = (await q.limit(500)) as Array<Record<string, unknown>>
+    }
+    const overrides = body.saved_overrides ?? {}
+    saved = saved.map((r) => ({ ...r, ...(overrides[String(r.id)] ?? {}) }))
+    const pendingIds = new Set(pendingRows.map((r) => String(r.id)))
+    const rows = [...saved, ...pendingRows]
     const parentContext = body.parent_context ?? {}
     const cache = new RowRuleLookupCache(db)
     const startedAt = Date.now()
@@ -467,6 +490,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     let applied = 0
     const failed: Array<{ id: string; error: string }> = []
     for (const c of changes) {
+      // Unsaved rows are the client's to stage — they have no row to write.
+      if (pendingIds.has(c.id)) continue
       try {
         // updateOne mutates its payload (computed columns ride along) — hand
         // it a copy so the response still reports the planned patch.
@@ -480,20 +505,21 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         })
       }
     }
-    await logActivity({
-      action: 'row-rules-apply',
-      user: req.user!.id,
-      collection,
-      item: String(body.parent_id),
-      comment: JSON.stringify({
-        fk_field,
-        mode,
-        rows: rows.length,
-        applied,
-        failed: failed.length,
-        fields
+    if (body.parent_id != null)
+      await logActivity({
+        action: 'row-rules-apply',
+        user: req.user!.id,
+        collection,
+        item: String(body.parent_id),
+        comment: JSON.stringify({
+          fk_field,
+          mode,
+          rows: rows.length,
+          applied,
+          failed: failed.length,
+          fields
+        })
       })
-    })
     return reply.send({
       data: { rows: rows.length, fields, changes: changes.slice(0, 200), applied, failed }
     })

@@ -2579,7 +2579,9 @@ export function InlineTableField({
     if (!list) return null
     for (const cfg of list) {
       if (cfg.when?.field) {
-        const v = draft[cfg.when.field]
+        const v = cfg.when.field.startsWith('$parent.')
+          ? parentDraftCtx?.draft?.[cfg.when.field.slice(8)]
+          : draft[cfg.when.field]
         const op = cfg.when.op ?? 'eq'
         const want = cfg.when.value
         const sv = v == null ? '' : String(v)
@@ -3438,12 +3440,24 @@ export function InlineTableField({
   })
 
   async function rerunRules(dryRun: boolean) {
-    if (!client || !rowRules?.length || isNew) return
+    if (!client || !rowRules?.length) return
+    if (isNew && pendingRows.length === 0) return
     setRerunBusy(dryRun ? 'preview' : 'apply')
     // A staged grid (save_mode 'pending') never writes on its own: the
     // re-derived values are QUEUED as row edits and land with the record's
     // Save, so they show as "Edited" first and can still be cancelled.
     const stageIt = isPendingMode && !!staging
+    // Unsaved rows (new record, staged additions) ride along under a client
+    // key; the server plans them but never writes them — their patches are
+    // staged here. Staged edits on saved rows overlay the DB values so the
+    // plan judges what the grid shows.
+    const pendingPayload = pendingRows.map((r, i) => ({ ...r, id: `pending:${i}` }))
+    const savedOverrides: Record<string, Record<string, unknown>> = {}
+    if (staging) {
+      for (const [id, patch] of staging.getPendingEdits(relatedCollection, manyField)) {
+        savedOverrides[String(id)] = patch
+      }
+    }
     try {
       const res = await client.request<{
         data: {
@@ -3458,12 +3472,14 @@ export function InlineTableField({
         post('/field-rules/apply', {
           collection: relatedCollection,
           fk_field: manyField,
-          parent_id: parentId,
+          ...(isNew ? {} : { parent_id: parentId }),
           parent_context: buildParentCtx(),
           row_rules: rowRules,
           mode: rerunMode,
-          dry_run: dryRun || stageIt,
-          all_changes: stageIt
+          dry_run: dryRun || stageIt || pendingPayload.length > 0,
+          all_changes: stageIt || pendingPayload.length > 0,
+          rows: pendingPayload,
+          saved_overrides: savedOverrides
         })
       )
       const d = res.data
@@ -3476,17 +3492,55 @@ export function InlineTableField({
         })
         return
       }
-      if (stageIt) {
-        for (const c of d.changes) {
+      // Unsaved rows: write the patches back into staging in place.
+      const pendingChanges = d.changes.filter((c) => String(c.id).startsWith('pending:'))
+      const savedChanges = d.changes.filter((c) => !String(c.id).startsWith('pending:'))
+      if (staging) {
+        for (const c of pendingChanges) {
+          const idx = Number(String(c.id).slice('pending:'.length))
+          const cur = pendingRows[idx]
+          if (!Number.isFinite(idx) || !cur) continue
+          staging.updateRow(relatedCollection, manyField, idx, { ...cur, ...c.patch })
+        }
+      }
+      if (stageIt || (isNew && staging)) {
+        for (const c of savedChanges) {
           if (pendingDeletes.has(String(c.id))) continue
           staging!.queueEdit(relatedCollection, manyField, String(c.id), c.patch)
         }
+        const n = pendingChanges.length + savedChanges.length
+        toast.success(`Rules staged on ${n} ${n === 1 ? 'line' : 'lines'} — saved with the record`)
+        setRerunPreview(null)
+        setRerunOpen(false)
+        return
+      }
+      if (pendingChanges.length > 0 && savedChanges.length === 0) {
         toast.success(
-          `Rules staged on ${d.changes.length} ${d.changes.length === 1 ? 'line' : 'lines'} — saved with the record`
+          `Rules applied to ${pendingChanges.length} pending ${pendingChanges.length === 1 ? 'line' : 'lines'}`
         )
         setRerunPreview(null)
         setRerunOpen(false)
         return
+      }
+      // Immediate-mode grids with BOTH saved and pending rows: the pending
+      // ones were staged above; the saved ones still need the real run.
+      if (pendingChanges.length > 0) {
+        const res2 = await client.request<{
+          data: { applied: number; failed: Array<{ id: string; error: string }> }
+        }>(
+          post('/field-rules/apply', {
+            collection: relatedCollection,
+            fk_field: manyField,
+            parent_id: parentId,
+            parent_context: buildParentCtx(),
+            row_rules: rowRules,
+            mode: rerunMode,
+            dry_run: false,
+            saved_overrides: savedOverrides
+          })
+        )
+        d.applied = res2.data.applied + pendingChanges.length
+        d.failed = res2.data.failed
       }
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({
@@ -5205,7 +5259,7 @@ export function InlineTableField({
               apply values…
             </button>
           )}
-          {!!rowRules?.length && !isNew && rows.length > 0 && (
+          {!!rowRules?.length && rows.length + pendingRows.length > 0 && (
             <button
               type='button'
               onClick={() => {
@@ -5218,7 +5272,7 @@ export function InlineTableField({
                   ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
                   : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
               )}
-              data-tip='Re-run this grid&apos;s auto-fill rules over every saved line'
+              data-tip='Re-run this grid&apos;s auto-fill rules over every line, saved or not yet saved'
             >
               re-run rules…
             </button>
@@ -5269,10 +5323,17 @@ export function InlineTableField({
         </div>
       )}
 
-      {rerunOpen && !!rowRules?.length && !isNew && (
+      {rerunOpen && !!rowRules?.length && (
         <div className='rounded-lg border border-[#00ceff]/40 bg-[#00ceff]/5 p-3 space-y-2 dark:bg-nvr-cyan/5'>
           <p className='text-[11px] font-medium text-slate-700 dark:text-slate-200'>
-            Re-run rules on all {rows.length} saved {rows.length === 1 ? 'line' : 'lines'}
+            Re-run rules on {rows.length + pendingRows.length}{' '}
+            {rows.length + pendingRows.length === 1 ? 'line' : 'lines'}
+            {pendingRows.length > 0 && (
+              <span className='font-normal text-slate-500'>
+                {' '}
+                ({rows.length} saved, {pendingRows.length} not yet saved)
+              </span>
+            )}
           </p>
           <p className='text-[11px] text-slate-500'>
             Rules edited after these lines were created never touched them. Preview first — nothing
