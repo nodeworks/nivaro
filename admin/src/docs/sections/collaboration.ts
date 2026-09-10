@@ -465,7 +465,7 @@ export const collabNotificationsCenter: DocSection = {
     { type: 'h3', text: 'Notification rules (per-category channels)' },
     {
       type: 'p',
-      text: 'Profile → Notification rules is one matrix over the notification categories (mentions, workflow, SLA, watches, system, other) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel inline.'
+      text: 'Profile → Notification rules is one matrix over the notification categories (mentions, workflow & approvals, SLA & escalations, field watches, alerts, anomaly detections, system & digests, everything else) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel, and the one beside each category name lists what that category covers.'
     },
     {
       type: 'ul',

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
@@ -373,7 +374,7 @@ export async function usersRoutes(app: FastifyInstance) {
           clean.quiet_start = np.quiet_start
         if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end))
           clean.quiet_end = np.quiet_end
-        const CATS = ['mentions', 'workflow', 'sla', 'watch', 'system', 'other']
+        const CATS = NOTIFY_CATEGORIES
         if (np.matrix && typeof np.matrix === 'object') {
           const m: Record<string, { inapp?: boolean; push?: boolean; email?: string }> = {}
           for (const cat of CATS) {

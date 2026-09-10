@@ -111,10 +111,34 @@ export interface NotifyUserOptions {
 // Quiet hours suppress PUSH only (the inbox row still lands — it IS the
 // inbox); truly critical subjects bypass. All America/New_York — EFP's clock.
 
-export type NotifyCategory = 'mentions' | 'workflow' | 'sla' | 'watch' | 'system' | 'other'
+export type NotifyCategory =
+  | 'mentions'
+  | 'workflow'
+  | 'sla'
+  | 'watch'
+  | 'alerts'
+  | 'anomaly'
+  | 'system'
+  | 'other'
+
+export const NOTIFY_CATEGORIES: NotifyCategory[] = [
+  'mentions',
+  'workflow',
+  'sla',
+  'watch',
+  'alerts',
+  'anomaly',
+  'system',
+  'other'
+]
 
 export function classifyNotification(subject: string): NotifyCategory {
   const s = subject.toLowerCase()
+  // Prefix-shaped subjects first — an alert or anomaly rule NAME can contain
+  // any word ("SLA breach watch"), so the writer's own prefix must win before
+  // the keyword sniffing below gets a look.
+  if (s.startsWith('anomaly')) return 'anomaly'
+  if (s.startsWith('alert') || s.startsWith('report alert')) return 'alerts'
   if (s.includes('mention')) return 'mentions'
   if (s.startsWith('sla') || s.includes('escalation') || s.includes('breach')) return 'sla'
   if (s.includes('watch') || (s.includes('field') && s.includes('changed'))) return 'watch'

@@ -249,13 +249,47 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 
 // ── Notification rules (quiet hours + per-category channel matrix) ──────────
 
-const NOTIFY_CATS: Array<{ key: string; label: string }> = [
-  { key: 'mentions', label: 'Mentions' },
-  { key: 'workflow', label: 'Workflow & approvals' },
-  { key: 'sla', label: 'SLA & escalations' },
-  { key: 'watch', label: 'Field watches' },
-  { key: 'system', label: 'System & digests' },
-  { key: 'other', label: 'Everything else' }
+const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
+  {
+    key: 'mentions',
+    label: 'Mentions',
+    help: 'Someone @-mentions you in a comment, note, or chat room.'
+  },
+  {
+    key: 'workflow',
+    label: 'Workflow & approvals',
+    help: 'A record you own or follow moves state, needs your approval, is sent back, or an approval chain reaches your step.'
+  },
+  {
+    key: 'sla',
+    label: 'SLA & escalations',
+    help: 'A record you own is nearing or past its SLA, and escalation-ladder notices as they climb. SLA escalations always email immediately.'
+  },
+  {
+    key: 'watch',
+    label: 'Field watches',
+    help: 'A field you watch changed on a record (Field watches and per-record subscriptions).'
+  },
+  {
+    key: 'alerts',
+    label: 'Alerts',
+    help: 'Threshold alerts you subscribe to: metric alert rules, per-record alert definitions, report alerts, and the alert digest.'
+  },
+  {
+    key: 'anomaly',
+    label: 'Anomaly detections',
+    help: 'Anomaly rules you created flag an outlier, spike, or duplicate pattern.'
+  },
+  {
+    key: 'system',
+    label: 'System & digests',
+    help: 'Maintenance windows, failing monitors, import results, and the daily/weekly digests. Maintenance and monitor failures always email immediately.'
+  },
+  {
+    key: 'other',
+    label: 'Everything else',
+    help: 'Any notification that does not fit a category above — direct messages from other users, access requests, task assignments.'
+  }
 ]
 
 /** Custom profile fields (#683) — admin-defined extras (cost center, skills…),
@@ -544,7 +578,10 @@ export function NotificationRulesCard() {
               const row = np.matrix?.[c.key] ?? {}
               return (
                 <tr key={c.key} className='border-t border-slate-100 dark:border-border'>
-                  <td className='py-1.5 text-slate-700 dark:text-foreground'>{c.label}</td>
+                  <td className='py-1.5 text-slate-700 dark:text-foreground'>
+                    {c.label}
+                    <HeaderHelp text={c.help} />
+                  </td>
                   {(['inapp', 'push'] as const).map((ch) => (
                     <td key={ch} className='py-1.5 text-center'>
                       <input
