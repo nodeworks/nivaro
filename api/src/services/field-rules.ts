@@ -898,8 +898,38 @@ export async function evaluateRowRules(
     if (rule.only_if_empty || rule.seed_only) {
       const existing = working[rule.target_field]
       if (existing != null && existing !== '') {
-        note('skipped:only-if-empty', existing)
-        continue
+        // A seed-only target still holding one of the rule's OWN defaults
+        // (any source, gates ignored) is still "auto" — it follows the
+        // trigger (materials → equipment swaps the default CIFA). Anything
+        // else is a hand pick and stays.
+        let stillAuto = false
+        if (rule.seed_only && rule.target_type === 'precedence') {
+          // The pool spans every seed rule for this target (materials AND
+          // equipment defaults) — switching category from one to the other
+          // must recognise the old default as "still auto".
+          const family = sorted.filter(
+            (r) => r.seed_only && r.target_field === rule.target_field && Array.isArray(r.sources)
+          )
+          const pool = await Promise.all(
+            family.flatMap((r) =>
+              (r.sources ?? []).map((src) =>
+                resolvePrecedenceSource(
+                  { ...src, when: undefined },
+                  collection,
+                  working,
+                  parentContext,
+                  subParent,
+                  cache
+                ).catch(() => null)
+              )
+            )
+          )
+          stillAuto = pool.some((v) => v != null && String(v) === String(existing))
+        }
+        if (!stillAuto) {
+          note('skipped:only-if-empty', existing)
+          continue
+        }
       }
     }
 
@@ -940,7 +970,14 @@ export async function evaluateRowRules(
           )
         )
       )
-      working[rule.target_field] = candidates.find((c) => c != null) ?? null
+      const picked = candidates.find((c) => c != null) ?? null
+      // A seed rule that derives nothing for the new state leaves the value
+      // it seeded earlier (a labor line keeps its CIFA rather than losing it).
+      if (rule.seed_only && picked == null && working[rule.target_field] != null) {
+        note('skipped:seed-no-candidate')
+        continue
+      }
+      working[rule.target_field] = picked
     }
     note('wrote', working[rule.target_field])
   }

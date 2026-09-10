@@ -322,16 +322,33 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         const targets = [
           ...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
         ]
-        // seed_only targets are inputs — never blanked for the probe.
+        // Derivable targets are blanked together; seed-only targets are
+        // inputs (category feeds cifa feeds oracle) and are probed ONE AT A
+        // TIME with everything else intact — blanking them all at once would
+        // starve the very rules that seed them.
+        const seedTargets = [
+          ...new Set(
+            rules.filter((r) => r.seed_only && r.target_type !== 'lock').map((r) => r.target_field)
+          )
+        ]
         const derivable = new Set(
           rules.filter((r) => r.target_type !== 'lock' && !r.seed_only).map((r) => r.target_field)
         )
-        for (const t of targets) if (derivable.has(t)) probeWorking[t] = null
+        for (const t of targets)
+          if (derivable.has(t) && !seedTargets.includes(t)) probeWorking[t] = null
         await evaluateRowRules(db, body.collection, probeWorking, parentContext, rules, undefined, {
           cache
         })
         expected = {}
-        for (const t of targets) expected[t] = probeWorking[t] ?? null
+        for (const t of targets) if (!seedTargets.includes(t)) expected[t] = probeWorking[t] ?? null
+        for (const t of seedTargets) {
+          const one: Record<string, unknown> = { ...working, [t]: null }
+          await evaluateRowRules(db, body.collection, one, parentContext, rules, undefined, {
+            cache,
+            targetFields: [t]
+          })
+          expected[t] = one[t] ?? null
+        }
       }
       recordRuleEvalSample(body.collection, {
         at: Date.now(),

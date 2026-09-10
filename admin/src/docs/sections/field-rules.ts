@@ -98,7 +98,7 @@ export const fieldRulesGuide: DocSection = {
     { type: 'h3', text: 'Seed-only rules, conditional sources and pinned picker defaults' },
     {
       type: 'p',
-      text: 'A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project\'s default category or default CIFA for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes.'
+      text: 'A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project\'s default category or default CIFA for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes. A seed-only value still equal to one of the rule family\'s own defaults counts as auto and FOLLOWS its trigger (switch a line from materials to equipment and the default CIFA swaps); any other value is a hand pick and stays, and the row editor labels it overridden. When the new state derives nothing, the seeded value is left in place.'
     },
     {
       type: 'p',
