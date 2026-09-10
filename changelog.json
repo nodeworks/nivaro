@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-10T16:42:50.045Z",
+  "generated_at": "2026-09-10T23:11:58.547Z",
   "releases": [
+    {
+      "version": "0.1.246",
+      "tag": "v0.1.246",
+      "date": "2026-09-10T19:11:50-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cbv",
+              "text": "relation filter lists newest records first when the page holds no values",
+              "hash": "99cb28c2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.245",
       "tag": "v0.1.245",
-      "date": "2026-09-10T12:42:42-04:00",
+      "date": "2026-09-10T12:42:50-04:00",
       "sections": [
         {
           "label": "Fixed",
