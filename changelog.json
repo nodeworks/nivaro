@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-10T00:26:57.067Z",
+  "generated_at": "2026-09-10T12:46:47.081Z",
   "releases": [
+    {
+      "version": "0.1.244",
+      "tag": "v0.1.244",
+      "date": "2026-09-10T08:46:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "change-reason",
+              "text": "name the record in the prompt; require a reason on create",
+              "hash": "6e22c4eb"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.243",
       "tag": "v0.1.243",
-      "date": "2026-09-09T20:26:50-04:00",
+      "date": "2026-09-09T20:26:57-04:00",
       "sections": [
         {
           "label": "Added",
