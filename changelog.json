@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-10T12:46:47.081Z",
+  "generated_at": "2026-09-10T16:42:50.045Z",
   "releases": [
+    {
+      "version": "0.1.245",
+      "tag": "v0.1.245",
+      "date": "2026-09-10T12:42:42-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "readable row history for alias fields, page-first relation filters, addendum pipeline state, dark/compact grid panels",
+              "hash": "6944d6be"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.244",
       "tag": "v0.1.244",
-      "date": "2026-09-10T08:46:40-04:00",
+      "date": "2026-09-10T08:46:47-04:00",
       "sections": [
         {
           "label": "Added",
