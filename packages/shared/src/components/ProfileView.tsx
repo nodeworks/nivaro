@@ -33,11 +33,11 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
-import { SimpleSelectXs } from './ui/SimpleSelect'
 import { playNotificationSound } from '../lib/notification-sound'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
+import { SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
  * ProfileView — user profile for headless hosts (and reusable by admin).
@@ -290,8 +290,7 @@ export function ProfileFieldsCard() {
     }
   })
   if (fields.length === 0) return null
-  const eff =
-    draft ?? Object.fromEntries(fields.map((f) => [f.key, f.value ?? '']))
+  const eff = draft ?? Object.fromEntries(fields.map((f) => [f.key, f.value ?? '']))
   const choicesOf = (o: unknown): string[] =>
     Array.isArray(o)
       ? o.map(String)
@@ -381,11 +380,16 @@ export function NotificationRulesCard() {
         .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
         .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
   })
+  type EmailMode = 'instant' | 'daily' | 'off'
   const np = (prefs?.notification_prefs ?? {}) as {
     quiet_start?: string
     quiet_end?: string
-    matrix?: Record<string, { inapp?: boolean; push?: boolean }>
+    matrix?: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }>
   }
+  // Legacy account-wide default (instant vs daily) — categories without an
+  // explicit email mode inherit it; the server applies the same fallback.
+  const legacyEmail: EmailMode = prefs?.email_digest === 'daily' ? 'daily' : 'instant'
+  const emailModeOf = (cat: string): EmailMode => np.matrix?.[cat]?.email ?? legacyEmail
   const [quietStart, setQuietStart] = useState<string | null>(null)
   const [quietEnd, setQuietEnd] = useState<string | null>(null)
   const effStart = quietStart ?? np.quiet_start ?? ''
@@ -411,8 +415,48 @@ export function NotificationRulesCard() {
   }
   const toggle = (cat: string, channel: 'inapp' | 'push') => {
     const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
-    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, [channel]: cur[channel] === false } } })
+    commit({
+      matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, [channel]: cur[channel] === false } }
+    })
   }
+  const setEmail = (cat: string, email: EmailMode) => {
+    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
+    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, email } } })
+  }
+  const setAllEmail = (email: EmailMode) => {
+    const matrix: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }> = {}
+    for (const c of NOTIFY_CATS)
+      matrix[c.key] = { ...(np.matrix?.[c.key] ?? { inapp: true, push: true }), email }
+    commit({ matrix })
+    // Keep the legacy default in step so older clients read the same answer.
+    if (email !== 'off') saveRaw.mutate({ email_digest: email })
+  }
+  const digestHour = Number.isInteger(Number(prefs?.digest_hour)) ? Number(prefs?.digest_hour) : 7
+  const fmtHour = (h: number) => `${h % 12 === 0 ? 12 : h % 12}:45 ${h < 12 ? 'AM' : 'PM'}`
+  const [testNote, setTestNote] = useState<string | null>(null)
+  const testSend = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { sent: boolean; note: string } }>(post('/users/me/digest-test', {})),
+    onSuccess: (r) => setTestNote(r.data.note),
+    onError: () => setTestNote('Test send failed — try again.')
+  })
+  const anyDaily = NOTIFY_CATS.some((c) => emailModeOf(c.key) === 'daily')
+  const EMAIL_OPTIONS = [
+    { value: 'instant', label: 'Individual email' },
+    { value: 'daily', label: 'Daily summary' },
+    { value: 'off', label: 'No email' }
+  ]
+  const HeaderHelp = ({ text }: { text: string }) => (
+    <span
+      className='ml-1 inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold normal-case tracking-normal text-slate-400 dark:border-border'
+      role='img'
+      title={text}
+      data-tip={text}
+      aria-label={text}
+    >
+      ?
+    </span>
+  )
 
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -421,8 +465,10 @@ export function NotificationRulesCard() {
           Notification rules
         </h3>
         <p className='mt-0.5 text-[11px] text-slate-400'>
-          Quiet hours pause pushes and hold emails until morning (inbox rows still arrive; critical
-          alerts always get through). The grid picks channels per category.
+          Per category: whether it lands in your in-app inbox, whether your browser pushes it, and
+          how it reaches your email — each one as it happens, folded into the daily action summary,
+          or not at all. Quiet hours pause pushes and hold emails until morning; critical alerts
+          (SLA escalations, maintenance, monitor failures) always get through.
         </p>
       </header>
       <div className='space-y-3 p-4'>
@@ -479,8 +525,18 @@ export function NotificationRulesCard() {
           <thead>
             <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
               <th className='py-1 font-semibold'>Category</th>
-              <th className='py-1 text-center font-semibold'>In-app</th>
-              <th className='py-1 text-center font-semibold'>Push</th>
+              <th className='py-1 text-center font-semibold'>
+                In-app
+                <HeaderHelp text='The notification itself: the bell badge and your Notifications inbox in the app. Off = no row is written for this category, so nothing shows anywhere in the app.' />
+              </th>
+              <th className='py-1 text-center font-semibold'>
+                Push
+                <HeaderHelp text='A browser / device alert (the popup you get even with the tab closed) on devices where you allowed notifications. Off keeps the in-app row but stops the device alert. Quiet hours pause pushes too.' />
+              </th>
+              <th className='py-1 text-center font-semibold'>
+                Email
+                <HeaderHelp text='Individual email = one message as each event happens. Daily summary = held and delivered once a day in your action summary (deliver-at time below). No email = never emailed for this category (in-app and push are unaffected).' />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -500,11 +556,80 @@ export function NotificationRulesCard() {
                       />
                     </td>
                   ))}
+                  <td className='py-1 text-center'>
+                    <div className='inline-block'>
+                      <SimpleSelectXs
+                        ariaLabel={`Email for ${c.label}`}
+                        value={emailModeOf(c.key)}
+                        options={EMAIL_OPTIONS}
+                        onChange={(v: string) => setEmail(c.key, v as EmailMode)}
+                      />
+                    </div>
+                  </td>
                 </tr>
               )
             })}
           </tbody>
         </table>
+        <div className='flex flex-wrap items-center gap-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          <span>All email:</span>
+          {EMAIL_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type='button'
+              disabled={save.isPending}
+              onClick={() => setAllEmail(o.value as EmailMode)}
+              className='rounded border border-slate-200 px-2 py-0.5 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:hover:text-foreground'
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border/60 dark:bg-background/40'>
+          <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+            Daily action summary
+            <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
+              one morning email — every category set to Daily summary, plus items assigned to you
+              and invoices awaiting your review
+              {!anyDaily && ' · nothing is set to Daily summary yet'}
+            </span>
+          </p>
+          <div className='flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
+            <span className='flex items-center gap-1.5'>
+              Deliver at
+              <SimpleSelectXs
+                ariaLabel='Digest delivery hour'
+                value={String(digestHour)}
+                onChange={(v: string) => saveRaw.mutate({ digest_hour: Number(v) })}
+                options={Array.from({ length: 24 }, (_, h) => ({
+                  value: String(h),
+                  label: fmtHour(h)
+                }))}
+              />
+              <span className='text-[11px] text-slate-400'>Eastern time</span>
+            </span>
+            <label className='flex cursor-pointer items-center gap-1.5'>
+              <input
+                type='checkbox'
+                checked={prefs?.digest_layout === 'compact'}
+                onChange={(e) =>
+                  saveRaw.mutate({ digest_layout: e.target.checked ? 'compact' : 'detailed' })
+                }
+                className='rounded'
+              />
+              Compact (counts only)
+            </label>
+            <button
+              type='button'
+              disabled={testSend.isPending}
+              onClick={() => testSend.mutate()}
+              className='text-[12px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200'
+            >
+              {testSend.isPending ? 'Building…' : 'Send me a test summary now'}
+            </button>
+            {testNote && <span className='text-[11.5px] text-slate-400'>{testNote}</span>}
+          </div>
+        </div>
         <div className='flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3 text-[12.5px] text-slate-600 dark:border-border/60 dark:text-muted-foreground'>
           {/* Notification sounds (#179) */}
           <label className='flex cursor-pointer items-center gap-1.5'>
@@ -530,26 +655,21 @@ export function NotificationRulesCard() {
                 type='range'
                 min={0}
                 max={100}
-                defaultValue={Math.round(((prefs?.notification_sound as { volume?: number })?.volume ?? 0.4) * 100)}
+                defaultValue={Math.round(
+                  ((prefs?.notification_sound as { volume?: number })?.volume ?? 0.4) * 100
+                )}
                 onMouseUp={(e) =>
                   saveRaw.mutate({
-                    notification_sound: { enabled: true, volume: Number((e.target as HTMLInputElement).value) / 100 }
+                    notification_sound: {
+                      enabled: true,
+                      volume: Number((e.target as HTMLInputElement).value) / 100
+                    }
                   })
                 }
                 className='w-24'
               />
             </label>
           )}
-          {/* Digest layout (#366) */}
-          <label className='flex cursor-pointer items-center gap-1.5'>
-            <input
-              type='checkbox'
-              checked={prefs?.digest_layout === 'compact'}
-              onChange={(e) => saveRaw.mutate({ digest_layout: e.target.checked ? 'compact' : 'detailed' })}
-              className='rounded'
-            />
-            Compact daily digest (counts only)
-          </label>
         </div>
         <div className='flex flex-wrap items-center gap-4 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           {/* Auto-watch rules (#400) */}
@@ -584,8 +704,6 @@ export function NotificationRulesCard() {
   )
 }
 
-// ── Email delivery (instant vs daily action digest) ─────────────────────────
-
 /** Timezone preference (#31): applied to every datetime the shared
  *  formatters render. Defaults to the browser's zone. */
 export function TimezoneCard() {
@@ -601,7 +719,11 @@ export function TimezoneCard() {
   })()
   const zones: string[] = (() => {
     try {
-      return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
+      return (
+        (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.(
+          'timeZone'
+        ) ?? []
+      )
     } catch {
       return []
     }
@@ -623,7 +745,10 @@ export function TimezoneCard() {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
     }
   })
-  const matches = search.length > 1 ? zones.filter((z) => z.toLowerCase().includes(search.toLowerCase())).slice(0, 8) : []
+  const matches =
+    search.length > 1
+      ? zones.filter((z) => z.toLowerCase().includes(search.toLowerCase())).slice(0, 8)
+      : []
 
   return (
     <div className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
@@ -669,124 +794,6 @@ export function TimezoneCard() {
         )}
       </div>
     </div>
-  )
-}
-
-function EmailDeliveryCard() {
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const { data: prefs } = useQuery({
-    queryKey: ['nvr-profile-prefs'],
-    queryFn: () =>
-      client
-        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
-        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
-  })
-  const mode = prefs?.email_digest === 'daily' ? 'daily' : 'instant'
-  const save = useMutation({
-    mutationFn: (email_digest: 'instant' | 'daily') =>
-      client.request(patch('/users/me/preferences', { email_digest })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
-  })
-  const digestHour = Number.isInteger(Number(prefs?.digest_hour)) ? Number(prefs?.digest_hour) : 7
-  const saveHour = useMutation({
-    mutationFn: (digest_hour: number) =>
-      client.request(patch('/users/me/preferences', { digest_hour })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
-  })
-  const [testNote, setTestNote] = useState<string | null>(null)
-  const testSend = useMutation({
-    mutationFn: () =>
-      client.request<{ data: { sent: boolean; note: string } }>(post('/users/me/digest-test', {})),
-    onSuccess: (r) => setTestNote(r.data.note),
-    onError: () => setTestNote('Test send failed — try again.')
-  })
-  const fmtHour = (h: number) => {
-    const ampm = h < 12 ? 'AM' : 'PM'
-    const disp = h % 12 === 0 ? 12 : h % 12
-    return `${disp}:45 ${ampm}`
-  }
-  const Option = ({
-    value,
-    label,
-    hint
-  }: {
-    value: 'instant' | 'daily'
-    label: string
-    hint: string
-  }) => (
-    <button
-      type='button'
-      onClick={() => save.mutate(value)}
-      disabled={save.isPending}
-      className={cn(
-        'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors',
-        mode === value
-          ? 'border-[#00ceff] bg-[#f0fbfe] dark:border-[#00ceff66] dark:bg-[#0b2530]'
-          : 'border-slate-200 hover:border-slate-300 dark:border-border dark:hover:border-slate-600'
-      )}
-    >
-      <span
-        className={cn(
-          'mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
-          mode === value ? 'border-[#00ceff]' : 'border-slate-300 dark:border-slate-600'
-        )}
-      >
-        {mode === value && <span className='h-2 w-2 rounded-full bg-[#00ceff]' />}
-      </span>
-      <span>
-        <span className='block text-[12.5px] font-semibold text-slate-700 dark:text-slate-200'>
-          {label}
-        </span>
-        <span className='block text-[11.5px] text-slate-500 dark:text-slate-400'>{hint}</span>
-      </span>
-    </button>
-  )
-  return (
-    <SectionCard
-      icon={<Mail className='h-4 w-4' />}
-      title='Email delivery'
-      hint='How workflow and assignment emails reach you'
-    >
-      <div className='space-y-2'>
-        <Option
-          value='instant'
-          label='Individual emails'
-          hint='An email for every state change, assignment and review the moment it happens'
-        />
-        <Option
-          value='daily'
-          label='Daily action summary'
-          hint='One morning email — all updates, items assigned to you, and invoices awaiting review'
-        />
-        {mode === 'daily' && (
-          <div className='flex items-center gap-2 pl-1 pt-1'>
-            <span className='text-[12px] text-slate-500 dark:text-slate-400'>Deliver at</span>
-            <SimpleSelectXs
-              ariaLabel='Digest delivery hour'
-              value={String(digestHour)}
-              onChange={(v) => saveHour.mutate(Number(v))}
-              options={Array.from({ length: 24 }, (_, h) => ({
-                value: String(h),
-                label: fmtHour(h)
-              }))}
-            />
-            <span className='text-[11px] text-slate-400'>Eastern time</span>
-          </div>
-        )}
-        <div className='flex items-center gap-2 pl-1 pt-1'>
-          <button
-            type='button'
-            disabled={testSend.isPending}
-            onClick={() => testSend.mutate()}
-            className='text-[12px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200'
-          >
-            {testSend.isPending ? 'Building…' : 'Send me a test digest now'}
-          </button>
-          {testNote && <span className='text-[11.5px] text-slate-400'>{testNote}</span>}
-        </div>
-      </div>
-    </SectionCard>
   )
 }
 
@@ -1900,14 +1907,13 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <ScopeDefaultsCard />
             <ProfileFieldsCard />
             <TimezoneCard />
-            <EmailDeliveryCard />
-        <NotificationRulesCard />
-        <DisplayPrefsCard />
-        <RemindersCard />
-        <MyStatsCard />
-        <MySecurityCard />
-        <MyPermissionsCard />
-        <MyMatrixSeatsCard />
+            <NotificationRulesCard />
+            <DisplayPrefsCard />
+            <RemindersCard />
+            <MyStatsCard />
+            <MySecurityCard />
+            <MyPermissionsCard />
+            <MyMatrixSeatsCard />
           </div>
           <div className='space-y-4'>
             {/* The full picture — every notification source in the app,
@@ -1959,7 +1965,6 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
     </div>
   )
 }
-
 
 // ─── My matrix seats (#122): why am I getting these approvals? ───────────────
 function MyMatrixSeatsCard() {
@@ -2057,7 +2062,6 @@ function MyMatrixSeatsCard() {
   )
 }
 
-
 // ─── My security (#103): my sessions, sign-out-others, login history ─────────
 
 // ─── Reminders manager (#259) ────────────────────────────────────────────────
@@ -2081,7 +2085,8 @@ function RemindersCard() {
   const [at, setAt] = useState('')
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['my-reminders'] })
   const create = useMutation({
-    mutationFn: () => client.request(post('/reminders', { note, remind_at: new Date(at).toISOString() })),
+    mutationFn: () =>
+      client.request(post('/reminders', { note, remind_at: new Date(at).toISOString() })),
     onSuccess: () => {
       setNote('')
       setAt('')
@@ -2097,8 +2102,8 @@ function RemindersCard() {
       <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Reminders</h3>
         <p className='mt-0.5 text-[11px] text-slate-400'>
-          Personal nudges delivered as notifications at the time you pick. The chat bot's
-          "remind me…" requests land here too.
+          Personal nudges delivered as notifications at the time you pick. The chat bot's "remind
+          me…" requests land here too.
         </p>
       </header>
       <div className='space-y-2 px-4 py-3'>
@@ -2171,10 +2176,7 @@ function MyStatsCard() {
     staleTime: 5 * 60_000
   })
   if (!data) return null
-  const weekMax = Math.max(
-    1,
-    ...data.weeks.map((w) => w.transitions + w.tasks_done + w.created)
-  )
+  const weekMax = Math.max(1, ...data.weeks.map((w) => w.transitions + w.tasks_done + w.created))
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <header className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
@@ -2210,11 +2212,15 @@ function MyStatsCard() {
         </div>
         <div className='mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           <span>
-            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.transitions}</b>{' '}
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>
+              {data.totals.transitions}
+            </b>{' '}
             transitions
           </span>
           <span>
-            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.tasks_done}</b>{' '}
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>
+              {data.totals.tasks_done}
+            </b>{' '}
             tasks done
           </span>
           <span>
@@ -2232,7 +2238,12 @@ function MySecurityCard() {
   const qc = useQueryClient()
   const { data } = useQuery<{
     sessions: Array<{ sid_prefix: string; ttl_seconds: number; current: boolean }>
-    logins: Array<{ ip: string | null; user_agent: string | null; created_at: string; new_ip?: boolean }>
+    logins: Array<{
+      ip: string | null
+      user_agent: string | null
+      created_at: string
+      new_ip?: boolean
+    }>
   }>({
     queryKey: ['my-security'],
     queryFn: () =>
@@ -2285,7 +2296,10 @@ function MySecurityCard() {
           Active sessions ({data?.sessions.length ?? 0})
         </p>
         {(data?.sessions ?? []).map((sn) => (
-          <p key={sn.sid_prefix} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+          <p
+            key={sn.sid_prefix}
+            className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'
+          >
             <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
             {sn.current && (
               <span className='rounded bg-[#00ceff14] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
@@ -2311,7 +2325,9 @@ function MySecurityCard() {
                     new IP
                   </span>
                 )}
-                <span className='ml-auto text-slate-400'>{new Date(l.created_at).toLocaleString()}</span>
+                <span className='ml-auto text-slate-400'>
+                  {new Date(l.created_at).toLocaleString()}
+                </span>
               </p>
             ))}
           </>
@@ -2333,16 +2349,25 @@ function MyPermissionsCard() {
     scopes: Array<{ dimension: string; values: string[] }>
   }>({
     queryKey: ['my-permissions'],
-    queryFn: () => client.request<{ data: never }>(get('/security/my/permissions')).then((r) => r.data),
+    queryFn: () =>
+      client.request<{ data: never }>(get('/security/my/permissions')).then((r) => r.data),
     enabled: open,
     staleTime: 5 * 60_000
   })
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <button type='button' onClick={() => setOpen((v) => !v)} className='flex w-full items-center justify-between px-4 py-2.5 text-left'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center justify-between px-4 py-2.5 text-left'
+      >
         <div>
-          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>What can I access?</h3>
-          <p className='mt-0.5 text-[11px] text-slate-400'>Your role, collections, and data limits in plain language.</p>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            What can I access?
+          </h3>
+          <p className='mt-0.5 text-[11px] text-slate-400'>
+            Your role, collections, and data limits in plain language.
+          </p>
         </div>
         <span className='text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
       </button>
@@ -2365,9 +2390,14 @@ function MyPermissionsCard() {
               </p>
               <div className='max-h-48 overflow-y-auto'>
                 {data.collections.map((c) => (
-                  <p key={c.collection} className='flex items-center gap-2 border-b border-slate-50 py-0.5 text-[12px] last:border-b-0 dark:border-border/40'>
+                  <p
+                    key={c.collection}
+                    className='flex items-center gap-2 border-b border-slate-50 py-0.5 text-[12px] last:border-b-0 dark:border-border/40'
+                  >
                     <span className='font-mono'>{c.collection}</span>
-                    <span className='ml-auto text-[10.5px] text-slate-400'>{[...new Set(c.actions)].join(' · ')}</span>
+                    <span className='ml-auto text-[10.5px] text-slate-400'>
+                      {[...new Set(c.actions)].join(' · ')}
+                    </span>
                   </p>
                 ))}
               </div>
@@ -2378,7 +2408,6 @@ function MyPermissionsCard() {
     </div>
   )
 }
-
 
 // ─── Display preferences (#229/#230/#231/#232/#411) ──────────────────────────
 
@@ -2397,7 +2426,9 @@ export function DisplayPrefsCard() {
       client.request(patch('/users/me/preferences', body)),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
-      void import('sonner').then(({ toast }) => toast.success('Saved — takes effect on the next page load'))
+      void import('sonner').then(({ toast }) =>
+        toast.success('Saved — takes effect on the next page load')
+      )
     }
   })
   const nf = (prefs?.number_format ?? {}) as { locale?: string; compact?: boolean }
@@ -2434,7 +2465,9 @@ export function DisplayPrefsCard() {
           Number locale
           <input
             defaultValue={nf.locale ?? ''}
-            onBlur={(e) => save.mutate({ number_format: { ...nf, locale: e.target.value.trim() || undefined } })}
+            onBlur={(e) =>
+              save.mutate({ number_format: { ...nf, locale: e.target.value.trim() || undefined } })
+            }
             placeholder='en-US'
             className='h-7 w-20 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
           />

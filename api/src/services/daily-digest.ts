@@ -32,10 +32,7 @@ export interface DigestSection {
   lines: DigestLine[]
 }
 
-export type DigestSectionProvider = (
-  userId: string,
-  email: string
-) => Promise<DigestSection | null>
+export type DigestSectionProvider = (userId: string, email: string) => Promise<DigestSection | null>
 
 const providers: DigestSectionProvider[] = []
 
@@ -124,7 +121,10 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
   }
   const labelFor = (c: string) =>
     collectionLabels.get(c) ??
-    c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()).replace(/s$/, '')
+    c
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (ch) => ch.toUpperCase())
+      .replace(/s$/, '')
 
   const ownersByKey = await resolveStateOwnersBatch(
     instances.map((inst) => ({
@@ -198,7 +198,11 @@ export async function runDailyActionDigest(
     const tz = typeof p?.['timezone'] === 'string' ? (p['timezone'] as string) : ''
     if (tz) prefTz.set(u.id, tz)
     if (p?.['digest_layout'] === 'compact') prefLayout.set(u.id, 'compact')
-    if (p && p['email_digest'] === 'daily' && u.email) digestUsers.set(u.id, u.email)
+    const matrix = ((
+      p?.['notification_prefs'] as { matrix?: Record<string, { email?: string }> } | undefined
+    )?.matrix ?? {}) as Record<string, { email?: string }>
+    const anyDaily = Object.values(matrix).some((r) => r?.email === 'daily')
+    if (p && (p['email_digest'] === 'daily' || anyDaily) && u.email) digestUsers.set(u.id, u.email)
   }
   const deferred = (await db('nivaro_deferred_emails').select(
     'id',
@@ -230,9 +234,11 @@ export async function runDailyActionDigest(
       if (tz) {
         try {
           localHour = Number(
-            new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(
-              new Date()
-            )
+            new Intl.DateTimeFormat('en-US', {
+              timeZone: tz,
+              hour: 'numeric',
+              hour12: false
+            }).format(new Date())
           )
           if (!Number.isInteger(localHour)) localHour = hour
         } catch {
@@ -277,7 +283,10 @@ export async function runDailyActionDigest(
         const section = await provider(userId, email)
         if (section && section.lines.length > 0) sections.push(section)
       } catch (err) {
-        console.warn('[daily-digest] section provider failed:', err instanceof Error ? err.message : err)
+        console.warn(
+          '[daily-digest] section provider failed:',
+          err instanceof Error ? err.message : err
+        )
       }
     }
 
@@ -306,7 +315,11 @@ export async function runDailyActionDigest(
       sent++
       if (!opts?.preserveDeferred) flushedIds.push(...mine.map((d) => d.id))
     } catch (err) {
-      console.warn('[daily-digest] send failed for', email, err instanceof Error ? err.message : err)
+      console.warn(
+        '[daily-digest] send failed for',
+        email,
+        err instanceof Error ? err.message : err
+      )
     }
   }
 

@@ -117,19 +117,51 @@ export function classifyNotification(subject: string): NotifyCategory {
   const s = subject.toLowerCase()
   if (s.includes('mention')) return 'mentions'
   if (s.startsWith('sla') || s.includes('escalation') || s.includes('breach')) return 'sla'
-  if (s.includes('watch') || s.includes('field') && s.includes('changed')) return 'watch'
-  if (s.includes('workflow') || s.includes('transition') || s.includes('moved to') || s.includes('approval')) return 'workflow'
-  if (s.includes('maintenance') || s.includes('monitor') || s.includes('import') || s.includes('digest')) return 'system'
+  if (s.includes('watch') || (s.includes('field') && s.includes('changed'))) return 'watch'
+  if (
+    s.includes('workflow') ||
+    s.includes('transition') ||
+    s.includes('moved to') ||
+    s.includes('approval')
+  )
+    return 'workflow'
+  if (
+    s.includes('maintenance') ||
+    s.includes('monitor') ||
+    s.includes('import') ||
+    s.includes('digest')
+  )
+    return 'system'
   return 'other'
 }
 
 const CRITICAL_SUBJECTS = /sla escalation|maintenance|monitor failing/i
 
-interface NotifyPrefs {
+export type EmailMode = 'instant' | 'daily' | 'off'
+
+export interface NotifyPrefs {
   quiet_start?: string
   quiet_end?: string
-  matrix?: Partial<Record<NotifyCategory, { inapp?: boolean; push?: boolean }>>
+  /** Per category: in-app row on/off, browser push on/off, and how EMAIL
+   *  reaches the person — each message as it happens, folded into the daily
+   *  action summary, or not at all. `email` absent = the legacy
+   *  preferences.email_digest default ('instant' unless 'daily'). */
+  matrix?: Partial<Record<NotifyCategory, { inapp?: boolean; push?: boolean; email?: EmailMode }>>
 }
+
+/** Effective email mode for one category, honouring the per-category setting
+ *  first and the legacy account-wide `email_digest` default second. */
+export function emailModeFor(
+  prefs: NotifyPrefs | null | undefined,
+  category: NotifyCategory,
+  legacyEmailDigest: unknown
+): EmailMode {
+  const explicit = prefs?.matrix?.[category]?.email
+  if (explicit === 'instant' || explicit === 'daily' || explicit === 'off') return explicit
+  return legacyEmailDigest === 'daily' ? 'daily' : 'instant'
+}
+
+export const isCriticalSubject = (subject: string) => CRITICAL_SUBJECTS.test(subject)
 
 const prefsCache = new Map<string, { at: number; prefs: NotifyPrefs | null }>()
 
@@ -143,7 +175,9 @@ async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
       | { preferences?: string | Record<string, unknown> | null }
       | undefined
     const parsed =
-      typeof row?.preferences === 'string' ? JSON.parse(row.preferences) : (row?.preferences ?? null)
+      typeof row?.preferences === 'string'
+        ? JSON.parse(row.preferences)
+        : (row?.preferences ?? null)
     prefs = (parsed?.notification_prefs as NotifyPrefs) ?? null
   } catch {
     prefs = null
@@ -192,7 +226,9 @@ export async function notifyUser(
   try {
     const recipient = (await db('nivaro_users')
       .where({ id: userId })
-      .first('status', 'is_redacted')) as { status?: string; is_redacted?: boolean | number } | undefined
+      .first('status', 'is_redacted')) as
+      | { status?: string; is_redacted?: boolean | number }
+      | undefined
     const suspended = String(recipient?.status ?? '').toLowerCase() === 'suspended'
     const redacted = recipient?.is_redacted === true || recipient?.is_redacted === 1
     if (suspended || redacted) return
@@ -235,8 +271,7 @@ export async function notifyUser(
   // Matrix: in-app off for this category kills the whole in-app channel
   // (row, push, toast) — critical subjects always land.
   if (matrixRow?.inapp === false && !critical) channels.inapp = false
-  const pushAllowed =
-    critical || (matrixRow?.push !== false && !inQuietHours(prefs, now))
+  const pushAllowed = critical || (matrixRow?.push !== false && !inQuietHours(prefs, now))
 
   try {
     if (channels.inapp) {
@@ -257,14 +292,14 @@ export async function notifyUser(
       // registered subscription, never blocks the caller. Quiet hours and the
       // per-category matrix suppress the interruption, never the inbox row.
       if (pushAllowed)
-      void sendWebPush(userId, {
-        title: opts.subject.slice(0, 120),
-        body: opts.message.slice(0, 300),
-        url:
-          opts.collection && opts.item
-            ? `/collections/${opts.collection}/${opts.item}`
-            : '/notifications'
-      })
+        void sendWebPush(userId, {
+          title: opts.subject.slice(0, 120),
+          body: opts.message.slice(0, 300),
+          url:
+            opts.collection && opts.item
+              ? `/collections/${opts.collection}/${opts.item}`
+              : '/notifications'
+        })
 
       if (app.io) {
         emitNotification(app.io, userId, {

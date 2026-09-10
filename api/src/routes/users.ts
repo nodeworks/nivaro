@@ -337,8 +337,12 @@ export async function usersRoutes(app: FastifyInstance) {
       const clean = raw
         .filter((f): f is { label?: unknown; path?: unknown } => !!f && typeof f === 'object')
         .map((f) => ({
-          label: String((f as { label?: unknown }).label ?? '').trim().slice(0, 60),
-          path: String((f as { path?: unknown }).path ?? '').trim().slice(0, 500)
+          label: String((f as { label?: unknown }).label ?? '')
+            .trim()
+            .slice(0, 60),
+          path: String((f as { path?: unknown }).path ?? '')
+            .trim()
+            .slice(0, 500)
         }))
         .filter((f) => f.label !== '' && /^\/(?!\/)/.test(f.path))
         .slice(0, 30)
@@ -347,7 +351,9 @@ export async function usersRoutes(app: FastifyInstance) {
     if ('notification_sound' in body) {
       // #684 — client-side chirp when an in-app notification lands.
       if (!['off', 'subtle', 'chime'].includes(String(body.notification_sound))) {
-        return reply.code(400).send({ error: "notification_sound must be 'off', 'subtle' or 'chime'" })
+        return reply
+          .code(400)
+          .send({ error: "notification_sound must be 'off', 'subtle' or 'chime'" })
       }
       patch.notification_sound = body.notification_sound
     }
@@ -363,17 +369,21 @@ export async function usersRoutes(app: FastifyInstance) {
         const np = raw as Record<string, unknown>
         const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
         const clean: Record<string, unknown> = {}
-        if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start)) clean.quiet_start = np.quiet_start
-        if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end)) clean.quiet_end = np.quiet_end
+        if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start))
+          clean.quiet_start = np.quiet_start
+        if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end))
+          clean.quiet_end = np.quiet_end
         const CATS = ['mentions', 'workflow', 'sla', 'watch', 'system', 'other']
         if (np.matrix && typeof np.matrix === 'object') {
-          const m: Record<string, { inapp?: boolean; push?: boolean }> = {}
+          const m: Record<string, { inapp?: boolean; push?: boolean; email?: string }> = {}
           for (const cat of CATS) {
             const row = (np.matrix as Record<string, unknown>)[cat]
             if (row && typeof row === 'object') {
+              const email = (row as { email?: unknown }).email
               m[cat] = {
                 inapp: (row as { inapp?: unknown }).inapp !== false,
-                push: (row as { push?: unknown }).push !== false
+                push: (row as { push?: unknown }).push !== false,
+                ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {})
               }
             }
           }
@@ -453,7 +463,7 @@ export async function usersRoutes(app: FastifyInstance) {
     }
     if ('font_size' in body) {
       if (!['small', 'default', 'large'].includes(String(body.font_size))) {
-        return reply.code(400).send({ error: "font_size must be small/default/large" })
+        return reply.code(400).send({ error: 'font_size must be small/default/large' })
       }
       patch.font_size = body.font_size
     }
@@ -485,7 +495,9 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.custom_status = null
       } else {
         const cs = raw as Record<string, unknown>
-        const text = String(cs.text ?? '').trim().slice(0, 100)
+        const text = String(cs.text ?? '')
+          .trim()
+          .slice(0, 100)
         if (!text) return reply.code(400).send({ error: 'custom_status.text is required' })
         let expires: string | null = null
         if (cs.expires_at != null) {

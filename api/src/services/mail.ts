@@ -310,6 +310,12 @@ async function applyDigestDeferral(
     }>
     if (users.length === 0) return recipients
     const daily = new Map<string, string>()
+    const off = new Set<string>()
+    const { inQuietHours, classifyNotification, emailModeFor, isCriticalSubject } = await import(
+      './notification-channels.js'
+    )
+    const category = classifyNotification(subject)
+    const critical = isCriticalSubject(subject)
     for (const u of users) {
       let prefs: Record<string, unknown> | null = null
       try {
@@ -318,23 +324,28 @@ async function applyDigestDeferral(
       } catch {
         prefs = null
       }
-      if (prefs && prefs['email_digest'] === 'daily') daily.set(u.email.toLowerCase(), u.id)
-      else {
+      const np = (prefs?.notification_prefs ?? null) as Parameters<typeof emailModeFor>[0]
+      // Per-category email mode (the profile's notification rules), falling
+      // back to the account-wide instant/daily default. Critical subjects
+      // (SLA escalations, maintenance, monitor failures) always send now.
+      const mode = critical ? 'instant' : emailModeFor(np, category, prefs?.['email_digest'])
+      if (mode === 'off') {
+        off.add(u.email.toLowerCase())
+        continue
+      }
+      if (mode === 'daily') daily.set(u.email.toLowerCase(), u.id)
+      else if (!critical) {
         // Quiet hours defer email the same way daily-digest prefs do — the
-        // 07:45 flush delivers everything held overnight.
+        // digest flush delivers everything held overnight.
         try {
-          const { inQuietHours } = await import('./notification-channels.js')
-          const np = (prefs?.notification_prefs ?? null) as {
-            quiet_start?: string
-            quiet_end?: string
-          } | null
           if (np && inQuietHours(np)) daily.set(u.email.toLowerCase(), u.id)
         } catch {
           // never let a prefs read break mail
         }
       }
     }
-    if (daily.size === 0) return recipients
+    const kept = off.size > 0 ? recipients.filter((r) => !off.has(r.toLowerCase())) : recipients
+    if (daily.size === 0) return kept
     const snippet = String(htmlOrText)
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
@@ -343,7 +354,7 @@ async function applyDigestDeferral(
       .trim()
       .slice(0, 300)
     const now = new Date()
-    const deferredRows = recipients
+    const deferredRows = kept
       .filter((r) => daily.has(r.toLowerCase()))
       .map((r) => ({
         user: daily.get(r.toLowerCase())!,
@@ -353,7 +364,7 @@ async function applyDigestDeferral(
         created_at: now
       }))
     if (deferredRows.length > 0) await db('nivaro_deferred_emails').insert(deferredRows)
-    return recipients.filter((r) => !daily.has(r.toLowerCase()))
+    return kept.filter((r) => !daily.has(r.toLowerCase()))
   } catch (err) {
     console.warn(
       '[mail] digest deferral failed — sending normally:',
@@ -496,9 +507,14 @@ export async function sendMail(opts: MailOptions): Promise<void> {
   if (active.length === 0) return
   const afterDigest = await applyDigestDeferral(active, opts.subject, html, opts.skipDigest)
   if (afterDigest.length < active.length) {
-    logMail(active.filter((a) => !afterDigest.includes(a)), opts.subject, 'deferred', {
-      template: opts.template
-    })
+    logMail(
+      active.filter((a) => !afterDigest.includes(a)),
+      opts.subject,
+      'deferred',
+      {
+        template: opts.template
+      }
+    )
   }
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
@@ -515,9 +531,20 @@ export async function sendMail(opts: MailOptions): Promise<void> {
       html,
       text: opts.text
     })
-    logMail(routed.to, opts.subject, 'sent', { template: opts.template, body: html, collection: opts.collection, item: opts.item })
+    logMail(routed.to, opts.subject, 'sent', {
+      template: opts.template,
+      body: html,
+      collection: opts.collection,
+      item: opts.item
+    })
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', { template: opts.template, error: err, body: html, collection: opts.collection, item: opts.item })
+    logMail(routed.to, opts.subject, 'failed', {
+      template: opts.template,
+      error: err,
+      body: html,
+      collection: opts.collection,
+      item: opts.item
+    })
     throw err
   }
 }
@@ -571,7 +598,11 @@ export async function sendRawMail(opts: {
   if (active2.length === 0) return
   const afterDigest = await applyDigestDeferral(active2, opts.subject, opts.html, opts.skipDigest)
   if (afterDigest.length < active2.length) {
-    logMail(active2.filter((a) => !afterDigest.includes(a)), opts.subject, 'deferred')
+    logMail(
+      active2.filter((a) => !afterDigest.includes(a)),
+      opts.subject,
+      'deferred'
+    )
   }
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
@@ -589,9 +620,18 @@ export async function sendRawMail(opts: {
       to: routed.to,
       subject: withEnvLabel(smtp, routed.subject)
     })
-    logMail(routed.to, opts.subject, 'sent', { body: html, collection: opts.collection, item: opts.item })
+    logMail(routed.to, opts.subject, 'sent', {
+      body: html,
+      collection: opts.collection,
+      item: opts.item
+    })
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', { error: err, body: html, collection: opts.collection, item: opts.item })
+    logMail(routed.to, opts.subject, 'failed', {
+      error: err,
+      body: html,
+      collection: opts.collection,
+      item: opts.item
+    })
     throw err
   }
 }

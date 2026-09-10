@@ -408,7 +408,7 @@ PATCH /api/item-locks/config/:collection
     {
       type: 'h3',
       id: 'item-locking-presence',
-      text: 'Presence (Who\'s Viewing)'
+      text: "Presence (Who's Viewing)"
     },
     {
       type: 'p',
@@ -461,6 +461,25 @@ export const collabNotificationsCenter: DocSection = {
         'Click a notification to open its collection/item; it is marked read automatically.',
         '"Mark all read" clears the unread counter everywhere (bell included).'
       ]
+    },
+    { type: 'h3', text: 'Notification rules (per-category channels)' },
+    {
+      type: 'p',
+      text: 'Profile → Notification rules is one matrix over the notification categories (mentions, workflow, SLA, watches, system, other) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel inline.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Email per category is Individual email (sent as it happens, deferred only during your quiet hours), Daily summary (held and delivered once in the daily action summary), or No email (dropped — the in-app row still lands).',
+        'The Daily action summary block on the same card sets the delivery hour (Eastern time), a compact layout, and a "send me a test summary now" button. Anyone with at least one category on Daily summary receives the digest.',
+        'Critical subjects (SLA escalations, maintenance notices, failing monitors) always email immediately regardless of the matrix.',
+        'The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/users/me/preferences
+{ "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }`
     },
     { type: 'h3', text: 'Sending a notification (user to user)' },
     {
@@ -623,7 +642,11 @@ export const collabChat: DocSection = {
       head: ['Room', 'Key', 'Who can see it'],
       rows: [
         ['General', '`global`', 'Every authenticated user.'],
-        ['Direct message', '`dm:<A>:<B>`', 'The two participants. Admins included? No — admin access is data access, not other people’s conversations.'],
+        [
+          'Direct message',
+          '`dm:<A>:<B>`',
+          'The two participants. Admins included? No — admin access is data access, not other people’s conversations.'
+        ],
         [
           'Channel',
           '`ch:<key>`',
