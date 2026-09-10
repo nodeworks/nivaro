@@ -61,6 +61,7 @@ export async function delegateOpenTasks(
     if (app) {
       await notifyUser(app, user.delegate_id, {
         subject: `${open.length} task${open.length === 1 ? '' : 's'} delegated to you`,
+        category: 'workflow',
         message: `${fromName} is out of office — their open tasks were reassigned to you: ${open
           .slice(0, 5)
           .map((t) => t.title)

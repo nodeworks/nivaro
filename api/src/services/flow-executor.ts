@@ -962,6 +962,7 @@ function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
     const snippet = String(err).slice(0, 200)
     await notifyUser(appShim, creator, {
       subject: `Flow "${ctx.flowName}" failed`,
+      category: 'system',
       message: `${snippet} — /flows/${ctx.flowId}`.slice(0, 500)
     })
   })().catch((notifyErr) =>

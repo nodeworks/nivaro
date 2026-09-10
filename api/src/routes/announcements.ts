@@ -112,9 +112,7 @@ async function resolveAudienceUsers(aud: Audience): Promise<
   if (aud.roles?.length) {
     roleUsers = new Set(
       (
-        (await db('nivaro_users')
-          .whereIn('role', aud.roles)
-          .select('id')) as Array<{ id: string }>
+        (await db('nivaro_users').whereIn('role', aud.roles).select('id')) as Array<{ id: string }>
       ).map((r) => String(r.id))
     )
   }
@@ -253,7 +251,9 @@ async function buildAudienceSummaries(
     const uids = p.aud.user_ids ?? []
     if (uids.length > 0) {
       const names = uids.slice(0, 3).map((uid) => userNames.get(String(uid)) ?? String(uid))
-      parts.push(uids.length > 3 ? `${names.join(', ')} +${uids.length - 3} more` : names.join(', '))
+      parts.push(
+        uids.length > 3 ? `${names.join(', ')} +${uids.length - 3} more` : names.join(', ')
+      )
     }
     out.set(p.id, parts.length > 0 ? parts.join(' · ') : 'Everyone')
   }
@@ -284,7 +284,10 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
     const users = await resolveAudienceUsers(aud)
     // Personalization (#245): {{first_name}} / {{name}} tokens render per
     // recipient; unknown tokens render empty rather than leaking braces.
-    const personalize = (text: string, u: { first_name: string | null; last_name?: string | null }) =>
+    const personalize = (
+      text: string,
+      u: { first_name: string | null; last_name?: string | null }
+    ) =>
       text
         .replace(/\{\{\s*first_name\s*\}\}/g, u.first_name ?? '')
         .replace(
@@ -371,14 +374,23 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
 /** Ack chasers (#385): must-ack banners older than 24h re-remind non-ackers
  *  ONCE (in-app), and at 48h escalate ONCE to the sender with the laggard
  *  count. State rides chased_at / escalated_at so a chaser can never repeat. */
-export async function runAckChasers(app: FastifyInstance): Promise<{ chased: number; escalated: number }> {
+export async function runAckChasers(
+  app: FastifyInstance
+): Promise<{ chased: number; escalated: number }> {
   const rows = (await db('nivaro_announcements')
     .where('require_ack', 1)
     .where('is_active', 1)
     .whereNotNull('sent_at')
-    .select('id', 'subject', 'message', 'audience', 'created_by', 'sent_at', 'chased_at', 'escalated_at')) as Array<
-    Record<string, unknown>
-  >
+    .select(
+      'id',
+      'subject',
+      'message',
+      'audience',
+      'created_by',
+      'sent_at',
+      'chased_at',
+      'escalated_at'
+    )) as Array<Record<string, unknown>>
   let chased = 0
   let escalated = 0
   const now = Date.now()
@@ -400,28 +412,37 @@ export async function runAckChasers(app: FastifyInstance): Promise<{ chased: num
         for (const u of laggards.slice(0, 500)) {
           await notifyUser(app, u.id, {
             subject: `Reminder: acknowledge "${String(row.subject ?? '').slice(0, 120)}"`,
+            category: 'system',
             message: 'This announcement requires your acknowledgement.',
             sender: (row.created_by as string) ?? null
           }).catch(() => {})
         }
-        await db('nivaro_announcements').where('id', Number(row.id)).update({ chased_at: new Date() })
+        await db('nivaro_announcements')
+          .where('id', Number(row.id))
+          .update({ chased_at: new Date() })
         chased++
       } else if (row.chased_at && !row.escalated_at && ageH >= 48) {
         const aud = parseJsonSafe<Audience>(row.audience) ?? {}
         const users = await resolveAudienceUsers(aud)
         const ackCount = Number(
-          ((await db('nivaro_announcement_acks').where('announcement', Number(row.id)).count({ n: '*' }).first()) as
-            | { n?: number | string }
-            | undefined)?.n ?? 0
+          (
+            (await db('nivaro_announcement_acks')
+              .where('announcement', Number(row.id))
+              .count({ n: '*' })
+              .first()) as { n?: number | string } | undefined
+          )?.n ?? 0
         )
         const missing = Math.max(0, users.length - ackCount)
         if (missing > 0 && row.created_by) {
           await notifyUser(app, String(row.created_by), {
             subject: `${missing} of ${users.length} still haven't acknowledged "${String(row.subject ?? '').slice(0, 100)}"`,
+            category: 'system',
             message: 'Open the broadcast receipts to see who is outstanding.'
           }).catch(() => {})
         }
-        await db('nivaro_announcements').where('id', Number(row.id)).update({ escalated_at: new Date() })
+        await db('nivaro_announcements')
+          .where('id', Number(row.id))
+          .update({ escalated_at: new Date() })
         escalated++
       }
     } catch {
@@ -530,8 +551,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     if (maint.on) {
       data.unshift({
         id: -1,
-        message:
-          maint.message || 'Maintenance in progress — changes are temporarily disabled.',
+        message: maint.message || 'Maintenance in progress — changes are temporarily disabled.',
         subject: 'Maintenance',
         severity: 'critical',
         ends_at: null,
@@ -552,9 +572,16 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
           | { id: number; title: string; message: string | null; starts_at: Date; ends_at: Date }
           | undefined
         if (next) {
-          const mins = Math.max(1, Math.round((new Date(next.starts_at).getTime() - Date.now()) / 60_000))
+          const mins = Math.max(
+            1,
+            Math.round((new Date(next.starts_at).getTime() - Date.now()) / 60_000)
+          )
           const when =
-            mins >= 120 ? `in ${Math.round(mins / 60)} hours` : mins >= 60 ? 'in about an hour' : `in ${mins} minutes`
+            mins >= 120
+              ? `in ${Math.round(mins / 60)} hours`
+              : mins >= 60
+                ? 'in about an hour'
+                : `in ${mins} minutes`
           data.unshift({
             id: -2,
             message: `${next.message ?? 'The system will be briefly unavailable for maintenance.'} Starts ${when} (${new Date(next.starts_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} – ${new Date(next.ends_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}).`,
@@ -805,7 +832,12 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       created_by: req.user!.id,
       created_at: new Date()
     })
-    await logActivity({ action: 'broadcast-template-create', user: req.user!.id, comment: b.name, req })
+    await logActivity({
+      action: 'broadcast-template-create',
+      user: req.user!.id,
+      comment: b.name,
+      req
+    })
     return reply.send({ data: { ok: true } })
   })
   app.delete<{ Params: { tid: string } }>(
@@ -880,39 +912,47 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     }
   )
 
-  app.patch<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_announcements').where('id', req.params.id).first()
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    const b = req.body as Record<string, unknown>
-    const patch: Record<string, unknown> = { updated_at: new Date() }
-    if (b.message !== undefined) patch.message = String(b.message)
-    if (b.severity !== undefined && ['info', 'warn', 'critical'].includes(String(b.severity))) {
-      patch.severity = b.severity
+  app.patch<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_announcements').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const b = req.body as Record<string, unknown>
+      const patch: Record<string, unknown> = { updated_at: new Date() }
+      if (b.message !== undefined) patch.message = String(b.message)
+      if (b.severity !== undefined && ['info', 'warn', 'critical'].includes(String(b.severity))) {
+        patch.severity = b.severity
+      }
+      if (b.ends_at !== undefined) patch.ends_at = b.ends_at ? new Date(String(b.ends_at)) : null
+      if (b.is_active !== undefined) patch.is_active = !!b.is_active
+      await db('nivaro_announcements').where('id', row.id).update(patch)
+      await logActivity({
+        action: 'announcement-update',
+        user: req.user?.id,
+        collection: 'nivaro_announcements',
+        item: String(row.id),
+        req
+      })
+      return { data: { id: row.id } }
     }
-    if (b.ends_at !== undefined) patch.ends_at = b.ends_at ? new Date(String(b.ends_at)) : null
-    if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    await db('nivaro_announcements').where('id', row.id).update(patch)
-    await logActivity({
-      action: 'announcement-update',
-      user: req.user?.id,
-      collection: 'nivaro_announcements',
-      item: String(row.id),
-      req
-    })
-    return { data: { id: row.id } }
-  })
+  )
 
-  app.delete<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_announcements').where('id', req.params.id).first('id')
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    await db('nivaro_announcements').where('id', row.id).del()
-    await logActivity({
-      action: 'announcement-delete',
-      user: req.user?.id,
-      collection: 'nivaro_announcements',
-      item: String(row.id),
-      req
-    })
-    return { data: { deleted: true } }
-  })
+  app.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_announcements').where('id', req.params.id).first('id')
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      await db('nivaro_announcements').where('id', row.id).del()
+      await logActivity({
+        action: 'announcement-delete',
+        user: req.user?.id,
+        collection: 'nivaro_announcements',
+        item: String(row.id),
+        req
+      })
+      return { data: { deleted: true } }
+    }
+  )
 }

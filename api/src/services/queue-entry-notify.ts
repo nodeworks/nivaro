@@ -97,6 +97,7 @@ export async function runQueueEntryNotifyPass(app: FastifyInstance): Promise<voi
       const { notifyUser } = await import('./notification-channels.js')
       await notifyUser(app, sub.user, {
         subject: `${queue.name ?? 'Queue'}: ${newOnes.length} new item${newOnes.length === 1 ? '' : 's'}`,
+        category: 'workflow',
         message:
           first && newOnes.length === 1
             ? `"${first.label}" just entered ${sub.label ?? queue.name ?? 'the queue'}.`

@@ -46,6 +46,7 @@ export async function recordLogin(
       if (Number((priorLogins as { c?: number } | undefined)?.c ?? 0) > 1) {
         await notifyUser(app, userId, {
           subject: 'New sign-in to your account',
+          category: 'system',
           message: `A sign-in from a new location (${ip || 'unknown IP'}) just occurred. If this was you, no action is needed — otherwise contact an administrator.`
         }).catch(() => {})
       }

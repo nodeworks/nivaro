@@ -110,29 +110,35 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
   // GET so the browser can navigate/download directly; the caller's live
   // filter state rides as the same `conditions`/`search` params the list uses.
 
-interface ExportResult {
-  buffer: Buffer
-  filename: string
-  contentType: string
-}
-interface ExportError {
-  code: 404 | 403 | 500
-  error: string
-}
+  interface ExportResult {
+    buffer: Buffer
+    filename: string
+    contentType: string
+  }
+  interface ExportError {
+    code: 404 | 403 | 500
+    error: string
+  }
 
-/** The whole export build, callable from the sync route AND the async job
- *  (#453). `reqLike` only needs `.query.conditions` — the async path passes a
- *  synthetic one carrying the filters captured at enqueue time. */
-async function buildExport(
-  user: import('../types.js').User,
-  isAdmin: boolean,
-  presetId: string,
-  q: Record<string, string>,
-  reqLike: unknown,
-  workspaceId?: string
-): Promise<ExportResult | ExportError> {
+  /** The whole export build, callable from the sync route AND the async job
+   *  (#453). `reqLike` only needs `.query.conditions` — the async path passes a
+   *  synthetic one carrying the filters captured at enqueue time. */
+  async function buildExport(
+    user: import('../types.js').User,
+    isAdmin: boolean,
+    presetId: string,
+    q: Record<string, string>,
+    reqLike: unknown,
+    workspaceId?: string
+  ): Promise<ExportResult | ExportError> {
     const preset = (await db('nivaro_export_presets').where('id', presetId).first()) as
-      | { collection: string; name: string; config: string; is_shared: boolean | number; created_by: string | null }
+      | {
+          collection: string
+          name: string
+          config: string
+          is_shared: boolean | number
+          created_by: string | null
+        }
       | undefined
     if (!preset) return { code: 404 as const, error: 'Not found' }
     if (!preset.is_shared && preset.created_by !== user.id && !isAdmin) {
@@ -275,7 +281,11 @@ async function buildExport(
           )
           const kws = XLSX.utils.aoa_to_sheet([kidCols, ...kidRows])
           kws['!cols'] = kidCols.map((h, ci) => ({
-            wch: Math.min(60, Math.max(h.length, ...kidRows.slice(0, 200).map((r) => String(r[ci] ?? '').length)) + 2)
+            wch: Math.min(
+              60,
+              Math.max(h.length, ...kidRows.slice(0, 200).map((r) => String(r[ci] ?? '').length)) +
+                2
+            )
           }))
           XLSX.utils.book_append_sheet(wb, kws, rel.one_field.slice(0, 31))
         } catch {
@@ -289,7 +299,7 @@ async function buildExport(
       filename: `${safeName}.xlsx`,
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     }
-}
+  }
 
   app.get<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
     const result = await buildExport(
@@ -310,54 +320,60 @@ async function buildExport(
   // #453 — async export: the same build runs as a background job; the file
   // lands in the file library and the requester gets a notification with the
   // link. For the exports big enough that the sync route feels like a hang.
-  app.post<{ Params: { id: string }; Body: { conditions?: string; search?: string; sort?: string } }>(
-    '/:id/run-async',
-    async (req, reply) => {
-      const user = req.user!
-      const isAdmin = !!req.isAdmin
-      const presetId = req.params.id
-      const preset = await db('nivaro_export_presets').where('id', presetId).first('id', 'name')
-      if (!preset) return reply.code(404).send({ error: 'Not found' })
-      const { startJobRun } = await import('../services/job-runs.js')
-      const run = await startJobRun('export', `preset:${preset.name}`.slice(0, 200), {
-        triggeredBy: user.id
-      })
-      const q: Record<string, string> = {}
-      if (req.body?.search) q.search = String(req.body.search)
-      if (req.body?.sort) q.sort = String(req.body.sort)
-      const conditions = req.body?.conditions ? String(req.body.conditions) : undefined
-      const workspaceId = req.workspaceId ?? undefined
-      void (async () => {
-        try {
-          const result = await buildExport(
-            user,
-            isAdmin,
-            presetId,
-            q,
-            // readItems reads conditions off req.query — a synthetic req
-            // carries the filters captured at enqueue time.
-            conditions ? { query: { conditions } } : undefined,
-            workspaceId
-          )
-          if ('error' in result) {
-            await run.fail(result.error)
-            return
-          }
-          const { uploadFileBuffer } = await import('../services/files.js')
-          const stored = await uploadFileBuffer(user, result.buffer, result.filename, result.contentType)
-          await run.complete(`${result.filename} → file ${stored.id}`)
-          const { notifyUser } = await import('../services/notification-channels.js')
-          await notifyUser(app, user.id, {
-            subject: `Export ready: ${result.filename}`,
-            message: 'Your export finished — open Files to download it.',
-            collection: 'nivaro_files',
-            item: String(stored.id)
-          }).catch(() => {})
-        } catch (err) {
-          await run.fail(err)
+  app.post<{
+    Params: { id: string }
+    Body: { conditions?: string; search?: string; sort?: string }
+  }>('/:id/run-async', async (req, reply) => {
+    const user = req.user!
+    const isAdmin = !!req.isAdmin
+    const presetId = req.params.id
+    const preset = await db('nivaro_export_presets').where('id', presetId).first('id', 'name')
+    if (!preset) return reply.code(404).send({ error: 'Not found' })
+    const { startJobRun } = await import('../services/job-runs.js')
+    const run = await startJobRun('export', `preset:${preset.name}`.slice(0, 200), {
+      triggeredBy: user.id
+    })
+    const q: Record<string, string> = {}
+    if (req.body?.search) q.search = String(req.body.search)
+    if (req.body?.sort) q.sort = String(req.body.sort)
+    const conditions = req.body?.conditions ? String(req.body.conditions) : undefined
+    const workspaceId = req.workspaceId ?? undefined
+    void (async () => {
+      try {
+        const result = await buildExport(
+          user,
+          isAdmin,
+          presetId,
+          q,
+          // readItems reads conditions off req.query — a synthetic req
+          // carries the filters captured at enqueue time.
+          conditions ? { query: { conditions } } : undefined,
+          workspaceId
+        )
+        if ('error' in result) {
+          await run.fail(result.error)
+          return
         }
-      })()
-      return reply.code(202).send({ data: { run_id: run.id } })
-    }
-  )
+        const { uploadFileBuffer } = await import('../services/files.js')
+        const stored = await uploadFileBuffer(
+          user,
+          result.buffer,
+          result.filename,
+          result.contentType
+        )
+        await run.complete(`${result.filename} → file ${stored.id}`)
+        const { notifyUser } = await import('../services/notification-channels.js')
+        await notifyUser(app, user.id, {
+          subject: `Export ready: ${result.filename}`,
+          category: 'reports',
+          message: 'Your export finished — open Files to download it.',
+          collection: 'nivaro_files',
+          item: String(stored.id)
+        }).catch(() => {})
+      } catch (err) {
+        await run.fail(err)
+      }
+    })()
+    return reply.code(202).send({ data: { run_id: run.id } })
+  })
 }

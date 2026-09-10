@@ -4,7 +4,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
-import { notifyUser } from '../services/notification-channels.js'
+import { notifyUser, NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -38,7 +38,12 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const page = Math.max(1, Number(q.page) || 1)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
 
-    const qf = req.query as { search?: string; collection?: string; sender?: string; snoozed?: string }
+    const qf = req.query as {
+      search?: string
+      collection?: string
+      sender?: string
+      snoozed?: string
+    }
     const filtered = () => {
       let query = db('nivaro_notifications').where({ recipient: userId })
       if (q.status === 'inbox' || q.unread === 'true') query = query.andWhere({ status: 'inbox' })
@@ -94,6 +99,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
       message?: string
       collection?: string
       item?: string
+      category?: string
     }
     if (!body.recipient || !body.subject?.trim()) {
       return reply.code(400).send({ error: 'recipient and subject are required' })
@@ -108,7 +114,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
       message: (body.message ?? '').slice(0, 500),
       sender: req.user!.id,
       collection: body.collection,
-      item: body.item
+      item: body.item,
+      category: NOTIFY_CATEGORIES.find((c) => c === body.category)
     })
     return reply.code(201).send({ ok: true })
   })

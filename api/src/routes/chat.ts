@@ -194,9 +194,14 @@ export async function chatRoutes(app: FastifyInstance) {
           try {
             const p = (await db('nivaro_users')
               .where({ id: peer })
-              .first('id', 'first_name', 'last_name', 'is_out_of_office', 'ooo_end', 'delegate_id')) as
-              | Record<string, unknown>
-              | undefined
+              .first(
+                'id',
+                'first_name',
+                'last_name',
+                'is_out_of_office',
+                'ooo_end',
+                'delegate_id'
+              )) as Record<string, unknown> | undefined
             if (!p?.is_out_of_office) return
             const recent = await db('chat_messages')
               .where({ room, sender: peer })
@@ -226,7 +231,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 date_created: new Date()
               })
               .returning('id')
-            const autoId = typeof ins === 'object' && ins !== null ? (ins as { id: number }).id : ins
+            const autoId =
+              typeof ins === 'object' && ins !== null ? (ins as { id: number }).id : ins
             app.io?.to(`chat:${room}`).emit('chat:message', {
               id: autoId,
               room,
@@ -263,6 +269,7 @@ export async function chatRoutes(app: FastifyInstance) {
             if (String(m.user).toUpperCase() === senderId) continue
             await notifyUser(app, m.user, {
               subject: `@channel in ${room.slice(3)}`,
+              category: 'mentions',
               message: `${senderName ?? 'Someone'}: ${message.slice(0, 300)}`,
               sender: req.user?.id ?? null
             }).catch(() => {})
@@ -530,9 +537,14 @@ export async function chatRoutes(app: FastifyInstance) {
       .where('s.user', req.user!.id)
       .orderBy('s.id', 'desc')
       .limit(100)
-      .select('s.id as saved_id', 'm.id', 'm.room', 'm.message', 'm.sender_name', 'm.date_created')) as Array<
-      Record<string, unknown>
-    >
+      .select(
+        's.id as saved_id',
+        'm.id',
+        'm.room',
+        'm.message',
+        'm.sender_name',
+        'm.date_created'
+      )) as Array<Record<string, unknown>>
     // Visibility can change after saving — re-check per room (cheap cache).
     const out: typeof rows = []
     const seen = new Map<string, boolean>()
@@ -649,7 +661,10 @@ export async function chatRoutes(app: FastifyInstance) {
           'Summarize a chat room\u2019s recent messages for someone catching up: 2-4 sentences, decisions and open questions first, names attached. No preamble.',
         messages: [{ role: 'user', content: transcript }]
       })
-      const text = resp.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim()
+      const text = resp.content
+        .map((b) => (b.type === 'text' ? b.text : ''))
+        .join('')
+        .trim()
       return reply.send({ data: { summary: text, count: msgs.length } })
     } catch (err) {
       return reply

@@ -17,6 +17,7 @@ import {
 import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import {
   type ExtensionEventHandler,
@@ -36,7 +37,10 @@ import {
   type NotificationChannelDef,
   notificationChannelRegistry
 } from './notification-channels.js'
-import { notificationSourceRegistry, type NotificationSourceProvider } from './notification-sources.js'
+import {
+  notificationSourceRegistry,
+  type NotificationSourceProvider
+} from './notification-sources.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -91,6 +95,14 @@ export interface ExtensionContext {
     item?: string | number
     comment?: string
   }): Promise<number | null>
+  /**
+   * Deliver a notification through the full channel stack — inbox row, live
+   * socket event, browser push, optional email — honouring the recipient's
+   * notification rules (per-category in-app / push / email, quiet hours).
+   * Extensions must use this instead of inserting nivaro_notifications rows
+   * directly: a raw insert bypasses every preference. Never throws.
+   */
+  notifyUser(userId: string, opts: NotifyUserOptions): Promise<void>
   /** Hook helpers scoped to this extension — hooks are tagged and can be disabled/removed. */
   hooks: {
     before(
@@ -434,6 +446,7 @@ async function loadExtension(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'notifyUser'
     | 'auth'
     | 'flows'
     | 'events'
@@ -539,6 +552,10 @@ async function loadExtension(
       callExternalApi: (nameOrId, options) => {
         note('external-apis')
         return callExternalApi(nameOrId, options)
+      },
+      notifyUser: (userId, opts) => {
+        note('notifications')
+        return notifyUser(ctx.app, userId, opts).catch(() => undefined)
       },
       logActivity: (entry) => {
         note('activity')
@@ -758,6 +775,7 @@ export async function loadExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'notifyUser'
     | 'auth'
     | 'flows'
     | 'events'
@@ -883,6 +901,7 @@ export async function loadCloudExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'notifyUser'
     | 'auth'
     | 'flows'
     | 'events'
@@ -958,6 +977,7 @@ export async function loadCloudExtensions(
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
         },
+        notifyUser: (userId, opts) => notifyUser(ctx.app, userId, opts).catch(() => undefined),
         logActivity: (entry) =>
           logActivity({
             action: `${extId}:${entry.action}`,
@@ -983,7 +1003,9 @@ export async function loadCloudExtensions(
         bulkActions: { register: (def) => bulkActionRegistry.register(def) },
         itemActions: { register: (def) => itemActionRegistry.register(def) },
         notificationChannels: { register: (def) => notificationChannelRegistry.register(def) },
-        notificationSources: { register: (provider) => notificationSourceRegistry.register(provider) },
+        notificationSources: {
+          register: (provider) => notificationSourceRegistry.register(provider)
+        },
         dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
         storage: {
           register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
@@ -1105,6 +1127,7 @@ export async function scanNewExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'notifyUser'
     | 'auth'
     | 'flows'
     | 'events'

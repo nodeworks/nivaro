@@ -404,6 +404,7 @@ export async function expireStaleAccessRequests(app: FastifyInstance): Promise<n
       : null
     await notifyUser(app, String(r.user), {
       subject: `Access request expired: ${String(r.collection).replace(/_/g, ' ')}${label ? ` ${label}` : ''}`,
+      category: 'system',
       message: `Nobody acted on your request within ${EXPIRE_AFTER_DAYS} days, so it was closed. If you still need it, open the record and request access again.`,
       collection: String(r.collection),
       item

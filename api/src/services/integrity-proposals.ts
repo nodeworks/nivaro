@@ -1381,6 +1381,7 @@ export async function applyProposal(
     void task
     await notifyUser(app, proposal.notify.user_id, {
       subject: 'A data-integrity issue needs your input',
+      category: 'system',
       message: title,
       collection,
       item: String(itemId),

@@ -1101,6 +1101,7 @@ export async function buildServer() {
               const { notifyUser } = await import('./services/notification-channels.js')
               await notifyUser(app, sch.created_by, {
                 subject: `Data integrity regression: ${sch.collection}`,
+                category: 'system',
                 message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
                 collection: 'nivaro_conformance_runs',
                 item: String(runId)

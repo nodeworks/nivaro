@@ -277,6 +277,7 @@ export async function runViewSubscriptionDigests(
       .join('')
 
     await sendRawMail({
+      category: 'reports',
       to: user.email,
       subject,
       html: `<h2>Watched views — ${cadence} digest</h2>${sections}`

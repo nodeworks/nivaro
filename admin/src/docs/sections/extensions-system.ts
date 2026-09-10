@@ -88,8 +88,16 @@ export const extContext: DocSection = {
       type: 'table',
       head: ['Property', 'Type', 'Purpose'],
       rows: [
-        ['hooks', '{ before, after }', 'Intercept CRUD operations. Tagged for enable/disable per extension.'],
-        ['cron', '{ schedule, unschedule }', 'Recurring jobs. Paused/resumed when extension toggled.']
+        [
+          'hooks',
+          '{ before, after }',
+          'Intercept CRUD operations. Tagged for enable/disable per extension.'
+        ],
+        [
+          'cron',
+          '{ schedule, unschedule }',
+          'Recurring jobs. Paused/resumed when extension toggled.'
+        ]
       ]
     },
     {
@@ -101,8 +109,17 @@ export const extContext: DocSection = {
       type: 'table',
       head: ['Property', 'Type', 'Purpose'],
       rows: [
-        ['callExternalApi', 'Function', 'Call configured external API by name/ID. Auth resolved automatically.'],
-        ['flows', 'Object', 'Register flow ops/triggers. Emit trigger events to execute flows.']
+        [
+          'callExternalApi',
+          'Function',
+          'Call configured external API by name/ID. Auth resolved automatically.'
+        ],
+        ['flows', 'Object', 'Register flow ops/triggers. Emit trigger events to execute flows.'],
+        [
+          'notifyUser',
+          'Function',
+          "notifyUser(userId, {subject, message, category?, collection?, item?}) — deliver through the full channel stack (inbox, socket, push, optional email) honouring the recipient's notification rules. Never insert nivaro_notifications rows directly."
+        ]
       ]
     },
     {
@@ -117,7 +134,11 @@ export const extContext: DocSection = {
         ['bulkActions', 'Object', 'Register selection bar buttons for collections.'],
         ['itemActions', 'Object', 'Register toolbar buttons on item edit pages.'],
         ['dashboardWidgets', 'Object', 'Register custom dashboard widget types.'],
-        ['collectionViews', 'Object', 'Register custom collection view modes (Kanban, calendar, etc).'],
+        [
+          'collectionViews',
+          'Object',
+          'Register custom collection view modes (Kanban, calendar, etc).'
+        ],
         ['notificationChannels', 'Object', 'Register delivery channels (Slack, SMS, custom).']
       ]
     },

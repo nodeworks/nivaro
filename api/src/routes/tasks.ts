@@ -101,6 +101,7 @@ async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: stri
   if (task.assignee === actorId) return // self-assignment needs no notification
   await notifyUser(app, task.assignee, {
     subject: `Task assigned: ${task.title}`,
+    category: 'workflow',
     message: task.description
       ? task.description.slice(0, 400)
       : `You have been assigned a task on ${task.collection}/${task.item}.`,
@@ -191,7 +192,9 @@ export async function tasksRoutes(app: FastifyInstance) {
   }>('/', async (req, reply) => {
     const { collection, item, title, description, assignee, due_date, priority } = req.body ?? {}
     if (priority && !TASK_PRIORITIES.includes(priority)) {
-      return reply.code(400).send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
+      return reply
+        .code(400)
+        .send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
     }
     if (!collection || !item || !title || !assignee) {
       return reply.code(400).send({ error: 'collection, item, title, and assignee are required' })
@@ -307,7 +310,9 @@ export async function tasksRoutes(app: FastifyInstance) {
     }
     if (body.priority !== undefined) {
       if (!TASK_PRIORITIES.includes(String(body.priority))) {
-        return reply.code(400).send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
+        return reply
+          .code(400)
+          .send({ error: `priority must be one of ${TASK_PRIORITIES.join(', ')}` })
       }
       patch.priority = body.priority
     }
