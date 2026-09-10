@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-09T23:35:55.875Z",
+  "generated_at": "2026-09-10T00:06:53.484Z",
   "releases": [
+    {
+      "version": "0.1.242",
+      "tag": "v0.1.242",
+      "date": "2026-09-09T20:06:47-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "rules",
+              "text": "seed-only values follow their trigger while still auto; probe seed targets one at a time",
+              "hash": "5a1963cc"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.241",
       "tag": "v0.1.241",
-      "date": "2026-09-09T19:35:49-04:00",
+      "date": "2026-09-09T19:35:55-04:00",
       "sections": [
         {
           "label": "Added",
