@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-10T00:06:53.484Z",
+  "generated_at": "2026-09-10T00:26:57.067Z",
   "releases": [
+    {
+      "version": "0.1.243",
+      "tag": "v0.1.243",
+      "date": "2026-09-09T20:26:50-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "re-run rules on unsaved lines; pinned default in the grouped category picker",
+              "hash": "d22c7896"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.242",
       "tag": "v0.1.242",
-      "date": "2026-09-09T20:06:47-04:00",
+      "date": "2026-09-09T20:06:53-04:00",
       "sections": [
         {
           "label": "Fixed",
