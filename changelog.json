@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-11T20:15:49.178Z",
+  "generated_at": "2026-09-11T20:31:17.581Z",
   "releases": [
+    {
+      "version": "0.1.261",
+      "tag": "v0.1.261",
+      "date": "2026-09-11T16:31:09-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "picker",
+              "text": "a manual clear no longer refills a single-option field",
+              "hash": "cfa888a9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.260",
       "tag": "v0.1.260",
-      "date": "2026-09-11T16:15:38-04:00",
+      "date": "2026-09-11T16:15:49-04:00",
       "sections": [
         {
           "label": "Added",
