@@ -1212,9 +1212,24 @@ export function ItemEditForm({
     })
   }, [])
 
+  // Condensing hides the header field strip, which sits OUTSIDE the scroll
+  // container — so the scroller grows by the strip's height and, when the body
+  // barely overflows (a drill sheet on a 1080p screen), scrollTop clamps back
+  // under the expand threshold, the strip returns, and every wheel tick
+  // re-triggers the cycle (the "header tweaks out while scrolling" report).
+  // Only condense when the body can still scroll past the expand threshold
+  // AFTER the strip is gone; otherwise the header simply stays as it is.
+  const headerStripRef = useRef<HTMLDivElement | null>(null)
   const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const top = (e.target as HTMLDivElement).scrollTop
-    setHeaderCondensed((prev) => (prev ? top > 40 : top > 110))
+    const el = e.target as HTMLDivElement
+    const top = el.scrollTop
+    setHeaderCondensed((prev) => {
+      if (prev) return top > 40
+      if (top <= 110) return false
+      const freed = (headerStripRef.current?.offsetHeight ?? 0) + 16 // strip + header padding delta
+      const maxScrollAfter = el.scrollHeight - (el.clientHeight + freed)
+      return maxScrollAfter > 40 + 24
+    })
   }, [])
 
   // The revision this draft is BASED on — the collision check's baseline.
@@ -8369,6 +8384,7 @@ export function ItemEditForm({
                                   // fetch, which read as the sub-header
                                   // "reloading" on scroll-up.
                                   <div
+                                    ref={headerStripRef}
                                     className={`shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
                                   >
                                     {[

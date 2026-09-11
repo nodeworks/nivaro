@@ -2587,6 +2587,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 Default
               </button>
             )}
+            {/* Hover-revealed pill actions keep their slot (`invisible`, never
+                `hidden`): a pill that WIDENS on hover re-wraps a toolbar that sits
+                at capacity (1080p), the cursor lands off the pill, it narrows,
+                the row un-wraps — a hover flicker (IR queue report, 2026-09-11). */}
             {(views?.data ?? []).map((v) => (
               <span
                 key={v.id}
@@ -2638,7 +2642,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                       'shrink-0',
                       v.is_default
                         ? 'text-nvr-cyan'
-                        : 'hidden text-slate-300 hover:text-nvr-cyan group-hover:inline dark:text-slate-600'
+                        : 'invisible text-slate-300 hover:text-nvr-cyan group-hover:visible dark:text-slate-600'
                     )}
                     aria-label={v.is_default ? 'Unset queue default' : 'Set queue default'}
                   >
@@ -2670,7 +2674,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                       'shrink-0',
                       viewSubFor(v.id)
                         ? 'text-nvr-cyan'
-                        : 'hidden text-slate-300 hover:text-nvr-cyan group-hover:inline dark:text-slate-600'
+                        : 'invisible text-slate-300 hover:text-nvr-cyan group-hover:visible dark:text-slate-600'
                     )}
                     aria-label={`Subscribe to view ${v.name}`}
                   >
@@ -2681,7 +2685,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   <button
                     type='button'
                     onClick={() => deleteViewMut.mutate(v.id)}
-                    className='hidden text-slate-400 hover:text-red-500 group-hover:inline'
+                    className='invisible text-slate-400 hover:text-red-500 group-hover:visible'
                     aria-label={`Delete view ${v.name}`}
                   >
                     ×
