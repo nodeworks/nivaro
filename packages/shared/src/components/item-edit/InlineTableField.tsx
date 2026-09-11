@@ -60,12 +60,15 @@ export function failingLints(
 
 export interface RowRule {
   trigger_field?: string | null
+  /** Additional trigger fields — any of them changing fires the rule. */
+  trigger_fields?: string[] | null
   trigger_op?: string
   trigger_value?: string | null
   target_field: string
-  target_type: 'set' | 'clear' | 'relation_field'
+  target_type: 'set' | 'clear' | 'relation_field' | 'precedence' | 'pick' | 'lock'
   target_value?: string | null
   only_if_empty?: boolean
+  seed_only?: boolean
   sort?: number
 }
 export interface ColumnPreset {
@@ -3474,14 +3477,7 @@ export function InlineTableField({
                 })
               )
               .catch(() => null)
-            const autoFields = Object.entries(probe?.expected ?? {})
-              .filter(([k, want]) => {
-                if (k === field) return false
-                const cur = base[k]
-                if (cur == null || cur === '' || want == null || want === '') return false
-                return String(cur) === String(want)
-              })
-              .map(([k]) => k)
+            const autoFields = autoTargetsFor(field, base, probe?.expected)
             for (const k of autoFields) next[k] = null
             const res = await client
               .request<{ updates?: Record<string, unknown> }>(
@@ -4022,6 +4018,35 @@ export function InlineTableField({
   /** Merge an evaluate response into the open editor, honoring the stale-
    *  response guard: a key touched since `seq` (by the user, or by a newer
    *  response) keeps the later write. */
+  /** Rule targets whose current value is AUTO — equal to what the rules derive
+   *  from scratch (`expected`) — among the rules `changedKey` triggers. Blank
+   *  these before a rule pass so only-if-empty rules re-derive them for the
+   *  new trigger value; a hand-picked value (≠ expected) is never listed and
+   *  keeps the 2026-09-08 protection. Rules the change doesn't trigger are
+   *  left alone — a quantity edit must not blank an auto expenditure type. */
+  function autoTargetsFor(
+    changedKey: string,
+    draft: Record<string, unknown>,
+    expected: Record<string, unknown> | undefined
+  ): string[] {
+    if (!expected || !rowRules?.length) return []
+    const triggered = new Set<string>()
+    for (const r of rowRules) {
+      if (r.target_type === 'lock') continue
+      const triggers = [r.trigger_field, ...(r.trigger_fields ?? [])].filter(
+        (t): t is string => typeof t === 'string' && t.length > 0
+      )
+      if (triggers.includes(changedKey)) triggered.add(r.target_field)
+    }
+    return [...triggered].filter((f) => {
+      if (f === changedKey || !(f in expected)) return false
+      const cur = draft[f]
+      const want = expected[f]
+      if (cur == null || cur === '' || want == null || want === '') return false
+      return String(cur) === String(want)
+    })
+  }
+
   function applyEvalResponse(
     rowId: string,
     seq: number,
@@ -4030,7 +4055,8 @@ export function InlineTableField({
       locks?: string[]
       lock_reasons?: Record<string, LockReason>
       expected?: Record<string, unknown>
-    }
+    },
+    autoFields: string[] = []
   ) {
     if (editStateRef.current?.rowId !== rowId || draftKeySeqRef.current.rowId !== rowId) return
     const seqs = draftKeySeqRef.current.seqs
@@ -4038,6 +4064,13 @@ export function InlineTableField({
     for (const [key, val] of Object.entries(res.updates ?? {})) {
       if ((seqs.get(key) ?? 0) > seq) continue
       fresh[key] = val
+      seqs.set(key, seq)
+    }
+    // An auto field the rules no longer derive for the new state is empty
+    // now — the same answer a from-scratch re-run gives, never the old value.
+    for (const key of autoFields) {
+      if (key in fresh || (seqs.get(key) ?? 0) > seq) continue
+      fresh[key] = null
       seqs.set(key, seq)
     }
     const hasUpdates = Object.keys(fresh).length > 0
@@ -4124,6 +4157,11 @@ export function InlineTableField({
 
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
+      // Auto values follow their triggers (Rob, 2026-09-11): a category change
+      // re-derives an auto-filled expenditure type; a hand-picked one stays.
+      const autoFields = autoTargetsFor(k, cur?.draft ?? {}, cur?.expected)
+      const evalData: Record<string, unknown> = { ...nextDraft }
+      for (const f of autoFields) evalData[f] = null
       client
         .request<{
           updates: Record<string, unknown>
@@ -4133,14 +4171,14 @@ export function InlineTableField({
         }>(
           post('/field-rules/evaluate', {
             collection: relatedCollection,
-            data: nextDraft,
+            data: evalData,
             changed_field: k,
             probe: true,
             parent_context: parentCtx,
             row_rules: rowRules
           })
         )
-        .then((res) => applyEvalResponse(rowId ?? '', seq, res))
+        .then((res) => applyEvalResponse(rowId ?? '', seq, res, autoFields))
         .catch(() => {})
     }
   }
