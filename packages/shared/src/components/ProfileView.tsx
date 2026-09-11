@@ -267,8 +267,8 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
   },
   {
     key: 'watch',
-    label: 'Field watches',
-    help: 'A field you watch changed on a record (Field watches and per-record subscriptions).'
+    label: 'Watches',
+    help: 'Something you explicitly watch fired: field watches, per-record subscriptions, and watched stock parts (Stock Planning).'
   },
   {
     key: 'alerts',
