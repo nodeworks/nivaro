@@ -1,3 +1,4 @@
+import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { existsSync } from 'node:fs'
 import { STATUS_CODES } from 'node:http'
 import { join } from 'node:path'
@@ -1363,6 +1364,12 @@ export async function buildServer() {
         'chat-reminders'
       ]) {
         app.cron.annotate(id, { idempotent: 'unsafe' })
+      }
+      // Plain-language purpose per core job (Background Jobs page). Extensions
+      // describe theirs via the schedule option; a job with no description
+      // reads as undescribed on the page — the cue to add one.
+      for (const [id, description] of Object.entries(CRON_DESCRIPTIONS)) {
+        app.cron.annotate(id, { description })
       }
 
       // #198 — hydrate the paused set from settings so pauses survive restarts.

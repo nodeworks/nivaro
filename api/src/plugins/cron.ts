@@ -17,6 +17,8 @@ export interface CronEntry {
   heavy?: boolean
   /** #305 — declared re-run safety, shown beside the run-now button. */
   idempotent?: 'safe' | 'unsafe' | 'unknown'
+  /** Plain-language purpose — what the job does and what it touches. */
+  description?: string
   /** #198 — a paused cron's ticks return immediately. */
   paused?: boolean
 }
@@ -36,6 +38,8 @@ export interface ScheduleOpts {
   catchUpHours?: number
   heavy?: boolean
   idempotent?: 'safe' | 'unsafe' | 'unknown'
+  /** Plain-language purpose, shown on the Background Jobs page. */
+  description?: string
 }
 
 /** Throws with croner's own message when the expression is not valid. */
@@ -126,20 +130,27 @@ export class CronManager {
     if (!e) return
     const effective = this.overrides.get(id) ?? e.defaultExpression
     if (effective === e.expression) return
-    const { fn, defaultExpression, scheduleOpts, catchUpHours, heavy, idempotent } = e
-    this.schedule(id, defaultExpression, fn, { ...scheduleOpts, catchUpHours, heavy, idempotent })
+    const { fn, defaultExpression, scheduleOpts, catchUpHours, heavy, idempotent, description } = e
+    this.schedule(id, defaultExpression, fn, {
+      ...scheduleOpts,
+      catchUpHours,
+      heavy,
+      idempotent,
+      description
+    })
   }
   /** Post-registration metadata (#136/#305) — one annotation block in
    *  server.ts marks heaviness and re-run safety without touching each
    *  schedule() call site. */
   annotate(
     id: string,
-    meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }
+    meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown'; description?: string }
   ): void {
     const e = this.entries.get(id)
     if (!e) return
     if (meta.heavy !== undefined) e.heavy = meta.heavy
     if (meta.idempotent) e.idempotent = meta.idempotent
+    if (meta.description) e.description = meta.description
   }
   private runSerialized(heavy: boolean, work: () => Promise<void>): Promise<void> {
     if (!heavy) return work()
@@ -212,6 +223,7 @@ export class CronManager {
       catchUpHours: opts?.catchUpHours,
       heavy: opts?.heavy,
       idempotent: opts?.idempotent ?? 'unknown',
+      description: opts?.description,
       job,
       get nextRun() {
         return job.nextRun() ?? null
@@ -305,7 +317,17 @@ export class CronManager {
 
   list(): CronEntry[] {
     return Array.from(this.entries.values()).map(
-      ({ id, expression, defaultExpression, overridden, extensionId, job, heavy, idempotent }) => ({
+      ({
+        id,
+        expression,
+        defaultExpression,
+        overridden,
+        extensionId,
+        job,
+        heavy,
+        idempotent,
+        description
+      }) => ({
         id,
         expression,
         defaultExpression,
@@ -314,6 +336,7 @@ export class CronManager {
         nextRun: job.nextRun() ?? null,
         heavy,
         idempotent,
+        description,
         paused: this.pausedIds.has(id)
       })
     )

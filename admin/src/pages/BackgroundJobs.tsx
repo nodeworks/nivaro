@@ -24,6 +24,7 @@ interface CronEntry {
   paused?: boolean
   heavy?: boolean
   idempotent?: 'safe' | 'unsafe' | 'unknown'
+  description?: string | null
   errors_7d: number
   last: {
     status: string
@@ -267,7 +268,7 @@ export default function BackgroundJobs() {
       <tbody>
         {list.map((c) => (
           <tr key={c.id} className='border-t border-slate-100 dark:border-border'>
-            <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+            <td className='py-1.5 pr-3 align-top font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
               {c.id}
               {c.paused && (
                 <span className='ml-1.5 rounded bg-amber-500/10 px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400'>
@@ -290,6 +291,13 @@ export default function BackgroundJobs() {
                   re-run unsafe
                 </span>
               )}
+              <p className='mt-0.5 max-w-[46ch] whitespace-normal font-sans text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                {c.description || (
+                  <span className='italic text-slate-400'>
+                    No description registered for this job.
+                  </span>
+                )}
+              </p>
             </td>
             <td className='py-1.5 pr-3 font-mono text-[11px] text-slate-400'>
               {editing === c.id ? (
@@ -407,38 +415,40 @@ export default function BackgroundJobs() {
                 <span className='text-slate-300'>0</span>
               )}
             </td>
-            <td className='py-1.5 text-right'>
-              <button
-                type='button'
-                disabled={running === c.id}
-                onClick={() => runNow(c.id)}
-                className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
-              >
-                <Play className='h-3 w-3' strokeWidth={2} />
-                {running === c.id ? 'Running…' : 'Run now'}
-              </button>
-              <button
-                type='button'
-                onClick={() => pauseResume(c.id, !c.paused)}
-                className='ml-1.5 inline-flex items-center rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
-                title={
-                  c.paused
-                    ? 'Enable — ticks run again immediately'
-                    : 'Disable — ticks skip until enabled again; survives restarts'
-                }
-              >
-                {c.paused ? 'Enable' : 'Disable'}
-              </button>
-              {c.overridden && editing !== c.id && (
+            <td className='py-1.5'>
+              <div className='flex items-center justify-end gap-1.5'>
                 <button
                   type='button'
-                  onClick={() => revertSchedule(c.id)}
-                  className='ml-1.5 inline-flex items-center rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
-                  title={`Revert to the registered schedule (${c.default_expression ?? '?'})`}
+                  disabled={running === c.id}
+                  onClick={() => runNow(c.id)}
+                  className='inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
                 >
-                  Revert
+                  <Play className='h-3 w-3' strokeWidth={2} />
+                  {running === c.id ? 'Running…' : 'Run now'}
                 </button>
-              )}
+                <button
+                  type='button'
+                  onClick={() => pauseResume(c.id, !c.paused)}
+                  className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+                  title={
+                    c.paused
+                      ? 'Enable — ticks run again immediately'
+                      : 'Disable — ticks skip until enabled again; survives restarts'
+                  }
+                >
+                  {c.paused ? 'Enable' : 'Disable'}
+                </button>
+                {c.overridden && editing !== c.id && (
+                  <button
+                    type='button'
+                    onClick={() => revertSchedule(c.id)}
+                    className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+                    title={`Revert to the registered schedule (${c.default_expression ?? '?'})`}
+                  >
+                    Revert
+                  </button>
+                )}
+              </div>
             </td>
           </tr>
         ))}

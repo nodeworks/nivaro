@@ -119,9 +119,24 @@ export interface ExtensionContext {
   /** Cron helpers scoped to this extension — jobs are paused/resumed with the extension. */
   cron: {
     /** Register a recurring job. `id` is scoped to this extension automatically. */
-    schedule(id: string, expression: string, fn: () => void | Promise<void>): void
+    schedule(
+      id: string,
+      expression: string,
+      fn: () => void | Promise<void>,
+      opts?: {
+        /** Plain-language purpose — what the job does and what it touches (Background Jobs page). */
+        description?: string
+        heavy?: boolean
+        idempotent?: 'safe' | 'unsafe' | 'unknown'
+      }
+    ): void
     /** Cancel a previously scheduled job. */
     unschedule(id: string): void
+    /** Attach a description / heavy / idempotent flag to one of this extension's jobs after scheduling. */
+    annotate(
+      id: string,
+      meta: { description?: string; heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }
+    ): void
   }
   /** Register custom bulk actions that appear in the collection browser action bar. */
   bulkActions: {
@@ -579,11 +594,15 @@ async function loadExtension(
         }
       },
       cron: {
-        schedule: (id, expression, fn) => {
+        schedule: (id, expression, fn, opts) => {
           note('cron')
-          ctx.app.cron.schedule(`ext:${extId}:${id}`, expression, fn, { extensionId: extId })
+          ctx.app.cron.schedule(`ext:${extId}:${id}`, expression, fn, {
+            extensionId: extId,
+            ...(opts ?? {})
+          })
         },
-        unschedule: (id) => ctx.app.cron.unschedule(`ext:${extId}:${id}`)
+        unschedule: (id) => ctx.app.cron.unschedule(`ext:${extId}:${id}`),
+        annotate: (id, meta) => ctx.app.cron.annotate(`ext:${extId}:${id}`, meta)
       },
       bulkActions: {
         register: (def) => {
@@ -998,7 +1017,8 @@ export async function loadCloudExtensions(
             ctx.app.cron.schedule(`cloud-ext:${extId}:${id}`, expression, fn, {
               extensionId: extId
             }),
-          unschedule: (id) => ctx.app.cron.unschedule(`cloud-ext:${extId}:${id}`)
+          unschedule: (id) => ctx.app.cron.unschedule(`cloud-ext:${extId}:${id}`),
+          annotate: (id, meta) => ctx.app.cron.annotate(`cloud-ext:${extId}:${id}`, meta)
         },
         bulkActions: { register: (def) => bulkActionRegistry.register(def) },
         itemActions: { register: (def) => itemActionRegistry.register(def) },
