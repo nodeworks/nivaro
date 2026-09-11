@@ -8,11 +8,12 @@ import {
   History,
   Inbox,
   Radar,
+  ExternalLink,
   X,
   Zap
 } from 'lucide-react'
 import { useState } from 'react'
-import { useNivaroClient } from '../context'
+import { useNavigation, useNivaroClient } from '../context'
 import { del, get, patch, put } from '../lib/commands'
 import { formatRelative, titleCase } from '../lib/utils'
 import { SimpleSelectXs } from './ui/SimpleSelect'
@@ -43,6 +44,9 @@ interface SourceTrigger {
 
 interface SubRow {
   trigger?: SourceTrigger
+  /** workflow_transition subs: the pipeline whose state this is (server-resolved). */
+  template_id?: string | null
+  template_name?: string | null
   id: number
   collection: string | null
   event_type: string
@@ -414,20 +418,50 @@ function TriggerLine({ trigger }: { trigger: SourceTrigger }) {
   )
 }
 
+/** "Manage →" link to the console page where a source group is configured.
+ *  Resolved through NavigationContext.consoleUrl so a headless host can point
+ *  at its own page, an absolute admin URL, or hide the link (null). */
+function ManageLink({ path, label }: { path: string; label: string }) {
+  const nav = useNavigation()
+  const href = nav.consoleUrl ? nav.consoleUrl(path) : path
+  if (!href) return null
+  const external = /^https?:\/\//.test(href)
+  return (
+    <a
+      href={href}
+      {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}
+      onClick={(e) => {
+        if (external || e.metaKey || e.ctrlKey) return
+        e.preventDefault()
+        nav.navigate(href)
+      }}
+      className='inline-flex items-center gap-1 text-[10.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+      data-manage-link
+    >
+      {label}
+      <ExternalLink className='h-2.5 w-2.5' />
+    </a>
+  )
+}
+
 function Section({
   title,
   hint,
+  action,
   children
 }: {
   title: string
   hint?: string
+  /** Right-aligned header action(s) — typically ManageLink(s). */
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section>
       <div className='mb-1.5 flex items-baseline gap-2 border-b border-slate-100 pb-1 dark:border-border/60'>
         <h3 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>{title}</h3>
-        {hint && <span className='text-[10.5px] text-slate-400'>{hint}</span>}
+        {hint && <span className='min-w-0 truncate text-[10.5px] text-slate-400'>{hint}</span>}
+        {action && <span className='ml-auto flex shrink-0 items-center gap-3'>{action}</span>}
       </div>
       <div className='space-y-0.5'>{children}</div>
     </section>
@@ -641,7 +675,25 @@ export function NotificationSourcesCard() {
             {stateSubs.length > 0 && (
               <Section
                 title='Workflow state changes'
-                hint='email + in-app when a matching workflow enters the state'
+                hint={`${[...new Set(stateSubs.map((r) => `${titleCase(String(r.collection ?? 'records').replace(/_/g, ' '))}${r.template_name ? ` · ${r.template_name} pipeline` : ''}`))].join(' / ')} — email + in-app when a matching record enters the state`}
+                action={
+                  <>
+                    {[
+                      ...new Map(
+                        stateSubs
+                          .filter((r) => r.template_id)
+                          .map((r) => [r.template_id, r.template_name])
+                      ).entries()
+                    ].map(([id, name]) => (
+                      <ManageLink
+                        key={String(id)}
+                        path={`/pipelines/${id}`}
+                        label={`${name ?? 'Pipeline'} states`}
+                      />
+                    ))}
+                    <ManageLink path='/notification-subscriptions' label='Manage subscriptions' />
+                  </>
+                }
               >
                 {stateSubs.map((r) => (
                   <Row
@@ -664,7 +716,12 @@ export function NotificationSourcesCard() {
             )}
 
             {otherSubs.length > 0 && (
-              <Section title='Record & collection subscriptions'>
+              <Section
+                title='Record & collection subscriptions'
+                action={
+                  <ManageLink path='/notification-subscriptions' label='Manage subscriptions' />
+                }
+              >
                 {otherSubs.map((r) => (
                   <Row
                     key={r.id}
@@ -713,7 +770,10 @@ export function NotificationSourcesCard() {
             )}
 
             {s.field_watches.length > 0 && (
-              <Section title='Field watches'>
+              <Section
+                title='Field watches'
+                action={<ManageLink path='/field-watches' label='Manage watches' />}
+              >
                 {s.field_watches.map((r) => (
                   <Row
                     key={r.id}
@@ -728,7 +788,10 @@ export function NotificationSourcesCard() {
             )}
 
             {s.record_alerts.length > 0 && (
-              <Section title='Record alerts'>
+              <Section
+                title='Record alerts'
+                action={<ManageLink path='/alerts' label='Manage alert definitions' />}
+              >
                 {s.record_alerts.map((r) => (
                   <Row
                     key={r.id}
@@ -745,7 +808,10 @@ export function NotificationSourcesCard() {
             )}
 
             {s.metric_alerts.length > 0 && (
-              <Section title='Metric alerts'>
+              <Section
+                title='Metric alerts'
+                action={<ManageLink path='/alert-manager' label='Alert Manager' />}
+              >
                 {s.metric_alerts.map((r) => (
                   <Row
                     key={r.id}
@@ -792,7 +858,11 @@ export function NotificationSourcesCard() {
             )}
 
             {s.anomaly_rules.length > 0 && (
-              <Section title='Anomaly detection' hint='rules you created — detections come to you'>
+              <Section
+                title='Anomaly detection'
+                hint='rules you created — detections come to you'
+                action={<ManageLink path='/alert-manager' label='Alert Manager' />}
+              >
                 {s.anomaly_rules.map((r) => (
                   <Row
                     key={r.id}
@@ -832,7 +902,10 @@ export function NotificationSourcesCard() {
             )}
 
             {s.report_subscriptions.length > 0 && (
-              <Section title='Report digests'>
+              <Section
+                title='Report digests'
+                action={<ManageLink path='/reports' label='Reports' />}
+              >
                 {s.report_subscriptions.map((r) => (
                   <Row
                     key={r.id}
@@ -870,7 +943,11 @@ export function NotificationSourcesCard() {
             )}
 
             {s.report_alerts.length > 0 && (
-              <Section title='Report alerts' hint='you created these'>
+              <Section
+                title='Report alerts'
+                hint='you created these'
+                action={<ManageLink path='/reports' label='Reports' />}
+              >
                 {s.report_alerts.map((r) => (
                   <Row
                     key={r.id}

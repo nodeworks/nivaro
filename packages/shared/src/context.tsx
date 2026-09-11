@@ -124,6 +124,12 @@ export type NavigationContextValue = {
    *  admin shape `/users/:id`; return null = host has no such page, the
    *  action is hidden instead of navigating into the host's 404 fallback. */
   userUrl?: (userId: string) => string | null
+  /** Route for an ADMIN CONSOLE page given its admin-shaped path
+   *  (`/notification-subscriptions`, `/pipelines/:id`). Absent = the path is
+   *  used as-is (the admin app); return null = the host has no such page and
+   *  the link is hidden. Headless hosts that embed the admin elsewhere can
+   *  return an absolute URL. */
+  consoleUrl?: (adminPath: string) => string | null
 }
 
 export const NavigationContext = createContext<NavigationContextValue>({
@@ -323,7 +329,6 @@ export const RelationPathDataContext = createContext<Record<
   string,
   { ids: string[]; target_collection: string | null }
 > | null>(null)
-
 
 /**
  * Lets a field picker tell the form that its stored value no longer appears in

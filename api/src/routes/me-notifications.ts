@@ -257,13 +257,37 @@ export async function meNotificationRoutes(app: FastifyInstance) {
         )
       ]
       if (stateKeys.length > 0) {
-        const states = (await db('nivaro_workflow_states')
-          .whereIn('key', stateKeys)
-          .select('key', 'label')) as Array<{ key: string; label: string }>
-        const byKey = new Map(states.map((r) => [r.key, r.label]))
+        // Which pipeline owns the state: states carry the template, bindings
+        // tie a template to the subscription's collection — so the profile can
+        // name the pipeline and link to where those states are configured.
+        const states = (await db('nivaro_workflow_states as ws')
+          .leftJoin('nivaro_workflow_templates as t', 't.id', 'ws.template')
+          .whereIn('ws.key', stateKeys)
+          .select('ws.key', 'ws.label', 'ws.template', 't.name as template_name')) as Array<{
+          key: string
+          label: string
+          template: string | null
+          template_name: string | null
+        }>
+        const bindings = (await db('nivaro_workflow_bindings')
+          .select('collection', 'template')
+          .catch(() => [])) as Array<{ collection: string; template: string }>
+        const boundTemplates = new Map<string, Set<string>>()
+        for (const b of bindings) {
+          const set = boundTemplates.get(b.collection) ?? new Set<string>()
+          set.add(String(b.template).toUpperCase())
+          boundTemplates.set(b.collection, set)
+        }
         for (const r of subscriptions as Array<Record<string, unknown>>) {
           if (r.event_type === 'workflow_transition' && r.filter_value) {
-            r.state_label = byKey.get(String(r.filter_value)) ?? null
+            const candidates = states.filter((s) => s.key === String(r.filter_value))
+            const bound = boundTemplates.get(String(r.collection ?? ''))
+            const pick =
+              candidates.find((s) => s.template && bound?.has(String(s.template).toUpperCase())) ??
+              candidates[0]
+            r.state_label = pick?.label ?? null
+            r.template_id = pick?.template ?? null
+            r.template_name = pick?.template_name ?? null
           }
         }
       }
