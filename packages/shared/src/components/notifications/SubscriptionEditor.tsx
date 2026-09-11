@@ -50,8 +50,8 @@ export type DigestFrequency = 'instant' | 'daily' | 'weekly'
 
 export const DELIVERY_OPTIONS: Array<{ value: DigestFrequency; label: string }> = [
   { value: 'instant', label: 'Instant' },
-  { value: 'daily', label: 'Daily digest' },
-  { value: 'weekly', label: 'Weekly digest' }
+  { value: 'daily', label: 'Daily summary' },
+  { value: 'weekly', label: 'Weekly summary (Monday)' }
 ]
 
 export interface SubscriptionRecord {

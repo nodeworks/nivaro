@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { renderChangesToken, renderNotificationTemplate } from '../services/notification-templates.js'
+import {
+  renderChangesToken,
+  renderNotificationTemplate
+} from '../services/notification-templates.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
@@ -124,9 +127,10 @@ async function fireSubscriptionNotifications(
         }
       }
 
-      // Immediate email only for instant subscriptions — daily/weekly are
-      // batched by the digest cron (services/digest.ts). In-app notification
-      // above is always inserted regardless of digest frequency.
+      // Immediate email only for instant subscriptions — daily/weekly ride
+      // the daily action summary (services/daily-digest.ts). In-app
+      // notification above is always inserted regardless of cadence. The
+      // subscription's own cadence beats the category's daily default.
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
       if (frequency === 'instant' && wantEmail && sub.email) {
         await sendMail({
@@ -134,6 +138,8 @@ async function fireSubscriptionNotifications(
           item,
           to: sub.email,
           subject,
+          category: 'watch',
+          cadence: 'sender',
           template: 'notification',
           data: {
             first_name: sub.first_name,
@@ -255,10 +261,7 @@ export async function fireWorkflowStateSubscriptions(opts: {
     const valueCache = new Map<string, unknown>()
     const getValue = async (path: string) => {
       if (!valueCache.has(path)) {
-        valueCache.set(
-          path,
-          await resolveRecordValue(opts.collection, record, path, opts.item, db)
-        )
+        valueCache.set(path, await resolveRecordValue(opts.collection, record, path, opts.item, db))
       }
       return valueCache.get(path)
     }
@@ -361,6 +364,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
           item: opts.item,
           to: sub.email,
           subject,
+          category: 'workflow',
+          cadence: 'sender',
           template: 'notification',
           data: {
             first_name: sub.first_name,

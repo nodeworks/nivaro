@@ -9,11 +9,7 @@
 export const CRON_DESCRIPTIONS: Record<string, string> = {
   // ── Delivery & notifications ──
   'daily-action-digest':
-    'Hourly at :45 — sends the "daily action summary" email to users whose delivery hour matches: deferred emails, records waiting on them, invoices to review. Flushes nivaro_deferred_emails.',
-  'digest-daily':
-    'Daily notification digest email — every unread notification since the last digest, for users on the daily cadence. Advances last_digest_at.',
-  'digest-weekly':
-    'Weekly notification digest email (Monday) — same as the daily digest for users on the weekly cadence.',
+    'Hourly at :45 — sends the "daily action summary" email to users whose delivery hour matches: deferred emails, the notification digest for Daily/Weekly subscriptions (weekly on Mondays), records waiting on them, invoices to review. Flushes nivaro_deferred_emails, advances last_digest_at.',
   'view-subscriptions-daily':
     'Re-runs every subscribed saved view as its subscriber and emails the records that entered it since yesterday.',
   'view-subscriptions-weekly': 'Weekly (Monday) version of the saved-view digest.',

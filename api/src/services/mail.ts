@@ -298,7 +298,8 @@ async function applyDigestDeferral(
   subject: string,
   htmlOrText: string,
   skip?: boolean,
-  explicitCategory?: NotifyCategory
+  explicitCategory?: NotifyCategory,
+  senderCadence?: boolean
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -330,7 +331,14 @@ async function applyDigestDeferral(
       // Per-category email mode (the profile's notification rules), falling
       // back to the account-wide instant/daily default. Critical subjects
       // (SLA escalations, maintenance, monitor failures) always send now.
-      const mode = critical ? 'instant' : emailModeFor(np, category, prefs?.['email_digest'])
+      // Precedence: a sender that already chose the cadence (a subscription
+      // set to Instantly) beats the category's "Daily summary" default — the
+      // per-subscription setting is the more specific one. "No email" and
+      // quiet hours still apply; critical subjects always send now.
+      const categoryMode = critical
+        ? 'instant'
+        : emailModeFor(np, category, prefs?.['email_digest'])
+      const mode = senderCadence && categoryMode === 'daily' ? 'instant' : categoryMode
       if (mode === 'off') {
         off.add(u.email.toLowerCase())
         continue
@@ -419,6 +427,10 @@ export interface MailOptions {
   skipDigest?: boolean
   /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
   category?: NotifyCategory
+  /** 'sender' = the caller already chose when this goes out (a subscription
+   *  set to Instantly): the category's Daily-summary default is skipped; No
+   *  email and quiet hours still apply. */
+  cadence?: 'sender'
 }
 
 /** Outbound mail log (#71): every send ATTEMPT gets a row — sent, failed
@@ -514,7 +526,8 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     opts.subject,
     html,
     opts.skipDigest,
-    opts.category
+    opts.category,
+    opts.cadence === 'sender'
   )
   if (afterDigest.length < active.length) {
     logMail(
@@ -573,6 +586,8 @@ export async function sendRawMail(opts: {
   skipDigest?: boolean
   /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
   category?: NotifyCategory
+  /** See MailOptions.cadence. */
+  cadence?: 'sender'
   /** Record context (#261) — logged, powers the record communications view. */
   collection?: string | null
   item?: string | number | null
@@ -613,7 +628,8 @@ export async function sendRawMail(opts: {
     opts.subject,
     opts.html,
     opts.skipDigest,
-    opts.category
+    opts.category,
+    opts.cadence === 'sender'
   )
   if (afterDigest.length < active2.length) {
     logMail(

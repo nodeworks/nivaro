@@ -288,7 +288,7 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
   {
     key: 'system',
     label: 'System & digests',
-    help: 'Maintenance windows, failing monitors, import results, and the daily/weekly digests. Maintenance and monitor failures always email immediately.'
+    help: 'Maintenance windows, failing monitors, import results, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
   },
   {
     key: 'other',

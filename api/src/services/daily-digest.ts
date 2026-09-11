@@ -1,7 +1,9 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { sendRawMail } from './mail.js'
+import { classifyNotification, emailModeFor, type NotifyPrefs } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -9,16 +11,23 @@ import {
   addendumRecordPath,
   loadAddendums
 } from './pipeline-subject.js'
+import { fetchQueueItems } from './queues.js'
 
 /**
- * Daily action digest — one summary email per user who opted into
- * preferences.email_digest = 'daily' (Profile → Email delivery), replacing
- * the individual notification emails captured for them in
- * nivaro_deferred_emails (see applyDigestDeferral in mail.ts).
+ * Daily action summary — ONE morning email per user, at their chosen hour:
  *
- * Content = deferred updates + "assigned to you" open workflow items (core,
- * from live owner resolution) + any sections registered by extensions
- * (ctx.digest.registerSection — e.g. efp-ops' invoices-awaiting-review).
+ *  - notification emails deferred for them (category email mode 'daily' or
+ *    quiet hours — applyDigestDeferral in mail.ts, nivaro_deferred_emails)
+ *  - the notification digest: in-app notifications since last_digest_at for
+ *    users with subscriptions on the Daily / Weekly cadence (weekly rides the
+ *    Monday summary), filtered by the category email matrix — a category on
+ *    "No email" drops its items — plus a stat line per queue subscription
+ *  - "assigned to you" open workflow items (live owner resolution)
+ *  - sections registered by extensions (ctx.digest.registerSection)
+ *
+ * The separate "Your daily Nivaro digest" email + digest-daily/weekly crons
+ * were folded in here (2026-09-10): two digests with different names and
+ * hours were the collision Rob asked about.
  */
 
 export interface DigestLine {
@@ -70,6 +79,87 @@ function sectionHtml(section: DigestSection): string {
   return `
     <h3 style="margin:18px 0 8px 0;font-size:14px;color:#0f172a;">${esc(section.title)}</h3>
     <ul style="margin:0;padding-left:18px;font-size:13px;color:#334155;">${items}</ul>`
+}
+
+const MAX_DIGEST_NOTIFICATIONS = 50
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** In-app notifications since the user's last digest watermark, minus the
+ *  categories whose email mode is "No email" — the matrix and the
+ *  subscription cadence agree instead of fighting. */
+async function buildNotificationDigestSection(
+  userId: string,
+  cadence: 'daily' | 'weekly',
+  since: Date | null,
+  prefs: Record<string, unknown> | null
+): Promise<DigestSection | null> {
+  const window = since ?? new Date(Date.now() - (cadence === 'weekly' ? 7 : 1) * DAY_MS)
+  const rows = (await db('nivaro_notifications')
+    .where({ recipient: userId })
+    .where('timestamp', '>', window)
+    .orderBy('timestamp', 'desc')
+    .limit(MAX_DIGEST_NOTIFICATIONS)
+    .select('id', 'subject', 'message', 'collection', 'item', 'timestamp')) as Array<{
+    id: number
+    subject: string | null
+    message: string | null
+    collection: string | null
+    item: string | null
+    timestamp: Date | string
+  }>
+  const np = (prefs?.['notification_prefs'] ?? null) as NotifyPrefs | null
+  const legacy = prefs?.['email_digest']
+  const kept = rows.filter(
+    (n) => emailModeFor(np, classifyNotification(n.subject ?? ''), legacy) !== 'off'
+  )
+  if (kept.length === 0) return null
+  return {
+    title: `${cadence === 'weekly' ? 'This week' : 'Since your last summary'} — ${kept.length} notification${kept.length === 1 ? '' : 's'}`,
+    lines: kept.map((n) => ({
+      text: n.subject ?? 'Notification',
+      sub: (n.message ?? '').slice(0, 120) || null,
+      url:
+        n.collection && n.item ? `${config.ADMIN_URL}/collections/${n.collection}/${n.item}` : null
+    }))
+  }
+}
+
+/** One stat line per queue subscription on the digest cadence. */
+async function buildQueueSubscriptionSection(
+  userId: string,
+  cadences: Set<'daily' | 'weekly'>
+): Promise<DigestSection | null> {
+  const subs = (await db('nivaro_notification_subscriptions as ns')
+    .join('nivaro_queues as q', 'ns.queue_id', 'q.id')
+    .where({ 'ns.user': userId, 'ns.is_active': true })
+    .whereIn('ns.digest_frequency', [...cadences])
+    .whereNotNull('ns.queue_id')
+    .select('q.id as queue_id', 'q.name as queue_name')) as Array<{
+    queue_id: string
+    queue_name: string
+  }>
+  if (subs.length === 0) return null
+  const fullUser = (await db('nivaro_users').where({ id: userId }).first()) as User | undefined
+  if (!fullUser) return null
+  const lines: DigestLine[] = []
+  for (const sub of subs) {
+    try {
+      const { stats } = await fetchQueueItems(sub.queue_id, fullUser, 'all')
+      const parts = [`${stats.total} item${stats.total === 1 ? '' : 's'}`]
+      if (stats.unowned) parts.push(`${stats.unowned} unowned`)
+      if (stats.sla_breached) parts.push(`${stats.sla_breached} past SLA`)
+      else if (stats.sla_warning) parts.push(`${stats.sla_warning} nearing SLA`)
+      if (stats.at_risk) parts.push(`${stats.at_risk} at risk`)
+      lines.push({
+        text: sub.queue_name,
+        sub: parts.join(' · '),
+        url: `${config.ADMIN_URL}/queues/${sub.queue_id}`
+      })
+    } catch (err) {
+      console.warn('[daily-digest] queue summary failed for', sub.queue_id, err)
+    }
+  }
+  return lines.length > 0 ? { title: `Your queues (${lines.length})`, lines } : null
 }
 
 /** Open workflow-engine items where the user is a resolved current-state owner. */
@@ -204,6 +294,48 @@ export async function runDailyActionDigest(
     const anyDaily = Object.values(matrix).some((r) => r?.email === 'daily')
     if (p && (p['email_digest'] === 'daily' || anyDaily) && u.email) digestUsers.set(u.id, u.email)
   }
+  // Subscription cadence: anyone with an active Daily subscription gets the
+  // notification digest every day; Weekly subscriptions ride Monday's summary.
+  const isMonday = new Date().getDay() === 1
+  const subCadence = new Map<string, Set<'daily' | 'weekly'>>()
+  try {
+    const rows = (await db('nivaro_notification_subscriptions as ns')
+      .join('nivaro_users as u', 'ns.user', 'u.id')
+      .where({ 'ns.is_active': true })
+      .whereIn('ns.digest_frequency', ['daily', 'weekly'])
+      .where((qb) => {
+        qb.whereNull('ns.notify_email').orWhere('ns.notify_email', true)
+      })
+      .where('u.status', 'active')
+      .select('u.id', 'u.email', 'ns.digest_frequency')) as Array<{
+      id: string
+      email: string | null
+      digest_frequency: 'daily' | 'weekly'
+    }>
+    for (const r of rows) {
+      if (!r.email) continue
+      if (r.digest_frequency === 'weekly' && !isMonday && !opts?.onlyUserId) continue
+      const set = subCadence.get(r.id) ?? new Set<'daily' | 'weekly'>()
+      set.add(r.digest_frequency)
+      subCadence.set(r.id, set)
+      if (!digestUsers.has(r.id)) digestUsers.set(r.id, r.email)
+    }
+  } catch (err) {
+    console.warn('[daily-digest] subscription cadence lookup failed:', err)
+  }
+  const prefsById = new Map<string, Record<string, unknown> | null>()
+  for (const u of users) prefsById.set(u.id, parsePrefs(u.preferences))
+  const lastDigestAt = new Map<string, Date | null>()
+  try {
+    const rows = (await db('nivaro_users')
+      .whereIn('id', [...subCadence.keys()])
+      .select('id', 'last_digest_at')) as Array<{ id: string; last_digest_at: Date | null }>
+    for (const r of rows)
+      lastDigestAt.set(r.id, r.last_digest_at ? new Date(r.last_digest_at) : null)
+  } catch {
+    /* watermark lookup failed — default windows below */
+  }
+
   const deferred = (await db('nivaro_deferred_emails').select(
     'id',
     'user',
@@ -270,6 +402,29 @@ export async function runDailyActionDigest(
       })
     }
 
+    // Notification digest for Daily/Weekly subscriptions — same rows the
+    // bell shows, minus categories the user set to "No email".
+    let digestedNotifications = false
+    const cadences = subCadence.get(userId)
+    if (cadences && cadences.size > 0) {
+      try {
+        const section = await buildNotificationDigestSection(
+          userId,
+          cadences.has('weekly') ? 'weekly' : 'daily',
+          lastDigestAt.get(userId) ?? null,
+          prefsById.get(userId) ?? null
+        )
+        if (section) {
+          sections.push(section)
+          digestedNotifications = true
+        }
+        const queueSection = await buildQueueSubscriptionSection(userId, cadences)
+        if (queueSection) sections.push(queueSection)
+      } catch (err) {
+        console.warn('[daily-digest] notification digest failed for', userId, err)
+      }
+    }
+
     const owned = ownership.get(userId) ?? []
     if (owned.length > 0) {
       sections.push({
@@ -314,6 +469,14 @@ export async function runDailyActionDigest(
       })
       sent++
       if (!opts?.preserveDeferred) flushedIds.push(...mine.map((d) => d.id))
+      // Advance the notification-digest watermark only when a digest section
+      // actually went out (a test send never moves it).
+      if (digestedNotifications && !opts?.onlyUserId) {
+        await db('nivaro_users')
+          .where({ id: userId })
+          .update({ last_digest_at: new Date() })
+          .catch(() => undefined)
+      }
     } catch (err) {
       console.warn(
         '[daily-digest] send failed for',

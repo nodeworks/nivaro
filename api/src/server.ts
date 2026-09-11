@@ -32,7 +32,6 @@ import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
-import { registerDigestCrons } from './services/digest.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
@@ -279,7 +278,8 @@ export async function buildServer() {
   }
   if (!process.env.CLOUD_META_DB_URL) {
     registerFileCleanup(app.cron)
-    registerDigestCrons(app.cron)
+    // digest-daily/weekly crons retired 2026-09-10 — the notification digest
+    // rides the daily action summary (services/daily-digest.ts).
     registerQueueSnapshotCron(app.cron)
     registerStagedImportWorker(app)
   }

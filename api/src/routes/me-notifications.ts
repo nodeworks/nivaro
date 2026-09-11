@@ -43,16 +43,24 @@ function scheduleTrigger(app: FastifyInstance, cronId: string, fallback: string)
   return { kind: 'schedule', text: text ?? fallback }
 }
 
+/** Subscription cadence → trigger. Daily/Weekly ride the user's daily action
+ *  summary (their own hour), so the text names that rather than a cron. */
 function digestTrigger(
-  app: FastifyInstance,
   cadence: string | null | undefined,
-  dailyId: string,
-  weeklyId: string,
+  summaryHourText: string,
   eventText: string
 ): SourceTrigger {
-  if (cadence === 'daily') return scheduleTrigger(app, dailyId, 'Daily')
-  if (cadence === 'weekly') return scheduleTrigger(app, weeklyId, 'Weekly')
+  if (cadence === 'daily')
+    return { kind: 'schedule', text: `In your daily summary, ${summaryHourText}` }
+  if (cadence === 'weekly')
+    return { kind: 'schedule', text: `In Monday's summary, ${summaryHourText}` }
   return { kind: 'event', text: eventText }
+}
+
+function fmtHour(h: number): string {
+  const suffix = h >= 12 ? 'PM' : 'AM'
+  const twelve = h % 12 === 0 ? 12 : h % 12
+  return `${twelve}:00 ${suffix}`
 }
 
 export async function meNotificationRoutes(app: FastifyInstance) {
@@ -431,6 +439,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
     }
 
     let emailDigest: string = 'instant'
+    let digestHour = 7
     try {
       const prefs =
         typeof (prefsRow as { preferences?: unknown } | null)?.preferences === 'string'
@@ -438,6 +447,8 @@ export async function meNotificationRoutes(app: FastifyInstance) {
           : ((prefsRow as { preferences?: unknown } | null)?.preferences ?? {})
       if (prefs && typeof prefs === 'object' && (prefs as { email_digest?: string }).email_digest) {
         emailDigest = String((prefs as { email_digest?: string }).email_digest)
+        const h = Number((prefs as { digest_hour?: unknown }).digest_hour)
+        if (Number.isInteger(h) && h >= 0 && h <= 23) digestHour = h
       }
     } catch {
       /* default */
@@ -518,23 +529,15 @@ export async function meNotificationRoutes(app: FastifyInstance) {
         preferences: { email_digest: emailDigest },
         external,
         subscriptions: withTrigger(subscriptions as Array<Record<string, unknown>>, (r) =>
-          r.queue_id
-            ? digestTrigger(
-                app,
-                r.digest_frequency as string,
-                'digest-daily',
-                'digest-weekly',
-                'Daily'
-              )
-            : digestTrigger(
-                app,
-                r.digest_frequency as string,
-                'digest-daily',
-                'digest-weekly',
-                r.event_type === 'workflow_transition'
-                  ? 'When a record enters the state'
-                  : 'When the record changes'
-              )
+          digestTrigger(
+            r.queue_id
+              ? ((r.digest_frequency as string) ?? 'daily')
+              : (r.digest_frequency as string),
+            `at ${fmtHour(digestHour)}`,
+            r.event_type === 'workflow_transition'
+              ? 'When a record enters the state'
+              : 'When the record changes'
+          )
         ),
         field_watches: withTrigger(fieldWatches as Array<Record<string, unknown>>, () =>
           eventText('When the field changes')

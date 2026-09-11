@@ -471,6 +471,7 @@ export const collabNotificationsCenter: DocSection = {
       type: 'ul',
       items: [
         'Email per category is Individual email (sent as it happens, deferred only during your quiet hours), Daily summary (held and delivered once in the daily action summary), or No email (dropped — the in-app row still lands).',
+        'Precedence with a subscription\'s own delivery setting: the subscription is the more specific one and wins. A subscription set to Instantly emails as it happens even when its category is on Daily summary (No email and quiet hours still apply); a subscription on Daily or Weekly summary rides the daily action summary at your delivery hour (weekly on Mondays), and items from a category set to No email are left out of it. There is one morning email — the old separate "daily digest" is folded into the action summary.',
         'The Daily action summary block on the same card sets the delivery hour (Eastern time), a compact layout, and a "send me a test summary now" button. Anyone with at least one category on Daily summary receives the digest.',
         'Critical subjects (SLA escalations, maintenance notices, failing monitors) always email immediately regardless of the matrix.',
         'The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.',

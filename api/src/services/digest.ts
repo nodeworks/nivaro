@@ -1,9 +1,5 @@
 import { config } from '../config.js'
-import { db } from '../db/index.js'
-import type { CronManager } from '../plugins/cron.js'
-import type { User } from '../types.js'
-import { sendRawMail } from './mail.js'
-import { fetchQueueItems, type QueueStats } from './queues.js'
+import type { QueueStats } from './queues.js'
 
 /**
  * Digest emails — batch nivaro_notifications into one daily/weekly email per
@@ -116,117 +112,7 @@ function buildDigestHtml(
 </html>`
 }
 
-/**
- * Run digest delivery for one frequency. For each user with at least one
- * active subscription set to that frequency, collect their notifications
- * since last_digest_at (default 24h / 7d window), cap at 50, group by
- * collection, send a single email, then advance last_digest_at.
- */
-export async function runDigests(frequency: 'daily' | 'weekly'): Promise<void> {
-  const now = new Date()
-  const defaultWindowMs = frequency === 'weekly' ? 7 * DAY_MS : DAY_MS
-
-  let users: DigestUser[]
-  try {
-    users = (await db('nivaro_notification_subscriptions as ns')
-      .join('nivaro_users as u', 'ns.user', 'u.id')
-      .where({ 'ns.is_active': true, 'ns.digest_frequency': frequency })
-      // #649: a subscription whose email channel is off never earns a digest
-      // send on its own (NULL = on, so historic rows are unaffected).
-      .where((qb) => {
-        qb.whereNull('ns.notify_email').orWhere('ns.notify_email', true)
-      })
-      .distinct('u.id', 'u.email', 'u.first_name', 'u.last_digest_at')) as DigestUser[]
-  } catch (err) {
-    console.warn('[digest] failed to load digest users:', err)
-    return
-  }
-
-  for (const user of users) {
-    try {
-      const since = user.last_digest_at
-        ? new Date(user.last_digest_at)
-        : new Date(now.getTime() - defaultWindowMs)
-
-      const notifications = (await db('nivaro_notifications')
-        .where({ recipient: user.id })
-        .where('timestamp', '>', since)
-        .orderBy('timestamp', 'desc')
-        .limit(MAX_NOTIFICATIONS)
-        .select('id', 'subject', 'message', 'collection', 'item', 'timestamp')) as NotificationRow[]
-
-      // Queue-scoped subscriptions: same table, rows with queue_id set instead of collection.
-      const queueSubs = (await db('nivaro_notification_subscriptions as ns')
-        .join('nivaro_queues as q', 'ns.queue_id', 'q.id')
-        .where({ 'ns.user': user.id, 'ns.is_active': true, 'ns.digest_frequency': frequency })
-        .whereNotNull('ns.queue_id')
-        .select('q.id as queue_id', 'q.name as queue_name')) as Array<{
-        queue_id: string
-        queue_name: string
-      }>
-
-      const queueSections: string[] = []
-      if (queueSubs.length > 0) {
-        // fetchQueueItems needs a full User (id/role at minimum, via can() + resolveStateOwners) —
-        // the lightweight DigestUser above isn't enough, so fetch the real row.
-        const fullUser = (await db('nivaro_users').where({ id: user.id }).first()) as
-          | User
-          | undefined
-        if (fullUser) {
-          for (const sub of queueSubs) {
-            try {
-              const { stats } = await fetchQueueItems(sub.queue_id, fullUser, 'all')
-              queueSections.push(
-                buildQueueSummaryHtml(
-                  sub.queue_name,
-                  stats,
-                  `${config.ADMIN_URL}/queues/${sub.queue_id}`
-                )
-              )
-            } catch (err) {
-              console.warn(`[digest] failed to build queue summary for ${sub.queue_id}:`, err)
-            }
-          }
-        }
-      }
-
-      // Nothing new — skip (and leave the watermark so old items roll into the next digest)
-      if (notifications.length === 0 && queueSections.length === 0) continue
-
-      // Group by collection (uncategorized notifications go last)
-      const grouped = new Map<string, NotificationRow[]>()
-      for (const n of notifications) {
-        const key = n.collection ?? 'Other'
-        const list = grouped.get(key) ?? []
-        list.push(n)
-        grouped.set(key, list)
-      }
-
-      const totalCount = notifications.length + queueSections.length
-
-      if (user.email) {
-        const subject = `Your ${frequency} Nivaro digest — ${totalCount} update${totalCount === 1 ? '' : 's'}`
-        await sendRawMail({
-          to: user.email,
-          subject,
-          category: 'system',
-          html: buildDigestHtml(user.first_name, frequency, grouped, totalCount, now, queueSections)
-        })
-      }
-
-      await db('nivaro_users').where({ id: user.id }).update({ last_digest_at: now })
-    } catch (err) {
-      // One user failing must not block the rest
-      console.warn(`[digest] failed for user ${user.id}:`, err)
-    }
-  }
-}
-
-/**
- * Register the digest cron jobs. Call after buildServer():
- *   registerDigestCrons(app.cron)
- */
-export function registerDigestCrons(cron: CronManager): void {
-  cron.schedule('digest-daily', '0 8 * * *', () => runDigests('daily'))
-  cron.schedule('digest-weekly', '0 8 * * 1', () => runDigests('weekly'))
-}
+// runDigests / registerDigestCrons were folded into services/daily-digest.ts
+// (2026-09-10): the notification digest now rides the daily action summary at
+// the user's hour, so there is one morning email, not two. This module keeps
+// the HTML helpers (unit-tested).

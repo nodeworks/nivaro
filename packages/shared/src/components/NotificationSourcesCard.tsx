@@ -103,8 +103,8 @@ function ChannelChips({
 
 const digestOptions = [
   { value: 'instant', label: 'Instantly' },
-  { value: 'daily', label: 'Daily digest' },
-  { value: 'weekly', label: 'Weekly digest' }
+  { value: 'daily', label: 'Daily summary' },
+  { value: 'weekly', label: 'Weekly summary' }
 ]
 
 /** Per-subscription controls: active toggle, channel chips, delivery, edit. */
@@ -284,9 +284,9 @@ function deliveryPhrase(email: boolean, inApp: boolean, cadence?: string | null)
     !cadence || cadence === 'instant' || cadence === 'immediate'
       ? 'instantly'
       : cadence === 'daily'
-        ? 'daily digest'
+        ? 'in your daily summary'
         : cadence === 'weekly'
-          ? 'weekly digest'
+          ? "in Monday's summary"
           : cadence
   return `${channels}, ${when}`
 }
@@ -748,7 +748,7 @@ export function NotificationSourcesCard({ only, bare }: NotificationSourcesCardP
             </h2>
             <p className='text-[11px] text-slate-500 dark:text-slate-400'>
               {total} sources · email delivered{' '}
-              {s.preferences.email_digest === 'daily' ? 'as a daily digest' : 'instantly'}
+              {s.preferences.email_digest === 'daily' ? 'in your daily summary' : 'instantly'}
             </p>
           </div>
           <div className='flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-muted'>
@@ -798,7 +798,7 @@ export function NotificationSourcesCard({ only, bare }: NotificationSourcesCardP
                   </p>
                 ))}
               <p className='text-[11px] text-amber-600/90 dark:text-amber-400/80'>
-                Consider muting or switching the source below to a daily digest.
+                Consider muting or switching the source below to the daily summary.
               </p>
             </div>
           )}
