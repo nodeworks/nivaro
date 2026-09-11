@@ -1,3 +1,4 @@
+import cronstrue from 'cronstrue'
 import type { FastifyInstance } from 'fastify'
 import { notificationSourceRegistry } from '../extensions/notification-sources.js'
 import { db } from '../db/index.js'
@@ -15,6 +16,45 @@ import { classifyRelationSegment, getLabels } from '../services/queues.js'
  * Deletion/unsubscription stays with each feature's own routes — this is a
  * read model; the client wires each row to its existing own-CRUD endpoint.
  */
+/** "On event" vs "on a schedule" for each notification source, with the
+ *  schedule rendered from the LIVE cron roster (overrides included) so the
+ *  profile says what the server will actually do — never a hardcoded time. */
+export interface SourceTrigger {
+  kind: 'event' | 'schedule' | 'both'
+  /** Plain-language sentence: "When it happens", "At 08:00 AM, only on Monday". */
+  text: string
+}
+
+function cronSentence(app: FastifyInstance, cronId: string): string | null {
+  const entry = app.cron?.list?.().find((c) => c.id === cronId)
+  if (!entry) return null
+  try {
+    return cronstrue.toString(entry.expression, { use24HourTimeFormat: false, verbose: false })
+  } catch {
+    return entry.expression
+  }
+}
+
+/** Lower-case a cron sentence for use mid-sentence ("checked at 06:35 AM"). */
+const lc = (t: string | null | undefined) => (t ? t.charAt(0).toLowerCase() + t.slice(1) : t)
+
+function scheduleTrigger(app: FastifyInstance, cronId: string, fallback: string): SourceTrigger {
+  const text = cronSentence(app, cronId)
+  return { kind: 'schedule', text: text ?? fallback }
+}
+
+function digestTrigger(
+  app: FastifyInstance,
+  cadence: string | null | undefined,
+  dailyId: string,
+  weeklyId: string,
+  eventText: string
+): SourceTrigger {
+  if (cadence === 'daily') return scheduleTrigger(app, dailyId, 'Daily')
+  if (cadence === 'weekly') return scheduleTrigger(app, weeklyId, 'Weekly')
+  return { kind: 'event', text: eventText }
+}
+
 export async function meNotificationRoutes(app: FastifyInstance) {
   /**
    * Notification hygiene — per-source unread pile and read rate over the
@@ -120,6 +160,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
           'm.delivery_in_app',
           'm.delivery_email',
           'm.digest_frequency',
+          'r.check_frequency',
           'm.last_notified'
         )
         .catch(() => []),
@@ -388,26 +429,99 @@ export async function meNotificationRoutes(app: FastifyInstance) {
     // last, provider errors skipped.
     const external = await notificationSourceRegistry.collect(uid)
 
+    const withTrigger = <T extends object>(rows: T[], fn: (r: T) => SourceTrigger) =>
+      rows.map((r) => ({ ...r, trigger: fn(r) }))
+    const eventText = (what: string): SourceTrigger => ({ kind: 'event', text: what })
+
     return reply.send({
       data: {
         preferences: { email_digest: emailDigest },
         external,
-        subscriptions,
-        field_watches: fieldWatches,
-        record_alerts: recordAlerts,
-        metric_alerts: metricAlerts,
-        anomaly_rules: anomalyRules,
-        report_subscriptions: reportSubs,
-        report_alerts: reportAlerts,
-        view_subscriptions: viewSubs,
+        subscriptions: withTrigger(subscriptions as Array<Record<string, unknown>>, (r) =>
+          r.queue_id
+            ? digestTrigger(
+                app,
+                r.digest_frequency as string,
+                'digest-daily',
+                'digest-weekly',
+                'Daily'
+              )
+            : digestTrigger(
+                app,
+                r.digest_frequency as string,
+                'digest-daily',
+                'digest-weekly',
+                r.event_type === 'workflow_transition'
+                  ? 'When a record enters the state'
+                  : 'When the record changes'
+              )
+        ),
+        field_watches: withTrigger(fieldWatches as Array<Record<string, unknown>>, () =>
+          eventText('When the field changes')
+        ),
+        record_alerts: withTrigger(recordAlerts as Array<Record<string, unknown>>, () => ({
+          kind: 'both',
+          text: `When a record is saved, plus a sweep ${lc(cronSentence(app, 'alert-definitions-sweep')) ?? 'hourly'}`
+        })),
+        metric_alerts: withTrigger(metricAlerts as Array<Record<string, unknown>>, (r) => {
+          const cf = String(r.check_frequency ?? 'daily')
+          const check = scheduleTrigger(
+            app,
+            cf === 'hourly'
+              ? 'metric-alerts-hourly'
+              : cf === 'weekly'
+                ? 'metric-alerts-weekly'
+                : 'metric-alerts-daily',
+            cf
+          )
+          const df = r.digest_frequency as string | null
+          if (df === 'daily' || df === 'weekly') {
+            const d = scheduleTrigger(
+              app,
+              df === 'daily' ? 'metric-alerts-digest-daily' : 'metric-alerts-digest-weekly',
+              df
+            )
+            return { kind: 'schedule', text: `Checked ${lc(check.text)}; delivered ${lc(d.text)}` }
+          }
+          return { kind: 'schedule', text: `Checked ${lc(check.text)}` }
+        }),
+        anomaly_rules: withTrigger(anomalyRules as Array<Record<string, unknown>>, (r) =>
+          scheduleTrigger(
+            app,
+            r.check_frequency === 'weekly' ? 'anomaly-checks-weekly' : 'anomaly-checks-daily',
+            String(r.check_frequency ?? 'daily')
+          )
+        ),
+        report_subscriptions: withTrigger(reportSubs as Array<Record<string, unknown>>, (r) =>
+          scheduleTrigger(
+            app,
+            r.cadence === 'weekly' ? 'report-studio-weekly' : 'report-studio-daily',
+            String(r.cadence ?? 'daily')
+          )
+        ),
+        report_alerts: withTrigger(reportAlerts as Array<Record<string, unknown>>, () =>
+          scheduleTrigger(app, 'report-studio-alerts', 'Hourly')
+        ),
+        view_subscriptions: withTrigger(viewSubs as Array<Record<string, unknown>>, (r) =>
+          scheduleTrigger(
+            app,
+            r.digest === 'weekly' ? 'view-subscriptions-weekly' : 'view-subscriptions-daily',
+            String(r.digest ?? 'daily')
+          )
+        ),
         chat_rooms: chatRooms,
         push_devices: pushDevices,
         implicit: {
-          owner_group_memberships: [...templateCounts.entries()].map(([template, groups]) => ({
-            template,
-            groups
-          })),
-          sla_escalations: slaEscalations
+          owner_group_memberships: withTrigger(
+            [...templateCounts.entries()].map(([template, groups]) => ({ template, groups })),
+            () => ({
+              kind: 'both',
+              text: `When a record you own moves, plus the daily summary ${lc(cronSentence(app, 'daily-action-digest')) ?? ''}`.trim()
+            })
+          ),
+          sla_escalations: withTrigger(slaEscalations as Array<Record<string, unknown>>, () =>
+            scheduleTrigger(app, 'sla-escalations', 'Every 30 minutes')
+          )
         }
       }
     })

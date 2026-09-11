@@ -238,8 +238,16 @@ export const userFlows: DocSection = {
           'Branch on a condition expression (not yet implemented — resolves forward).'
         ],
         ['exec-script', '⚙️ Stub', 'Run arbitrary Node.js code (not yet implemented).'],
-        ['mail', '⚙️ Stub', 'Send email via nodemailer (not yet implemented).'],
-        ['notification', '⚙️ Stub', 'Create an in-app notification (not yet implemented).']
+        [
+          'mail',
+          '✅ Live',
+          "Send an email (branded chrome, optional named template). `category` pins the recipients' notification-rules row; otherwise it is detected from the subject."
+        ],
+        [
+          'notification',
+          '✅ Live',
+          'In-app notification through the recipient\'s notification rules (bell, live socket update, push). `category` pins the rules row; `always_inbox` (default on) keeps record mutes and "already viewing" from swallowing it.'
+        ]
       ]
     },
     { type: 'h3', text: 'Configuring a log operation' },

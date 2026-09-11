@@ -50,6 +50,18 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+
+const NOTIFY_CATEGORY_OPTIONS = [
+  { value: 'mentions', label: 'Mentions' },
+  { value: 'workflow', label: 'Workflow & approvals' },
+  { value: 'sla', label: 'SLA & escalations' },
+  { value: 'watch', label: 'Field watches' },
+  { value: 'alerts', label: 'Alerts' },
+  { value: 'anomaly', label: 'Anomaly detections' },
+  { value: 'reports', label: 'Reports' },
+  { value: 'system', label: 'System & digests' },
+  { value: 'other', label: 'Everything else' }
+]
 import { Textarea } from '@/components/ui/textarea'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -1157,6 +1169,30 @@ function EditOperationDialog({
                       placeholder='<p>Hello {{name}}</p>'
                     />
                   </div>
+                  <div className='space-y-1.5'>
+                    <Label>Notification category</Label>
+                    <Select
+                      value={(optsState.category as string) || '__auto__'}
+                      onValueChange={(v) => setOpt('category', v === '__auto__' ? '' : v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='__auto__'>Auto — detect from the subject</SelectItem>
+                        {NOTIFY_CATEGORY_OPTIONS.map((c) => (
+                          <SelectItem key={c.value} value={c.value}>
+                            {c.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className='text-[11px] text-slate-400'>
+                      Which row of each recipient's Profile → Notification rules governs this send.
+                      Subjects with no recognisable keyword land in "Everything else" unless set
+                      here.
+                    </p>
+                  </div>
                 </>
               )}
               {op.type === 'workflow-auto-sweep' && (
@@ -1316,7 +1352,8 @@ function EditOperationDialog({
                 <>
                   <div className='rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400'>
                     <Bell className='inline h-3 w-3 mr-1' />
-                    Sends an in-app notification. Supports{' '}
+                    Sends an in-app notification through the recipient's notification rules (bell,
+                    live socket update, browser push). Supports{' '}
                     <code className='font-mono'>{'{{variable}}'}</code> templates.
                   </div>
                   <div className='space-y-1.5'>
@@ -1346,6 +1383,45 @@ function EditOperationDialog({
                       rows={3}
                       placeholder='Item {{id}} was updated by {{user}}.'
                     />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Notification category</Label>
+                    <Select
+                      value={(optsState.category as string) || '__auto__'}
+                      onValueChange={(v) => setOpt('category', v === '__auto__' ? '' : v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='__auto__'>Auto — detect from the subject</SelectItem>
+                        {NOTIFY_CATEGORY_OPTIONS.map((c) => (
+                          <SelectItem key={c.value} value={c.value}>
+                            {c.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className='text-[11px] text-slate-400'>
+                      Which row of each recipient's Profile → Notification rules governs this send.
+                      Subjects with no recognisable keyword land in "Everything else" unless set
+                      here.
+                    </p>
+                  </div>
+                  <div className='flex items-start gap-2'>
+                    <Switch
+                      id='op-always-inbox'
+                      checked={optsState.always_inbox !== false}
+                      onCheckedChange={(v) => setOpt('always_inbox', v)}
+                    />
+                    <Label htmlFor='op-always-inbox' className='cursor-pointer'>
+                      Always land in the inbox
+                      <span className='block text-[11px] font-normal text-slate-400'>
+                        On: record mutes and "already viewing the record" never swallow it. Off:
+                        those suppressions apply like any other notification. The recipient's In-app
+                        / Push toggles for the category apply either way.
+                      </span>
+                    </Label>
                   </div>
                 </>
               )}

@@ -523,6 +523,9 @@ export async function flowsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     unscheduleFlow(app, id)
     unregisterEventFlowHook(id)
+    // nivaro_flow_versions references the flow with NO ACTION (MSSQL multi-
+    // cascade rule) — clear the snapshots first or the delete 500s on the FK.
+    await db('nivaro_flow_versions').where({ flow: id }).delete().catch(() => undefined)
     const deleted = await db('nivaro_flows').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({

@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, BellRing, FileBarChart, Gauge, History, Inbox, Radar, X } from 'lucide-react'
+import {
+  Activity,
+  BellRing,
+  CalendarClock,
+  FileBarChart,
+  Gauge,
+  History,
+  Inbox,
+  Radar,
+  X,
+  Zap
+} from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, patch, put } from '../lib/commands'
@@ -23,7 +34,15 @@ import { SimpleSelectXs } from './ui/SimpleSelect'
  * removable — they follow from role, not subscription.
  */
 
+/** Server-resolved: is this source fired by an event or by a cron, and
+ *  what does that schedule read as ("At 08:00 AM, only on Monday"). */
+interface SourceTrigger {
+  kind: 'event' | 'schedule' | 'both'
+  text: string
+}
+
 interface SubRow {
+  trigger?: SourceTrigger
   id: number
   collection: string | null
   event_type: string
@@ -77,6 +96,7 @@ interface Sources {
   preferences: { email_digest: string }
   subscriptions: SubRow[]
   field_watches: Array<{
+    trigger?: SourceTrigger
     id: number
     watch_id: number
     name: string
@@ -84,6 +104,7 @@ interface Sources {
     field: string
   }>
   record_alerts: Array<{
+    trigger?: SourceTrigger
     id: number
     definition_id: number
     name: string
@@ -94,6 +115,7 @@ interface Sources {
     last_fired?: string | null
   }>
   metric_alerts: Array<{
+    trigger?: SourceTrigger
     id: number
     rule_id: number
     metric_key: string | null
@@ -106,6 +128,7 @@ interface Sources {
     last_notified?: string | null
   }>
   anomaly_rules: Array<{
+    trigger?: SourceTrigger
     id: number
     name: string
     check_frequency: string
@@ -114,6 +137,7 @@ interface Sources {
     status: string
   }>
   report_subscriptions: Array<{
+    trigger?: SourceTrigger
     id: number
     report_id: string
     name: string
@@ -125,6 +149,7 @@ interface Sources {
     last_sent_at?: string | null
   }>
   report_alerts: Array<{
+    trigger?: SourceTrigger
     id: string
     report_id: string
     report_name: string
@@ -133,6 +158,7 @@ interface Sources {
     delivery_inapp: boolean | number
   }>
   view_subscriptions: Array<{
+    trigger?: SourceTrigger
     id: number
     name: string
     collection: string
@@ -143,8 +169,14 @@ interface Sources {
   chat_rooms: Array<{ room: string; is_muted: boolean | number; notify_mode: string | null }>
   push_devices: Array<{ id: number; user_agent: string | null; last_used_at: string | null }>
   implicit: {
-    owner_group_memberships: Array<{ template: string; groups: number }>
-    sla_escalations: Array<{ id: number; name: string; state_key: string; template: string | null }>
+    owner_group_memberships: Array<{ trigger?: SourceTrigger; template: string; groups: number }>
+    sla_escalations: Array<{
+      trigger?: SourceTrigger
+      id: number
+      name: string
+      state_key: string
+      template: string | null
+    }>
   }
   /** Extension-contributed sources (e.g. EFP stock watches) — display-only
    *  here; each group links to where it is managed. */
@@ -153,7 +185,12 @@ interface Sources {
     title: string
     description?: string
     manage_url?: string
-    items: Array<{ id: string | number; label: string; detail?: string | null; is_active?: boolean }>
+    items: Array<{
+      id: string | number
+      label: string
+      detail?: string | null
+      is_active?: boolean
+    }>
   }>
 }
 
@@ -286,6 +323,7 @@ function Row({
   title,
   description,
   meta,
+  trigger,
   controls,
   onRemove,
   removing
@@ -293,6 +331,7 @@ function Row({
   title: string
   description?: string | null
   meta?: string | null
+  trigger?: SourceTrigger | null
   controls?: React.ReactNode
   onRemove?: () => void
   removing?: boolean
@@ -305,10 +344,37 @@ function Row({
           {description}
           {meta && <span className='text-slate-400 dark:text-slate-500'> · {meta}</span>}
         </p>
+        {trigger && <TriggerLine trigger={trigger} />}
       </div>
       {controls}
       {onRemove && <RemoveButton label={title} onRemove={onRemove} busy={!!removing} />}
     </div>
+  )
+}
+
+/** "On event" vs "Scheduled · At 08:00 AM" — the server resolves the text
+ *  from the live cron roster, so an overridden schedule reads correctly. */
+function TriggerLine({ trigger }: { trigger: SourceTrigger }) {
+  const scheduled = trigger.kind !== 'event'
+  return (
+    <p
+      className='mt-0.5 flex items-center gap-1 truncate text-[10.5px] text-slate-400 dark:text-slate-500'
+      data-tip={scheduled ? 'Runs on the server schedule shown' : 'Fires the moment it happens'}
+    >
+      {scheduled ? (
+        <CalendarClock className='h-3 w-3 shrink-0 text-nvr-cyan' />
+      ) : (
+        <Zap className='h-3 w-3 shrink-0 text-amber-500' />
+      )}
+      <span className='font-medium text-slate-500 dark:text-slate-400'>
+        {trigger.kind === 'event'
+          ? 'On event'
+          : trigger.kind === 'both'
+            ? 'Event + schedule'
+            : 'Scheduled'}
+      </span>
+      <span className='truncate'>· {trigger.text}</span>
+    </p>
   )
 }
 
@@ -371,9 +437,14 @@ export function NotificationSourcesCard() {
     queryKey: ['me-notification-stats'],
     queryFn: () =>
       client
-        .request<{ data: Array<{ collection: string | null; total: number; unread: number; read_rate: number }> }>(
-          get('/users/me/notification-stats')
-        )
+        .request<{
+          data: Array<{
+            collection: string | null
+            total: number
+            unread: number
+            read_rate: number
+          }>
+        }>(get('/users/me/notification-stats'))
         .then((r) => r.data ?? [])
         .catch(() => []),
     staleTime: 60_000
@@ -516,7 +587,10 @@ export function NotificationSourcesCard() {
                 .filter((h) => h.unread >= 25)
                 .slice(0, 4)
                 .map((h) => (
-                  <p key={h.collection ?? 'general'} className='text-[11.5px] text-amber-700 dark:text-amber-200/90'>
+                  <p
+                    key={h.collection ?? 'general'}
+                    className='text-[11.5px] text-amber-700 dark:text-amber-200/90'
+                  >
                     {h.unread.toLocaleString()} unread from{' '}
                     <span className='font-mono text-[11px]'>{h.collection ?? 'general'}</span>
                     {` — you read ${h.read_rate}% of these in the last 30 days`}
@@ -527,337 +601,354 @@ export function NotificationSourcesCard() {
               </p>
             </div>
           )}
-        <div className='space-y-5 px-5 py-4'>
-          {stateSubs.length > 0 && (
-            <Section
-              title='Workflow state changes'
-              hint='email + in-app when a matching workflow enters the state'
-            >
-              {stateSubs.map((r) => (
-                <Row
-                  key={r.id}
-                  title={
-                    r.state_label || titleCase(String(r.filter_value ?? '').replace(/_/g, ' '))
-                  }
-                  description={
-                    r.criteria && r.criteria.length > 0
-                      ? `Only when ${r.criteria.join(' · ')}`
-                      : 'Any workflow entering this state'
-                  }
-                  meta={r.is_active ? null : 'paused'}
-                  onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+          <div className='space-y-5 px-5 py-4'>
+            {stateSubs.length > 0 && (
+              <Section
+                title='Workflow state changes'
+                hint='email + in-app when a matching workflow enters the state'
+              >
+                {stateSubs.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={
+                      r.state_label || titleCase(String(r.filter_value ?? '').replace(/_/g, ' '))
+                    }
+                    description={
+                      r.criteria && r.criteria.length > 0
+                        ? `Only when ${r.criteria.join(' · ')}`
+                        : 'Any workflow entering this state'
+                    }
+                    meta={r.is_active ? null : 'paused'}
+                    onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
 
-          {otherSubs.length > 0 && (
-            <Section title='Record & collection subscriptions'>
-              {otherSubs.map((r) => (
-                <Row
-                  key={r.id}
-                  title={
-                    r.label ||
-                    (r.queue_name
-                      ? `Queue digest — ${r.queue_name}`
-                      : `${titleCase((r.collection ?? '?').replace(/_/g, ' '))} — every ${r.event_type === 'all' ? 'change' : r.event_type}`)
-                  }
-                  description={
-                    r.criteria && r.criteria.length > 0
-                      ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
-                      : deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)
-                  }
-                  meta={r.is_active ? null : 'paused'}
-                  controls={
-                    <span className='flex items-center gap-1.5'>
-                      <ChannelChips
-                        sub={r}
-                        onPatch={(body) =>
-                          patchPath.mutate({ path: `/notification-subscriptions/${r.id}`, body })
-                        }
-                      />
+            {otherSubs.length > 0 && (
+              <Section title='Record & collection subscriptions'>
+                {otherSubs.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={
+                      r.label ||
+                      (r.queue_name
+                        ? `Queue digest — ${r.queue_name}`
+                        : `${titleCase((r.collection ?? '?').replace(/_/g, ' '))} — every ${r.event_type === 'all' ? 'change' : r.event_type}`)
+                    }
+                    description={
+                      r.criteria && r.criteria.length > 0
+                        ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
+                        : deliveryPhrase(
+                            r.notify_email !== false,
+                            r.notify_inapp !== false,
+                            r.digest_frequency
+                          )
+                    }
+                    meta={r.is_active ? null : 'paused'}
+                    controls={
+                      <span className='flex items-center gap-1.5'>
+                        <ChannelChips
+                          sub={r}
+                          onPatch={(body) =>
+                            patchPath.mutate({ path: `/notification-subscriptions/${r.id}`, body })
+                          }
+                        />
+                        <SimpleSelectXs
+                          value={r.digest_frequency ?? 'instant'}
+                          options={digestOptions}
+                          onChange={(v: string) =>
+                            patchPath.mutate({
+                              path: `/notification-subscriptions/${r.id}`,
+                              body: { digest_frequency: v }
+                            })
+                          }
+                        />
+                      </span>
+                    }
+                    onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {s.field_watches.length > 0 && (
+              <Section title='Field watches'>
+                {s.field_watches.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={`Notifies when ${titleCase(r.collection.replace(/_/g, ' '))} · ${r.field.replace(/_/g, ' ')} changes`}
+                    onRemove={() => remove.mutate(`/field-watches/${r.watch_id}/subscribe`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {s.record_alerts.length > 0 && (
+              <Section title='Record alerts'>
+                {s.record_alerts.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={deliveryPhrase(Boolean(r.notify_email), Boolean(r.notify_inapp))}
+                    meta={lastFired(r.last_fired) ?? (r.is_active ? null : 'paused')}
+                    onRemove={() => remove.mutate(`/alerts/subscriptions/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {s.metric_alerts.length > 0 && (
+              <Section title='Metric alerts'>
+                {s.metric_alerts.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={`${humanMetric(r.metric_key)} ${OP_WORDS[r.operator] ?? r.operator} ${Number(r.threshold_value).toLocaleString('en-US')}`}
+                    description={deliveryPhrase(
+                      Boolean(r.delivery_email),
+                      Boolean(r.delivery_in_app),
+                      r.digest_frequency
+                    )}
+                    meta={
+                      lastFired(r.last_notified) ??
+                      (r.rule_status === 'active' ? null : r.rule_status)
+                    }
+                    controls={
+                      <span className='flex shrink-0 items-center gap-1'>
+                        <ChannelToggle
+                          label='email'
+                          on={Boolean(r.delivery_email)}
+                          disabled={busy}
+                          onToggle={() =>
+                            patchPath.mutate({
+                              path: `/metric-alerts/subscriptions/${r.id}`,
+                              body: { delivery_email: !r.delivery_email }
+                            })
+                          }
+                        />
+                        <ChannelToggle
+                          label='in-app'
+                          on={Boolean(r.delivery_in_app)}
+                          disabled={busy}
+                          onToggle={() =>
+                            patchPath.mutate({
+                              path: `/metric-alerts/subscriptions/${r.id}`,
+                              body: { delivery_in_app: !r.delivery_in_app }
+                            })
+                          }
+                        />
+                      </span>
+                    }
+                    onRemove={() => remove.mutate(`/metric-alerts/subscriptions/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
+
+            {s.anomaly_rules.length > 0 && (
+              <Section title='Anomaly detection' hint='rules you created — detections come to you'>
+                {s.anomaly_rules.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={`${deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_in_app))} · checked ${r.check_frequency}`}
+                    meta={r.status === 'active' ? null : r.status}
+                    controls={
+                      <span className='flex shrink-0 items-center gap-1'>
+                        <ChannelToggle
+                          label='email'
+                          on={Boolean(r.delivery_email)}
+                          disabled={busy}
+                          onToggle={() =>
+                            patchPath.mutate({
+                              path: `/metric-alerts/anomaly-rules/${r.id}`,
+                              body: { delivery_email: !r.delivery_email }
+                            })
+                          }
+                        />
+                        <ChannelToggle
+                          label='in-app'
+                          on={Boolean(r.delivery_in_app)}
+                          disabled={busy}
+                          onToggle={() =>
+                            patchPath.mutate({
+                              path: `/metric-alerts/anomaly-rules/${r.id}`,
+                              body: { delivery_in_app: !r.delivery_in_app }
+                            })
+                          }
+                        />
+                      </span>
+                    }
+                  />
+                ))}
+              </Section>
+            )}
+
+            {s.report_subscriptions.length > 0 && (
+              <Section title='Report digests'>
+                {s.report_subscriptions.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={[
+                      deliveryPhrase(
+                        Boolean(r.delivery_email),
+                        Boolean(r.delivery_inapp),
+                        r.cadence
+                      ),
+                      Boolean(r.deliver_teams) && 'Teams',
+                      Boolean(r.attach_pdf) && 'PDF attached'
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    meta={r.last_sent_at ? `last sent ${formatRelative(r.last_sent_at)}` : null}
+                    controls={
                       <SimpleSelectXs
-                        value={r.digest_frequency ?? 'instant'}
-                        options={digestOptions}
+                        value={r.cadence}
+                        options={[
+                          { value: 'daily', label: 'Daily' },
+                          { value: 'weekly', label: 'Weekly' }
+                        ]}
                         onChange={(v: string) =>
-                          patchPath.mutate({
-                            path: `/notification-subscriptions/${r.id}`,
-                            body: { digest_frequency: v }
-                          })
+                          reportSub.mutate({ reportId: r.report_id, body: { cadence: v } })
                         }
                       />
-                    </span>
-                  }
-                  onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+                    }
+                    onRemove={() => reportSub.mutate({ reportId: r.report_id, body: null })}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
 
-          {s.field_watches.length > 0 && (
-            <Section title='Field watches'>
-              {s.field_watches.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={`Notifies when ${titleCase(r.collection.replace(/_/g, ' '))} · ${r.field.replace(/_/g, ' ')} changes`}
-                  onRemove={() => remove.mutate(`/field-watches/${r.watch_id}/subscribe`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+            {s.report_alerts.length > 0 && (
+              <Section title='Report alerts' hint='you created these'>
+                {s.report_alerts.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={`${r.report_name} · ${deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_inapp))}`}
+                    onRemove={() => remove.mutate(`/report-studio/${r.report_id}/alerts/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
 
-          {s.record_alerts.length > 0 && (
-            <Section title='Record alerts'>
-              {s.record_alerts.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={deliveryPhrase(Boolean(r.notify_email), Boolean(r.notify_inapp))}
-                  meta={lastFired(r.last_fired) ?? (r.is_active ? null : 'paused')}
-                  onRemove={() => remove.mutate(`/alerts/subscriptions/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+            {s.view_subscriptions.length > 0 && (
+              <Section
+                title='Saved-view digests'
+                hint='which records entered the view since last time'
+              >
+                {s.view_subscriptions.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={r.name}
+                    description={`${titleCase(r.collection.replace(/_/g, ' '))} · ${r.digest} email`}
+                    meta={r.last_run_at ? `last sent ${formatRelative(r.last_run_at)}` : null}
+                    onRemove={() => remove.mutate(`/view-subscriptions/${r.id}`)}
+                    removing={busy}
+                  />
+                ))}
+              </Section>
+            )}
 
-          {s.metric_alerts.length > 0 && (
-            <Section title='Metric alerts'>
-              {s.metric_alerts.map((r) => (
-                <Row
-                  key={r.id}
-                  title={`${humanMetric(r.metric_key)} ${OP_WORDS[r.operator] ?? r.operator} ${Number(r.threshold_value).toLocaleString('en-US')}`}
-                  description={deliveryPhrase(
-                    Boolean(r.delivery_email),
-                    Boolean(r.delivery_in_app),
-                    r.digest_frequency
-                  )}
-                  meta={
-                    lastFired(r.last_notified) ??
-                    (r.rule_status === 'active' ? null : r.rule_status)
-                  }
-                  controls={
-                    <span className='flex shrink-0 items-center gap-1'>
-                      <ChannelToggle
-                        label='email'
-                        on={Boolean(r.delivery_email)}
-                        disabled={busy}
-                        onToggle={() =>
-                          patchPath.mutate({
-                            path: `/metric-alerts/subscriptions/${r.id}`,
-                            body: { delivery_email: !r.delivery_email }
-                          })
-                        }
-                      />
-                      <ChannelToggle
-                        label='in-app'
-                        on={Boolean(r.delivery_in_app)}
-                        disabled={busy}
-                        onToggle={() =>
-                          patchPath.mutate({
-                            path: `/metric-alerts/subscriptions/${r.id}`,
-                            body: { delivery_in_app: !r.delivery_in_app }
-                          })
-                        }
-                      />
-                    </span>
-                  }
-                  onRemove={() => remove.mutate(`/metric-alerts/subscriptions/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+            {(s.chat_rooms.length > 0 || s.push_devices.length > 0) && (
+              <Section title='Chat & devices'>
+                {s.chat_rooms.map((r) => (
+                  <Row
+                    key={r.room}
+                    title={r.room.replace(/^ch:/, '#')}
+                    description={
+                      r.is_muted ? 'Muted — no notifications from this room' : 'Mentions only'
+                    }
+                  />
+                ))}
+                {s.push_devices.length > 0 && (
+                  <Row
+                    title={`Browser push — ${s.push_devices.length} device${s.push_devices.length === 1 ? '' : 's'}`}
+                    description='Push notifications mirror your in-app notifications'
+                  />
+                )}
+              </Section>
+            )}
 
-          {s.anomaly_rules.length > 0 && (
-            <Section title='Anomaly detection' hint='rules you created — detections come to you'>
-              {s.anomaly_rules.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={`${deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_in_app))} · checked ${r.check_frequency}`}
-                  meta={r.status === 'active' ? null : r.status}
-                  controls={
-                    <span className='flex shrink-0 items-center gap-1'>
-                      <ChannelToggle
-                        label='email'
-                        on={Boolean(r.delivery_email)}
-                        disabled={busy}
-                        onToggle={() =>
-                          patchPath.mutate({
-                            path: `/metric-alerts/anomaly-rules/${r.id}`,
-                            body: { delivery_email: !r.delivery_email }
-                          })
-                        }
-                      />
-                      <ChannelToggle
-                        label='in-app'
-                        on={Boolean(r.delivery_in_app)}
-                        disabled={busy}
-                        onToggle={() =>
-                          patchPath.mutate({
-                            path: `/metric-alerts/anomaly-rules/${r.id}`,
-                            body: { delivery_in_app: !r.delivery_in_app }
-                          })
-                        }
-                      />
-                    </span>
-                  }
-                />
-              ))}
-            </Section>
-          )}
+            {(s.external ?? []).map((g) => (
+              <Section key={g.key} title={g.title} hint={g.description}>
+                {g.items.map((it) => (
+                  <Row
+                    key={String(it.id)}
+                    title={it.label}
+                    description={it.detail ?? undefined}
+                    meta={it.is_active === false ? 'inactive' : null}
+                  />
+                ))}
+                {g.items.length === 0 && (
+                  <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>Nothing watched yet.</p>
+                )}
+                {g.manage_url && (
+                  <a
+                    href={g.manage_url}
+                    className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                  >
+                    Manage →
+                  </a>
+                )}
+              </Section>
+            ))}
 
-          {s.report_subscriptions.length > 0 && (
-            <Section title='Report digests'>
-              {s.report_subscriptions.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={[
-                    deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_inapp), r.cadence),
-                    Boolean(r.deliver_teams) && 'Teams',
-                    Boolean(r.attach_pdf) && 'PDF attached'
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  meta={r.last_sent_at ? `last sent ${formatRelative(r.last_sent_at)}` : null}
-                  controls={
-                    <SimpleSelectXs
-                      value={r.cadence}
-                      options={[
-                        { value: 'daily', label: 'Daily' },
-                        { value: 'weekly', label: 'Weekly' }
-                      ]}
-                      onChange={(v: string) =>
-                        reportSub.mutate({ reportId: r.report_id, body: { cadence: v } })
-                      }
-                    />
-                  }
-                  onRemove={() => reportSub.mutate({ reportId: r.report_id, body: null })}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
+            {(s.implicit.owner_group_memberships.length > 0 ||
+              s.implicit.sla_escalations.length > 0) && (
+              <Section
+                title='Because of your role'
+                hint='these follow from assignments, not subscriptions — an admin manages them'
+              >
+                {s.implicit.owner_group_memberships.map((m) => (
+                  <Row
+                    key={m.template}
+                    trigger={m.trigger}
+                    title={`Pipeline owner — ${m.template}`}
+                    description={`Owner notifications + daily-digest items for records you own (${m.groups} owner group${m.groups === 1 ? '' : 's'})`}
+                  />
+                ))}
+                {s.implicit.sla_escalations.map((r) => (
+                  <Row
+                    key={r.id}
+                    trigger={r.trigger}
+                    title={`SLA escalation — ${r.name}`}
+                    description={`Emailed when ${r.template ? `${r.template} · ` : ''}${titleCase(r.state_key.replace(/_/g, ' '))} breaches its deadline`}
+                  />
+                ))}
+              </Section>
+            )}
 
-          {s.report_alerts.length > 0 && (
-            <Section title='Report alerts' hint='you created these'>
-              {s.report_alerts.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={`${r.report_name} · ${deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_inapp))}`}
-                  onRemove={() => remove.mutate(`/report-studio/${r.report_id}/alerts/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
-
-          {s.view_subscriptions.length > 0 && (
-            <Section
-              title='Saved-view digests'
-              hint='which records entered the view since last time'
-            >
-              {s.view_subscriptions.map((r) => (
-                <Row
-                  key={r.id}
-                  title={r.name}
-                  description={`${titleCase(r.collection.replace(/_/g, ' '))} · ${r.digest} email`}
-                  meta={r.last_run_at ? `last sent ${formatRelative(r.last_run_at)}` : null}
-                  onRemove={() => remove.mutate(`/view-subscriptions/${r.id}`)}
-                  removing={busy}
-                />
-              ))}
-            </Section>
-          )}
-
-          {(s.chat_rooms.length > 0 || s.push_devices.length > 0) && (
-            <Section title='Chat & devices'>
-              {s.chat_rooms.map((r) => (
-                <Row
-                  key={r.room}
-                  title={r.room.replace(/^ch:/, '#')}
-                  description={
-                    r.is_muted ? 'Muted — no notifications from this room' : 'Mentions only'
-                  }
-                />
-              ))}
-              {s.push_devices.length > 0 && (
-                <Row
-                  title={`Browser push — ${s.push_devices.length} device${s.push_devices.length === 1 ? '' : 's'}`}
-                  description='Push notifications mirror your in-app notifications'
-                />
-              )}
-            </Section>
-          )}
-
-          {(s.external ?? []).map((g) => (
-            <Section key={g.key} title={g.title} hint={g.description}>
-              {g.items.map((it) => (
-                <Row
-                  key={String(it.id)}
-                  title={it.label}
-                  description={it.detail ?? undefined}
-                  meta={it.is_active === false ? 'inactive' : null}
-                />
-              ))}
-              {g.items.length === 0 && (
-                <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>
-                  Nothing watched yet.
+            {total === 0 && (
+              <div className='px-2 py-6 text-center'>
+                <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
+                  No subscriptions or alerts
                 </p>
-              )}
-              {g.manage_url && (
-                <a
-                  href={g.manage_url}
-                  className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                >
-                  Manage →
-                </a>
-              )}
-            </Section>
-          ))}
-
-          {(s.implicit.owner_group_memberships.length > 0 ||
-            s.implicit.sla_escalations.length > 0) && (
-            <Section
-              title='Because of your role'
-              hint='these follow from assignments, not subscriptions — an admin manages them'
-            >
-              {s.implicit.owner_group_memberships.map((m) => (
-                <Row
-                  key={m.template}
-                  title={`Pipeline owner — ${m.template}`}
-                  description={`Owner notifications + daily-digest items for records you own (${m.groups} owner group${m.groups === 1 ? '' : 's'})`}
-                />
-              ))}
-              {s.implicit.sla_escalations.map((r) => (
-                <Row
-                  key={r.id}
-                  title={`SLA escalation — ${r.name}`}
-                  description={`Emailed when ${r.template ? `${r.template} · ` : ''}${titleCase(r.state_key.replace(/_/g, ' '))} breaches its deadline`}
-                />
-              ))}
-            </Section>
-          )}
-
-          {total === 0 && (
-            <div className='px-2 py-6 text-center'>
-              <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
-                No subscriptions or alerts
-              </p>
-              <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
-                You only receive what your role implies: mentions, tasks assigned to you, and
-                records you own. Subscribe from any record's bell, queue, report, or saved view.
-              </p>
-            </div>
-          )}
-        </div>
+                <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
+                  You only receive what your role implies: mentions, tasks assigned to you, and
+                  records you own. Subscribe from any record's bell, queue, report, or saved view.
+                </p>
+              </div>
+            )}
+          </div>
         </>
       )}
 

@@ -5,7 +5,7 @@ import { assertSafeUrl } from '../lib/ssrf.js'
 import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
-import { NOTIFY_CATEGORIES } from './notification-channels.js'
+import { NOTIFY_CATEGORIES, notifyUser } from './notification-channels.js'
 
 interface FlowOperation {
   id: string
@@ -290,20 +290,28 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     (Array.isArray(keys) && keys.length > 0 ? String(keys[0]) : '') ||
     null
   try {
-    await db('nivaro_notifications').insert({
-      recipient,
+    // Through the channel stack (inbox row + live socket + push + outbox
+    // retry, recipient's notification rules applied) — not a raw insert.
+    // `always_inbox` defaults ON: a flow author configured this
+    // notification on purpose, so record mutes / "already viewing" never
+    // swallow it; set the option to false to opt into those suppressions.
+    const { getIo } = await import('./io-holder.js')
+    const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
+    const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
+    await notifyUser(appShim, recipient, {
       subject,
       message,
-      status: 'inbox',
-      timestamp: new Date(),
       sender: ctx.userId ?? null,
       collection: linkCollection,
-      item: linkCollection ? linkItem : null
+      item: linkCollection ? linkItem : null,
+      ...(category ? { category } : {}),
+      always_inbox: opts.always_inbox !== false,
+      channels: { inapp: true, email: false }
     })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, recipient }, 'Notification sent')
     return { status: 'resolve' as const, output: data }
   } catch (err) {
-    ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Notification insert failed')
+    ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Notification send failed')
     return { status: 'reject' as const, output: { ...data, $error: String(err) } }
   }
 }

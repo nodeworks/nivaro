@@ -258,6 +258,9 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      cronstrue:
+        specifier: ^2.59.0
+        version: 2.59.0
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2

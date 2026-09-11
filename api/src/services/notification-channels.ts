@@ -100,6 +100,12 @@ export interface NotifyUserOptions {
    *  the recipient's matrix row for that category applies; otherwise the
    *  category is sniffed from the subject. */
   category?: NotifyCategory
+  /** Skip the two "you already know" suppressions — record mutes and
+   *  presence-aware suppression — so the inbox row ALWAYS lands. The matrix
+   *  (in-app / push off per category), quiet hours and suspended/redacted
+   *  skips still apply. Flow notification ops set this by default: a flow
+   *  author configured that notification deliberately. */
+  always_inbox?: boolean
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
 }
@@ -271,7 +277,7 @@ export async function notifyUser(
   // Record mute (#401): "never tell me about THIS record" beats every watch
   // and subscription — the mute is the most specific signal the user can
   // give. Critical subjects still bypass (same rule as quiet hours).
-  if (opts.collection && opts.item && !CRITICAL_SUBJECTS.test(opts.subject)) {
+  if (opts.collection && opts.item && !opts.always_inbox && !CRITICAL_SUBJECTS.test(opts.subject)) {
     try {
       const muted = await db('nivaro_notification_mutes')
         .where({ user: userId, collection: opts.collection, item: String(opts.item) })
@@ -290,7 +296,7 @@ export async function notifyUser(
   // this notification is about — they watched it happen; the inbox doesn't
   // need to tell them. In-app + push only (email/digest unaffected); critical
   // subjects always land. Per-node presence, same accepted limitation.
-  if (!critical && opts.collection && opts.item) {
+  if (!critical && !opts.always_inbox && opts.collection && opts.item) {
     try {
       const { isUserViewing } = await import('../plugins/socketio.js')
       if (isUserViewing(opts.collection, String(opts.item), userId)) {

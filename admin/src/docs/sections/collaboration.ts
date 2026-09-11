@@ -474,6 +474,7 @@ export const collabNotificationsCenter: DocSection = {
         'The Daily action summary block on the same card sets the delivery hour (Eastern time), a compact layout, and a "send me a test summary now" button. Anyone with at least one category on Daily summary receives the digest.',
         'Critical subjects (SLA escalations, maintenance notices, failing monitors) always email immediately regardless of the matrix.',
         'The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.',
+        'Notifications & alerts (the sources list below the rules) shows, under every source, whether it fires on an event or on a schedule — and the schedule in words ("Scheduled · At 08:00 AM, only on Monday"), read from the live cron roster so an overridden schedule reads correctly.',
         'Every email leaves through the same sender, so cron-driven mail (scheduled reports, report and view digests, alert checks, anomaly sweeps, SLA escalations, coverage notices, flow mail ops) follows the same rules. Senders pass an explicit category; a flow mail op can set `category` in its options.'
       ]
     },
