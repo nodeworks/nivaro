@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-11T19:20:22.797Z",
+  "generated_at": "2026-09-11T19:56:19.095Z",
   "releases": [
+    {
+      "version": "0.1.259",
+      "tag": "v0.1.259",
+      "date": "2026-09-11T15:56:09-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "a cascade swap re-derives auto values instead of leaving them as overrides",
+              "hash": "0549619f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "say why a cascade swap did nothing when the parent has no default",
+              "hash": "98559762"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.258",
       "tag": "v0.1.258",
-      "date": "2026-09-11T15:20:15-04:00",
+      "date": "2026-09-11T15:20:22-04:00",
       "sections": [
         {
           "label": "Added",
