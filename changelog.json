@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-09-11T18:42:43.981Z",
+  "generated_at": "2026-09-11T19:20:22.797Z",
   "releases": [
+    {
+      "version": "0.1.258",
+      "tag": "v0.1.258",
+      "date": "2026-09-11T15:20:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "show and edit the user's status on the profile",
+              "hash": "acaaf253"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "saved-view pill hover flicker + record header condense loop",
+              "hash": "11edf441"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "www",
+              "text": "sync cascade-swap section",
+              "hash": "d641cb7b"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.257",
       "tag": "v0.1.257",
-      "date": "2026-09-11T14:42:36-04:00",
+      "date": "2026-09-11T14:42:44-04:00",
       "sections": [
         {
           "label": "Added",
