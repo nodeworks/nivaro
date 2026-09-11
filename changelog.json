@@ -1,10 +1,62 @@
 {
-  "generated_at": "2026-09-11T00:11:47.588Z",
+  "generated_at": "2026-09-11T00:34:49.386Z",
   "releases": [
+    {
+      "version": "0.1.248",
+      "tag": "v0.1.248",
+      "date": "2026-09-10T20:34:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "jobs",
+              "text": "plain-language description on every cron job; align the action buttons",
+              "hash": "2cdc1cb7"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "users",
+              "text": "last_access updates on every authenticated request",
+              "hash": "9db2ccd9"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www docs (flow ops, notifyUser, notification rules)",
+              "hash": "05f5c529"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "broaden the Watches notification-rule row",
+              "hash": "e0bf02d2"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.247",
       "tag": "v0.1.247",
-      "date": "2026-09-10T20:11:41-04:00",
+      "date": "2026-09-10T20:11:47-04:00",
       "sections": [
         {
           "label": "Added",
