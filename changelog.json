@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-11T15:06:29.005Z",
+  "generated_at": "2026-09-11T16:44:43.353Z",
   "releases": [
+    {
+      "version": "0.1.256",
+      "tag": "v0.1.256",
+      "date": "2026-09-11T12:44:33-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "cascade swap on unavailable — re-point a row to the parent's default when a parent change orphans its value",
+              "hash": "3f4632d6"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.255",
       "tag": "v0.1.255",
-      "date": "2026-09-11T11:06:21-04:00",
+      "date": "2026-09-11T11:06:29-04:00",
       "sections": [],
       "count": 0
     },
