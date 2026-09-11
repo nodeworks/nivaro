@@ -10480,7 +10480,7 @@ POST /api/items/pages
           <!-- /SYNC:content-ops-m2a -->
         </div>
 
-        <div class="doc-section" id="s-content-ops-grid-presets" data-toc='[{"id":"content-ops-grid-presets","label":"Grid View Presets &amp; Nested Relations"},{"id":"grid-view-presets","label":"View presets (column_presets)"},{"id":"grid-nested-relations","label":"Nested relation editor (drawer_relations)"}]'>
+        <div class="doc-section" id="s-content-ops-grid-presets" data-toc='[{"id":"content-ops-grid-presets","label":"Grid View Presets &amp; Nested Relations"},{"id":"grid-view-presets","label":"View presets (column_presets)"},{"id":"grid-nested-relations","label":"Nested relation editor (drawer_relations)"},{"id":"grid-cascade-swap","label":"Cascade swap on unavailable (parent_cascades[].on_unavailable)"}]'>
           <!-- SYNC:content-ops-grid-presets -->
           <h1 class="doc-h1" id="content-ops-grid-presets">Grid View Presets &amp; Nested Relations</h1>
           <p class="doc-p">Two layout options for an O2M field rendered as an inline grid (interface <code class="doc-code">inline-table</code>) in the item editor: named view presets that switch which columns the grid shows, and a nested relation editor that lets a grandchild collection be edited from inside each row's expanded drawer. Both are configured per-field in Data Model, not by the end user.</p>
@@ -10551,6 +10551,23 @@ POST /api/items/pages
           <p class="doc-p">Clicking the chip lists the contributing rows biggest-first (named by <code class="doc-code">row_label</code>, e.g. "Line {{line_number}} · {{item_description}}") and opens whichever you pick. Rollup header fields carry their own explainer beneath the value — "= 5 lines · 1 excluded (line type is not 4)" — whose popover lists the contributors, the rows the source filter left out with the reason, and per-source subtotals.</p>
           <h3 class="doc-h3">Row lints</h3>
           <p class="doc-p">An inline-table field may carry <code class="doc-code">options.row_lints</code> (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (<code class="doc-code">{label, when: {field, op, value}, expect: {field, op, value}}</code>, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. Workflow lines check that a Labor line carries a Services PO line type and a Materials line a Goods one.</p>
+          <h3 class="doc-h3" id="grid-cascade-swap">Cascade swap on unavailable (parent_cascades[].on_unavailable)</h3>
+          <p class="doc-p">A parent → child picker cascade (<code class="doc-code">options.parent_cascades</code>, Data Model → grid field ⚙ → Cascade from parent) can carry <code class="doc-code">on_unavailable</code>: when the USER changes the parent field on the record and a row’s current value is no longer offered under the new parent, the row is re-pointed instead of just flagged amber. The replacement is the target row that keeps the <code class="doc-code">keep</code> columns of the old value and takes the <code class="doc-code">replace</code> columns from the parent’s defaults (each entry uses the pinned_options shape — <code class="doc-code">parent_field</code>, <code class="doc-code">parent_collection</code>, <code class="doc-code">source_field</code>, optional <code class="doc-code">when</code> over <code class="doc-code">$parent.*</code> fields — first entry with a value wins). The grid then runs its row rules with the child field as the changed field, so every downstream derivation follows, and writes through its normal path (staged on pending-mode grids and new records, PATCHed on immediate grids). A record that merely loaded with a stale value is never touched; a value with no matching option stays flagged.</p>
+          <pre class="doc-pre"><code>{
+  "parent_field": "project",
+  "child_field": "category",
+  "on_unavailable": {
+    "keep": ["sub_category"],
+    "replace": {
+      "core_category": [
+        { "when": { "field": "$parent.workflow_source", "op": "eq", "value": "1" }, "parent_field": "project", "parent_collection": "projects", "source_field": "default_core_category_p2" },
+        { "parent_field": "project", "parent_collection": "projects", "source_field": "default_core_category" },
+        { "parent_field": "project_type", "parent_collection": "project_types", "source_field": "default_core_category" }
+      ]
+    },
+    "label": "Category"
+  }
+}</code></pre>
           <h3 class="doc-h3">Header freshness</h3>
           <p class="doc-p">Plain header fields show when they were last changed and by whom under the value ("3d ago", "2h ago · import (Bid Import)"), from the newest revision that touched that field; a value written by an import, an integration identity or the system is tinted amber so a stale figure reads as stale. Fields nobody changed since creation show nothing. Rollup header fields carry their explainer instead.</p>
           <h3 class="doc-h3">Line provenance from imports</h3>
