@@ -9125,6 +9125,8 @@ type RowRuleItem = {
   seed_only?: boolean
   sort?: number
   on_update?: boolean
+  except_admin?: boolean
+  reason?: string | null
 }
 
 const ROW_RULE_SKIP_TYPES = new Set([
@@ -10941,6 +10943,35 @@ function RowRuleRow({
                   Seed only — target is an input, never re-derived
                 </span>
               </label>
+            )}
+            {rule.target_type === 'lock' && (
+              <div className='mt-1 space-y-1'>
+                <label className='flex items-center gap-2 cursor-pointer'>
+                  <input
+                    type='checkbox'
+                    checked={rule.except_admin === true}
+                    onChange={(e) => {
+                      const next = { ...rule }
+                      if (e.target.checked) next.except_admin = true
+                      else delete next.except_admin
+                      onChange(next)
+                    }}
+                    className='h-3.5 w-3.5 accent-nvr-cyan'
+                  />
+                  <span
+                    className='text-[11px] text-slate-600'
+                    title='Admins (role admin_access) keep editing the field — the lock binds everyone else, in the grid and on API writes.'
+                  >
+                    Except admins — view only for non-admins
+                  </span>
+                </label>
+                <input
+                  value={rule.reason ?? ''}
+                  onChange={(e) => onChange({ ...rule, reason: e.target.value || null })}
+                  placeholder='Lock message shown on hover (optional) — e.g. "set by the rules; ask an admin"'
+                  className='h-7 w-full rounded border border-slate-200 bg-white px-2 text-[11px]'
+                />
+              </div>
             )}
             {rule.target_type !== 'lock' && (
               <label className='mt-1 flex items-center gap-2 cursor-pointer'>

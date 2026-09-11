@@ -2530,7 +2530,7 @@ export async function createOne(
   // the caller left out; never throws.
   // Locked child-row fields (layout 'lock' row rules) are never caller-set —
   // drop them first so the autofill below owns their value.
-  await applyRowLocksOnWrite(collection, ctx.payload, callerFields, null)
+  await applyRowLocksOnWrite(collection, ctx.payload, callerFields, null, req?.isAdmin ?? false)
   await applyRowRulesOnCreate(collection, ctx.payload, callerFields)
 
   // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
@@ -2761,7 +2761,13 @@ export async function updateOne(
   // Field rules — apply inline field defaults based on other field values
   await span('field-rules', () => applyFieldRules(collection, ctx.payload))
   await span('row-locks', () =>
-    applyRowLocksOnWrite(collection, ctx.payload, callerFields, previousData ?? null)
+    applyRowLocksOnWrite(
+      collection,
+      ctx.payload,
+      callerFields,
+      previousData ?? null,
+      req?.isAdmin ?? false
+    )
   )
   // Layout row rules flagged on_update re-derive their targets when the PATCH
   // changed one of their triggers (caller-sent targets still win).

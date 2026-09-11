@@ -560,6 +560,13 @@ export interface RowRule {
    *  win). ON unless explicitly `false` — the form already re-derives on
    *  every edit, so an API update behaving differently was the surprise. */
   on_update?: boolean
+  /** Skip this rule for admins (role admin_access) — "view only except for
+   *  admins" locks. Honoured by every pass that knows the acting user: the
+   *  grid's evaluate route and the items service's lock check. */
+  except_admin?: boolean
+  /** Lock rules: the sentence the grid shows instead of deriving one from the
+   *  trigger ("Set by the rules — ask an admin to change it"). */
+  reason?: string | null
 }
 
 /** One line of an explain trace — what a rule did on one pass and why. */
@@ -590,8 +597,16 @@ export interface RowRuleEvalOptions {
   /** Per locked target: the trigger that locked it (for "why is this locked"). */
   lockReasons?: Map<
     string,
-    { field: string | null; related_field: string | null; op: string; value: string | null }
+    {
+      field: string | null
+      related_field: string | null
+      op: string
+      value: string | null
+      reason?: string | null
+    }
   >
+  /** The acting user is an admin — rules flagged `except_admin` are skipped. */
+  isAdmin?: boolean
   /** Evaluate ONLY lock rules — used when a row editor opens, so 'set' rules
    *  don't re-fire over values the user already has. */
   locksOnly?: boolean
@@ -744,6 +759,10 @@ export async function evaluateRowRules(
       note('skipped:rule-filter')
       continue
     }
+    if (rule.except_admin && evalOpts?.isAdmin) {
+      note('skipped:admin')
+      continue
+    }
     const isParentTrigger = !!triggerField && triggerField.startsWith('$parent.')
     const extraTriggerFields = Array.isArray(rule.trigger_fields)
       ? rule.trigger_fields.filter(Boolean)
@@ -884,7 +903,8 @@ export async function evaluateRowRules(
           field: rule.trigger_field ?? null,
           related_field: rule.trigger_related_field ?? null,
           op: rule.trigger_op ?? 'eq',
-          value: rule.trigger_value ?? null
+          value: rule.trigger_value ?? null,
+          reason: rule.reason ?? null
         })
       }
       note(triggered ? 'lock' : 'not-triggered')

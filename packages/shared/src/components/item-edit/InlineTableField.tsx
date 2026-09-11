@@ -1601,6 +1601,7 @@ export function InlineTableField({
     related_field: string | null
     op: string
     value: string | null
+    reason?: string | null
   }
   type GridEditState = {
     rowId: string
@@ -3884,6 +3885,7 @@ export function InlineTableField({
   function lockReasonText(field: string): string {
     const r = editStateRef.current?.lockReasons?.[field]
     if (!r) return 'Set automatically for this row'
+    if (r.reason) return `Locked — ${r.reason}`
     const col = r.field ? cols.find((c) => c.field === r.field) : undefined
     const triggerLabel = col?.label || (r.field ? titleCase(r.field) : 'a rule')
     // The lock fired for THIS row, so the row's own trigger value (shown by

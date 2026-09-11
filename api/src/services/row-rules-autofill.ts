@@ -144,7 +144,8 @@ export async function applyRowLocksOnWrite(
   collection: string,
   payload: Record<string, unknown>,
   callerFields: Set<string>,
-  existing: Record<string, unknown> | null
+  existing: Record<string, unknown> | null,
+  isAdmin = false
 ): Promise<string[]> {
   if (collection.startsWith('nivaro_')) return []
   const dropped: string[] = []
@@ -178,7 +179,8 @@ export async function applyRowLocksOnWrite(
         undefined,
         {
           locks,
-          locksOnly: true
+          locksOnly: true,
+          isAdmin
         }
       )
       for (const field of locks) {

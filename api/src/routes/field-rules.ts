@@ -312,7 +312,14 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         parentContext,
         rules,
         targetFields?.length ? undefined : body.changed_field,
-        { locks, lockReasons, locksOnly: body.locks_only === true, cache, targetFields }
+        {
+          locks,
+          lockReasons,
+          locksOnly: body.locks_only === true,
+          cache,
+          targetFields,
+          isAdmin: req.isAdmin === true
+        }
       )
       if (body.probe === true) {
         // Second pass over a copy with EVERY rule target cleared: what the
