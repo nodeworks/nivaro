@@ -31,6 +31,29 @@ function isRecordScoped(sub: { filter_field?: string | null; filters?: unknown }
   }
 }
 
+/** Friendly label for a record: the entity-room registry's match_field
+ *  (CM26-79811 for workflows) first, then the collection's display template,
+ *  then '#<id>'. Both resolvers are imported lazily — workflow-transitions.ts
+ *  and queues.ts import THIS module, so a static import would be circular. */
+async function friendlyRecordLabel(collection: string, item: string): Promise<string> {
+  try {
+    const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
+    const f = await resolveFriendlyId(collection, item)
+    if (f && f !== String(item)) return f
+  } catch {
+    /* fall through */
+  }
+  try {
+    const { getLabels } = await import('../services/queues.js')
+    const labels = await getLabels(new Map([[collection, new Set([String(item)])]]))
+    const l = labels[`${collection}:${item}`]
+    if (l && l !== String(item)) return l
+  } catch {
+    /* fall through */
+  }
+  return `#${item}`
+}
+
 /** Child collection → parent M2O relations, so a write to a line rolls up to
  *  the parent record's watchers. 60s cache; relations change in Data Model. */
 const parentRelCache = new Map<
@@ -133,16 +156,23 @@ async function fireSubscriptionNotifications(
         if (actualVal !== sub.filter_value) continue
       }
 
-      const label = sub.label || `${collection} ${eventType}`
+      // Record watches speak in the record's friendly label ("CM26-79811"),
+      // never the internal id or the label captured at subscribe time.
+      const friendly = recordScoped ? await friendlyRecordLabel(collection, item) : null
+      const collectionLabel = collection.replace(/_/g, ' ')
+      const label = friendly ? `Watching ${friendly}` : sub.label || `${collection} ${eventType}`
       const childLabel = viaChild ? viaChild.collection.replace(/_/g, ' ') : null
+      const recordRef = friendly ? friendly : `item ${item} in ${collection}`
       let subject = viaChild
         ? `${label}: ${childLabel} ${viaChild.event}d${by}`
-        : `${label}: ${eventType} in ${collection}${by}`
+        : friendly
+          ? `${label}: ${eventType}d${by}`
+          : `${label}: ${eventType} in ${collection}${by}`
       let message = viaChild
-        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childLabel} ${viaChild.item} on item ${item} in ${collection}`
+        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childLabel} ${viaChild.item} on ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
         : actorName
-          ? `${actorName} performed a ${eventType} on item ${item} in ${collection}`
-          : `A ${eventType} event occurred on item ${item} in ${collection}`
+          ? `${actorName} ${eventType}d ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
+          : `${recordRef} was ${eventType}d${friendly ? ` (${collectionLabel})` : ''}`
       // Notification templates (#126): a `notification:subscription.<event>`
       // mail-template override rewrites the wording; {{changes}} carries the
       // field diff (#384). Hardcoded wording stays the default.
@@ -371,9 +401,14 @@ export async function fireWorkflowStateSubscriptions(opts: {
       }
       if (!pass) continue
 
-      const label = sub.label || `${opts.collection} workflow`
-      const friendly = opts.friendlyId ?? opts.item
-      let subject = `${label} ${friendly}: ${opts.transitionLabel} → ${opts.stateLabel}${
+      const recordScoped = isRecordScoped(sub)
+      const friendly =
+        opts.friendlyId ??
+        (recordScoped ? await friendlyRecordLabel(opts.collection, opts.item) : opts.item)
+      const label = recordScoped
+        ? `Watching ${friendly}`
+        : sub.label || `${opts.collection} workflow`
+      let subject = `${recordScoped ? label : `${label} ${friendly}`}: ${opts.transitionLabel} → ${opts.stateLabel}${
         actorName ? ` by ${actorName}` : ''
       }`
       let message = actorName
