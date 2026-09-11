@@ -324,6 +324,7 @@ function Row({
   description,
   meta,
   trigger,
+  paused,
   controls,
   onRemove,
   removing
@@ -332,19 +333,54 @@ function Row({
   description?: string | null
   meta?: string | null
   trigger?: SourceTrigger | null
+  /** Set when the source is NOT running (paused / archived / inactive) —
+   *  the row is tinted amber, the title carries a pill, and the trigger
+   *  line says it is not firing. A small "· paused" in the meta text was
+   *  too easy to miss. */
+  paused?: string | null
   controls?: React.ReactNode
   onRemove?: () => void
   removing?: boolean
 }) {
   return (
-    <div className='group flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-muted/40'>
+    <div
+      className={`group flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors duration-150 ${
+        paused
+          ? 'bg-amber-500/[0.07] hover:bg-amber-500/10 dark:bg-amber-400/10 dark:hover:bg-amber-400/15'
+          : 'hover:bg-slate-50 dark:hover:bg-muted/40'
+      }`}
+      data-paused={paused ? 'true' : undefined}
+    >
       <div className='min-w-0 flex-1'>
-        <p className='truncate text-[12.5px] text-slate-800 dark:text-slate-100'>{title}</p>
+        <p className='flex items-center gap-1.5 truncate text-[12.5px] text-slate-800 dark:text-slate-100'>
+          <span className={`truncate ${paused ? 'text-slate-500 dark:text-slate-400' : ''}`}>
+            {title}
+          </span>
+          {paused && (
+            <span
+              className='shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/20 dark:text-amber-300'
+              data-tip='Not firing — nothing is sent while this source is paused'
+            >
+              {paused}
+            </span>
+          )}
+        </p>
         <p className='truncate text-[11px] text-slate-500 dark:text-slate-400'>
           {description}
           {meta && <span className='text-slate-400 dark:text-slate-500'> · {meta}</span>}
         </p>
-        {trigger && <TriggerLine trigger={trigger} />}
+        {trigger &&
+          (paused ? (
+            <p className='mt-0.5 flex items-center gap-1 truncate text-[10.5px] text-amber-700/80 dark:text-amber-300/80'>
+              <CalendarClock className='h-3 w-3 shrink-0' />
+              <span className='font-medium'>Not running</span>
+              <span className='truncate'>
+                · would be {trigger.text.charAt(0).toLowerCase() + trigger.text.slice(1)}
+              </span>
+            </p>
+          ) : (
+            <TriggerLine trigger={trigger} />
+          ))}
       </div>
       {controls}
       {onRemove && <RemoveButton label={title} onRemove={onRemove} busy={!!removing} />}
@@ -619,7 +655,7 @@ export function NotificationSourcesCard() {
                         ? `Only when ${r.criteria.join(' · ')}`
                         : 'Any workflow entering this state'
                     }
-                    meta={r.is_active ? null : 'paused'}
+                    paused={r.is_active ? null : 'paused'}
                     onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
                     removing={busy}
                   />
@@ -648,7 +684,7 @@ export function NotificationSourcesCard() {
                             r.digest_frequency
                           )
                     }
-                    meta={r.is_active ? null : 'paused'}
+                    paused={r.is_active ? null : 'paused'}
                     controls={
                       <span className='flex items-center gap-1.5'>
                         <ChannelChips
@@ -699,7 +735,8 @@ export function NotificationSourcesCard() {
                     trigger={r.trigger}
                     title={r.name}
                     description={deliveryPhrase(Boolean(r.notify_email), Boolean(r.notify_inapp))}
-                    meta={lastFired(r.last_fired) ?? (r.is_active ? null : 'paused')}
+                    meta={lastFired(r.last_fired)}
+                    paused={r.is_active ? null : 'paused'}
                     onRemove={() => remove.mutate(`/alerts/subscriptions/${r.id}`)}
                     removing={busy}
                   />
@@ -719,10 +756,8 @@ export function NotificationSourcesCard() {
                       Boolean(r.delivery_in_app),
                       r.digest_frequency
                     )}
-                    meta={
-                      lastFired(r.last_notified) ??
-                      (r.rule_status === 'active' ? null : r.rule_status)
-                    }
+                    meta={lastFired(r.last_notified)}
+                    paused={r.rule_status === 'active' ? null : r.rule_status}
                     controls={
                       <span className='flex shrink-0 items-center gap-1'>
                         <ChannelToggle
@@ -764,7 +799,7 @@ export function NotificationSourcesCard() {
                     trigger={r.trigger}
                     title={r.name}
                     description={`${deliveryPhrase(Boolean(r.delivery_email), Boolean(r.delivery_in_app))} · checked ${r.check_frequency}`}
-                    meta={r.status === 'active' ? null : r.status}
+                    paused={r.status === 'active' ? null : r.status}
                     controls={
                       <span className='flex shrink-0 items-center gap-1'>
                         <ChannelToggle
@@ -861,6 +896,7 @@ export function NotificationSourcesCard() {
                     title={r.name}
                     description={`${titleCase(r.collection.replace(/_/g, ' '))} · ${r.digest} email`}
                     meta={r.last_run_at ? `last sent ${formatRelative(r.last_run_at)}` : null}
+                    paused={r.is_active ? null : 'paused'}
                     onRemove={() => remove.mutate(`/view-subscriptions/${r.id}`)}
                     removing={busy}
                   />
@@ -895,7 +931,7 @@ export function NotificationSourcesCard() {
                     key={String(it.id)}
                     title={it.label}
                     description={it.detail ?? undefined}
-                    meta={it.is_active === false ? 'inactive' : null}
+                    paused={it.is_active === false ? 'inactive' : null}
                   />
                 ))}
                 {g.items.length === 0 && (
