@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-11T19:56:19.095Z",
+  "generated_at": "2026-09-11T20:15:49.178Z",
   "releases": [
+    {
+      "version": "0.1.260",
+      "tag": "v0.1.260",
+      "date": "2026-09-11T16:15:38-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "auto-derived values follow a manual trigger change; hand-picked ones stay",
+              "hash": "8f0bd549"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.259",
       "tag": "v0.1.259",
-      "date": "2026-09-11T15:56:09-04:00",
+      "date": "2026-09-11T15:56:19-04:00",
       "sections": [
         {
           "label": "Fixed",
