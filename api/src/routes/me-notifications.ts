@@ -449,6 +449,62 @@ export async function meNotificationRoutes(app: FastifyInstance) {
       templateCounts.set(t, (templateCounts.get(t) ?? 0) + 1)
     }
 
+    // Record-scoped subscriptions (the per-record bell): one `id eq` filter
+    // (state changes) or filter_field 'id' (every change). Carry the record
+    // and its display label so the profile can say "Watching CM26-79811" and
+    // link to it, instead of "Only when Id: …".
+    try {
+      const wanted = new Map<string, Set<string>>()
+      const target = new Map<number, { collection: string; item_id: string }>()
+      for (const r of subscriptions as Array<Record<string, unknown>>) {
+        const collection = typeof r.collection === 'string' ? r.collection : null
+        if (!collection) continue
+        let itemId: string | null = null
+        if (r.filter_field === 'id' && r.filter_value) itemId = String(r.filter_value)
+        else if (r.filters) {
+          try {
+            const list = JSON.parse(String(r.filters)) as Array<{
+              field?: string
+              op?: string
+              value?: unknown
+            }>
+            if (
+              Array.isArray(list) &&
+              list.length === 1 &&
+              list[0]?.field === 'id' &&
+              (list[0].op === 'eq' || list[0].op === undefined) &&
+              list[0].value != null
+            )
+              itemId = String(list[0].value)
+          } catch {
+            /* not record-scoped */
+          }
+        }
+        if (!itemId) continue
+        target.set(r.id as number, { collection, item_id: itemId })
+        const set = wanted.get(collection) ?? new Set<string>()
+        set.add(itemId)
+        wanted.set(collection, set)
+      }
+      if (target.size > 0) {
+        const labels = await getLabels(wanted).catch(() => ({}) as Record<string, string>)
+        for (const r of subscriptions as Array<Record<string, unknown>>) {
+          const t = target.get(r.id as number)
+          if (!t) continue
+          r.record = {
+            collection: t.collection,
+            item_id: t.item_id,
+            label: labels[`${t.collection}:${t.item_id}`] ?? `#${t.item_id}`
+          }
+          // The record IS the scope — the generic "Id: …" criterion is noise.
+          if (Array.isArray(r.criteria))
+            r.criteria = (r.criteria as string[]).filter((c) => !/^id:/i.test(c))
+        }
+      }
+    } catch {
+      /* record labels are decoration */
+    }
+
     // Extension-contributed sources (e.g. EFP stock watches) — collected
     // last, provider errors skipped.
     const external = await notificationSourceRegistry.collect(uid)

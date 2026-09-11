@@ -76,7 +76,10 @@ export type {
   ImportStats
 } from './components/imports/types'
 export { CloneDialog } from './components/item-edit/CloneDialog'
-export { ChangeReasonDialog, changeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
+export {
+  ChangeReasonDialog,
+  changeReasonChallenge
+} from './components/item-edit/ChangeReasonDialog'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
@@ -91,6 +94,17 @@ export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
 export { NotificationSourcesCard } from './components/NotificationSourcesCard'
+export type { NotificationSourcesCardProps } from './components/NotificationSourcesCard'
+export { NotificationSubscriptionsView } from './components/notifications/NotificationSubscriptionsView'
+export {
+  SubscriptionDialog,
+  SubscriptionForm,
+  useSubscriptionMutations
+} from './components/notifications/SubscriptionEditor'
+export type {
+  SubscriptionFormState,
+  SubscriptionRecord
+} from './components/notifications/SubscriptionEditor'
 export { OfflineBanner } from './components/OfflineBanner'
 export type {
   PageRendererPage,

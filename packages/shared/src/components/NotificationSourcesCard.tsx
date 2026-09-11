@@ -3,20 +3,23 @@ import {
   Activity,
   BellRing,
   CalendarClock,
+  ExternalLink,
   FileBarChart,
   Gauge,
   History,
   Inbox,
-  Radar,
-  ExternalLink,
+  Pencil,
+  Plus,
   X,
   Zap
 } from 'lucide-react'
 import { useState } from 'react'
-import { useNavigation, useNivaroClient } from '../context'
+import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { del, get, patch, put } from '../lib/commands'
 import { formatRelative, titleCase } from '../lib/utils'
+import { SubscriptionDialog, useSubscriptionMutations } from './notifications/SubscriptionEditor'
 import { SimpleSelectXs } from './ui/SimpleSelect'
+import { Switch } from './ui/switch'
 
 /**
  * "Where do all my emails/texts/notifications come from — and when did they
@@ -47,6 +50,8 @@ interface SubRow {
   /** workflow_transition subs: the pipeline whose state this is (server-resolved). */
   template_id?: string | null
   template_name?: string | null
+  /** Record-scoped subscription (the per-record bell): the record + its display label. */
+  record?: { collection: string; item_id: string; label: string } | null
   id: number
   collection: string | null
   event_type: string
@@ -92,6 +97,51 @@ function ChannelChips({
     <span className='flex items-center gap-1'>
       {chip(inapp, 'In-app', { notify_inapp: !inapp })}
       {chip(email, 'Email', { notify_email: !email })}
+    </span>
+  )
+}
+
+const digestOptions = [
+  { value: 'instant', label: 'Instantly' },
+  { value: 'daily', label: 'Daily digest' },
+  { value: 'weekly', label: 'Weekly digest' }
+]
+
+/** Per-subscription controls: active toggle, channel chips, delivery, edit. */
+function SubscriptionControls({
+  sub,
+  onPatch,
+  onEdit
+}: {
+  sub: SubRow
+  onPatch: (body: Record<string, unknown>) => void
+  onEdit: () => void
+}) {
+  const active = sub.is_active !== false && sub.is_active !== 0
+  return (
+    <span className='flex shrink-0 items-center gap-1.5'>
+      <ChannelChips sub={sub} onPatch={onPatch} />
+      <SimpleSelectXs
+        value={sub.digest_frequency ?? 'instant'}
+        options={digestOptions}
+        onChange={(v: string) => onPatch({ digest_frequency: v })}
+      />
+      <Switch
+        checked={active}
+        onCheckedChange={(v) => onPatch({ is_active: v })}
+        aria-label={active ? 'Pause this subscription' : 'Resume this subscription'}
+        data-tip={active ? 'Active — click to pause' : 'Paused — click to resume'}
+        className='scale-[0.8]'
+      />
+      <button
+        type='button'
+        onClick={onEdit}
+        aria-label='Edit subscription'
+        data-tip='Edit'
+        className='rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-muted'
+      >
+        <Pencil className='h-3.5 w-3.5' />
+      </button>
     </span>
   )
 }
@@ -333,7 +383,7 @@ function Row({
   onRemove,
   removing
 }: {
-  title: string
+  title: React.ReactNode
   description?: string | null
   meta?: string | null
   trigger?: SourceTrigger | null
@@ -387,7 +437,13 @@ function Row({
           ))}
       </div>
       {controls}
-      {onRemove && <RemoveButton label={title} onRemove={onRemove} busy={!!removing} />}
+      {onRemove && (
+        <RemoveButton
+          label={typeof title === 'string' ? title : 'this source'}
+          onRemove={onRemove}
+          busy={!!removing}
+        />
+      )}
     </div>
   )
 }
@@ -415,6 +471,35 @@ function TriggerLine({ trigger }: { trigger: SourceTrigger }) {
       </span>
       <span className='truncate'>· {trigger.text}</span>
     </p>
+  )
+}
+
+/** Friendly-id link to a record (record-scoped subscriptions). Opens through
+ *  the host's item navigation so headless hosts land on their own record route. */
+function RecordLink({
+  collection,
+  itemId,
+  label
+}: {
+  collection: string
+  itemId: string
+  label: string
+}) {
+  const nav = useItemNavigation()
+  const target = { collection, itemId }
+  return (
+    <a
+      href={nav.urlFor(target)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey) return
+        e.preventDefault()
+        nav.open(target)
+      }}
+      className='font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+      data-record-link
+    >
+      {label}
+    </a>
   )
 }
 
@@ -481,10 +566,26 @@ const HISTORY_ICONS: Record<string, { icon: typeof Inbox; tint: string }> = {
 
 // ── The card ─────────────────────────────────────────────────────────────────
 
-export function NotificationSourcesCard() {
+export interface NotificationSourcesCardProps {
+  /** 'subscriptions' = only the two subscription sections (the My
+   *  Subscriptions page); default = every source + the History tab. */
+  only?: 'subscriptions'
+  /** Hide the card chrome (border, header, tab strip) — the host supplies its own. */
+  bare?: boolean
+}
+
+export function NotificationSourcesCard({ only, bare }: NotificationSourcesCardProps = {}) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [tab, setTab] = useState<'sources' | 'history'>('sources')
+  // Subscription editor (create + edit) — shared with the My Subscriptions page.
+  const subs = useSubscriptionMutations()
+  const [editingSub, setEditingSub] = useState<SubRow | null>(null)
+  const [creatingSub, setCreatingSub] = useState<{
+    collection?: string
+    event_type?: 'workflow_transition'
+  } | null>(null)
+  const subsOnly = only === 'subscriptions'
   // History filters — multi-select toggles; empty selection = everything.
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set())
   const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set())
@@ -598,57 +699,87 @@ export function NotificationSourcesCard() {
     else byDay.set(day, [e])
   }
 
-  const digestOptions = [
-    { value: 'instant', label: 'Instantly' },
-    { value: 'daily', label: 'Daily digest' },
-    { value: 'weekly', label: 'Weekly digest' }
-  ]
+  const addButton = (seed?: { collection?: string; event_type?: 'workflow_transition' }) => (
+    <button
+      type='button'
+      onClick={() => setCreatingSub(seed ?? {})}
+      className='inline-flex items-center gap-1 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10.5px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+      data-add-subscription
+    >
+      <Plus className='h-3 w-3' />
+      Add subscription
+    </button>
+  )
 
   return (
     <div
-      className='rounded-xl border border-slate-200 bg-white dark:border-border dark:bg-card'
+      className={
+        bare ? '' : 'rounded-xl border border-slate-200 bg-white dark:border-border dark:bg-card'
+      }
       data-notification-sources
     >
+      <SubscriptionDialog
+        open={!!editingSub || !!creatingSub}
+        onOpenChange={(o) => {
+          if (!o) {
+            setEditingSub(null)
+            setCreatingSub(null)
+          }
+        }}
+        subscription={editingSub}
+        initial={
+          creatingSub
+            ? {
+                collection: creatingSub.collection ?? '',
+                ...(creatingSub.event_type
+                  ? { event_type: creatingSub.event_type, filter_field: 'to_state' }
+                  : {})
+              }
+            : undefined
+        }
+      />
       {/* Header + tab switch */}
-      <div className='flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-5 py-3.5 dark:border-border/60'>
-        <BellRing className='h-4 w-4 shrink-0 text-nvr-cyan' />
-        <div className='min-w-0 flex-1'>
-          <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-            Notifications & alerts
-          </h2>
-          <p className='text-[11px] text-slate-500 dark:text-slate-400'>
-            {total} sources · email delivered{' '}
-            {s.preferences.email_digest === 'daily' ? 'as a daily digest' : 'instantly'}
-          </p>
+      {!bare && (
+        <div className='flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-5 py-3.5 dark:border-border/60'>
+          <BellRing className='h-4 w-4 shrink-0 text-nvr-cyan' />
+          <div className='min-w-0 flex-1'>
+            <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+              Notifications & alerts
+            </h2>
+            <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+              {total} sources · email delivered{' '}
+              {s.preferences.email_digest === 'daily' ? 'as a daily digest' : 'instantly'}
+            </p>
+          </div>
+          <div className='flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-muted'>
+            {(
+              [
+                { key: 'sources', label: 'Sources' },
+                { key: 'history', label: 'History' }
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                type='button'
+                onClick={() => setTab(t.key)}
+                aria-pressed={tab === t.key}
+                className={[
+                  'rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors duration-150',
+                  tab === t.key
+                    ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                    : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                ].join(' ')}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className='flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-muted'>
-          {(
-            [
-              { key: 'sources', label: 'Sources' },
-              { key: 'history', label: 'History' }
-            ] as const
-          ).map((t) => (
-            <button
-              key={t.key}
-              type='button'
-              onClick={() => setTab(t.key)}
-              aria-pressed={tab === t.key}
-              className={[
-                'rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors duration-150',
-                tab === t.key
-                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
-                  : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-              ].join(' ')}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {tab === 'sources' && (
         <>
-          {hygiene.some((h) => h.unread >= 25) && (
+          {!subsOnly && hygiene.some((h) => h.unread >= 25) && (
             <div className='mb-3 space-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-400/10'>
               <p className='text-[11.5px] font-medium text-amber-800 dark:text-amber-300'>
                 Unread piles — the important ones drown under these:
@@ -691,7 +822,13 @@ export function NotificationSourcesCard() {
                         label={`${name ?? 'Pipeline'} states`}
                       />
                     ))}
-                    <ManageLink path='/notification-subscriptions' label='Manage subscriptions' />
+                    {!subsOnly && (
+                      <ManageLink path='/notification-subscriptions' label='All subscriptions' />
+                    )}
+                    {addButton({
+                      collection: stateSubs[0]?.collection ?? undefined,
+                      event_type: 'workflow_transition'
+                    })}
                   </>
                 }
               >
@@ -700,15 +837,26 @@ export function NotificationSourcesCard() {
                     key={r.id}
                     trigger={r.trigger}
                     title={
-                      r.state_label || titleCase(String(r.filter_value ?? '').replace(/_/g, ' '))
+                      r.state_label ||
+                      (r.label && !/^workflow state:/i.test(r.label) ? r.label : null) ||
+                      (r.filter_value
+                        ? titleCase(String(r.filter_value).replace(/_/g, ' '))
+                        : 'Any state')
                     }
                     description={
                       r.criteria && r.criteria.length > 0
-                        ? `Only when ${r.criteria.join(' · ')}`
-                        : 'Any workflow entering this state'
+                        ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
+                        : `Any record entering this state — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
                     }
                     paused={r.is_active ? null : 'paused'}
-                    onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
+                    controls={
+                      <SubscriptionControls
+                        sub={r}
+                        onPatch={(body) => subs.patchFields.mutate({ id: r.id, body })}
+                        onEdit={() => setEditingSub(r)}
+                      />
+                    }
+                    onRemove={() => subs.remove.mutate(r.id)}
                     removing={busy}
                   />
                 ))}
@@ -719,7 +867,12 @@ export function NotificationSourcesCard() {
               <Section
                 title='Record & collection subscriptions'
                 action={
-                  <ManageLink path='/notification-subscriptions' label='Manage subscriptions' />
+                  <>
+                    {!subsOnly && (
+                      <ManageLink path='/notification-subscriptions' label='All subscriptions' />
+                    )}
+                    {addButton()}
+                  </>
                 }
               >
                 {otherSubs.map((r) => (
@@ -727,49 +880,72 @@ export function NotificationSourcesCard() {
                     key={r.id}
                     trigger={r.trigger}
                     title={
-                      r.label ||
-                      (r.queue_name
-                        ? `Queue digest — ${r.queue_name}`
-                        : `${titleCase((r.collection ?? '?').replace(/_/g, ' '))} — every ${r.event_type === 'all' ? 'change' : r.event_type}`)
+                      r.record ? (
+                        <>
+                          Watching{' '}
+                          <RecordLink
+                            collection={r.record.collection}
+                            itemId={r.record.item_id}
+                            label={r.record.label}
+                          />
+                          <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
+                            {titleCase(r.record.collection.replace(/_/g, ' '))}
+                          </span>
+                        </>
+                      ) : (
+                        r.label ||
+                        (r.queue_name
+                          ? `Queue digest — ${r.queue_name}`
+                          : `${titleCase((r.collection ?? '?').replace(/_/g, ' '))} — every ${r.event_type === 'all' ? 'change' : r.event_type}`)
+                      )
                     }
-                    description={
+                    description={[
+                      r.record
+                        ? r.event_type === 'workflow_transition'
+                          ? 'State changes only'
+                          : 'Every change'
+                        : null,
                       r.criteria && r.criteria.length > 0
-                        ? `Only when ${r.criteria.join(' · ')} — ${deliveryPhrase(r.notify_email !== false, r.notify_inapp !== false, r.digest_frequency)}`
-                        : deliveryPhrase(
-                            r.notify_email !== false,
-                            r.notify_inapp !== false,
-                            r.digest_frequency
-                          )
-                    }
+                        ? `Only when ${r.criteria.join(' · ')}`
+                        : null,
+                      deliveryPhrase(
+                        r.notify_email !== false,
+                        r.notify_inapp !== false,
+                        r.digest_frequency
+                      )
+                    ]
+                      .filter(Boolean)
+                      .join(' — ')}
                     paused={r.is_active ? null : 'paused'}
                     controls={
-                      <span className='flex items-center gap-1.5'>
-                        <ChannelChips
-                          sub={r}
-                          onPatch={(body) =>
-                            patchPath.mutate({ path: `/notification-subscriptions/${r.id}`, body })
-                          }
-                        />
-                        <SimpleSelectXs
-                          value={r.digest_frequency ?? 'instant'}
-                          options={digestOptions}
-                          onChange={(v: string) =>
-                            patchPath.mutate({
-                              path: `/notification-subscriptions/${r.id}`,
-                              body: { digest_frequency: v }
-                            })
-                          }
-                        />
-                      </span>
+                      <SubscriptionControls
+                        sub={r}
+                        onPatch={(body) => subs.patchFields.mutate({ id: r.id, body })}
+                        onEdit={() => setEditingSub(r)}
+                      />
                     }
-                    onRemove={() => remove.mutate(`/notification-subscriptions/${r.id}`)}
+                    onRemove={() => subs.remove.mutate(r.id)}
                     removing={busy}
                   />
                 ))}
               </Section>
             )}
 
-            {s.field_watches.length > 0 && (
+            {subsOnly && stateSubs.length === 0 && otherSubs.length === 0 && (
+              <div className='flex flex-col items-center gap-2 py-12 text-center'>
+                <BellRing className='h-7 w-7 text-slate-300 dark:text-slate-600' />
+                <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
+                  No subscriptions yet
+                </p>
+                <p className='max-w-[38ch] text-[12px] text-slate-500 dark:text-slate-400'>
+                  Subscribe to a collection or a workflow state to get told when it changes —
+                  instantly, or folded into your daily summary.
+                </p>
+                <div className='mt-1'>{addButton()}</div>
+              </div>
+            )}
+
+            {!subsOnly && s.field_watches.length > 0 && (
               <Section
                 title='Field watches'
                 action={<ManageLink path='/field-watches' label='Manage watches' />}
@@ -787,7 +963,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.record_alerts.length > 0 && (
+            {!subsOnly && s.record_alerts.length > 0 && (
               <Section
                 title='Record alerts'
                 action={<ManageLink path='/alerts' label='Manage alert definitions' />}
@@ -807,7 +983,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.metric_alerts.length > 0 && (
+            {!subsOnly && s.metric_alerts.length > 0 && (
               <Section
                 title='Metric alerts'
                 action={<ManageLink path='/alert-manager' label='Alert Manager' />}
@@ -857,7 +1033,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.anomaly_rules.length > 0 && (
+            {!subsOnly && s.anomaly_rules.length > 0 && (
               <Section
                 title='Anomaly detection'
                 hint='rules you created — detections come to you'
@@ -901,7 +1077,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.report_subscriptions.length > 0 && (
+            {!subsOnly && s.report_subscriptions.length > 0 && (
               <Section
                 title='Report digests'
                 action={<ManageLink path='/reports' label='Reports' />}
@@ -942,7 +1118,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.report_alerts.length > 0 && (
+            {!subsOnly && s.report_alerts.length > 0 && (
               <Section
                 title='Report alerts'
                 hint='you created these'
@@ -961,7 +1137,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {s.view_subscriptions.length > 0 && (
+            {!subsOnly && s.view_subscriptions.length > 0 && (
               <Section
                 title='Saved-view digests'
                 hint='which records entered the view since last time'
@@ -981,7 +1157,7 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {(s.chat_rooms.length > 0 || s.push_devices.length > 0) && (
+            {!subsOnly && (s.chat_rooms.length > 0 || s.push_devices.length > 0) && (
               <Section title='Chat & devices'>
                 {s.chat_rooms.map((r) => (
                   <Row
@@ -1001,54 +1177,56 @@ export function NotificationSourcesCard() {
               </Section>
             )}
 
-            {(s.external ?? []).map((g) => (
-              <Section key={g.key} title={g.title} hint={g.description}>
-                {g.items.map((it) => (
-                  <Row
-                    key={String(it.id)}
-                    title={it.label}
-                    description={it.detail ?? undefined}
-                    paused={it.is_active === false ? 'inactive' : null}
-                  />
-                ))}
-                {g.items.length === 0 && (
-                  <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>Nothing watched yet.</p>
-                )}
-                {g.manage_url && (
-                  <a
-                    href={g.manage_url}
-                    className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
-                  >
-                    Manage →
-                  </a>
-                )}
-              </Section>
-            ))}
+            {!subsOnly &&
+              (s.external ?? []).map((g) => (
+                <Section key={g.key} title={g.title} hint={g.description}>
+                  {g.items.map((it) => (
+                    <Row
+                      key={String(it.id)}
+                      title={it.label}
+                      description={it.detail ?? undefined}
+                      paused={it.is_active === false ? 'inactive' : null}
+                    />
+                  ))}
+                  {g.items.length === 0 && (
+                    <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>Nothing watched yet.</p>
+                  )}
+                  {g.manage_url && (
+                    <a
+                      href={g.manage_url}
+                      className='mt-1 inline-block px-2 text-[11.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                    >
+                      Manage →
+                    </a>
+                  )}
+                </Section>
+              ))}
 
-            {(s.implicit.owner_group_memberships.length > 0 ||
-              s.implicit.sla_escalations.length > 0) && (
-              <Section
-                title='Because of your role'
-                hint='these follow from assignments, not subscriptions — an admin manages them'
-              >
-                {s.implicit.owner_group_memberships.map((m) => (
-                  <Row
-                    key={m.template}
-                    trigger={m.trigger}
-                    title={`Pipeline owner — ${m.template}`}
-                    description={`Owner notifications + daily-digest items for records you own (${m.groups} owner group${m.groups === 1 ? '' : 's'})`}
-                  />
-                ))}
-                {s.implicit.sla_escalations.map((r) => (
-                  <Row
-                    key={r.id}
-                    trigger={r.trigger}
-                    title={`SLA escalation — ${r.name}`}
-                    description={`Emailed when ${r.template ? `${r.template} · ` : ''}${titleCase(r.state_key.replace(/_/g, ' '))} breaches its deadline`}
-                  />
-                ))}
-              </Section>
-            )}
+            {!subsOnly &&
+              (s.implicit.owner_group_memberships.length > 0 ||
+                s.implicit.sla_escalations.length > 0) && (
+                <Section
+                  title='Because of your role'
+                  hint='these follow from assignments, not subscriptions — an admin manages them'
+                >
+                  {s.implicit.owner_group_memberships.map((m) => (
+                    <Row
+                      key={m.template}
+                      trigger={m.trigger}
+                      title={`Pipeline owner — ${m.template}`}
+                      description={`Owner notifications + daily-digest items for records you own (${m.groups} owner group${m.groups === 1 ? '' : 's'})`}
+                    />
+                  ))}
+                  {s.implicit.sla_escalations.map((r) => (
+                    <Row
+                      key={r.id}
+                      trigger={r.trigger}
+                      title={`SLA escalation — ${r.name}`}
+                      description={`Emailed when ${r.template ? `${r.template} · ` : ''}${titleCase(r.state_key.replace(/_/g, ' '))} breaches its deadline`}
+                    />
+                  ))}
+                </Section>
+              )}
 
             {total === 0 && (
               <div className='px-2 py-6 text-center'>
