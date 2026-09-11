@@ -130,6 +130,8 @@ export async function meNotificationRoutes(app: FastifyInstance) {
           's.digest_frequency',
           's.queue_id',
           's.filters',
+          's.notify_inapp',
+          's.notify_email',
           'q.name as queue_name'
         )
         .catch(() => []),
