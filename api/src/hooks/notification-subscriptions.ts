@@ -6,8 +6,58 @@ import {
   renderNotificationTemplate
 } from '../services/notification-templates.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
+
+/** A subscription that names ONE record (the per-record bell): filter_field
+ *  'id', or a single `id eq` entry in `filters`. Such a watch is an explicit
+ *  "tell me about this record", so it fires on the watcher's own edits too
+ *  and on writes to the record's child rows — collection-wide subscriptions
+ *  keep skipping the actor and only see their own collection. */
+function isRecordScoped(sub: { filter_field?: string | null; filters?: unknown }): boolean {
+  if (sub.filter_field === 'id') return true
+  if (!sub.filters) return false
+  try {
+    const list = typeof sub.filters === 'string' ? JSON.parse(sub.filters) : sub.filters
+    return (
+      Array.isArray(list) &&
+      list.length === 1 &&
+      list[0]?.field === 'id' &&
+      (list[0].op === 'eq' || list[0].op === undefined)
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Child collection → parent M2O relations, so a write to a line rolls up to
+ *  the parent record's watchers. 60s cache; relations change in Data Model. */
+const parentRelCache = new Map<
+  string,
+  { at: number; rels: Array<{ parent: string; fk: string }> }
+>()
+async function parentRelationsOf(child: string): Promise<Array<{ parent: string; fk: string }>> {
+  const hit = parentRelCache.get(child)
+  if (hit && Date.now() - hit.at < 60_000) return hit.rels
+  let rels: Array<{ parent: string; fk: string }> = []
+  try {
+    const rows = await getRelations(child)
+    rels = rows
+      .filter(
+        (r) =>
+          r.many_collection === child &&
+          r.one_collection &&
+          !r.junction_field &&
+          !String(r.one_collection).startsWith('nivaro_')
+      )
+      .map((r) => ({ parent: r.one_collection as string, fk: r.many_field }))
+  } catch {
+    rels = []
+  }
+  parentRelCache.set(child, { at: Date.now(), rels })
+  return rels
+}
 
 let _app: FastifyInstance | null = null
 export function setApp(app: FastifyInstance) {
@@ -19,7 +69,11 @@ async function fireSubscriptionNotifications(
   eventType: 'create' | 'update' | 'delete',
   item: string,
   data: Record<string, unknown> | null,
-  actorUserId: string | undefined
+  actorUserId: string | undefined,
+  /** Set when this fires on behalf of a CHILD-row write (a workflow line):
+   *  only record-scoped watches of the parent are told, and the wording
+   *  names the child. */
+  viaChild?: { collection: string; item: string; event: 'create' | 'update' | 'delete' }
 ) {
   try {
     // Find all active subscriptions matching this collection+event
@@ -34,6 +88,7 @@ async function fireSubscriptionNotifications(
         'ns.user',
         'ns.filter_field',
         'ns.filter_value',
+        'ns.filters',
         'ns.label',
         'ns.digest_frequency',
         'ns.notify_inapp',
@@ -64,8 +119,13 @@ async function fireSubscriptionNotifications(
     const by = actorName ? ` by ${actorName}` : ''
 
     for (const sub of subs) {
-      // Skip the actor — don't notify the user who triggered the event
-      if (actorUserId && sub.user === actorUserId) continue
+      const recordScoped = isRecordScoped(sub)
+      // Skip the actor for collection-wide subscriptions — nobody wants a
+      // "you changed X" for every save. A record-scoped watch is explicit and
+      // fires on the watcher's own edits too (Rob, 2026-09-11).
+      if (actorUserId && sub.user === actorUserId && !recordScoped) continue
+      // Child-row roll-ups reach record watchers only.
+      if (viaChild && !recordScoped) continue
 
       // Apply optional field filter
       if (sub.filter_field && data) {
@@ -74,10 +134,15 @@ async function fireSubscriptionNotifications(
       }
 
       const label = sub.label || `${collection} ${eventType}`
-      let subject = `${label}: ${eventType} in ${collection}${by}`
-      let message = actorName
-        ? `${actorName} performed a ${eventType} on item ${item} in ${collection}`
-        : `A ${eventType} event occurred on item ${item} in ${collection}`
+      const childLabel = viaChild ? viaChild.collection.replace(/_/g, ' ') : null
+      let subject = viaChild
+        ? `${label}: ${childLabel} ${viaChild.event}d${by}`
+        : `${label}: ${eventType} in ${collection}${by}`
+      let message = viaChild
+        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childLabel} ${viaChild.item} on item ${item} in ${collection}`
+        : actorName
+          ? `${actorName} performed a ${eventType} on item ${item} in ${collection}`
+          : `A ${eventType} event occurred on item ${item} in ${collection}`
       // Notification templates (#126): a `notification:subscription.<event>`
       // mail-template override rewrites the wording; {{changes}} carries the
       // field diff (#384). Hardcoded wording stays the default.
@@ -285,7 +350,7 @@ export async function fireWorkflowStateSubscriptions(opts: {
 
     const now = new Date()
     for (const sub of relevant) {
-      if (opts.actorUserId && sub.user === opts.actorUserId) continue
+      if (opts.actorUserId && sub.user === opts.actorUserId && !isRecordScoped(sub)) continue
 
       let filters: SubFilter[] = []
       try {
@@ -383,37 +448,54 @@ export async function fireWorkflowStateSubscriptions(opts: {
   }
 }
 
+/** A write to a child row (workflow line, allocation…) is a change to the
+ *  parent record as far as someone WATCHING that record is concerned: fire the
+ *  parent's record-scoped subscriptions for every M2O parent the row names. */
+async function rollUpToParents(
+  child: string,
+  event: 'create' | 'update' | 'delete',
+  childItem: string,
+  row: Record<string, unknown> | null,
+  actorUserId: string | undefined
+) {
+  if (!row) return
+  const rels = await parentRelationsOf(child)
+  for (const rel of rels) {
+    const parentId = row[rel.fk]
+    if (parentId == null || parentId === '') continue
+    await fireSubscriptionNotifications(
+      rel.parent,
+      'update',
+      String(parentId),
+      { id: parentId },
+      actorUserId,
+      { collection: child, item: childItem, event }
+    ).catch(() => undefined)
+  }
+}
+
 export function registerNotificationSubscriptionHooks() {
   hooks.after('*', 'create', async (ctx) => {
     if (ctx.collection.startsWith('nivaro_')) return
-    await fireSubscriptionNotifications(
-      ctx.collection,
-      'create',
-      ctx.keys?.[0] != null ? String(ctx.keys[0]) : '',
-      ctx.result as Record<string, unknown> | null,
-      ctx.user?.id
-    )
+    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+    const row = ctx.result as Record<string, unknown> | null
+    await fireSubscriptionNotifications(ctx.collection, 'create', item, row, ctx.user?.id)
+    await rollUpToParents(ctx.collection, 'create', item, row, ctx.user?.id)
   })
 
   hooks.after('*', 'update', async (ctx) => {
     if (ctx.collection.startsWith('nivaro_')) return
-    await fireSubscriptionNotifications(
-      ctx.collection,
-      'update',
-      ctx.keys?.[0] != null ? String(ctx.keys[0]) : '',
-      ctx.result as Record<string, unknown> | null,
-      ctx.user?.id
-    )
+    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+    const row = ctx.result as Record<string, unknown> | null
+    await fireSubscriptionNotifications(ctx.collection, 'update', item, row, ctx.user?.id)
+    await rollUpToParents(ctx.collection, 'update', item, row, ctx.user?.id)
   })
 
   hooks.after('*', 'delete', async (ctx) => {
     if (ctx.collection.startsWith('nivaro_')) return
-    await fireSubscriptionNotifications(
-      ctx.collection,
-      'delete',
-      ctx.keys?.[0] != null ? String(ctx.keys[0]) : '',
-      ctx.previousData as Record<string, unknown> | null,
-      ctx.user?.id
-    )
+    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+    const prev = ctx.previousData as Record<string, unknown> | null
+    await rollUpToParents(ctx.collection, 'delete', item, prev, ctx.user?.id)
+    await fireSubscriptionNotifications(ctx.collection, 'delete', item, prev, ctx.user?.id)
   })
 }
