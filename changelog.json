@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-11T01:05:12.359Z",
+  "generated_at": "2026-09-11T01:19:10.010Z",
   "releases": [
+    {
+      "version": "0.1.250",
+      "tag": "v0.1.250",
+      "date": "2026-09-10T21:19:00-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "one digest and one precedence rule for subscription delivery vs notification rules",
+              "hash": "82cf9a78"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.249",
       "tag": "v0.1.249",
-      "date": "2026-09-10T21:05:04-04:00",
+      "date": "2026-09-10T21:05:12-04:00",
       "sections": [
         {
           "label": "Added",
