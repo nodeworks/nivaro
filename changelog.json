@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-11T20:31:17.581Z",
+  "generated_at": "2026-09-11T22:26:41.473Z",
   "releases": [
+    {
+      "version": "0.1.262",
+      "tag": "v0.1.262",
+      "date": "2026-09-11T18:26:33-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cascade",
+              "text": "emptying a required parent clears its dependents; a cleared picker stays cleared",
+              "hash": "9ec338d8"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.261",
       "tag": "v0.1.261",
-      "date": "2026-09-11T16:31:09-04:00",
+      "date": "2026-09-11T16:31:17-04:00",
       "sections": [
         {
           "label": "Fixed",
