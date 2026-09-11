@@ -3451,9 +3451,38 @@ export function InlineTableField({
         if (replacementByOld.size === 0) continue
         const parentCtx = buildParentCtx()
         const derive = async (base: Record<string, unknown>) => {
-          const next = { ...base, [field]: replacementByOld.get(String(base[field])) }
+          const next: Record<string, unknown> = {
+            ...base,
+            [field]: replacementByOld.get(String(base[field]))
+          }
           let changes: Record<string, unknown> = { [field]: next[field] }
           if (rowRules && rowRules.length > 0) {
+            // Values the rules had derived for the OLD state (equal to the
+            // from-scratch probe) are AUTO, not the user's — blank them so
+            // only-if-empty rules (expenditure type, CIFA seed) re-derive for
+            // the new value instead of keeping the old answer and reading as
+            // "overridden" afterwards. A hand-picked value (≠ probe) stays.
+            const probe = await client
+              .request<{ expected?: Record<string, unknown> }>(
+                post('/field-rules/evaluate', {
+                  collection: relatedCollection,
+                  data: base,
+                  locks_only: true,
+                  probe: true,
+                  parent_context: parentCtx,
+                  row_rules: rowRules
+                })
+              )
+              .catch(() => null)
+            const autoFields = Object.entries(probe?.expected ?? {})
+              .filter(([k, want]) => {
+                if (k === field) return false
+                const cur = base[k]
+                if (cur == null || cur === '' || want == null || want === '') return false
+                return String(cur) === String(want)
+              })
+              .map(([k]) => k)
+            for (const k of autoFields) next[k] = null
             const res = await client
               .request<{ updates?: Record<string, unknown> }>(
                 post('/field-rules/evaluate', {
@@ -3466,6 +3495,9 @@ export function InlineTableField({
               )
               .catch(() => null)
             if (res?.updates) changes = { ...changes, ...res.updates }
+            // An auto field the rules no longer derive is empty now, the same
+            // answer a from-scratch re-run gives — never the old value.
+            for (const k of autoFields) if (!(k in changes)) changes[k] = null
           }
           return changes
         }
