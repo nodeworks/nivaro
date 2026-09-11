@@ -3376,8 +3376,32 @@ export function InlineTableField({
         replaceValues[col] = v.id
       }
       // No default on this parent (or its record still loading): leave the
-      // rows flagged and try again when the parent rows land.
-      if (!resolved) continue
+      // rows flagged and try again when the parent rows land. Once the parent
+      // rows HAVE landed and still yield nothing, say so once — a project with
+      // only the "if P2" default set on a non-P2 workflow looks exactly like
+      // a broken swap otherwise (Rob's ROBLEE test, 2026-09-11).
+      if (!resolved) {
+        const parentsLanded = Object.values(cfg.replace)
+          .flat()
+          .every((c) => {
+            const pid = parentDraftCtx?.draft?.[c.parent_field]
+            return (
+              pid == null ||
+              pid === '' ||
+              pinnedParentRows.has(`${c.parent_collection}|${String(pid)}`)
+            )
+          })
+        const hintKey = `hint|${rule.child_field}|${filterKey}`
+        if (parentsLanded && !swapDoneRef.current.has(hintKey)) {
+          swapDoneRef.current.add(hintKey)
+          const parentLabel =
+            parentDraftCtx?.fieldLabels?.[rule.parent_field] ?? titleCase(rule.parent_field)
+          toast.message(
+            `${cfg.label ?? 'Value'} on ${ids.length} ${ids.length === 1 ? 'line is' : 'lines are'} not available for this ${parentLabel} — no default ${(cfg.label ?? 'value').toLowerCase()} is set on it (or its type), so nothing was switched`
+          )
+        }
+        continue
+      }
       jobs.push({ rule, cfg, target: rel.one_collection, filter, filterKey, ids, replaceValues })
     }
     if (!jobs.length) return
