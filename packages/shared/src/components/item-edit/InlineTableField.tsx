@@ -332,7 +332,27 @@ export function evalClientFormula(formula: string, row: Record<string, unknown>)
   return evaluateNumeric(formula, row)
 }
 
-type CascadeRule = { parent_field: string; child_field: string }
+/** A parent→child picker cascade. `on_unavailable` opts a rule into the
+ *  swap: when the USER changes the parent this session and a row's current
+ *  value is no longer offered under the new parent, the row is re-pointed to
+ *  the target row that keeps the `keep` columns of the old value and takes
+ *  the `replace` columns from the parent's defaults (same entry shape as
+ *  pinned_options — `when` gates read parent fields only). The swap runs the
+ *  grid's row rules with the child field as the changed field, so every
+ *  downstream derivation (category type, oracle category, task…) follows. */
+type CascadeSwapConfig = {
+  keep?: string[]
+  replace: Record<string, PinnedCfg[]>
+  label?: string
+}
+type CascadeRule = { parent_field: string; child_field: string; on_unavailable?: CascadeSwapConfig }
+type PinnedCfg = {
+  when?: { field: string; op?: string; value?: string | string[] }
+  parent_field: string
+  parent_collection: string
+  source_field: string
+  tag?: string
+}
 type CascadeResolution =
   | { type: 'none'; reason?: string }
   | { type: 'direct_fk'; filter_column: string }
@@ -2506,14 +2526,8 @@ export function InlineTableField({
   //   tag}] — when the ROW matches `when` (category_type eq 2 = a materials
   // line), the value the PARENT's linked record holds in `source_field`
   // (workflow.project → projects.default_materials_cifa) is pinned at the top
-  // of that column's picker. The parent records are fetched once per grid.
-  type PinnedCfg = {
-    when?: { field: string; op?: string; value?: string | string[] }
-    parent_field: string
-    parent_collection: string
-    source_field: string
-    tag?: string
-  }
+  // of that column's picker. The parent records are fetched once per grid
+  // (shared with the cascade-swap `replace` entries below).
   const pinnedConfigByField = useMemo(() => {
     const out = new Map<string, PinnedCfg[]>()
     for (const c of cols) {
@@ -2538,9 +2552,28 @@ export function InlineTableField({
     }
     return out
   }, [cols])
+  const cascadeSwapCfgs = useMemo(() => {
+    const out: PinnedCfg[] = []
+    for (const rule of parentCascades ?? []) {
+      const rep = rule.on_unavailable?.replace
+      if (!rep || typeof rep !== 'object') continue
+      for (const list of Object.values(rep))
+        if (Array.isArray(list))
+          out.push(
+            ...list.filter(
+              (x) =>
+                x &&
+                typeof x.parent_field === 'string' &&
+                typeof x.parent_collection === 'string' &&
+                typeof x.source_field === 'string'
+            )
+          )
+    }
+    return out
+  }, [parentCascades])
   const pinnedParents = useMemo(() => {
     const want = new Map<string, { collection: string; id: string; fields: Set<string> }>()
-    for (const list of pinnedConfigByField.values()) {
+    for (const list of [...pinnedConfigByField.values(), cascadeSwapCfgs]) {
       for (const cfg of list) {
         const pid = parentDraftCtx?.draft?.[cfg.parent_field]
         if (pid == null || pid === '' || typeof pid === 'object') continue
@@ -2555,7 +2588,7 @@ export function InlineTableField({
       }
     }
     return [...want.entries()]
-  }, [pinnedConfigByField, parentDraftCtx?.draft])
+  }, [pinnedConfigByField, cascadeSwapCfgs, parentDraftCtx?.draft])
   const pinnedParentQueries = useQueries({
     queries: pinnedParents.map(([key, p]) => ({
       queryKey: ['pinned-parent', p.collection, p.id, [...p.fields].sort().join(',')],
@@ -2574,9 +2607,9 @@ export function InlineTableField({
     for (const q of pinnedParentQueries) if (q.data) m.set(q.data[0], q.data[1])
     return m
   }, [pinnedParentQueries])
-  const pinnedOptionFor = (field: string, draft: Record<string, unknown>) => {
-    const list = pinnedConfigByField.get(field)
-    if (!list) return null
+  /** First entry whose `when` matches (row fields off `draft`, `$parent.*`
+   *  off the parent draft) AND whose parent record holds a value. */
+  const resolveParentDefault = (list: PinnedCfg[], draft: Record<string, unknown>) => {
     for (const cfg of list) {
       if (cfg.when?.field) {
         const v = cfg.when.field.startsWith('$parent.')
@@ -2610,6 +2643,10 @@ export function InlineTableField({
       return { id, tag: cfg.tag ?? 'Default' }
     }
     return null
+  }
+  const pinnedOptionFor = (field: string, draft: Record<string, unknown>) => {
+    const list = pinnedConfigByField.get(field)
+    return list ? resolveParentDefault(list, draft) : null
   }
 
   const displayCols = cols.filter(
@@ -3291,6 +3328,183 @@ export function InlineTableField({
     })
     return map
   }, [staleSweepInput, staleSweepResults])
+
+  // ── Cascade swap ───────────────────────────────────────────────────────────
+  // A parent field the USER changed this session (dirtyFields — a record that
+  // LOADED with a stale value only gets the amber flag) orphaned some rows'
+  // values: re-point each to the target row that keeps the old value's `keep`
+  // columns and takes `replace` from the parent's defaults, then run the row
+  // rules as if the user had picked it. Each (field, value, filter) is
+  // attempted once — a value with no matching option stays flagged.
+  const swapDoneRef = useRef(new Set<string>())
+  const swapBusyRef = useRef(false)
+  useEffect(() => {
+    if (readOnly || !client || swapBusyRef.current) return
+    const dirty = parentDraftCtx?.dirtyFields
+    if (!dirty || dirty.size === 0) return
+    type Job = {
+      rule: CascadeRule
+      cfg: CascadeSwapConfig
+      target: string
+      filter: Record<string, unknown>
+      filterKey: string
+      ids: string[]
+      replaceValues: Record<string, unknown>
+    }
+    const jobs: Job[] = []
+    for (const rule of cascadeRules) {
+      const cfg = rule.on_unavailable
+      if (!cfg?.replace || !dirty.has(rule.parent_field)) continue
+      const stale = staleCellValues.get(rule.child_field)
+      const filter = fieldCascadeFilters[rule.child_field]
+      const rel = m2oRelMap.get(rule.child_field)
+      if (!stale?.size || !filter || !rel?.one_collection) continue
+      const filterKey = JSON.stringify(filter)
+      const ids = [...stale].filter(
+        (id) => !swapDoneRef.current.has(`${rule.child_field}|${id}|${filterKey}`)
+      )
+      if (!ids.length) continue
+      const replaceValues: Record<string, unknown> = {}
+      let resolved = true
+      for (const [col, list] of Object.entries(cfg.replace)) {
+        const v = Array.isArray(list) ? resolveParentDefault(list, {}) : null
+        if (!v) {
+          resolved = false
+          break
+        }
+        replaceValues[col] = v.id
+      }
+      // No default on this parent (or its record still loading): leave the
+      // rows flagged and try again when the parent rows land.
+      if (!resolved) continue
+      jobs.push({ rule, cfg, target: rel.one_collection, filter, filterKey, ids, replaceValues })
+    }
+    if (!jobs.length) return
+    swapBusyRef.current = true
+    void (async () => {
+      let swapped = 0
+      let unresolved = 0
+      let failed = 0
+      for (const job of jobs) {
+        for (const id of job.ids)
+          swapDoneRef.current.add(`${job.rule.child_field}|${id}|${job.filterKey}`)
+        const field = job.rule.child_field
+        const keep = (job.cfg.keep ?? []).filter((k) => typeof k === 'string' && k)
+        const current = await client
+          .request<{ data: Array<Record<string, unknown>> }>(
+            get(`/items/${job.target}`, {
+              filter: JSON.stringify({ id: { _in: job.ids } }),
+              fields: ['id', ...keep].join(','),
+              limit: job.ids.length
+            })
+          )
+          .then((r) => r.data ?? [])
+          .catch(() => [] as Array<Record<string, unknown>>)
+        const replacementByOld = new Map<string, unknown>()
+        for (const old of current) {
+          const clauses: Record<string, unknown>[] = [
+            job.filter,
+            ...Object.entries(job.replaceValues).map(([c, v]) => ({ [c]: { _eq: v } })),
+            ...keep.map((k) =>
+              old[k] == null || old[k] === '' ? { [k]: { _null: true } } : { [k]: { _eq: old[k] } }
+            )
+          ]
+          const found = await client
+            .request<{ data: Array<{ id: unknown }> }>(
+              get(`/items/${job.target}`, {
+                filter: JSON.stringify({ _and: clauses }),
+                fields: 'id',
+                limit: 1,
+                sort: 'id'
+              })
+            )
+            .then((r) => r.data?.[0]?.id ?? null)
+            .catch(() => null)
+          if (found == null) unresolved++
+          else replacementByOld.set(String(old.id), found)
+        }
+        if (replacementByOld.size === 0) continue
+        const parentCtx = buildParentCtx()
+        const derive = async (base: Record<string, unknown>) => {
+          const next = { ...base, [field]: replacementByOld.get(String(base[field])) }
+          let changes: Record<string, unknown> = { [field]: next[field] }
+          if (rowRules && rowRules.length > 0) {
+            const res = await client
+              .request<{ updates?: Record<string, unknown> }>(
+                post('/field-rules/evaluate', {
+                  collection: relatedCollection,
+                  data: next,
+                  changed_field: field,
+                  parent_context: parentCtx,
+                  row_rules: rowRules
+                })
+              )
+              .catch(() => null)
+            if (res?.updates) changes = { ...changes, ...res.updates }
+          }
+          return changes
+        }
+        const pendingHits = pendingRows
+          .map((r, i) => ({ r, i }))
+          .filter(({ r }) => r[field] != null && replacementByOld.has(String(r[field])))
+        for (const { r, i } of pendingHits) {
+          const changes = await derive(r)
+          staging?.updateRow(relatedCollection, manyField, i, { ...r, ...changes })
+          swapped++
+        }
+        const savedHits = rows.filter((r) => {
+          const id = String(r.id)
+          if (pendingDeletes.has(id)) return false
+          const v = pendingEdits.get(id)?.[field] ?? r[field]
+          return v != null && replacementByOld.has(String(v))
+        })
+        for (const r of savedHits) {
+          const id = String(r.id)
+          const changes = await derive({ ...r, ...(pendingEdits.get(id) ?? {}) })
+          if ((isPendingMode || isNew) && staging) {
+            staging.queueEdit(relatedCollection, manyField, id, changes)
+          } else {
+            const ok = await client
+              .request(patch(`/items/${relatedCollection}/${id}`, changes))
+              .then(() => true)
+              .catch(() => false)
+            if (!ok) {
+              failed++
+              continue
+            }
+          }
+          swapped++
+          if (editStateRef.current?.rowId === id)
+            setEditState((st) =>
+              st && st.rowId === id
+                ? { ...st, draft: applyComputedFields({ ...st.draft, ...changes }) }
+                : st
+            )
+        }
+        if (savedHits.length && !((isPendingMode || isNew) && staging))
+          await qc.invalidateQueries({
+            queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+          })
+      }
+      const label = jobs[0]?.cfg.label ?? 'Value'
+      const parentLabel =
+        parentDraftCtx?.fieldLabels?.[jobs[0]?.rule.parent_field ?? ''] ??
+        titleCase(jobs[0]?.rule.parent_field ?? 'parent')
+      if (swapped)
+        toast.message(
+          `${label} switched to the default on ${swapped} ${swapped === 1 ? 'line' : 'lines'} — the previous one is not available for this ${parentLabel}${
+            (isPendingMode || isNew) && staging ? ' (saved with the record)' : ''
+          }`
+        )
+      if (unresolved || failed)
+        toast.warning(
+          `${unresolved + failed} ${unresolved + failed === 1 ? 'line' : 'lines'} could not be switched — no matching default option${failed ? ' / save failed' : ''}`
+        )
+    })().finally(() => {
+      swapBusyRef.current = false
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staleCellValues, fieldCascadeFilters, parentDraftCtx?.dirtyFields, pinnedParentRows])
 
   // Collect unique FK ids per one_collection from all rows (incl. pending edits + addendum rows)
   const m2oLookupIds = useMemo(() => {

@@ -1881,6 +1881,29 @@ export const contentOpsGridPresets: DocSection = {
       type: 'p',
       text: 'An inline-table field may carry `options.row_lints` (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (`{label, when: {field, op, value}, expect: {field, op, value}}`, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. Workflow lines check that a Labor line carries a Services PO line type and a Materials line a Goods one.'
     },
+    { type: 'h3', id: 'grid-cascade-swap', text: 'Cascade swap on unavailable (parent_cascades[].on_unavailable)' },
+    {
+      type: 'p',
+      text: 'A parent → child picker cascade (`options.parent_cascades`, Data Model → grid field ⚙ → Cascade from parent) can carry `on_unavailable`: when the USER changes the parent field on the record and a row’s current value is no longer offered under the new parent, the row is re-pointed instead of just flagged amber. The replacement is the target row that keeps the `keep` columns of the old value and takes the `replace` columns from the parent’s defaults (each entry uses the pinned_options shape — `parent_field`, `parent_collection`, `source_field`, optional `when` over `$parent.*` fields — first entry with a value wins). The grid then runs its row rules with the child field as the changed field, so every downstream derivation follows, and writes through its normal path (staged on pending-mode grids and new records, PATCHed on immediate grids). A record that merely loaded with a stale value is never touched; a value with no matching option stays flagged.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "parent_field": "project",
+  "child_field": "category",
+  "on_unavailable": {
+    "keep": ["sub_category"],
+    "replace": {
+      "core_category": [
+        { "when": { "field": "$parent.workflow_source", "op": "eq", "value": "1" }, "parent_field": "project", "parent_collection": "projects", "source_field": "default_core_category_p2" },
+        { "parent_field": "project", "parent_collection": "projects", "source_field": "default_core_category" },
+        { "parent_field": "project_type", "parent_collection": "project_types", "source_field": "default_core_category" }
+      ]
+    },
+    "label": "Category"
+  }
+}`
+    },
     { type: 'h3', text: 'Header freshness' },
     {
       type: 'p',
