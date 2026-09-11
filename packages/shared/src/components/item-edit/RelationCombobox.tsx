@@ -349,19 +349,26 @@ export function RelationCombobox({
   // option. Side-effect fetch outside react-query, so it carries the same
   // dedupe guard as useCascadeEffects: one probe per filter shape, ref cleared
   // on failure so a transient error can't permanently suppress the fill.
-  // A MANUAL clear stamps the current filter shape as already probed, so the
-  // sole option is not put straight back (Rob, 2026-09-11: clearing Project
-  // on the workflow form refilled it). A parent change alters the filter
-  // shape, so a cascade-driven clear still gets its refill.
+  // A MANUAL clear switches the auto-fill off for this field until it holds
+  // a value again (Rob, 2026-09-11: clearing Project on the workflow form put
+  // it straight back). Stamping the filter shape was not enough: the clear
+  // itself cascades (Sub Type empties), which changes THIS field's filter
+  // shape and re-armed the probe. Fields this one cascades to or from keep
+  // their own auto-fill — only the field the user cleared stays empty.
   const autoSelectRef = useRef<string | null>(null)
+  const manualClearRef = useRef(false)
   const autoSelectKey = `${collection}|${filterStr ?? ''}`
   const clearByUser = () => {
+    manualClearRef.current = true
     autoSelectRef.current = autoSelectKey
     onChange(null)
   }
   const isEmpty = value === null || value === undefined || value === ''
   useEffect(() => {
-    if (!autoSelectSingle || disabled || !isEmpty) return
+    if (!isEmpty) manualClearRef.current = false
+  }, [isEmpty])
+  useEffect(() => {
+    if (!autoSelectSingle || disabled || !isEmpty || manualClearRef.current) return
     const probeKey = autoSelectKey
     if (autoSelectRef.current === probeKey) return
     autoSelectRef.current = probeKey

@@ -1,5 +1,5 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
-import { useNivaroClient , useParentDraft } from '../../context'
+import { useNivaroClient, useParentDraft } from '../../context'
 import { get } from '../../lib/commands'
 import type { NestedOps } from './types'
 
@@ -17,7 +17,10 @@ export function applyDisplayTemplate(
     const parts = k.trim().split('.')
     let val: unknown = item
     for (const part of parts) {
-      if (val == null || typeof val !== 'object') { val = null; break }
+      if (val == null || typeof val !== 'object') {
+        val = null
+        break
+      }
       val = (val as Record<string, unknown>)[part]
     }
     return String(val ?? '')
@@ -77,12 +80,15 @@ export function CascadeEffectController({
   cascadeFilter,
   currentValue,
   relatedCollection,
+  missingRequiredParents,
   onClear
 }: {
   cascadeRules: CascadeRule[]
   cascadeFilter?: Record<string, unknown>
   currentValue?: unknown
   relatedCollection?: string
+  /** Parent fields with show_all_if_no_parent=false that are EMPTY right now. */
+  missingRequiredParents?: string[]
   onClear: () => void
 }) {
   const client = useNivaroClient()
@@ -116,6 +122,28 @@ export function CascadeEffectController({
   // load-time filter itself changes without any user interaction.
   const parentDraft = useParentDraft()
   const dirtyFields = parentDraft?.dirtyFields
+  // A required parent the USER emptied this session: the child's picker is
+  // disabled ("Select Project first") and its value can no longer be
+  // re-picked, yet it kept narrowing everything downstream (Project cleared →
+  // Sub Type stayed → Project Type offered only CMTS). Clear it like any
+  // other value that fell out of its cascade; a record that merely LOADED
+  // with the parent empty keeps its value (dirtyFields gate, as above).
+  const missingKey = (missingRequiredParents ?? []).join(',')
+  const lastMissingClearRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (currentValue == null || currentValue === '') return
+    const emptiedByUser = (missingRequiredParents ?? []).filter(
+      (p) =>
+        dirtyFields?.has(p) &&
+        cascadeRules.some((r) => r.parent_field === p && r.clear_on_unavailable)
+    )
+    if (emptiedByUser.length === 0) return
+    const key = `${String(currentValue)}|${emptiedByUser.join(',')}`
+    if (lastMissingClearRef.current === key) return
+    lastMissingClearRef.current = key
+    onClearRef.current()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey, currentValue, dirtyFields, cascadeRules])
   useEffect(() => {
     if (!cascadeFilter || Object.keys(cascadeFilter).length === 0) return
     if (!cascadeRules.some((r) => r.clear_on_unavailable)) return
@@ -143,7 +171,15 @@ export function CascadeEffectController({
         // leaving a value permanently unverified.
         if (lastCheckRef.current === checkKey) lastCheckRef.current = null
       })
-  }, [cascadeFilter, cascadeFilterStr, cascadeRules, client, currentValue, relatedCollection, dirtyFields])
+  }, [
+    cascadeFilter,
+    cascadeFilterStr,
+    cascadeRules,
+    client,
+    currentValue,
+    relatedCollection,
+    dirtyFields
+  ])
 
   return null
 }
@@ -172,7 +208,10 @@ export function useContainerWidth(ref: RefObject<HTMLElement | null>): number {
   return width
 }
 
-export function resolveColSpan(options: Record<string, unknown> | string | null, containerWidth: number): number {
+export function resolveColSpan(
+  options: Record<string, unknown> | string | null,
+  containerWidth: number
+): number {
   const parsed = parseJson<{ col_span?: number }>(options)
   const cfg = parsed?.col_span ?? 0
   const configured = [3, 4, 6, 12].includes(cfg) ? cfg : 12
@@ -207,7 +246,17 @@ export const SYSTEM_FIELDS = new Set([
   'user_updated'
 ])
 
-export const SENTINEL_FIELDS = new Set(['__pipeline__', '__comments__', '__tasks__', '__addendums__', '__referenced_by__', '__related_records__', '__owners__', '__pdf__', '__subtitle__'])
+export const SENTINEL_FIELDS = new Set([
+  '__pipeline__',
+  '__comments__',
+  '__tasks__',
+  '__addendums__',
+  '__referenced_by__',
+  '__related_records__',
+  '__owners__',
+  '__pdf__',
+  '__subtitle__'
+])
 export const isSentinelKey = (field: string) =>
   SENTINEL_FIELDS.has(field) || (field.startsWith('__widget_') && field.endsWith('__'))
 
@@ -226,7 +275,9 @@ export function richTextToPlain(val: unknown): string | null {
   if (!s) return null
   if (s.startsWith('{') && /"blocks"\s*:/.test(s)) {
     try {
-      const doc = JSON.parse(s) as { blocks?: Array<{ type?: string; data?: Record<string, unknown> }> }
+      const doc = JSON.parse(s) as {
+        blocks?: Array<{ type?: string; data?: Record<string, unknown> }>
+      }
       if (Array.isArray(doc.blocks)) {
         const parts: string[] = []
         for (const b of doc.blocks) {
@@ -235,7 +286,11 @@ export function richTextToPlain(val: unknown): string | null {
           else if (Array.isArray(d.items))
             parts.push(
               (d.items as unknown[])
-                .map((it) => (typeof it === 'string' ? it : String((it as Record<string, unknown>)?.content ?? '')))
+                .map((it) =>
+                  typeof it === 'string'
+                    ? it
+                    : String((it as Record<string, unknown>)?.content ?? '')
+                )
                 .filter(Boolean)
                 .join(' · ')
             )
@@ -256,5 +311,8 @@ function stripTags(html: string): string {
     div.innerHTML = html
     return (div.textContent || '').replace(/\s+/g, ' ')
   }
-  return html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ')
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
 }

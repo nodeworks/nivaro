@@ -812,6 +812,10 @@ export function FieldRow({
   const cascadeParentFieldKeys: string[] = []
   let unsatisfiedParentLabel: string | null = null
   let requiredParentLabel: string | null = null
+  // Required parents (show_all_if_no_parent false) that hold NO value right
+  // now — a child that cannot be picked without them cannot keep a value
+  // once the user empties one (Project cleared → Sub Type must go too).
+  const missingRequiredParents: string[] = []
   for (const rule of cascadeRules) {
     // A parent whose value THIS field's own pick derived must not narrow this
     // field's options — otherwise picking a region locks the region picker
@@ -879,8 +883,9 @@ export function FieldRow({
     } else {
       if (!unsatisfiedParentLabel)
         unsatisfiedParentLabel = parentFieldLabel(String(rule.parent_field))
-      if (rule.show_all_if_no_parent === false && !requiredParentLabel) {
-        requiredParentLabel = parentFieldLabel(String(rule.parent_field))
+      if (rule.show_all_if_no_parent === false) {
+        missingRequiredParents.push(String(rule.parent_field))
+        if (!requiredParentLabel) requiredParentLabel = parentFieldLabel(String(rule.parent_field))
       }
       // Parent unset but the parent's OWN picker curates its options
       // (option_filter): inherit that filter through the cascade relation, so
@@ -954,6 +959,7 @@ export function FieldRow({
           cascadeFilter={cascadeFilter}
           currentValue={cascadeCurrentValue}
           relatedCollection={cascadeRelatedCollection}
+          missingRequiredParents={missingRequiredParents}
           onClear={handleCascadeClear}
         />
       )}
