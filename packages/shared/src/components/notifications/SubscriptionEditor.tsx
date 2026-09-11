@@ -48,11 +48,17 @@ export const SUBSCRIPTION_EVENT_TYPES = [
 export type SubscriptionEventType = (typeof SUBSCRIPTION_EVENT_TYPES)[number]
 export type DigestFrequency = 'instant' | 'daily' | 'weekly'
 
+/** Offered cadences — Instant or the daily summary. 'weekly' is still a
+ *  valid stored value (rides Monday's summary) but is no longer offered; a
+ *  row already on it keeps showing it via `deliveryOptionsFor`. */
 export const DELIVERY_OPTIONS: Array<{ value: DigestFrequency; label: string }> = [
   { value: 'instant', label: 'Instant' },
-  { value: 'daily', label: 'Daily summary' },
-  { value: 'weekly', label: 'Weekly summary (Monday)' }
+  { value: 'daily', label: 'Daily summary' }
 ]
+const WEEKLY_OPTION = { value: 'weekly' as DigestFrequency, label: 'Weekly summary (Monday)' }
+export function deliveryOptionsFor(current: string | null | undefined) {
+  return current === 'weekly' ? [...DELIVERY_OPTIONS, WEEKLY_OPTION] : DELIVERY_OPTIONS
+}
 
 export interface SubscriptionRecord {
   id: number
@@ -116,7 +122,7 @@ export function subscriptionToForm(sub: SubscriptionRecord): SubscriptionFormSta
     filter_value: sub.filter_value ?? '',
     filters_json,
     is_active: sub.is_active !== false && sub.is_active !== 0,
-    digest_frequency: (DELIVERY_OPTIONS.some((o) => o.value === sub.digest_frequency)
+    digest_frequency: (['instant', 'daily', 'weekly'].includes(String(sub.digest_frequency))
       ? sub.digest_frequency
       : 'instant') as DigestFrequency,
     notify_inapp: sub.notify_inapp !== false,
@@ -480,7 +486,7 @@ export function SubscriptionForm({
           <SimpleSelect
             value={form.digest_frequency}
             onChange={(v) => set('digest_frequency', v as DigestFrequency)}
-            options={DELIVERY_OPTIONS}
+            options={deliveryOptionsFor(form.digest_frequency)}
           />
         </div>
         <div className='space-y-1.5'>

@@ -103,9 +103,13 @@ function ChannelChips({
 
 const digestOptions = [
   { value: 'instant', label: 'Instantly' },
-  { value: 'daily', label: 'Daily summary' },
-  { value: 'weekly', label: 'Weekly summary' }
+  { value: 'daily', label: 'Daily summary' }
 ]
+/** A row already on the retired weekly cadence keeps showing it. */
+const digestOptionsFor = (current: string | null | undefined) =>
+  current === 'weekly'
+    ? [...digestOptions, { value: 'weekly', label: 'Weekly summary' }]
+    : digestOptions
 
 /** Per-subscription controls: active toggle, channel chips, delivery, edit. */
 function SubscriptionControls({
@@ -123,7 +127,7 @@ function SubscriptionControls({
       <ChannelChips sub={sub} onPatch={onPatch} />
       <SimpleSelectXs
         value={sub.digest_frequency ?? 'instant'}
-        options={digestOptions}
+        options={digestOptionsFor(sub.digest_frequency)}
         onChange={(v: string) => onPatch({ digest_frequency: v })}
       />
       <Switch
