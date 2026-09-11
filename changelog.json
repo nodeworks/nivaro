@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-09-11T01:19:10.010Z",
+  "generated_at": "2026-09-11T01:26:45.138Z",
   "releases": [
+    {
+      "version": "0.1.251",
+      "tag": "v0.1.251",
+      "date": "2026-09-10T21:26:38-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "subscription delivery offers Instant or Daily summary only",
+              "hash": "c7ba1b10"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "subscription channel chips reflect the saved state",
+              "hash": "5b2ce44c"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www docs (notification rules precedence, subscriptions)",
+              "hash": "81f2ae67"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.250",
       "tag": "v0.1.250",
-      "date": "2026-09-10T21:19:00-04:00",
+      "date": "2026-09-10T21:19:10-04:00",
       "sections": [
         {
           "label": "Added",
