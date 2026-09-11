@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-09-11T00:34:49.386Z",
+  "generated_at": "2026-09-11T01:05:12.359Z",
   "releases": [
+    {
+      "version": "0.1.249",
+      "tag": "v0.1.249",
+      "date": "2026-09-10T21:05:04-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "My Subscriptions is the shared sources card with a full editor",
+              "hash": "553521f7"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "every notification source section links to where it is managed",
+              "hash": "a405defc"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "paused notification sources are unmistakable",
+              "hash": "02687c5c"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.248",
       "tag": "v0.1.248",
-      "date": "2026-09-10T20:34:41-04:00",
+      "date": "2026-09-10T20:34:49-04:00",
       "sections": [
         {
           "label": "Added",
