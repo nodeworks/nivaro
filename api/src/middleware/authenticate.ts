@@ -24,8 +24,30 @@ function httpError(statusCode: number, message: string): Error & { statusCode: n
   return Object.assign(new Error(message), { statusCode })
 }
 
-async function hydrateRole(req: FastifyRequest, user: User) {
+/** nivaro_users.last_access used to be written ONLY at OIDC login, so a
+ *  7-day session or a static-token user read "last active Sep 1" while
+ *  working all day (Rob's report). Every authenticated request now touches
+ *  it, throttled to once per user per 5 minutes in-process and written
+ *  fire-and-forget so auth never waits on it. Masquerade requests never
+ *  touch the TARGET (the admin is the one active); API-key requests track
+ *  last_used_at on the key instead. */
+const LAST_ACCESS_TOUCH_MS = 5 * 60_000
+const lastAccessTouched = new Map<string, number>()
+function touchLastAccess(userId: string) {
+  const now = Date.now()
+  const prev = lastAccessTouched.get(userId) ?? 0
+  if (now - prev < LAST_ACCESS_TOUCH_MS) return
+  lastAccessTouched.set(userId, now)
+  if (lastAccessTouched.size > 5000) lastAccessTouched.clear()
+  void db('nivaro_users')
+    .where({ id: userId })
+    .update({ last_access: new Date(now) })
+    .catch(() => undefined)
+}
+
+async function hydrateRole(req: FastifyRequest, user: User, opts?: { touch?: boolean }) {
   req.user = user
+  if (opts?.touch !== false) touchLastAccess(String(user.id))
   if (user.role) {
     const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
     req.userRole = role ?? null
@@ -122,7 +144,7 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
   const user = await db<User>('nivaro_users').where({ id: key.user, status: 'active' }).first()
   if (!user) throw httpError(401, 'API key owner is not active')
 
-  await hydrateRole(req, user)
+  await hydrateRole(req, user, { touch: false })
   // Key-level row scoping: rides the user object so getUserScopeEnforcement
   // (which never sees the request) can merge it with the owner's own scopes.
   const restrictions = parseJsonArray<{ dimension: string; values: Array<string | number> }>(
@@ -192,7 +214,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
           .where({ id: payload.user_id, status: 'active' })
           .first()
         if (!user) throw httpError(401, 'Masqueraded user is not active')
-        await hydrateRole(req, user)
+        await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
         return
       }
