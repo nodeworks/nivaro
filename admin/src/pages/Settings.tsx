@@ -2759,9 +2759,9 @@ export function SettingsPage() {
                         {mailTestEnv.recipient && (
                           <>
                             {' '}
-                            Its default recipient is{' '}
-                            <code className='font-mono'>{mailTestEnv.recipient}</code> — used only
-                            while the field below is empty.
+                            Its recipient <code className='font-mono'>{mailTestEnv.recipient}</code>{' '}
+                            applies only while this switch is off — with the switch on, the field
+                            below is authoritative and empty means redirected mail is dropped.
                           </>
                         )}
                       </p>
@@ -2770,7 +2770,7 @@ export function SettingsPage() {
                       <div className='space-y-3'>
                         <Field
                           label='Test recipient'
-                          hint={`All redirected mail goes here. ${mailTestEnv.recipient ? `Empty = the environment default (${mailTestEnv.recipient}).` : 'Empty = non-allowlisted mail is dropped with a server log.'}`}
+                          hint='All redirected mail goes here. Empty = non-allowlisted mail is dropped with a server log (only the allowlist still receives mail).'
                         >
                           <Input
                             type='email'
