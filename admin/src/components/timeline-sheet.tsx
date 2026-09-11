@@ -1,3 +1,4 @@
+import { UserAvatar } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import {
   CheckSquare,
@@ -199,9 +200,16 @@ export function TimelineSheet({
                         )}
                         {e.user?.name && (
                           <p className='mt-1 flex items-center gap-1.5 text-[10.5px] text-slate-400'>
-                            <span className='flex h-4 w-4 items-center justify-center rounded-full bg-[#00ceff33] text-[8.5px] font-semibold text-[#0e7490] dark:text-[#67e8f9]'>
-                              {initials(e.user.name)}
-                            </span>
+                            <UserAvatar
+                              userId={e.user.id}
+                              alt={e.user.name}
+                              className='h-4 w-4'
+                              fallback={
+                                <span className='flex h-4 w-4 items-center justify-center rounded-full bg-[#00ceff33] text-[8.5px] font-semibold text-[#0e7490] dark:text-[#67e8f9]'>
+                                  {initials(e.user.name)}
+                                </span>
+                              }
+                            />
                             {e.user.name}
                           </p>
                         )}

@@ -807,9 +807,15 @@ function UserCardPopover({
     <PopoverContent align='start' className='w-72 p-0 overflow-hidden'>
       {/* Header */}
       <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
-        <span className='flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
-          {initials}
-        </span>
+        <UserAvatar
+          userId={userId}
+          className='h-12 w-12 ring-2 ring-white shadow-sm dark:ring-card'
+          fallback={
+            <span className='flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[15px] font-bold text-nvr-navy dark:text-nvr-cyan ring-2 ring-white dark:ring-card shadow-sm'>
+              {initials}
+            </span>
+          }
+        />
         <div className='min-w-0 flex-1'>
           <div className='flex items-center gap-1.5'>
             {online && (
@@ -1012,26 +1018,38 @@ export function UserChip({
       <PopoverTrigger asChild>
         {size === 'compact' ? (
           <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
-            <span
-              data-copy-skip
-              aria-hidden='true'
-              className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[9px] font-bold text-nvr-navy dark:text-nvr-cyan'
-            >
-              {initials}
-            </span>
+            <UserAvatar
+              userId={userId}
+              className='h-4 w-4'
+              fallback={
+                <span
+                  data-copy-skip
+                  aria-hidden='true'
+                  className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[9px] font-bold text-nvr-navy dark:text-nvr-cyan'
+                >
+                  {initials}
+                </span>
+              }
+            />
             <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
               {name}
             </span>
           </span>
         ) : (
           <div className='inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-0.5 pr-2.5 hover:bg-slate-100 dark:border-border dark:bg-card dark:hover:bg-accent transition-colors'>
-            <span
-              data-copy-skip
-              aria-hidden='true'
-              className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'
-            >
-              {initials}
-            </span>
+            <UserAvatar
+              userId={userId}
+              className='h-6 w-6'
+              fallback={
+                <span
+                  data-copy-skip
+                  aria-hidden='true'
+                  className='flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'
+                >
+                  {initials}
+                </span>
+              }
+            />
             <span className='text-[12px] text-slate-700 dark:text-slate-300'>{name}</span>
           </div>
         )}

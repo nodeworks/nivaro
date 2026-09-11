@@ -6,6 +6,22 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get } from '../../lib/commands'
 import { useOnlineUsers } from '../../lib/use-online-users'
+import { UserAvatar } from '../UserAvatar'
+
+/** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
+function labelInitials(label: string): string {
+  return (
+    label
+      .replace(/\(.*$/, '')
+      .trim()
+      .split(/\s+/)
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
+  )
+}
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 
@@ -572,6 +588,17 @@ export function RelationCombobox({
                         >
                           {sel && <Check className='h-2.5 w-2.5 text-white' />}
                         </div>
+                        {isUserCollection && (
+                          <UserAvatar
+                            userId={item.id as string}
+                            className='h-4 w-4'
+                            fallback={
+                              <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                                {labelInitials(label)}
+                              </span>
+                            }
+                          />
+                        )}
                         {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
                           <span
                             className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'

@@ -195,9 +195,17 @@ function resolveTestMode(row: Record<string, unknown> | undefined): {
   testAllowlist: string[]
 } {
   const dbMode = row?.mail_test_mode === 1 || row?.mail_test_mode === true
+  // MODE: env OR settings — env wins so a prod-DB restore into staging can
+  // never flip test mode off. RECIPIENT: the source that turned test mode ON
+  // supplies it. Settings on → the Settings field is authoritative (empty =
+  // non-allowlisted mail is DROPPED, never the env address — Rob cleared the
+  // field to stop receiving other people's mail, 2026-09-11). Settings off
+  // and env forcing the mode → the env recipient (the prod-restore case).
   const testMode = envBool(process.env.MAIL_TEST_MODE) || dbMode
-  const testRecipient =
-    process.env.MAIL_TEST_RECIPIENT || (row?.mail_test_recipient as string | null) || null
+  const dbRecipient = String(row?.mail_test_recipient ?? '').trim()
+  const testRecipient = dbMode
+    ? dbRecipient || null
+    : dbRecipient || process.env.MAIL_TEST_RECIPIENT || null
   const testAllowlist = String(row?.mail_test_allowlist ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())

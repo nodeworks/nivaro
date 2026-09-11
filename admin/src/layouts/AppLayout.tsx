@@ -1,5 +1,11 @@
-import { InstanceSwitcher } from '@/components/InstanceSwitcher'
-import { applyThemeSettings } from '@/lib/theme-settings'
+import {
+  rumRouteChange,
+  setDisplayTimezone,
+  setNumberFormat,
+  setTimeDisplay,
+  startRum,
+  UserAvatar
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -18,6 +24,7 @@ import {
   Check,
   CheckSquare,
   Clapperboard,
+  ClipboardList,
   Clock,
   Code2,
   Database,
@@ -29,7 +36,6 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
-  ClipboardList,
   GitCompare,
   Globe,
   Grid3x3,
@@ -75,23 +81,26 @@ import {
   Terminal,
   TerminalSquare,
   ThumbsUp,
+  ToggleLeft,
   Trash2,
   TrendingUp,
   Upload,
   UserRound,
-  UserX,
   Users,
+  Users2,
+  UserX,
   Webhook,
   Wifi,
   Workflow,
   X as XIcon
-, Users2, ToggleLeft } from 'lucide-react'
+} from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { toast } from 'sonner'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
-import { rumRouteChange, setDisplayTimezone, setNumberFormat, setTimeDisplay, startRum } from '@nivaro/shared'
-import { adminRealtime } from '@/lib/socket'
+import { toast } from 'sonner'
+import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { preloadRoute } from '@/lib/preload-routes'
+import { adminRealtime } from '@/lib/socket'
+import { applyThemeSettings } from '@/lib/theme-settings'
 
 /** '/collections/workflows/312100' → '/collections/:c/:id' — RUM aggregates
  *  per page, not per record. */
@@ -106,6 +115,16 @@ function rumPattern(path: string): string {
     .join('/')
     .replace(/^\/collections\/[^/]+/, (m) => (m.split('/').length > 2 ? '/collections/:c' : m))
 }
+
+import { createNivaro } from '@nivaro/sdk'
+import {
+  AnnouncementBanner,
+  ApiUpdateBanner,
+  ErrorSurface,
+  NivaroProvider,
+  OfflineBanner,
+  RealtimeContext
+} from '@nivaro/shared'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
@@ -125,8 +144,6 @@ import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
-import { AnnouncementBanner, ApiUpdateBanner, ErrorSurface, NivaroProvider, OfflineBanner, RealtimeContext } from '@nivaro/shared'
-import { createNivaro } from '@nivaro/sdk'
 
 const announcementsClient = createNivaro(window.location.origin)
 
@@ -161,7 +178,12 @@ export const navCategories: NavCategory[] = [
       { icon: CheckSquare, label: 'Tasks', to: '/tasks', section: 'Work' },
       { icon: FileImage, label: 'Files', to: '/files', section: 'Work' },
       { icon: FileText, label: 'Record Templates', to: '/record-templates', section: 'Authoring' },
-      { icon: Package, label: 'Collection Presets', to: '/collection-presets', section: 'Authoring' },
+      {
+        icon: Package,
+        label: 'Collection Presets',
+        to: '/collection-presets',
+        section: 'Authoring'
+      },
       { icon: LayoutGrid, label: 'Pages', to: '/pages-admin', section: 'Authoring' },
       { icon: FileText, label: 'PDF Templates', to: '/pdf-templates', section: 'Authoring' }
     ]
@@ -192,7 +214,12 @@ export const navCategories: NavCategory[] = [
       { icon: RefreshCw, label: 'Sync Jobs', to: '/sync-jobs', section: 'Integrations' },
       { icon: Upload, label: 'ERP Submissions', to: '/erp-submissions', section: 'Integrations' },
       { icon: CalendarOff, label: 'Blackout Dates', to: '/blackout-dates', section: 'Scheduling' },
-      { icon: CalendarClock, label: 'Scheduled Changes', to: '/scheduled-changes', section: 'Scheduling' }
+      {
+        icon: CalendarClock,
+        label: 'Scheduled Changes',
+        to: '/scheduled-changes',
+        section: 'Scheduling'
+      }
     ]
   },
   {
@@ -203,28 +230,93 @@ export const navCategories: NavCategory[] = [
       { icon: Activity, label: 'Activity', to: '/activity', section: 'Activity & Insight' },
       { icon: Radio, label: 'Pulse', to: '/pulse', section: 'Activity & Insight' },
       { icon: FileBarChart, label: 'Reports', to: '/reports', section: 'Activity & Insight' },
-      { icon: FileBarChart, label: 'Scheduled Reports', to: '/scheduled-reports', section: 'Activity & Insight' },
-      { icon: TrendingUp, label: 'Team Throughput', to: '/team-throughput', section: 'Activity & Insight' },
-      { icon: BarChart2, label: 'API Analytics', to: '/api-analytics', section: 'Activity & Insight' },
-      { icon: FileSearch, label: 'History Search', to: '/revision-search', section: 'Activity & Insight' },
-      { icon: GitBranch, label: 'Value Provenance', to: '/provenance', section: 'Activity & Insight' },
-      { icon: SearchCode, label: 'Config Search', to: '/config-search', section: 'Activity & Insight' },
+      {
+        icon: FileBarChart,
+        label: 'Scheduled Reports',
+        to: '/scheduled-reports',
+        section: 'Activity & Insight'
+      },
+      {
+        icon: TrendingUp,
+        label: 'Team Throughput',
+        to: '/team-throughput',
+        section: 'Activity & Insight'
+      },
+      {
+        icon: BarChart2,
+        label: 'API Analytics',
+        to: '/api-analytics',
+        section: 'Activity & Insight'
+      },
+      {
+        icon: FileSearch,
+        label: 'History Search',
+        to: '/revision-search',
+        section: 'Activity & Insight'
+      },
+      {
+        icon: GitBranch,
+        label: 'Value Provenance',
+        to: '/provenance',
+        section: 'Activity & Insight'
+      },
+      {
+        icon: SearchCode,
+        label: 'Config Search',
+        to: '/config-search',
+        section: 'Activity & Insight'
+      },
       { icon: BellDot, label: 'Alerts', to: '/alerts', section: 'Alerts & Watching' },
       { icon: Siren, label: 'Alert Manager', to: '/alert-manager', section: 'Alerts & Watching' },
       { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk', section: 'Alerts & Watching' },
       { icon: Clock, label: 'SLA Rules', to: '/sla-rules', section: 'Alerts & Watching' },
       { icon: Radar, label: 'Monitors', to: '/monitors', section: 'Alerts & Watching' },
       { icon: Eye, label: 'Field Watches', to: '/field-watches', section: 'Alerts & Watching' },
-      { icon: Bell, label: 'Subscriptions', to: '/notification-subscriptions', section: 'Alerts & Watching' },
+      {
+        icon: Bell,
+        label: 'Subscriptions',
+        to: '/notification-subscriptions',
+        section: 'Alerts & Watching'
+      },
       { icon: AlertOctagon, label: 'Issues', to: '/issues', section: 'Alerts & Watching' },
-      { icon: ShieldCheck, label: 'Access Audit', to: '/access-audit', section: 'Access & Compliance' },
-      { icon: KeyRound, label: 'Access Requests', to: '/access-requests', section: 'Access & Compliance' },
+      {
+        icon: ShieldCheck,
+        label: 'Access Audit',
+        to: '/access-audit',
+        section: 'Access & Compliance'
+      },
+      {
+        icon: KeyRound,
+        label: 'Access Requests',
+        to: '/access-requests',
+        section: 'Access & Compliance'
+      },
       { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps', section: 'Access & Compliance' },
-      { icon: ShieldAlert, label: 'Security Center', to: '/security-center', section: 'Access & Compliance' },
+      {
+        icon: ShieldAlert,
+        label: 'Security Center',
+        to: '/security-center',
+        section: 'Access & Compliance'
+      },
       { icon: Scale, label: 'Legal Holds', to: '/legal-holds', section: 'Access & Compliance' },
-      { icon: ShieldOff, label: 'Privacy & Retention', to: '/privacy-retention', section: 'Access & Compliance' },
-      { icon: ScanSearch, label: 'Data Integrity', to: '/data-integrity', section: 'Access & Compliance' },
-      { icon: Sparkles, label: 'Config Health', to: '/config-health', section: 'Access & Compliance' },
+      {
+        icon: ShieldOff,
+        label: 'Privacy & Retention',
+        to: '/privacy-retention',
+        section: 'Access & Compliance'
+      },
+      {
+        icon: ScanSearch,
+        label: 'Data Integrity',
+        to: '/data-integrity',
+        section: 'Access & Compliance'
+      },
+      {
+        icon: Sparkles,
+        label: 'Config Health',
+        to: '/config-health',
+        section: 'Access & Compliance'
+      },
       { icon: Activity, label: 'Background Jobs', to: '/background-jobs', section: 'Operations' },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Operations' },
       { icon: Link2, label: 'Integrations', to: '/integration-health', section: 'Operations' },
@@ -235,13 +327,23 @@ export const navCategories: NavCategory[] = [
       { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console', section: 'Operations' },
       { icon: Database, label: 'Redis Keys', to: '/ops-redis', section: 'Operations' },
       { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters', section: 'Operations' },
-      { icon: FlaskConical, label: 'Automation Tests', to: '/automation-tests', section: 'Operations' },
+      {
+        icon: FlaskConical,
+        label: 'Automation Tests',
+        to: '/automation-tests',
+        section: 'Operations'
+      },
       { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist', section: 'Operations' },
       { icon: Upload, label: 'Imports', to: '/imports', section: 'Data Tools' },
       { icon: Globe, label: 'Submission Forms', to: '/submission-forms', section: 'Data Tools' },
       { icon: Replace, label: 'Find & Replace', to: '/find-replace', section: 'Data Tools' },
       { icon: Grid3x3, label: 'M2M Matrix', to: '/m2m-matrix', section: 'Data Tools' },
-      { icon: TerminalSquare, label: 'SQL Scratchpad', to: '/sql-scratchpad', section: 'Data Tools' },
+      {
+        icon: TerminalSquare,
+        label: 'SQL Scratchpad',
+        to: '/sql-scratchpad',
+        section: 'Data Tools'
+      },
       { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Data Tools' },
       { icon: ListOrdered, label: 'ID Sequences', to: '/sequences', section: 'Data Tools' },
       { icon: Mail, label: 'Mail Templates', to: '/mail-templates', section: 'Data Tools' },
@@ -256,12 +358,27 @@ export const navCategories: NavCategory[] = [
       { icon: Settings, label: 'Settings', to: '/settings', section: 'Configuration' },
       { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags', section: 'Configuration' },
       { icon: ServerCog, label: 'Environments', to: '/environments', section: 'Configuration' },
-      { icon: GitCompare, label: 'Environment Config', to: '/config-diff', section: 'Configuration' },
+      {
+        icon: GitCompare,
+        label: 'Environment Config',
+        to: '/config-diff',
+        section: 'Configuration'
+      },
       { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness', section: 'Configuration' },
-      { icon: ArrowRightLeft, label: 'Content Promotion', to: '/content-promotion', section: 'Content Ops' },
+      {
+        icon: ArrowRightLeft,
+        label: 'Content Promotion',
+        to: '/content-promotion',
+        section: 'Content Ops'
+      },
       { icon: Package, label: 'Blueprints', to: '/blueprints', section: 'Content Ops' },
       { icon: ClipboardList, label: 'Change Sets', to: '/change-sets', section: 'Content Ops' },
-      { icon: Database, label: 'Virtual Collections', to: '/virtual-collections', section: 'Content Ops' },
+      {
+        icon: Database,
+        label: 'Virtual Collections',
+        to: '/virtual-collections',
+        section: 'Content Ops'
+      },
       { icon: Megaphone, label: 'Broadcasts', to: '/announcements', section: 'Content Ops' },
       { icon: Trash2, label: 'Trash', to: '/trash', section: 'Content Ops' },
       { icon: Link2, label: 'External APIs', to: '/external-apis', section: 'Developer' },
@@ -276,7 +393,12 @@ export const navCategories: NavCategory[] = [
       { icon: BarChart2, label: 'Analytics', to: '/analytics', section: 'Insight & Docs' },
       { icon: BarChart3, label: 'Report Studio', to: '/report-studio', section: 'Insight & Docs' },
       { icon: Wifi, label: 'Presence', to: '/presence', section: 'Insight & Docs' },
-      { icon: Clapperboard, label: 'Session Replays', to: '/session-replays', section: 'Insight & Docs' },
+      {
+        icon: Clapperboard,
+        label: 'Session Replays',
+        to: '/session-replays',
+        section: 'Insight & Docs'
+      },
       { icon: BookOpen, label: 'Docs', to: '/docs', section: 'Insight & Docs' },
       { icon: ScrollText, label: 'API Docs', to: '/api-docs', section: 'Insight & Docs' }
     ]
@@ -422,7 +544,6 @@ function WorkspaceSwitcher() {
   )
 }
 
-
 /**
  * Per-user shortcuts to anywhere in the app. The nav is organised by what
  * things ARE (collections, monitoring, system), which is the right default and
@@ -493,7 +614,10 @@ function FavoritePinButton() {
       title={pinned ? 'Remove this page from favorites' : 'Add this page to favorites'}
       className='rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-nvr-cyan disabled:opacity-50'
     >
-      <Star className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')} strokeWidth={2} />
+      <Star
+        className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')}
+        strokeWidth={2}
+      />
     </button>
   )
 }
@@ -753,12 +877,12 @@ export function AppLayout() {
     activeCategory === 'favorites'
       ? favoritesCategory.items
       : activeCategory === 'system'
-      ? [
-          ...(activeCat?.items ?? []),
-          ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
-          ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
-        ]
-      : activeCat.items
+        ? [
+            ...(activeCat?.items ?? []),
+            ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
+            ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
+          ]
+        : activeCat.items
 
   const displayName =
     [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.email || '?'
@@ -769,301 +893,317 @@ export function AppLayout() {
 
   return (
     <RealtimeContext.Provider value={adminRealtime}>
-    <TooltipProvider delayDuration={150}>
-      {/* User extension app-components */}
-      {extensionPlugins
-        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
-        .map((Comp, i) => (
-          <Comp key={`ext-${i}`} />
-        ))}
-      {/* Cloud extension app-components — rendered separately, always present */}
-      {cloudPlugins
-        .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
-        .map((Comp, i) => (
-          <Comp key={`cloud-${i}`} />
-        ))}
-      <div className='flex h-screen flex-col overflow-hidden bg-secondary'>
-        {/* API redeploy notice — clears itself once this tab reloads onto the
+      <TooltipProvider delayDuration={150}>
+        {/* User extension app-components */}
+        {extensionPlugins
+          .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+          .map((Comp, i) => (
+            <Comp key={`ext-${i}`} />
+          ))}
+        {/* Cloud extension app-components — rendered separately, always present */}
+        {cloudPlugins
+          .flatMap((p) => (p.slots?.['app-component'] ? [p.slots['app-component'].component] : []))
+          .map((Comp, i) => (
+            <Comp key={`cloud-${i}`} />
+          ))}
+        <div className='flex h-screen flex-col overflow-hidden bg-secondary'>
+          {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
-        <ApiUpdateBanner appName='Nivaro' />
-        <SessionExpiryWatcher />
-        <OfflineBanner />
-        <DbOutageBanner />
-        <NivaroProvider client={announcementsClient}>
-          <AnnouncementBanner />
-        </NivaroProvider>
-        <div className='flex min-h-0 flex-1 overflow-hidden'>
-        <a
-          href='#main-content'
-          className='sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:rounded focus:bg-nvr-cyan focus:px-3 focus:py-1.5 focus:text-xs focus:font-semibold focus:text-white'
-        >
-          Skip to main content
-        </a>
-
-        {/* ─── Sidebar ──────────────────────────────────────────────── */}
-        <aside className='flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]'>
-          {/* Icon rail — always 52px */}
-          <div className='flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.07]'>
-            {/* Logo mark */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className='flex h-14 w-full shrink-0 cursor-default items-center justify-center border-b border-white/[0.07]'>
-                  {settings?.brand_logo ? (
-                    <img
-                      src={`/api/files/${settings.brand_logo}`}
-                      alt={projectName}
-                      className='max-h-8 max-w-[40px] object-contain'
-                    />
-                  ) : (
-                    <div className='flex h-7 w-7 items-center justify-center rounded-md bg-nvr-cyan'>
-                      <NivaroMark size={16} color='#172940' />
-                    </div>
-                  )}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side='right' sideOffset={8}>
-                {projectName}
-              </TooltipContent>
-            </Tooltip>
-
-            {/* Workspace dot */}
-            <div className='flex w-full shrink-0 justify-center border-b border-white/[0.07] px-1.5 py-2 h-12'>
-              <WorkspaceSwitcher />
-            </div>
-
-            {/* Category buttons */}
-            <nav
-              className='flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-y-auto pb-3'
-              aria-label='Navigation categories'
+          <ApiUpdateBanner appName='Nivaro' />
+          <SessionExpiryWatcher />
+          <OfflineBanner />
+          <DbOutageBanner />
+          <NivaroProvider client={announcementsClient}>
+            <AnnouncementBanner />
+          </NivaroProvider>
+          <div className='flex min-h-0 flex-1 overflow-hidden'>
+            <a
+              href='#main-content'
+              className='sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:rounded focus:bg-nvr-cyan focus:px-3 focus:py-1.5 focus:text-xs focus:font-semibold focus:text-white'
             >
-              {railCategories.map((cat) => {
-                const hasActive = cat.items.some((item) =>
-                  isActiveRoute(item.to, location.pathname)
-                )
-                const isSelected = activeCategory === cat.id
-                const panelOpen = isSelected && !collapsed
-                return (
-                  <Tooltip key={cat.id}>
+              Skip to main content
+            </a>
+
+            {/* ─── Sidebar ──────────────────────────────────────────────── */}
+            <aside className='flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]'>
+              {/* Icon rail — always 52px */}
+              <div className='flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.07]'>
+                {/* Logo mark */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className='flex h-14 w-full shrink-0 cursor-default items-center justify-center border-b border-white/[0.07]'>
+                      {settings?.brand_logo ? (
+                        <img
+                          src={`/api/files/${settings.brand_logo}`}
+                          alt={projectName}
+                          className='max-h-8 max-w-[40px] object-contain'
+                        />
+                      ) : (
+                        <div className='flex h-7 w-7 items-center justify-center rounded-md bg-nvr-cyan'>
+                          <NivaroMark size={16} color='#172940' />
+                        </div>
+                      )}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side='right' sideOffset={8}>
+                    {projectName}
+                  </TooltipContent>
+                </Tooltip>
+
+                {/* Workspace dot */}
+                <div className='flex w-full shrink-0 justify-center border-b border-white/[0.07] px-1.5 py-2 h-12'>
+                  <WorkspaceSwitcher />
+                </div>
+
+                {/* Category buttons */}
+                <nav
+                  className='flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-y-auto pb-3'
+                  aria-label='Navigation categories'
+                >
+                  {railCategories.map((cat) => {
+                    const hasActive = cat.items.some((item) =>
+                      isActiveRoute(item.to, location.pathname)
+                    )
+                    const isSelected = activeCategory === cat.id
+                    const panelOpen = isSelected && !collapsed
+                    return (
+                      <Tooltip key={cat.id}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type='button'
+                            onClick={() => handleCategoryClick(cat.id)}
+                            aria-pressed={panelOpen}
+                            aria-label={cat.label}
+                            className={cn(
+                              // Full-bleed rows — active background spans the entire rail width
+                              'relative flex h-9 w-full items-center justify-center transition-colors duration-100',
+                              panelOpen
+                                ? 'bg-nvr-cyan/[0.15] text-nvr-cyan'
+                                : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                            )}
+                          >
+                            <cat.icon className='h-[15px] w-[15px]' />
+                            {hasActive && !panelOpen && (
+                              <span className='absolute bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-nvr-cyan/70' />
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side='right' sideOffset={8}>
+                          {t(`nav.${cat.label}`, cat.label)}
+                        </TooltipContent>
+                      </Tooltip>
+                    )
+                  })}
+                </nav>
+
+                {/* Footer utilities */}
+                <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
+                  <TeamChatDock />
+                  <NotificationBell collapsed compact />
+                  {/* Beside chat and the bell rather than buried in System: "what
+                  changed" is something people reach for from anywhere, not a
+                  configuration screen they navigate to. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to='/changelog'
+                        aria-label='Changelog'
+                        className={cn(
+                          'flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-white/[0.05] hover:text-white',
+                          location.pathname === '/changelog'
+                            ? 'bg-white/[0.08] text-white'
+                            : 'text-slate-400'
+                        )}
+                      >
+                        <ScrollText className='h-[15px] w-[15px]' />
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent side='right'>Changelog</TooltipContent>
+                  </Tooltip>
+                  <InstanceSwitcher collapsed />
+                  <ThemeSwitcher collapsed />
+                  <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type='button'
-                        onClick={() => handleCategoryClick(cat.id)}
-                        aria-pressed={panelOpen}
-                        aria-label={cat.label}
-                        className={cn(
-                          // Full-bleed rows — active background spans the entire rail width
-                          'relative flex h-9 w-full items-center justify-center transition-colors duration-100',
-                          panelOpen
-                            ? 'bg-nvr-cyan/[0.15] text-nvr-cyan'
-                            : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
-                        )}
+                        onClick={togglePanel}
+                        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                        className='flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white'
                       >
-                        <cat.icon className='h-[15px] w-[15px]' />
-                        {hasActive && !panelOpen && (
-                          <span className='absolute bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-nvr-cyan/70' />
+                        {collapsed ? (
+                          <PanelLeftOpen className='h-[15px] w-[15px]' />
+                        ) : (
+                          <PanelLeftClose className='h-[15px] w-[15px]' />
                         )}
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side='right' sideOffset={8}>
-                      {t(`nav.${cat.label}`, cat.label)}
+                      {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                     </TooltipContent>
                   </Tooltip>
-                )
-              })}
-            </nav>
-
-            {/* Footer utilities */}
-            <div className='flex shrink-0 flex-col items-center gap-0.5 border-t border-white/[0.07] px-1.5 py-2'>
-              <TeamChatDock />
-              <NotificationBell collapsed compact />
-              {/* Beside chat and the bell rather than buried in System: "what
-                  changed" is something people reach for from anywhere, not a
-                  configuration screen they navigate to. */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Link
-                    to='/changelog'
-                    aria-label='Changelog'
-                    className={cn(
-                      'flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-white/[0.05] hover:text-white',
-                      location.pathname === '/changelog'
-                        ? 'bg-white/[0.08] text-white'
-                        : 'text-slate-400'
-                    )}
-                  >
-                    <ScrollText className='h-[15px] w-[15px]' />
-                  </Link>
-                </TooltipTrigger>
-                <TooltipContent side='right'>Changelog</TooltipContent>
-              </Tooltip>
-              <InstanceSwitcher collapsed />
-              <ThemeSwitcher collapsed />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type='button'
-                    onClick={togglePanel}
-                    aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    className='flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white'
-                  >
-                    {collapsed ? (
-                      <PanelLeftOpen className='h-[15px] w-[15px]' />
-                    ) : (
-                      <PanelLeftClose className='h-[15px] w-[15px]' />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side='right' sideOffset={8}>
-                  {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            {/* User avatar */}
-            <div className='flex w-full shrink-0 justify-center border-t border-white/[0.07] px-1.5 py-2.5'>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Avatar className='h-7 w-7 cursor-pointer'>
-                    <AvatarFallback className='bg-white/[0.15] text-[10px] font-bold text-white'>
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
-                </PopoverTrigger>
-                <PopoverContent side='right' sideOffset={12} className='w-52 p-3'>
-                  <div className='flex items-center gap-2.5'>
-                    <Avatar className='h-8 w-8 shrink-0'>
-                      <AvatarFallback className='bg-nvr-cyan/[0.15] text-[11px] font-bold text-nvr-navy'>
-                        {initials}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className='min-w-0'>
-                      <p className='truncate text-[13px] font-medium text-slate-900'>
-                        {displayName}
-                      </p>
-                      <p className='truncate text-[11px] text-slate-500'>{user?.email}</p>
-                    </div>
-                  </div>
-                  <div className='my-2.5 border-t border-slate-100' />
-                  <Link
-                    to='/profile'
-                    className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
-                  >
-                    <UserRound className='h-3.5 w-3.5' />
-                    My Profile
-                  </Link>
-                  <button
-                    type='button'
-                    onClick={logout}
-                    className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
-                  >
-                    <LogOut className='h-3.5 w-3.5' />
-                    Sign out
-                  </button>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-
-          {/* Category panel — slides in/out */}
-          <div
-            className={cn(
-              'overflow-hidden border-r border-white/[0.07] transition-[width] duration-200 ease-in-out',
-              collapsed ? 'w-0' : 'w-[168px]'
-            )}
-          >
-            <div className='flex h-full w-[168px] flex-col'>
-              {/* Panel header */}
-              <div className='flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/[0.07] px-4'>
-                <div className='min-w-0'>
-                  <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
-                    {projectName}
-                  </p>
-                  <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
-                    {t(`nav.${activeCat.label}`, activeCat.label)}
-                  </p>
                 </div>
-                <FavoritePinButton />
+
+                {/* User avatar */}
+                <div className='flex w-full shrink-0 justify-center border-t border-white/[0.07] px-1.5 py-2.5'>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <span className='inline-flex cursor-pointer'>
+                        <UserAvatar
+                          userId={user?.id}
+                          alt={displayName}
+                          className='h-7 w-7'
+                          fallback={
+                            <Avatar className='h-7 w-7'>
+                              <AvatarFallback className='bg-white/[0.15] text-[10px] font-bold text-white'>
+                                {initials}
+                              </AvatarFallback>
+                            </Avatar>
+                          }
+                        />
+                      </span>
+                    </PopoverTrigger>
+                    <PopoverContent side='right' sideOffset={12} className='w-52 p-3'>
+                      <div className='flex items-center gap-2.5'>
+                        <UserAvatar
+                          userId={user?.id}
+                          alt={displayName}
+                          className='h-8 w-8'
+                          fallback={
+                            <Avatar className='h-8 w-8 shrink-0'>
+                              <AvatarFallback className='bg-nvr-cyan/[0.15] text-[11px] font-bold text-nvr-navy'>
+                                {initials}
+                              </AvatarFallback>
+                            </Avatar>
+                          }
+                        />
+                        <div className='min-w-0'>
+                          <p className='truncate text-[13px] font-medium text-slate-900'>
+                            {displayName}
+                          </p>
+                          <p className='truncate text-[11px] text-slate-500'>{user?.email}</p>
+                        </div>
+                      </div>
+                      <div className='my-2.5 border-t border-slate-100' />
+                      <Link
+                        to='/profile'
+                        className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
+                      >
+                        <UserRound className='h-3.5 w-3.5' />
+                        My Profile
+                      </Link>
+                      <button
+                        type='button'
+                        onClick={logout}
+                        className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
+                      >
+                        <LogOut className='h-3.5 w-3.5' />
+                        Sign out
+                      </button>
+                    </PopoverContent>
+                  </Popover>
+                </div>
               </div>
 
-              {/* Nav items — no horizontal padding so active rows span full width */}
-              <nav
-                className='min-h-0 flex-1 overflow-y-auto py-3'
-                aria-label={`${activeCat.label} navigation`}
-              >
-                {activeCategory === 'favorites' && panelItems.length === 0 && (
-                  <p className='px-4 py-2 text-[11px] leading-snug text-slate-400'>
-                    Star a page with the ☆ beside its category name to keep it here.
-                  </p>
+              {/* Category panel — slides in/out */}
+              <div
+                className={cn(
+                  'overflow-hidden border-r border-white/[0.07] transition-[width] duration-200 ease-in-out',
+                  collapsed ? 'w-0' : 'w-[168px]'
                 )}
-                <div className='space-y-0.5'>
-                  {panelItems.map((item, idx) => (
-                    <div key={item.to}>
-                      {item.section && item.section !== panelItems[idx - 1]?.section && (
-                        <p
-                          className={cn(
-                            'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500',
-                            idx > 0 ? 'mt-3' : 'mt-1'
-                          )}
-                        >
-                          {item.section}
-                        </p>
-                      )}
-                      {activeCategory === 'favorites' ? (
-                      // Favorites are removable HERE — the star toggle lives on
-                      // the page itself, which may no longer exist (a deleted
-                      // page-builder page left an unremovable favorite).
-                      <div key={item.to} className='group/fav relative'>
-                        <PanelNavItem {...item} />
-                        <button
-                          type='button'
-                          aria-label={`Remove ${item.label} from favorites`}
-                          title='Remove from favorites'
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            void removeFavorite(item.to)
-                          }}
-                          className='absolute right-1.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-red-500 group-hover/fav:flex dark:hover:bg-muted'
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      ) : (
-                        <PanelNavItem {...item} />
-                      )}
+              >
+                <div className='flex h-full w-[168px] flex-col'>
+                  {/* Panel header */}
+                  <div className='flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/[0.07] px-4'>
+                    <div className='min-w-0'>
+                      <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
+                        {projectName}
+                      </p>
+                      <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
+                        {t(`nav.${activeCat.label}`, activeCat.label)}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              </nav>
-            </div>
-          </div>
-        </aside>
+                    <FavoritePinButton />
+                  </div>
 
-        {/* ─── Main area ───────────────────────────────────────────── */}
-        <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
-          <PageErrorBoundary key={location.pathname}>
-            <Suspense fallback={null}>
-              {disabledPaths.size > 0 &&
-              [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
-                <Navigate to='/' replace />
-              ) : (
-                <div
-                  key={location.pathname}
-                  className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
-                >
-                  <Outlet />
-                  <BugReporter />
+                  {/* Nav items — no horizontal padding so active rows span full width */}
+                  <nav
+                    className='min-h-0 flex-1 overflow-y-auto py-3'
+                    aria-label={`${activeCat.label} navigation`}
+                  >
+                    {activeCategory === 'favorites' && panelItems.length === 0 && (
+                      <p className='px-4 py-2 text-[11px] leading-snug text-slate-400'>
+                        Star a page with the ☆ beside its category name to keep it here.
+                      </p>
+                    )}
+                    <div className='space-y-0.5'>
+                      {panelItems.map((item, idx) => (
+                        <div key={item.to}>
+                          {item.section && item.section !== panelItems[idx - 1]?.section && (
+                            <p
+                              className={cn(
+                                'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500',
+                                idx > 0 ? 'mt-3' : 'mt-1'
+                              )}
+                            >
+                              {item.section}
+                            </p>
+                          )}
+                          {activeCategory === 'favorites' ? (
+                            // Favorites are removable HERE — the star toggle lives on
+                            // the page itself, which may no longer exist (a deleted
+                            // page-builder page left an unremovable favorite).
+                            <div key={item.to} className='group/fav relative'>
+                              <PanelNavItem {...item} />
+                              <button
+                                type='button'
+                                aria-label={`Remove ${item.label} from favorites`}
+                                title='Remove from favorites'
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  void removeFavorite(item.to)
+                                }}
+                                className='absolute right-1.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-red-500 group-hover/fav:flex dark:hover:bg-muted'
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <PanelNavItem {...item} />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </nav>
                 </div>
-              )}
-            </Suspense>
-          </PageErrorBoundary>
-        </main>
+              </div>
+            </aside>
+
+            {/* ─── Main area ───────────────────────────────────────────── */}
+            <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
+              <PageErrorBoundary key={location.pathname}>
+                <Suspense fallback={null}>
+                  {disabledPaths.size > 0 &&
+                  [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+                    <Navigate to='/' replace />
+                  ) : (
+                    <div
+                      key={location.pathname}
+                      className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
+                    >
+                      <Outlet />
+                      <BugReporter />
+                    </div>
+                  )}
+                </Suspense>
+              </PageErrorBoundary>
+            </main>
+          </div>
         </div>
-      </div>
-      <CommandPalette />
-      <KeyboardShortcuts />
-      <ForceRefreshBanner />
-    </TooltipProvider>
+        <CommandPalette />
+        <KeyboardShortcuts />
+        <ForceRefreshBanner />
+      </TooltipProvider>
     </RealtimeContext.Provider>
   )
 }
@@ -1127,8 +1267,8 @@ function DbOutageBanner() {
   return (
     <div className='flex items-center justify-center gap-2 border-b border-red-300 bg-red-50 px-4 py-1.5 text-[12px] text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'>
       <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-red-500' />
-      The database is unreachable — changes can't be saved right now. This clears automatically
-      when it recovers.
+      The database is unreachable — changes can't be saved right now. This clears automatically when
+      it recovers.
     </div>
   )
 }
@@ -1184,7 +1324,6 @@ function ForceRefreshBanner() {
   )
 }
 
-
 // ─── Session-expiry warning (#199) ───────────────────────────────────────────
 // Sessions are ROLLING, so any request refreshes them — including a TTL poll,
 // which would keep an idle tab alive forever. Instead: read the TTL ONCE at
@@ -1200,7 +1339,8 @@ function SessionExpiryWatcher() {
       lastActivity = Date.now()
       warnedRef.current = false
     }
-    for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, onActivity, { passive: true })
+    for (const ev of ['pointerdown', 'keydown'])
+      window.addEventListener(ev, onActivity, { passive: true })
     void api
       .get<{ data: { ttl_seconds: number | null } }>('/security/my/session-ttl')
       .then((r) => {

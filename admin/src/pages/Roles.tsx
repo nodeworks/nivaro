@@ -1,6 +1,26 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, ChevronsUpDown, Copy, Filter, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
+  Copy,
+  Filter,
+  Plus,
+  Search,
+  Shield,
+  Trash2,
+  Users,
+  X
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -108,9 +128,15 @@ function MembersTab({ roleId }: { roleId: string }) {
           key={u.id}
           className='flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 transition-colors dark:hover:bg-muted/50'
         >
-          <div className='flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-nvr-navy text-nvr-cyan text-xs font-bold select-none'>
-            {initials(u)}
-          </div>
+          <UserAvatar
+            userId={u.id}
+            className='h-8 w-8'
+            fallback={
+              <div className='flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-nvr-navy text-nvr-cyan text-xs font-bold select-none'>
+                {initials(u)}
+              </div>
+            }
+          />
           <div className='flex-1 min-w-0'>
             <p className='text-[13px] font-medium text-slate-900 truncate dark:text-foreground'>
               {[u.first_name, u.last_name].filter(Boolean).join(' ') || '—'}
@@ -831,7 +857,9 @@ function TemplateBar({ roleId }: { roleId: string }) {
           </button>
         )
       )}
-      <span className='ml-auto text-[10.5px] text-slate-400'>additive — existing policies untouched</span>
+      <span className='ml-auto text-[10.5px] text-slate-400'>
+        additive — existing policies untouched
+      </span>
     </div>
   )
 }
@@ -850,9 +878,7 @@ function CompareTab({ roleId, policies }: { roleId: string; policies: Policy[] }
     queryKey: ['role', otherId],
     enabled: !!otherId,
     queryFn: () =>
-      api
-        .get<{ data: Role & { policies: Policy[] } }>(`/roles/${otherId}`)
-        .then((r) => r.data.data)
+      api.get<{ data: Role & { policies: Policy[] } }>(`/roles/${otherId}`).then((r) => r.data.data)
   })
   const mine = new Set(policies.map((p) => `${p.collection}:${p.action}`))
   const theirs = new Set((other?.policies ?? []).map((p) => `${p.collection}:${p.action}`))
@@ -1037,7 +1063,13 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
             )}
           >
-            {tab === 'ui' ? 'UI Access' : tab === 'simulate' ? 'Simulator' : tab === 'compare' ? 'Compare' : tab}
+            {tab === 'ui'
+              ? 'UI Access'
+              : tab === 'simulate'
+                ? 'Simulator'
+                : tab === 'compare'
+                  ? 'Compare'
+                  : tab}
           </button>
         ))}
       </div>
@@ -1107,12 +1139,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
             </Button>
           </form>
         ) : (
-          <Button
-            size='sm'
-            variant='outline'
-            onClick={() => setCloning(true)}
-            data-clone-role
-          >
+          <Button size='sm' variant='outline' onClick={() => setCloning(true)} data-clone-role>
             <Copy className='h-3.5 w-3.5 mr-1' /> Duplicate Role
           </Button>
         )}
@@ -1121,18 +1148,18 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           <div className='flex flex-col items-end gap-1.5 text-[13px]'>
             <RoleDeletionImpact roleId={role.id} />
             <div className='flex items-center gap-2'>
-            <span className='text-slate-600 dark:text-slate-400'>Delete this role?</span>
-            <Button
-              size='sm'
-              variant='destructive'
-              onClick={() => deleteRole.mutate()}
-              disabled={deleteRole.isPending}
-            >
-              {deleteRole.isPending ? 'Deleting…' : 'Confirm'}
-            </Button>
-            <Button size='sm' variant='outline' onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
+              <span className='text-slate-600 dark:text-slate-400'>Delete this role?</span>
+              <Button
+                size='sm'
+                variant='destructive'
+                onClick={() => deleteRole.mutate()}
+                disabled={deleteRole.isPending}
+              >
+                {deleteRole.isPending ? 'Deleting…' : 'Confirm'}
+              </Button>
+              <Button size='sm' variant='outline' onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
             </div>
           </div>
         ) : (
@@ -1562,7 +1589,6 @@ export function RolesPage() {
     </div>
   )
 }
-
 
 // ─── Role deletion impact (#113) ─────────────────────────────────────────────
 // Everything referencing the role, shown BEFORE the confirm click lands.

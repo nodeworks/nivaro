@@ -1,3 +1,4 @@
+import { UserAvatar } from '@nivaro/shared'
 import { Radio, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
@@ -135,11 +136,18 @@ export function PresenceLiveMap() {
                     key={`${p.user.id}-${i}`}
                     className='flex items-center gap-1.5 rounded-full border border-slate-200 bg-white py-0.5 pl-0.5 pr-2.5 dark:border-border dark:bg-card'
                   >
-                    <Avatar className='h-5 w-5'>
-                      <AvatarFallback className='bg-nvr-navy text-[8px] text-white'>
-                        {initials(p.user.name)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <UserAvatar
+                      userId={p.user.id}
+                      alt={p.user.name}
+                      className='h-5 w-5'
+                      fallback={
+                        <Avatar className='h-5 w-5'>
+                          <AvatarFallback className='bg-nvr-navy text-[8px] text-white'>
+                            {initials(p.user.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                      }
+                    />
                     <span className='text-[11.5px] text-slate-700 dark:text-slate-300'>
                       {p.user.name}
                     </span>

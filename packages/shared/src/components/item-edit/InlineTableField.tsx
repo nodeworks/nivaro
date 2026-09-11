@@ -4361,12 +4361,19 @@ export function InlineTableField({
       const row = rowData ?? rows.find((r) => String(r.id) === rowId) ?? {}
       // A dotted reference comes from the bulk resolve-paths response; a bare
       // one is a plain column on the row.
+      // Addendum / staged rows carry decimals as STRINGS ("1107.4400"); the
+      // formula engine refuses a non-number, so a numeric-looking string is
+      // coerced here rather than rendering "—".
+      const asNumeric = (v: unknown) =>
+        typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v
       const result = evaluateNumeric(formula, (ref) =>
-        ref.includes('.')
-          ? rowId
-            ? resolvedPathData?.rows[rowId]?.[ref]?.value
-            : undefined
-          : (row as Record<string, unknown>)[ref]
+        asNumeric(
+          ref.includes('.')
+            ? rowId
+              ? resolvedPathData?.rows[rowId]?.[ref]?.value
+              : undefined
+            : (row as Record<string, unknown>)[ref]
+        )
       )
       if (result === null) return <span className='text-slate-300'>—</span>
       const formatted = result.toLocaleString(

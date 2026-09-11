@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { UserAvatar } from '@nivaro/shared'
 import { ArrowLeft, Copy, Eye, EyeOff, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
@@ -116,7 +117,10 @@ export function UserEditPage() {
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
               to='/users'
-              onClick={(e) => { e.preventDefault(); goBack() }}
+              onClick={(e) => {
+                e.preventDefault()
+                goBack()
+              }}
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />
@@ -161,11 +165,17 @@ export function UserEditPage() {
                 <h2 className='mb-5 text-[11px] font-medium text-slate-500'>Profile</h2>
 
                 <div className='mb-6 flex items-center gap-4'>
-                  <Avatar className='h-12 w-12'>
-                    <AvatarFallback className='bg-nvr-navy text-[14px] font-bold text-nvr-cyan'>
-                      {initials(user)}
-                    </AvatarFallback>
-                  </Avatar>
+                  <UserAvatar
+                    userId={user.id}
+                    className='h-12 w-12'
+                    fallback={
+                      <Avatar className='h-12 w-12'>
+                        <AvatarFallback className='bg-nvr-navy text-[14px] font-bold text-nvr-cyan'>
+                          {initials(user)}
+                        </AvatarFallback>
+                      </Avatar>
+                    }
+                  />
                   <div>
                     <p className='text-[15px] font-semibold text-slate-900'>{displayName}</p>
                     <div className='mt-0.5 flex items-center gap-2'>
@@ -366,7 +376,6 @@ export function UserEditPage() {
   )
 }
 
-
 // ─── Active sessions (#431): this user's live sessions, revocable ────────────
 
 function UserSessionsCard({ userId }: { userId: string }) {
@@ -399,9 +408,14 @@ function UserSessionsCard({ userId }: { userId: string }) {
       ) : (
         <div className='mt-2 space-y-1.5'>
           {sessions.map((sn) => (
-            <p key={sn.sid_prefix} className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+            <p
+              key={sn.sid_prefix}
+              className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'
+            >
               <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
-              <span className='text-[11px] text-slate-400'>expires in {Math.round(sn.ttl_seconds / 3600)}h</span>
+              <span className='text-[11px] text-slate-400'>
+                expires in {Math.round(sn.ttl_seconds / 3600)}h
+              </span>
               <button
                 type='button'
                 onClick={() => revoke.mutate(sn.sid_prefix)}

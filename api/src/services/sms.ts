@@ -82,9 +82,14 @@ function resolveTestMode(row: Record<string, unknown> | undefined): {
   testAllowlist: string[]
 } {
   const dbMode = row?.sms_test_mode === 1 || row?.sms_test_mode === true
+  // Same precedence as mail: the source that turned test mode on supplies the
+  // recipient — Settings on → Settings field (empty = drop); env forcing the
+  // mode alone → env recipient.
   const testMode = envBool(process.env.SMS_TEST_MODE) || dbMode
-  const testRecipient =
-    process.env.SMS_TEST_RECIPIENT || (row?.sms_test_recipient as string | null) || null
+  const dbRecipient = String(row?.sms_test_recipient ?? '').trim()
+  const testRecipient = dbMode
+    ? dbRecipient || null
+    : dbRecipient || process.env.SMS_TEST_RECIPIENT || null
   const testAllowlist = String(row?.sms_test_allowlist ?? '')
     .split(',')
     .map((s) => normalizePhone(s.trim()))

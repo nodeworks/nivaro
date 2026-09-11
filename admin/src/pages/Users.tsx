@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { UserAvatar } from '@nivaro/shared'
 import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -130,9 +131,15 @@ export function UsersPage() {
       sortable: false,
       render: (user) => (
         <div className='flex items-center gap-3'>
-          <div className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-nvr-navy text-[10px] font-bold text-nvr-cyan'>
-            {initials(user)}
-          </div>
+          <UserAvatar
+            userId={user.id}
+            className='h-7 w-7'
+            fallback={
+              <div className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-nvr-navy text-[10px] font-bold text-nvr-cyan'>
+                {initials(user)}
+              </div>
+            }
+          />
           <div>
             <p className='text-[13px] font-medium text-slate-800'>
               {[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'}
@@ -358,7 +365,6 @@ export function UsersPage() {
   )
 }
 
-
 // ─── Inactive-user report (#118) ─────────────────────────────────────────────
 
 // Delegation chain viewer (#174): who delegates to whom, resolved as chains
@@ -370,9 +376,16 @@ function DelegationChains() {
     queryKey: ['delegation-chains'],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string; delegate_id: string | null; is_out_of_office: boolean }> }>(
-          '/users?limit=1000&include_suspended=true'
-        )
+        .get<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string
+            delegate_id: string | null
+            is_out_of_office: boolean
+          }>
+        }>('/users?limit=1000&include_suspended=true')
         .then((r) => r.data.data),
     staleTime: 60_000
   })
@@ -452,14 +465,28 @@ function DelegationChains() {
 function InactiveUserReport() {
   const qc = useQueryClient()
   const { data: rows = [], isLoading } = useQuery<
-    Array<{ id: string; name: string; email: string; last_seen: string | null; days_quiet: number | null; flagged: boolean }>
+    Array<{
+      id: string
+      name: string
+      email: string
+      last_seen: string | null
+      days_quiet: number | null
+      flagged: boolean
+    }>
   >({
     queryKey: ['inactive-user-report'],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: string; name: string; email: string; last_seen: string | null; days_quiet: number | null; flagged: boolean }> }>(
-          '/users/inactive-report'
-        )
+        .get<{
+          data: Array<{
+            id: string
+            name: string
+            email: string
+            last_seen: string | null
+            days_quiet: number | null
+            flagged: boolean
+          }>
+        }>('/users/inactive-report')
         .then((r) => r.data.data),
     staleTime: 60_000
   })

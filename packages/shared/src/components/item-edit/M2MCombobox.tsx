@@ -5,6 +5,22 @@ import { useDrilldown, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { useOnlineUsers } from '../../lib/use-online-users'
+import { UserAvatar } from '../UserAvatar'
+
+/** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
+function labelInitials(label: string): string {
+  return (
+    label
+      .replace(/\(.*$/, '')
+      .trim()
+      .split(/\s+/)
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
+  )
+}
 import { Button } from '../ui/button'
 import {
   Command,
@@ -146,7 +162,14 @@ export function M2MCombobox({
     return ['id', ...tokens].join(',')
   })()
   const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? '', templateNestedFields ?? ''],
+    queryKey: [
+      'm2m-options',
+      relatedCollection,
+      search,
+      filterParam,
+      serverSort ?? '',
+      templateNestedFields ?? ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -398,11 +421,24 @@ export function M2MCombobox({
                         <div
                           className={cn(
                             'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                            isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300 dark:border-slate-500'
+                            isSelected
+                              ? 'border-nvr-cyan bg-nvr-cyan'
+                              : 'border-slate-300 dark:border-slate-500'
                           )}
                         >
                           {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
                         </div>
+                        {relatedCollection === 'nivaro_users' && (
+                          <UserAvatar
+                            userId={optId}
+                            className='h-4 w-4'
+                            fallback={
+                              <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                                {labelInitials(getLabel(opt))}
+                              </span>
+                            }
+                          />
+                        )}
                         {relatedCollection === 'nivaro_users' &&
                           onlineUsers.has(optId.toUpperCase()) && (
                             <span
@@ -508,7 +544,14 @@ export function M2MSingleSelectCombobox({
     return ['id', ...tokens].join(',')
   })()
   const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: ['m2m-options', relatedCollection, search, filterParam, serverSort ?? '', templateNestedFields ?? ''],
+    queryKey: [
+      'm2m-options',
+      relatedCollection,
+      search,
+      filterParam,
+      serverSort ?? '',
+      templateNestedFields ?? ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
@@ -725,11 +768,24 @@ export function M2MSingleSelectCombobox({
                           <div
                             className={cn(
                               'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                              isSelected ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300 dark:border-slate-500'
+                              isSelected
+                                ? 'border-nvr-cyan bg-nvr-cyan'
+                                : 'border-slate-300 dark:border-slate-500'
                             )}
                           >
                             {isSelected && <Check className='h-2.5 w-2.5 text-white' />}
                           </div>
+                          {relatedCollection === 'nivaro_users' && (
+                            <UserAvatar
+                              userId={optId}
+                              className='h-4 w-4'
+                              fallback={
+                                <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                                  {labelInitials(getLabel(opt))}
+                                </span>
+                              }
+                            />
+                          )}
                           {relatedCollection === 'nivaro_users' &&
                             onlineUsers.has(optId.toUpperCase()) && (
                               <span

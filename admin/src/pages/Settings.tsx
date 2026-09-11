@@ -972,7 +972,9 @@ function SsoProvidersSection() {
               <div className='flex items-start gap-2'>
                 <textarea
                   value={draft.logo_url}
-                  onChange={(e) => setDraft((d) => ({ ...d, logo_url: normalizeLogoInput(e.target.value) }))}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, logo_url: normalizeLogoInput(e.target.value) }))
+                  }
                   placeholder='<svg …>, https://… or data:image/png;base64,…'
                   rows={2}
                   className='min-h-[32px] w-full rounded-md border border-slate-200 bg-transparent px-2.5 py-1.5 font-mono text-[12px] outline-none transition-colors focus:border-slate-400 dark:border-border'
@@ -1028,7 +1030,11 @@ function SsoProvidersSection() {
                 <input
                   type='color'
                   aria-label='Pick button color'
-                  value={/^#[0-9a-fA-F]{6}$/.test(draft.button_color.trim()) ? draft.button_color.trim() : '#00ceff'}
+                  value={
+                    /^#[0-9a-fA-F]{6}$/.test(draft.button_color.trim())
+                      ? draft.button_color.trim()
+                      : '#00ceff'
+                  }
                   onChange={(e) => setDraft((d) => ({ ...d, button_color: e.target.value }))}
                   className='h-8 w-10 cursor-pointer rounded border border-slate-200 bg-transparent dark:border-border'
                 />
@@ -1436,6 +1442,10 @@ export function SettingsPage() {
   const [smtpFrom, setSmtpFrom] = useState('')
   const [smtpSecure, setSmtpSecure] = useState(false)
   const [mailTestMode, setMailTestMode] = useState(false)
+  const [mailTestEnv, setMailTestEnv] = useState<{ mode: boolean; recipient: string | null }>({
+    mode: false,
+    recipient: null
+  })
   const [mailTestRecipient, setMailTestRecipient] = useState('')
   const [mailTestAllowlist, setMailTestAllowlist] = useState('')
   const [environmentLabel, setEnvironmentLabel] = useState('')
@@ -1530,6 +1540,10 @@ export function SettingsPage() {
     setSmtpFrom((s.smtp_from as string) ?? '')
     setSmtpSecure(s.smtp_secure === 1 || s.smtp_secure === true)
     setMailTestMode(s.mail_test_mode === 1 || s.mail_test_mode === true)
+    setMailTestEnv({
+      mode: s.mail_test_env_mode === true,
+      recipient: (s.mail_test_env_recipient as string | null) ?? null
+    })
     setMailTestRecipient((s.mail_test_recipient as string) ?? '')
     setMailTestAllowlist((s.mail_test_allowlist as string) ?? '')
     setEnvironmentLabel((s.environment_label as string) ?? '')
@@ -2737,11 +2751,26 @@ export function SettingsPage() {
                       dev and staging so real users never receive system mail. The MAIL_TEST_MODE
                       env var forces this on regardless of this switch.
                     </p>
-                    {mailTestMode && (
+                    {mailTestEnv.mode && (
+                      <p className='mb-3 rounded-md border border-amber-300/60 bg-white/60 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+                        This instance's environment sets{' '}
+                        <code className='font-mono'>MAIL_TEST_MODE</code>, so test mode stays on
+                        here even if the switch is off.
+                        {mailTestEnv.recipient && (
+                          <>
+                            {' '}
+                            Its default recipient is{' '}
+                            <code className='font-mono'>{mailTestEnv.recipient}</code> — used only
+                            while the field below is empty.
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {(mailTestMode || mailTestEnv.mode) && (
                       <div className='space-y-3'>
                         <Field
                           label='Test recipient'
-                          hint='All redirected mail goes here. If empty (and no MAIL_TEST_RECIPIENT env var), non-allowlisted mail is dropped with a server log.'
+                          hint={`All redirected mail goes here. ${mailTestEnv.recipient ? `Empty = the environment default (${mailTestEnv.recipient}).` : 'Empty = non-allowlisted mail is dropped with a server log.'}`}
                         >
                           <Input
                             type='email'
@@ -3053,7 +3082,11 @@ function RegionalClocksBlock({
 }) {
   const trimmed = source.trim()
   const sourceValid = /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && !/^nivaro_/i.test(trimmed)
-  const { data: records, isFetching, isError } = useQuery({
+  const {
+    data: records,
+    isFetching,
+    isError
+  } = useQuery({
     queryKey: ['sla-zone-source-records', trimmed],
     enabled: sourceValid,
     staleTime: 60_000,

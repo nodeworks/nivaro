@@ -4,7 +4,8 @@ import {
   NivaroProvider,
   NotificationRulesCard,
   NotificationSourcesCard,
-  TimezoneCard
+  TimezoneCard,
+  UserAvatar
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, Copy, Eye, EyeOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
@@ -457,11 +458,17 @@ export function ProfilePage() {
                 </h2>
 
                 <div className='mb-6 flex items-center gap-4'>
-                  <Avatar className='h-12 w-12'>
-                    <AvatarFallback className='bg-nvr-navy text-[14px] font-bold text-nvr-cyan'>
-                      {initials(user)}
-                    </AvatarFallback>
-                  </Avatar>
+                  <UserAvatar
+                    userId={user.id}
+                    className='h-12 w-12'
+                    fallback={
+                      <Avatar className='h-12 w-12'>
+                        <AvatarFallback className='bg-nvr-navy text-[14px] font-bold text-nvr-cyan'>
+                          {initials(user)}
+                        </AvatarFallback>
+                      </Avatar>
+                    }
+                  />
                   <div>
                     <p className='text-[15px] font-semibold text-slate-900 dark:text-slate-100'>
                       {displayName}

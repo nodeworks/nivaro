@@ -102,7 +102,20 @@ export async function settingsRoutes(app: FastifyInstance) {
     const settings = await db('nivaro_settings').orderBy('id', 'asc').first()
     // Which keys THIS instance overrides via NIVARO_SETTINGS_OVERRIDES — the
     // values shown/edited stay the shared DB row; this is provenance only.
-    return reply.send({ data: maskSettings(settings), env_overrides: envOverrideKeys() })
+    // Virtual, read-only: what the process environment contributes to mail /
+    // SMS test mode, so the Settings card can say "forced on by MAIL_TEST_MODE"
+    // and "env default recipient X applies while this field is empty".
+    const envOn = (v: string | undefined) => v === '1' || v?.toLowerCase() === 'true'
+    return reply.send({
+      data: {
+        ...maskSettings(settings),
+        mail_test_env_mode: envOn(process.env.MAIL_TEST_MODE),
+        mail_test_env_recipient: process.env.MAIL_TEST_RECIPIENT || null,
+        sms_test_env_mode: envOn(process.env.SMS_TEST_MODE),
+        sms_test_env_recipient: process.env.SMS_TEST_RECIPIENT || null
+      },
+      env_overrides: envOverrideKeys()
+    })
   })
 
   app.patch('/', { preHandler: requireAdmin }, async (req, reply) => {

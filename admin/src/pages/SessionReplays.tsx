@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { UserAvatar } from '@nivaro/shared'
 import { Clapperboard, Code2, Play, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -272,13 +273,26 @@ function ReplayPlayer({
         const events = r.data.data.events
         lastSeqRef.current = r.data.data.last_seq ?? -1
         {
-          const evs = events as Array<{ type?: number; timestamp?: number; data?: { tag?: string; payload?: Record<string, unknown> } }>
+          const evs = events as Array<{
+            type?: number
+            timestamp?: number
+            data?: { tag?: string; payload?: Record<string, unknown> }
+          }>
           const first = evs.find((e) => typeof e.timestamp === 'number')?.timestamp ?? 0
-          const found: Array<{ offset: number; tag: 'route' | 'console'; level?: string; text: string }> = []
+          const found: Array<{
+            offset: number
+            tag: 'route' | 'console'
+            level?: string
+            text: string
+          }> = []
           for (const e of evs) {
             if (e.type !== 5 || !e.data?.tag || typeof e.timestamp !== 'number') continue
             if (e.data.tag === 'route') {
-              found.push({ offset: e.timestamp - first, tag: 'route', text: String(e.data.payload?.path ?? '') })
+              found.push({
+                offset: e.timestamp - first,
+                tag: 'route',
+                text: String(e.data.payload?.path ?? '')
+              })
             } else if (e.data.tag === 'console') {
               found.push({
                 offset: e.timestamp - first,
@@ -543,7 +557,9 @@ function ReplayPlayer({
           </div>
           <div className='max-h-56 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed'>
             {markers
-              .filter((m) => m.tag === 'console' && (consoleFilter === 'all' || m.level === consoleFilter))
+              .filter(
+                (m) => m.tag === 'console' && (consoleFilter === 'all' || m.level === consoleFilter)
+              )
               .map((m, i) => (
                 <button
                   key={i}
@@ -557,7 +573,9 @@ function ReplayPlayer({
                   >
                     {m.level}
                   </span>
-                  <span className='min-w-0 break-all text-slate-600 dark:text-slate-300'>{m.text}</span>
+                  <span className='min-w-0 break-all text-slate-600 dark:text-slate-300'>
+                    {m.text}
+                  </span>
                 </button>
               ))}
           </div>
@@ -738,7 +756,9 @@ export function SessionReplaysPage() {
     void api
       .get<{ data: Recording }>(`/session-recordings/${deepLinkId}`)
       .then((r) => openIt(r.data.data))
-      .catch(() => toast.error('That recording no longer exists (recordings expire with retention)'))
+      .catch(() =>
+        toast.error('That recording no longer exists (recordings expire with retention)')
+      )
   }, [deepLinkId, deepLinkT, recordings])
 
   const { data: settings } = useQuery({
@@ -979,11 +999,18 @@ export function SessionReplaysPage() {
                 )}
               >
                 <span className='relative'>
-                  <Avatar className='h-7 w-7'>
-                    <AvatarFallback className='bg-nvr-navy text-[10px] text-white'>
-                      {initials(p.name)}
-                    </AvatarFallback>
-                  </Avatar>
+                  <UserAvatar
+                    userId={p.user}
+                    alt={p.name}
+                    className='h-7 w-7'
+                    fallback={
+                      <Avatar className='h-7 w-7'>
+                        <AvatarFallback className='bg-nvr-navy text-[10px] text-white'>
+                          {initials(p.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                    }
+                  />
                   {p.live && (
                     <span className='absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-500 dark:border-card' />
                   )}
@@ -1000,8 +1027,7 @@ export function SessionReplaysPage() {
                     {p.name}
                   </span>
                   <span className='block text-[11px] text-slate-400'>
-                    {p.count} session{p.count === 1 ? '' : 's'} ·{' '}
-                    {formatRelative(p.lastActive)}
+                    {p.count} session{p.count === 1 ? '' : 's'} · {formatRelative(p.lastActive)}
                   </span>
                 </span>
               </button>
@@ -1088,7 +1114,8 @@ export function SessionReplaysPage() {
                             className='shrink-0 rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
                             title={`Recorded while ${rec.masquerade_admin_name || 'an admin'} was masquerading as this user — the admin was driving`}
                           >
-                            Masquerade{rec.masquerade_admin_name ? ` · ${rec.masquerade_admin_name}` : ''}
+                            Masquerade
+                            {rec.masquerade_admin_name ? ` · ${rec.masquerade_admin_name}` : ''}
                           </span>
                         )}
                         {rec.truncated && (
@@ -1163,7 +1190,8 @@ export function SessionReplaysPage() {
                   className='rounded bg-amber-500/15 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
                   title={`Recorded while ${playing.masquerade_admin_name || 'an admin'} was masquerading as this user`}
                 >
-                  Masquerade{playing.masquerade_admin_name ? ` · ${playing.masquerade_admin_name}` : ''}
+                  Masquerade
+                  {playing.masquerade_admin_name ? ` · ${playing.masquerade_admin_name}` : ''}
                 </span>
               )}
               {(playing?.scopes ?? []).map((sc) => (

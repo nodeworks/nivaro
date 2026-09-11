@@ -1,12 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Check, ChevronDown, GitBranch, Loader2, Minus, Search, UserPlus, Users, X } from 'lucide-react'
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  GitBranch,
+  Loader2,
+  Minus,
+  Search,
+  UserPlus,
+  Users,
+  X
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
-import { cn, formatRelative , humanHours} from '../../lib/utils'
+import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
+import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -92,7 +104,9 @@ interface RequirementsDialogState {
 // Shared by both executeTransition mutations below: pulls the 422 requirements
 // payload out of a failed transition request, or null when the failure is
 // something else (409 conflict, permission error, etc).
-export function transitionRequirementsFromError(err: unknown): TransitionRequirementsPayload | null {
+export function transitionRequirementsFromError(
+  err: unknown
+): TransitionRequirementsPayload | null {
   const e = err as {
     status?: number
     response?: { error?: string; requirements?: TransitionRequirementsPayload }
@@ -371,12 +385,14 @@ function StateTrack({
                   // Per-state help text (#81) — instant tip via TipLayer.
                   data-tip={s.description || undefined}
                   style={{
-                    backgroundColor: isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
-                    border: isCurrent || isDone
-                      ? 'none'
-                      : isSkipped
-                        ? '1.5px dashed #cbd5e1'
-                        : '1.5px solid #e2e8f0',
+                    backgroundColor:
+                      isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
+                    border:
+                      isCurrent || isDone
+                        ? 'none'
+                        : isSkipped
+                          ? '1.5px dashed #cbd5e1'
+                          : '1.5px solid #e2e8f0',
                     boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
                   }}
                 >
@@ -416,24 +432,22 @@ function StateTrack({
                           ))}
                         </ul>
                       ) : (
-                        <p className='mt-1 text-[11px] opacity-90'>
-                          Its skip conditions are met.
-                        </p>
+                        <p className='mt-1 text-[11px] opacity-90'>Its skip conditions are met.</p>
                       )}
                     </TooltipContent>
                   </Tooltip>
                 ) : (
-                <span
-                  className='w-full break-words text-center leading-snug'
-                  style={{
-                    fontSize: '11px',
-                    color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
-                    fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
-                    wordBreak: 'break-word'
-                  }}
-                >
-                  {s.label}
-                </span>
+                  <span
+                    className='w-full break-words text-center leading-snug'
+                    style={{
+                      fontSize: '11px',
+                      color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
+                      fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
+                      wordBreak: 'break-word'
+                    }}
+                  >
+                    {s.label}
+                  </span>
                 )}
               </div>
               {!isLast && (
@@ -813,9 +827,16 @@ function OwnersSection({
                 key={`group-${o.id}`}
                 className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50'
               >
-                <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80'>
-                  {initials}
-                </span>
+                <UserAvatar
+                  userId={o.id}
+                  alt={name}
+                  className='h-6 w-6'
+                  fallback={
+                    <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80'>
+                      {initials}
+                    </span>
+                  }
+                />
                 <div className='min-w-0 flex-1'>
                   <span className='block truncate text-[12px] font-medium text-slate-700'>
                     {name}
@@ -1201,11 +1222,16 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
       {data.field_changes.length > 0 && (
         <div className='mt-1 space-y-0.5'>
           {data.field_changes.slice(0, 5).map((f) => (
-            <p key={f.field} className='font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+            <p
+              key={f.field}
+              className='font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'
+            >
               {f.field}:{' '}
               {f.old !== undefined && (
                 <>
-                  <span className='text-red-600 line-through dark:text-red-400'>{fmt(f.old)}</span>{' '}
+                  <span className='text-red-600 line-through dark:text-red-400'>
+                    {fmt(f.old)}
+                  </span>{' '}
                 </>
               )}
               <span className='text-emerald-600 dark:text-emerald-400'>{fmt(f.new)}</span>
@@ -1360,7 +1386,8 @@ function PipelinePanelInner({
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
-      if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
+      if (collection === 'nivaro_addendums')
+        queryClient.invalidateQueries({ queryKey: ['addendums'] })
       // A transition changes owners, integrations pushes and audience —
       // refresh the Record Insights popover caches too.
       invalidateRecordInsights(queryClient, collection, String(item))
@@ -1437,7 +1464,9 @@ function PipelinePanelInner({
             String(t.from_state).toUpperCase() === String(instance.current_state).toUpperCase()
         )
       : null
-  const visibleTransitions = instance?.completed_at ? (escapeTransitions ?? []) : (transitions ?? [])
+  const visibleTransitions = instance?.completed_at
+    ? (escapeTransitions ?? [])
+    : (transitions ?? [])
   const hasTransitions = visibleTransitions.length > 0
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
@@ -1584,7 +1613,9 @@ function PipelinePanelInner({
 
   return (
     <>
-      <div className={`overflow-hidden rounded-xl border bg-white dark:bg-card ${addendumView ? 'border-amber-300 dark:border-amber-600/50' : 'border-slate-200 dark:border-border'}`}>
+      <div
+        className={`overflow-hidden rounded-xl border bg-white dark:bg-card ${addendumView ? 'border-amber-300 dark:border-amber-600/50' : 'border-slate-200 dark:border-border'}`}
+      >
         <div
           role='button'
           tabIndex={0}
@@ -1871,7 +1902,8 @@ function PipelineTransitionButtonsInner({
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
-      if (collection === 'nivaro_addendums') queryClient.invalidateQueries({ queryKey: ['addendums'] })
+      if (collection === 'nivaro_addendums')
+        queryClient.invalidateQueries({ queryKey: ['addendums'] })
       // A transition changes owners, integrations pushes and audience —
       // refresh the Record Insights popover caches too.
       invalidateRecordInsights(queryClient, collection, String(item))
@@ -1936,7 +1968,11 @@ function PipelineTransitionButtonsInner({
 
   return (
     <div className='relative'>
-      <div className={wrap ? 'flex flex-wrap justify-end gap-2' : 'flex shrink-0 items-center justify-end gap-2'}>
+      <div
+        className={
+          wrap ? 'flex flex-wrap justify-end gap-2' : 'flex shrink-0 items-center justify-end gap-2'
+        }
+      >
         {Array.from(byLabel.entries()).map(([label, txs]) => {
           const txColor = txs[0]?.color ?? null
           const isActive = txs.some((t) => t.id === pendingTransition)
@@ -2044,14 +2080,14 @@ function PipelineTransitionButtonsInner({
               type='button'
               size='sm'
               className='h-7 gap-1.5 text-[12px]'
-               // Same rule as the panel's confirm: a required note must be
-               // filled in before this commits.
-               disabled={
-                 executeTransition.isPending ||
-                 (String((pendingTx as { comment_mode?: string } | null)?.comment_mode ?? '') ===
-                   'required' &&
-                   comment.trim() === '')
-               }
+              // Same rule as the panel's confirm: a required note must be
+              // filled in before this commits.
+              disabled={
+                executeTransition.isPending ||
+                (String((pendingTx as { comment_mode?: string } | null)?.comment_mode ?? '') ===
+                  'required' &&
+                  comment.trim() === '')
+              }
               onClick={() =>
                 executeTransition.mutate({
                   transition_id: pendingTransition,
