@@ -807,8 +807,8 @@ Server listening on http://0.0.0.0:3055</code></pre>
               <tr><td>webhook</td><td>✅ Live</td><td>HTTP fetch to an external URL. Configure url and method in options.</td></tr>
               <tr><td>condition</td><td>⚙️ Stub</td><td>Branch on a condition expression (not yet implemented — resolves forward).</td></tr>
               <tr><td>exec-script</td><td>⚙️ Stub</td><td>Run arbitrary Node.js code (not yet implemented).</td></tr>
-              <tr><td>mail</td><td>⚙️ Stub</td><td>Send email via nodemailer (not yet implemented).</td></tr>
-              <tr><td>notification</td><td>⚙️ Stub</td><td>Create an in-app notification (not yet implemented).</td></tr></tr></tbody>
+              <tr><td>mail</td><td>✅ Live</td><td>Send an email (branded chrome, optional named template). <code class="doc-code">category</code> pins the recipients' notification-rules row; otherwise it is detected from the subject.</td></tr>
+              <tr><td>notification</td><td>✅ Live</td><td>In-app notification through the recipient's notification rules (bell, live socket update, push). <code class="doc-code">category</code> pins the rules row; <code class="doc-code">always_inbox</code> (default on) keeps record mutes and "already viewing" from swallowing it.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Configuring a log operation</h3>
           <p class="doc-p">Click the pencil icon on any operation row to open the options editor. For a log operation:</p>
@@ -5784,7 +5784,8 @@ Authorization: Bearer &lt;admin-token&gt;
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Property</th><th>Type</th><th>Purpose</th></tr></thead>
             <tbody><tr><tr><td>callExternalApi</td><td>Function</td><td>Call configured external API by name/ID. Auth resolved automatically.</td></tr>
-              <tr><td>flows</td><td>Object</td><td>Register flow ops/triggers. Emit trigger events to execute flows.</td></tr></tr></tbody>
+              <tr><td>flows</td><td>Object</td><td>Register flow ops/triggers. Emit trigger events to execute flows.</td></tr>
+              <tr><td>notifyUser</td><td>Function</td><td>notifyUser(userId, {subject, message, category?, collection?, item?}) — deliver through the full channel stack (inbox, socket, push, optional email) honouring the recipient's notification rules. Never insert nivaro_notifications rows directly.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3" id="ext-context-ui">Admin UI</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -12306,6 +12307,18 @@ PATCH /api/item-locks/config/:collection
             <li>Click a notification to open its collection/item; it is marked read automatically.</li>
             <li>"Mark all read" clears the unread counter everywhere (bell included).</li>
           </ul>
+          <h3 class="doc-h3">Notification rules (per-category channels)</h3>
+          <p class="doc-p">Profile → Notification rules is one matrix over the notification categories (mentions, workflow &amp; approvals, SLA &amp; escalations, field watches, alerts, anomaly detections, reports, system &amp; digests, everything else) with three channels per row: In-app (the bell inbox row), Push (browser push to your registered devices), and Email. The "?" badge on each column header explains that channel, and the one beside each category name lists what that category covers.</p>
+          <ul class="doc-ul">
+            <li>Email per category is Individual email (sent as it happens, deferred only during your quiet hours), Daily summary (held and delivered once in the daily action summary), or No email (dropped — the in-app row still lands).</li>
+            <li>The Daily action summary block on the same card sets the delivery hour (Eastern time), a compact layout, and a "send me a test summary now" button. Anyone with at least one category on Daily summary receives the digest.</li>
+            <li>Critical subjects (SLA escalations, maintenance notices, failing monitors) always email immediately regardless of the matrix.</li>
+            <li>The legacy Profile → Email delivery card is gone; its instant/daily toggle maps onto the "All email" quick buttons.</li>
+            <li>Notifications &amp; alerts (the sources list below the rules) shows, under every source, whether it fires on an event or on a schedule — and the schedule in words ("Scheduled · At 08:00 AM, only on Monday"), read from the live cron roster so an overridden schedule reads correctly.</li>
+            <li>Every email leaves through the same sender, so cron-driven mail (scheduled reports, report and view digests, alert checks, anomaly sweeps, SLA escalations, coverage notices, flow mail ops) follows the same rules. Senders pass an explicit category; a flow mail op can set <code class="doc-code">category</code> in its options.</li>
+          </ul>
+          <pre class="doc-pre"><code>PATCH /api/users/me/preferences
+{ "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }</code></pre>
           <h3 class="doc-h3">Sending a notification (user to user)</h3>
           <p class="doc-p">Any authenticated user can send an in-app notification to another active user — built for chat @mentions and similar frontend features. The sender is always the authenticated caller, and delivery rides the full channel stack: the inbox row, a live Socket.io <code class="doc-code">notification:new</code> event, and browser push for users with a registered subscription.</p>
           <pre class="doc-pre"><code>POST /api/notifications
