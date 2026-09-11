@@ -35,6 +35,7 @@ import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
 import { cn, setDisplayTimezone } from '../lib/utils'
+import { CustomStatusEditor, activeCustomStatus } from './CustomStatusEditor'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
 import { SimpleSelectXs } from './ui/SimpleSelect'
@@ -1833,6 +1834,18 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
                 </span>
               )}
             </div>
+            {isOwn && me && (
+              // The same status the chat panel's Online tab sets — one editor,
+              // one preference, so the profile always agrees with the top bar.
+              <CustomStatusEditor
+                status={activeCustomStatus(
+                  (me as { preferences?: { custom_status?: unknown } | null }).preferences
+                    ?.custom_status
+                )}
+                showExpiry
+                className='mt-1.5'
+              />
+            )}
             {(view.title || view.department) && (
               <p className='mt-0.5 truncate text-[13px] text-slate-500 dark:text-slate-400'>
                 {[view.title, view.department].filter(Boolean).join(' · ')}

@@ -5,7 +5,9 @@ import {
   NotificationRulesCard,
   NotificationSourcesCard,
   TimezoneCard,
-  UserAvatar
+  UserAvatar,
+  CustomStatusEditor,
+  activeCustomStatus
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, Copy, Eye, EyeOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
@@ -479,6 +481,19 @@ export function ProfilePage() {
                       </Badge>
                       {roleName && <span className='text-[12px] text-slate-400'>{roleName}</span>}
                     </div>
+                    {/* The status the chat dock's Online tab sets — same shared
+                        editor + preference, so the profile always agrees with it. */}
+                    <NivaroProvider client={sharedClient}>
+                      <CustomStatusEditor
+                        status={activeCustomStatus(
+                          (user as { preferences?: { custom_status?: unknown } | null }).preferences
+                            ?.custom_status
+                        )}
+                        invalidate={[['user', id]]}
+                        showExpiry
+                        className='mt-2'
+                      />
+                    </NivaroProvider>
                   </div>
                 </div>
 

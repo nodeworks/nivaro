@@ -121,6 +121,8 @@ export {
   ProfileView,
   TimezoneCard
 } from './components/ProfileView'
+export { CustomStatusEditor, activeCustomStatus, formatStatusExpiry } from './components/CustomStatusEditor'
+export type { CustomStatus } from './components/CustomStatusEditor'
 export * from './components/panels'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'

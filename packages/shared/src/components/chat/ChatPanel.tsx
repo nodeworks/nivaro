@@ -1,4 +1,5 @@
-import { Bookmark,
+import {
+  Bookmark,
   Bell,
   BellOff,
   HelpCircle,
@@ -32,6 +33,7 @@ import { toast } from 'sonner'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { CustomStatusEditor } from '../CustomStatusEditor'
 import { UserAvatar } from '../UserAvatar'
 import {
   CHAT_DEFAULTS,
@@ -119,7 +121,7 @@ const DEFAULT_THEME: ChatTheme = {
   divider: 'border-slate-100 dark:border-border/60'
 }
 
-const ChatThemeContext = ({} as { current: ChatTheme })
+const ChatThemeContext = {} as { current: ChatTheme }
 ChatThemeContext.current = DEFAULT_THEME
 
 export interface ChatProviderProps {
@@ -204,13 +206,25 @@ function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size
   const disc = (
     <span
       className='flex shrink-0 items-center justify-center rounded-full font-semibold text-[#04263b]'
-      style={{ width: size, height: size, backgroundColor: chatAvatarColor(id), fontSize: size * 0.36 }}
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: chatAvatarColor(id),
+        fontSize: size * 0.36
+      }}
       aria-hidden
     >
       {chatInitials(name)}
     </span>
   )
-  return <UserAvatar userId={id} fallback={disc} style={{ width: size, height: size }} alt={name ?? ''} />
+  return (
+    <UserAvatar
+      userId={id}
+      fallback={disc}
+      style={{ width: size, height: size }}
+      alt={name ?? ''}
+    />
+  )
 }
 
 /**
@@ -228,10 +242,17 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
     queryKey: ['nvr-chat-room-types'],
     queryFn: async () => {
       const res = (await client.request(
-        get<{ data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }> }>(
-          '/chat/room-types'
-        )
-      )) as { data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }> }
+        get<{
+          data: Array<{
+            prefix: string
+            collection: string
+            match_field: string
+            is_active: boolean
+          }>
+        }>('/chat/room-types')
+      )) as {
+        data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }>
+      }
       return (res.data ?? []).filter((t) => t.is_active)
     },
     staleTime: 5 * 60_000
@@ -252,10 +273,12 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
           const id = res.data?.[0]?.id
           if (id == null) continue
           const inst = (await client.request(
-            get<{ data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }>(
-              `/pipelines/instance/${t.collection}/${id}`
-            )
-          )) as { data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }
+            get<{
+              data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
+            }>(`/pipelines/instance/${t.collection}/${id}`)
+          )) as {
+            data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
+          }
           const state = inst.data?.instance?.current_state_obj
           return {
             collection: t.collection,
@@ -314,7 +337,10 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
 function MessageBody({ text, mine }: { text: string; mine?: boolean }) {
   const cfg = useChatConfig()
   const th = useTheme()
-  const parts = useMemo(() => splitMessageTokens(text, cfg.entityPattern), [text, cfg.entityPattern])
+  const parts = useMemo(
+    () => splitMessageTokens(text, cfg.entityPattern),
+    [text, cfg.entityPattern]
+  )
   return (
     <>
       {parts.map((p, i) => {
@@ -369,7 +395,11 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
   // UI render as plain labels — cramming prose like "Hover a message" into a
   // fake-code chip read as buttons that did nothing.
   const tips: Array<{ k: string; v: string; kind: 'code' | 'place' }> = [
-    { k: '@name', kind: 'code', v: 'Mention someone — they get notified even with the panel closed.' },
+    {
+      k: '@name',
+      kind: 'code',
+      v: 'Mention someone — they get notified even with the panel closed.'
+    },
     ...(botName
       ? [
           {
@@ -412,7 +442,9 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'rounded-md p-1 transition-colors',
-          open ? th.accentSoft : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          open
+            ? th.accentSoft
+            : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
         )}
         aria-label='Chat tips'
         title='Tips'
@@ -435,7 +467,10 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
               column, descriptions read as a second clean column. */}
           <div className='grid grid-cols-[122px_1fr] gap-x-3 gap-y-0 px-4 py-1.5'>
             {tips.map((t) => (
-              <div key={t.k} className='col-span-2 grid grid-cols-subgrid border-b border-slate-100/70 py-2 last:border-b-0 dark:border-border/40'>
+              <div
+                key={t.k}
+                className='col-span-2 grid grid-cols-subgrid border-b border-slate-100/70 py-2 last:border-b-0 dark:border-border/40'
+              >
                 {t.kind === 'code' ? (
                   <code
                     className={cn(
@@ -478,10 +513,24 @@ function EntityRoomCard({ room }: { room: string }) {
     queryKey: ['nvr-chat-room-card', room],
     queryFn: async () => {
       const types = (await client.request(
-        get<{ data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean; label: string | null }> }>(
-          '/chat/room-types'
-        )
-      )) as { data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean; label: string | null }> }
+        get<{
+          data: Array<{
+            prefix: string
+            collection: string
+            match_field: string
+            is_active: boolean
+            label: string | null
+          }>
+        }>('/chat/room-types')
+      )) as {
+        data: Array<{
+          prefix: string
+          collection: string
+          match_field: string
+          is_active: boolean
+          label: string | null
+        }>
+      }
       const t = (types.data ?? []).find((x) => x.is_active && x.prefix === prefix)
       if (!t) return null
       const rec = (await client.request(
@@ -494,10 +543,12 @@ function EntityRoomCard({ room }: { room: string }) {
       const id = rec.data?.[0]?.id
       if (id == null) return null
       const inst = (await client.request(
-        get<{ data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }>(
-          `/pipelines/instance/${t.collection}/${id}`
-        )
-      )) as { data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null }
+        get<{
+          data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
+        }>(`/pipelines/instance/${t.collection}/${id}`)
+      )) as {
+        data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
+      }
       const state = inst.data?.instance?.current_state_obj
       return {
         collection: t.collection,
@@ -583,7 +634,9 @@ export function ChatRoomView({
   // Seen-by (#147): members' read watermarks — "Seen by N" under your own
   // messages in group rooms (channels/group DMs; 1:1 DMs keep the check).
   const isGroupRoom = room.startsWith('ch:')
-  const { data: readMarks = [] } = useQuery<Array<{ user: string; last_read_at: string; name: string }>>({
+  const { data: readMarks = [] } = useQuery<
+    Array<{ user: string; last_read_at: string; name: string }>
+  >({
     queryKey: ['chat-read-marks', room],
     queryFn: () =>
       client
@@ -615,7 +668,7 @@ export function ChatRoomView({
   const savedIds = useMemo(() => new Set(savedRows.map((r) => r.id)), [savedRows])
   const toggleSave = useMutation({
     mutationFn: (mid: number) => client.request(post(`/chat/messages/${mid}/save`, {})),
-    onSuccess: () => void qcRoom.invalidateQueries({ queryKey: ["chat-saved"] })
+    onSuccess: () => void qcRoom.invalidateQueries({ queryKey: ['chat-saved'] })
   })
 
   // Room catch-up (#346): AI "what you missed" for a busy unread backlog.
@@ -727,15 +780,28 @@ export function ChatRoomView({
     queryKey: ['nvr-chat-attachments', attachmentIds.slice().sort().join('|')],
     queryFn: async () => {
       const res = (await client.request(
-        get<{ data: Array<{ id: string; filename_download: string | null; title: string | null; type: string | null; filesize: number | null }> }>(
-          '/files',
-          {
-            filter: JSON.stringify({ id: { _in: attachmentIds } }),
-            limit: String(attachmentIds.length),
-            fields: 'id,filename_download,title,type,filesize'
-          }
-        )
-      )) as { data: Array<{ id: string; filename_download: string | null; title: string | null; type: string | null; filesize: number | null }> }
+        get<{
+          data: Array<{
+            id: string
+            filename_download: string | null
+            title: string | null
+            type: string | null
+            filesize: number | null
+          }>
+        }>('/files', {
+          filter: JSON.stringify({ id: { _in: attachmentIds } }),
+          limit: String(attachmentIds.length),
+          fields: 'id,filename_download,title,type,filesize'
+        })
+      )) as {
+        data: Array<{
+          id: string
+          filename_download: string | null
+          title: string | null
+          type: string | null
+          filesize: number | null
+        }>
+      }
       return new Map((res.data ?? []).map((f) => [f.id, f]))
     },
     enabled: attachmentIds.length > 0,
@@ -748,10 +814,7 @@ export function ChatRoomView({
     for (const f of files) {
       try {
         const result = await client.upload(f)
-        setPendingFiles((prev) => [
-          ...prev,
-          { id: result.id, name: f.name, type: f.type || null }
-        ])
+        setPendingFiles((prev) => [...prev, { id: result.id, name: f.name, type: f.type || null }])
       } catch {
         /* one failed upload shouldn't kill the rest */
       } finally {
@@ -773,7 +836,10 @@ export function ChatRoomView({
     // The AI assistant answers in-room — offered alongside people when its
     // configured name matches what's being typed.
     if (botName && botName.toLowerCase().startsWith(q)) {
-      return [{ user_id: '__bot__', display_name: botName } as ChatOnlineUser, ...people].slice(0, 6)
+      return [{ user_id: '__bot__', display_name: botName } as ChatOnlineUser, ...people].slice(
+        0,
+        6
+      )
     }
     return people
   }, [mentionQuery, cfg.onlineUsers, botName])
@@ -994,7 +1060,11 @@ export function ChatRoomView({
                 {(
                   [
                     ['all', 'All messages', !roomInfo.muted && roomInfo.notify_mode !== 'mentions'],
-                    ['mentions', 'Mentions only', !roomInfo.muted && roomInfo.notify_mode === 'mentions'],
+                    [
+                      'mentions',
+                      'Mentions only',
+                      !roomInfo.muted && roomInfo.notify_mode === 'mentions'
+                    ],
                     ['muted', 'Muted', roomInfo.muted]
                   ] as const
                 ).map(([mode, text, active]) => (
@@ -1012,7 +1082,9 @@ export function ChatRoomView({
                     }}
                     className={cn(
                       'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]',
-                      active ? th.accentSoft : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-muted'
+                      active
+                        ? th.accentSoft
+                        : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-muted'
                     )}
                   >
                     {text}
@@ -1125,7 +1197,10 @@ export function ChatRoomView({
               !searching &&
               initialUnreadRef.current > 0 &&
               idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
-            const reactionGroups = new Map<string, { count: number; mine: boolean; names: string[] }>()
+            const reactionGroups = new Map<
+              string,
+              { count: number; mine: boolean; names: string[] }
+            >()
             for (const r of m.reactions ?? []) {
               const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
               g.count++
@@ -1145,7 +1220,11 @@ export function ChatRoomView({
                   </div>
                 )}
                 {showUnreadDivider && (
-                  <div ref={dividerRef} className='my-2 flex items-center gap-2' data-chat-unread-divider>
+                  <div
+                    ref={dividerRef}
+                    className='my-2 flex items-center gap-2'
+                    data-chat-unread-divider
+                  >
                     <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
                     <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
                       New messages
@@ -1228,7 +1307,11 @@ export function ChatRoomView({
                         </button>
                         <button
                           type='button'
-                          title={savedIds.has(m.id) ? 'Remove from saved' : 'Save for later (personal bookmark)'}
+                          title={
+                            savedIds.has(m.id)
+                              ? 'Remove from saved'
+                              : 'Save for later (personal bookmark)'
+                          }
                           onClick={() => toggleSave.mutate(m.id)}
                           className={cn(
                             'rounded-full p-0.5',
@@ -1304,10 +1387,19 @@ export function ChatRoomView({
                           onKeyDown={(e) => {
                             if (e.key === 'Escape') setEditingId(null)
                           }}
-                          className={cn('h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none', th.input)}
+                          className={cn(
+                            'h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none',
+                            th.input
+                          )}
                           aria-label='Edit message'
                         />
-                        <button type='submit' className={cn('rounded-md px-1.5 py-1 text-[11px] font-medium', th.accentText)}>
+                        <button
+                          type='submit'
+                          className={cn(
+                            'rounded-md px-1.5 py-1 text-[11px] font-medium',
+                            th.accentText
+                          )}
+                        >
                           Save
                         </button>
                       </form>
@@ -1315,7 +1407,9 @@ export function ChatRoomView({
                       <div
                         className={cn(
                           'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
-                          mine ? cn('rounded-br-md', th.bubbleMine) : cn('rounded-bl-md', th.bubbleOther)
+                          mine
+                            ? cn('rounded-br-md', th.bubbleMine)
+                            : cn('rounded-bl-md', th.bubbleOther)
                         )}
                       >
                         {m.message &&
@@ -1340,7 +1434,12 @@ export function ChatRoomView({
                                   size: meta?.filesize ?? null
                                 })
                               return isImg ? (
-                                <button key={aid} type='button' onClick={openPreview} className='block cursor-zoom-in'>
+                                <button
+                                  key={aid}
+                                  type='button'
+                                  onClick={openPreview}
+                                  className='block cursor-zoom-in'
+                                >
                                   <img
                                     src={url}
                                     alt={name}
@@ -1370,7 +1469,10 @@ export function ChatRoomView({
                       </div>
                     )}
                     {reactionGroups.size > 0 && (
-                      <div className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')} data-chat-reactions>
+                      <div
+                        className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')}
+                        data-chat-reactions
+                      >
                         {[...reactionGroups.entries()].map(([emoji, g]) => (
                           <button
                             key={emoji}
@@ -1397,23 +1499,29 @@ export function ChatRoomView({
                         hour: 'numeric',
                         minute: '2-digit'
                       })}
-                      {mine && isGroupRoom && !deleted && (() => {
-                        const seen = seenBy(m)
-                        if (seen.length === 0) return null
-                        return (
-                          <span
-                            className={cn('font-medium', th.accentText)}
-                            data-tip={`Seen by ${seen.map((sb) => sb.name || 'someone').join(', ')}`}
-                          >
-                            Seen by {seen.length}
-                          </span>
-                        )
-                      })()}
+                      {mine &&
+                        isGroupRoom &&
+                        !deleted &&
+                        (() => {
+                          const seen = seenBy(m)
+                          if (seen.length === 0) return null
+                          return (
+                            <span
+                              className={cn('font-medium', th.accentText)}
+                              data-tip={`Seen by ${seen.map((sb) => sb.name || 'someone').join(', ')}`}
+                            >
+                              Seen by {seen.length}
+                            </span>
+                          )
+                        })()}
                       {isLastMine &&
                         room.startsWith('dm:') &&
                         (wasRead ? (
                           <span
-                            className={cn('inline-flex items-center gap-0.5 font-medium', th.accentText)}
+                            className={cn(
+                              'inline-flex items-center gap-0.5 font-medium',
+                              th.accentText
+                            )}
                           >
                             <CheckCheck className='h-3 w-3' strokeWidth={2.4} /> Read
                           </span>
@@ -1433,7 +1541,10 @@ export function ChatRoomView({
       </div>
       <div className='min-h-[18px] shrink-0 px-3.5'>
         {botAskedAt && botName ? (
-          <p className='flex items-center gap-1.5 text-[11px] italic text-slate-400' data-chat-bot-thinking>
+          <p
+            className='flex items-center gap-1.5 text-[11px] italic text-slate-400'
+            data-chat-bot-thinking
+          >
             <span className='inline-flex gap-0.5'>
               <span className='h-1 w-1 animate-bounce rounded-full bg-slate-400 [animation-delay:0ms]' />
               <span className='h-1 w-1 animate-bounce rounded-full bg-slate-400 [animation-delay:150ms]' />
@@ -1449,7 +1560,12 @@ export function ChatRoomView({
       </div>
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {(pendingFiles.length > 0 || uploadingFiles > 0) && (
-        <div className={cn('flex shrink-0 flex-wrap items-center gap-1.5 border-t px-3 py-1.5', th.divider)}>
+        <div
+          className={cn(
+            'flex shrink-0 flex-wrap items-center gap-1.5 border-t px-3 py-1.5',
+            th.divider
+          )}
+        >
           {pendingFiles.map((f) => (
             <span
               key={f.id}
@@ -1529,7 +1645,10 @@ export function ChatRoomView({
             }
           }}
           placeholder={`Message ${label}… (@ to mention${botName ? `, @${botName} for AI` : ''})`}
-          className={cn('h-9 min-w-0 flex-1 rounded-lg border px-3 text-[12.5px] outline-none', th.input)}
+          className={cn(
+            'h-9 min-w-0 flex-1 rounded-lg border px-3 text-[12.5px] outline-none',
+            th.input
+          )}
           aria-label={`Message ${label}`}
         />
         <input
@@ -1553,7 +1672,9 @@ export function ChatRoomView({
         </button>
         <button
           type='submit'
-          disabled={(!draft.trim() && pendingFiles.length === 0) || send.isPending || uploadingFiles > 0}
+          disabled={
+            (!draft.trim() && pendingFiles.length === 0) || send.isPending || uploadingFiles > 0
+          }
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-[filter] hover:brightness-110 disabled:opacity-40',
             th.action
@@ -1631,8 +1752,7 @@ export function ChatChannelSettings({
   const debounced = useDebouncedValue(memberSearch, 250)
   const { users } = useUserSearch(debounced, visibility === 'private')
 
-  const canEdit =
-    isAdmin || (!!cfg.me && String(channel.created_by ?? '') === String(cfg.me.id))
+  const canEdit = isAdmin || (!!cfg.me && String(channel.created_by ?? '') === String(cfg.me.id))
   const memberIds = new Set(members.map((m) => String(m.user).toUpperCase()))
   const dirty =
     name !== label ||
@@ -1678,7 +1798,9 @@ export function ChatChannelSettings({
             </label>
 
             <div>
-              <span className='mb-1 block text-[11px] font-medium text-slate-400'>Who can see it</span>
+              <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+                Who can see it
+              </span>
               <div className='flex flex-wrap gap-1.5'>
                 {(
                   [
@@ -1706,7 +1828,10 @@ export function ChatChannelSettings({
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
-                  className={cn('mt-2 h-8 w-full rounded-md px-2 text-[12.5px] outline-none', th.input)}
+                  className={cn(
+                    'mt-2 h-8 w-full rounded-md px-2 text-[12.5px] outline-none',
+                    th.input
+                  )}
                 >
                   <option value=''>Choose a role…</option>
                   {roles.map((r) => (
@@ -1876,7 +2001,10 @@ export function ChatRoomList({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder='Search rooms & messages…'
-          className={cn('h-7 min-w-0 flex-1 rounded-md border px-2 text-[12px] outline-none', th.input)}
+          className={cn(
+            'h-7 min-w-0 flex-1 rounded-md border px-2 text-[12px] outline-none',
+            th.input
+          )}
           aria-label='Search rooms and messages'
           data-chat-global-search
         />
@@ -1948,7 +2076,12 @@ export function ChatRoomList({
           className='mb-1 flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
           data-chat-bot-dm
         >
-          <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[13px] font-bold', th.accentSoft)}>
+          <span
+            className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[13px] font-bold',
+              th.accentSoft
+            )}
+          >
             @
           </span>
           <span className='min-w-0 flex-1'>
@@ -1963,7 +2096,12 @@ export function ChatRoomList({
       )}
       {(
         [
-          ['Channels', filteredRooms.filter((r) => (r.kind === 'global' || r.kind === 'channel') && !isGroupDm(r))],
+          [
+            'Channels',
+            filteredRooms.filter(
+              (r) => (r.kind === 'global' || r.kind === 'channel') && !isGroupDm(r)
+            )
+          ],
           ['Direct messages', filteredRooms.filter((r) => r.kind === 'dm' || isGroupDm(r))],
           ['Records', filteredRooms.filter((r) => r.kind === 'entity')]
         ] as const
@@ -2086,7 +2224,10 @@ export function ChatChannelBrowser({
         <button
           type='button'
           onClick={() => setCreating((v) => !v)}
-          className={cn('flex h-8 shrink-0 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium', th.action)}
+          className={cn(
+            'flex h-8 shrink-0 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium',
+            th.action
+          )}
         >
           <Plus className='h-3.5 w-3.5' /> New
         </button>
@@ -2130,7 +2271,9 @@ export function ChatChannelBrowser({
                 onClick={() => setVisibility(v)}
                 className={cn(
                   'rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors',
-                  visibility === v ? th.accentSoft : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
+                  visibility === v
+                    ? th.accentSoft
+                    : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
                 )}
               >
                 {l}
@@ -2254,134 +2397,12 @@ interface PresenceExtra {
  *  user preferences; /presence/online serves it to every host. */
 function MyStatusRow({ myStatus }: { myStatus: { text: string; emoji: string | null } | null }) {
   const th = useTheme()
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState('')
-  const [emoji, setEmoji] = useState('')
-  const [duration, setDuration] = useState<'30' | '60' | 'today' | 'never'>('60')
-  const QUICK = ['📅', '🍽️', '🏠', '✈️', '🤒', '🎯', '☕']
-
-  const save = useMutation({
-    mutationFn: (status: { text: string; emoji: string | null; expires_at: string | null } | null) =>
-      client.request(patchCmd('/users/me/preferences', { custom_status: status })),
-    onSuccess: () => {
-      setEditing(false)
-      void qc.invalidateQueries({ queryKey: ['presence-online'] })
-    },
-    onError: () => toast.error('Could not update your status')
-  })
-  const expiresAt = (): string | null => {
-    if (duration === 'never') return null
-    if (duration === 'today') {
-      const d = new Date()
-      d.setHours(23, 59, 59, 0)
-      return d.toISOString()
-    }
-    return new Date(Date.now() + Number(duration) * 60_000).toISOString()
-  }
-
-  if (!editing) {
-    return (
-      <div className='mb-1.5 flex items-center gap-1.5 px-1'>
-        <button
-          type='button'
-          onClick={() => {
-            setText(myStatus?.text ?? '')
-            setEmoji(myStatus?.emoji ?? '')
-            setEditing(true)
-          }}
-          className={cn(
-            'flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-dashed px-2 py-1 text-left text-[11.5px]',
-            myStatus
-              ? 'border-slate-200 text-slate-600 dark:border-border dark:text-slate-300'
-              : 'border-slate-200 text-slate-400 dark:border-border'
-          )}
-          data-chat-my-status
-        >
-          {myStatus ? (
-            <span className='truncate'>
-              {myStatus.emoji ? `${myStatus.emoji} ` : ''}
-              {myStatus.text}
-            </span>
-          ) : (
-            <span>Set a status…</span>
-          )}
-        </button>
-        {myStatus && (
-          <button
-            type='button'
-            onClick={() => save.mutate(null)}
-            className='rounded p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
-            aria-label='Clear status'
-          >
-            <X className='h-3.5 w-3.5' />
-          </button>
-        )}
-      </div>
-    )
-  }
   return (
-    <div className='mb-2 space-y-1.5 rounded-lg border border-slate-200 p-2 dark:border-border'>
-      <div className='flex gap-1'>
-        {QUICK.map((e) => (
-          <button
-            key={e}
-            type='button'
-            onClick={() => setEmoji(emoji === e ? '' : e)}
-            className={cn(
-              'rounded-md px-1 py-0.5 text-[15px]',
-              emoji === e ? th.accentSoft : 'hover:bg-slate-100 dark:hover:bg-muted'
-            )}
-          >
-            {e}
-          </button>
-        ))}
-      </div>
-      <input
-        // biome-ignore lint/a11y/noAutofocus: single-purpose inline form
-        autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && text.trim()) {
-            save.mutate({ text: text.trim(), emoji: emoji || null, expires_at: expiresAt() })
-          }
-          if (e.key === 'Escape') setEditing(false)
-        }}
-        maxLength={100}
-        placeholder="What's up? (e.g. In a meeting until 3)"
-        className={cn('h-7 w-full rounded-md border px-2 text-[12px]', th.input)}
-      />
-      <div className='flex items-center gap-1.5'>
-        <select
-          value={duration}
-          onChange={(e) => setDuration(e.target.value as typeof duration)}
-          className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-        >
-          <option value='30'>Clear in 30 min</option>
-          <option value='60'>Clear in 1 hour</option>
-          <option value='today'>Clear today</option>
-          <option value='never'>Don't clear</option>
-        </select>
-        <span className='flex-1' />
-        <button
-          type='button'
-          onClick={() => setEditing(false)}
-          className='rounded-md px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-        >
-          Cancel
-        </button>
-        <button
-          type='button'
-          disabled={!text.trim() || save.isPending}
-          onClick={() => save.mutate({ text: text.trim(), emoji: emoji || null, expires_at: expiresAt() })}
-          className={cn('rounded-md px-2.5 py-1 text-[11.5px] font-semibold disabled:opacity-50', th.action)}
-        >
-          Save
-        </button>
-      </div>
-    </div>
+    <CustomStatusEditor
+      status={myStatus ? { text: myStatus.text, emoji: myStatus.emoji } : null}
+      theme={{ accentSoft: th.accentSoft, input: th.input, action: th.action }}
+      className='mb-1.5 px-1'
+    />
   )
 }
 
@@ -2433,9 +2454,7 @@ function prettyPath(path: string | null | undefined): string | null {
   const kept = parts.filter((p) => !skip.has(p))
   if (kept.length === 0) return 'Home'
   return kept
-    .map((p, i) =>
-      i === 0 ? p.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : p
-    )
+    .map((p, i) => (i === 0 ? p.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : p))
     .join(' › ')
 }
 
@@ -2453,8 +2472,11 @@ function GroupDmDialog({
   const [selected, setSelected] = useState<Map<string, string>>(new Map())
   const { users } = useUserSearch(search, true)
   const createGroup = useCreateGroupDm()
-  const displayName = (u: { first_name: string | null; last_name: string | null; email: string | null }) =>
-    [u.first_name, u.last_name].filter(Boolean).join(' ') || (u.email ?? 'Unknown')
+  const displayName = (u: {
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+  }) => [u.first_name, u.last_name].filter(Boolean).join(' ') || (u.email ?? 'Unknown')
 
   return (
     <div className='flex min-h-0 flex-1 flex-col p-3' data-chat-group-dialog>
@@ -2476,7 +2498,10 @@ function GroupDmDialog({
           {[...selected.entries()].map(([id, n]) => (
             <span
               key={id}
-              className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium', th.accentSoft)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                th.accentSoft
+              )}
             >
               {n}
               <button
@@ -2535,7 +2560,10 @@ function GroupDmDialog({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder='Group name (optional)'
-        className={cn('mb-2 mt-1.5 h-8 rounded-md border px-2.5 text-[12.5px] outline-none', th.input)}
+        className={cn(
+          'mb-2 mt-1.5 h-8 rounded-md border px-2.5 text-[12.5px] outline-none',
+          th.input
+        )}
         aria-label='Group name'
       />
       <button
@@ -2552,7 +2580,9 @@ function GroupDmDialog({
           th.action
         )}
       >
-        {createGroup.isPending ? 'Creating…' : `Start conversation${selected.size ? ` (${selected.size + 1})` : ''}`}
+        {createGroup.isPending
+          ? 'Creating…'
+          : `Start conversation${selected.size ? ` (${selected.size + 1})` : ''}`}
       </button>
     </div>
   )
@@ -2608,7 +2638,9 @@ export function ChatPanel({
       const values =
         by === '__role__'
           ? [humanLabel(x?.role_name ?? u.role_name) || 'No role']
-          : (x?.scopes_by_dimension?.[by]?.length ? x.scopes_by_dimension[by] : ['Unassigned'])
+          : x?.scopes_by_dimension?.[by]?.length
+            ? x.scopes_by_dimension[by]
+            : ['Unassigned']
       // Sorted so people with the same set land in the same bucket regardless
       // of the order their scope rows happened to come back in.
       const key = [...new Set(values)].sort((a, b) => a.localeCompare(b)).join(', ')
@@ -2746,7 +2778,13 @@ export function ChatPanel({
             {/* Group by an attribute of the people listed — role, or any scope
                 dimension the instance tracks (Zone, Region…). Purely a view
                 preference, remembered per browser. */}
-            <MyStatusRow myStatus={me ? (presenceExtras.byUser.get(String(me.id).toUpperCase())?.custom_status ?? null) : null} />
+            <MyStatusRow
+              myStatus={
+                me
+                  ? (presenceExtras.byUser.get(String(me.id).toUpperCase())?.custom_status ?? null)
+                  : null
+              }
+            />
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>
@@ -2783,138 +2821,151 @@ export function ChatPanel({
                   {section.label !== null && (
                     <div className='sticky top-0 z-[1] flex items-center gap-1.5 bg-white/95 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 backdrop-blur dark:bg-card/95'>
                       {section.label}
-                      <span className='font-normal normal-case text-slate-300'>{section.users.length}</span>
+                      <span className='font-normal normal-case text-slate-300'>
+                        {section.users.length}
+                      </span>
                     </div>
                   )}
                   {section.users.map((u) => {
-                // /presence/online is the ONE classifier of idle: it weighs
-                // last_active freshness against the row's is_idle bit, so a
-                // host feeding raw table rows here (admin) must not disagree
-                // with a host feeding the endpoint's own rows (efp-new).
-                const px = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                const isIdle = px?.is_idle ?? u.is_idle
-                const idleSrc = px ?? u
-                return (
-                <button
-                  key={u.user_id}
-                  type='button'
-                  onClick={() => openDm(u)}
-                  title='Send a direct message'
-                  className='flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
-                >
-                  <span className='relative'>
-                    <Avatar id={u.user_id} name={u.display_name} />
-                    <span
-                      className={cn(
-                        'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-card',
-                        // Hollow amber rather than a second solid colour: idle
-                        // is a weaker state than online, and should read that
-                        // way at a glance rather than competing with it.
-                        isIdle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
-                      )}
-                      title={isIdle ? idleLabel(idleSrc) : 'Online'}
-                    />
-                  </span>
-                  <span className='min-w-0 flex-1'>
-                    <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
-                      {u.display_name ?? 'Unknown user'}
-                      {isIdle && (
-                        <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
-                          {idleLabel(idleSrc)}
-                        </span>
-                      )}
-                    </span>
-                    {(() => {
-                      const cs = presenceExtras.byUser.get(String(u.user_id).toUpperCase())?.custom_status
-                      if (!cs) return null
-                      return (
-                        <span className='block truncate text-[11px] italic text-slate-500 dark:text-slate-400' data-chat-status>
-                          {cs.emoji ? `${cs.emoji} ` : ''}
-                          {cs.text}
-                        </span>
-                      )
-                    })()}
-                    <span className='block truncate text-[11px] text-slate-400'>
-                      {(() => {
-                        const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                        // Instance config decides which parts appear and in
-                        // what order; the live page comes from the presence
-                        // heartbeat, so it tracks people as they navigate.
-                        const parts = presenceExtras.fields
-                          .map((f) => {
-                            if (f === 'role') return humanLabel(x?.role_name ?? u.role_name)
-                            if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
-                            if (f === 'page') {
-                              // The server renders a record's display template
-                              // ("Workflows › CR26-79811"); prettyPath can only
-                              // reach the raw id, so it is the fallback.
-                              const page =
-                                (x as { page?: string | null })?.page ??
-                                (u as { page?: string | null }).page ??
-                                prettyPath(x?.current_path ?? u.current_path)
-                              const app =
-                                (x as { app?: string | null })?.app ??
-                                (u as { app?: string | null }).app
-                              // Only unusual places are worth naming; the
-                              // ordinary frontend sends no app at all.
-                              return app ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim() : page
-                            }
-                            return null
-                          })
-                          .filter(Boolean)
-                        return parts.join(' · ') || 'Online'
-                      })()}
-                    </span>
-                  </span>
-                  {(() => {
-                    // Admin-only: jump straight into this person's live session
-                    // replay. Hidden unless a recording exists AND the host has
-                    // a replay route.
-                    const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                    if (!isAdmin || !x?.recording_id) return null
-                    const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
-                    // The app that OWNS /session-replays supplies its own
-                    // sessionUrl, so the default below is only ever used by a
-                    // headless host. There, a base that is empty or resolves to
-                    // this very origin cannot reach the replay page — it lands
-                    // the viewer back in their own router (a dashboard, not an
-                    // error), which reads as the feature being broken. Hide the
-                    // action instead of opening a tab that goes nowhere.
-                    const reachable =
-                      !!base &&
-                      (typeof window === 'undefined' ||
-                        new URL(base, window.location.origin).origin !== window.location.origin)
-                    const href = cfg.sessionUrl
-                      ? cfg.sessionUrl(x.recording_id, String(u.user_id))
-                      : reachable
-                        ? `${base}/session-replays?recording=${x.recording_id}`
-                        : null
-                    if (!href) return null
+                    // /presence/online is the ONE classifier of idle: it weighs
+                    // last_active freshness against the row's is_idle bit, so a
+                    // host feeding raw table rows here (admin) must not disagree
+                    // with a host feeding the endpoint's own rows (efp-new).
+                    const px = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                    const isIdle = px?.is_idle ?? u.is_idle
+                    const idleSrc = px ?? u
                     return (
-                      <span
-                        role='link'
-                        tabIndex={0}
-                        title='Watch this session'
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openSession(href)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.stopPropagation()
-                            openSession(href)
-                          }
-                        }}
-                        className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'
+                      <button
+                        key={u.user_id}
+                        type='button'
+                        onClick={() => openDm(u)}
+                        title='Send a direct message'
+                        className='flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
                       >
-                        <PlayCircle className='h-4 w-4' strokeWidth={1.8} />
-                      </span>
+                        <span className='relative'>
+                          <Avatar id={u.user_id} name={u.display_name} />
+                          <span
+                            className={cn(
+                              'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-card',
+                              // Hollow amber rather than a second solid colour: idle
+                              // is a weaker state than online, and should read that
+                              // way at a glance rather than competing with it.
+                              isIdle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
+                            )}
+                            title={isIdle ? idleLabel(idleSrc) : 'Online'}
+                          />
+                        </span>
+                        <span className='min-w-0 flex-1'>
+                          <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                            {u.display_name ?? 'Unknown user'}
+                            {isIdle && (
+                              <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
+                                {idleLabel(idleSrc)}
+                              </span>
+                            )}
+                          </span>
+                          {(() => {
+                            const cs = presenceExtras.byUser.get(
+                              String(u.user_id).toUpperCase()
+                            )?.custom_status
+                            if (!cs) return null
+                            return (
+                              <span
+                                className='block truncate text-[11px] italic text-slate-500 dark:text-slate-400'
+                                data-chat-status
+                              >
+                                {cs.emoji ? `${cs.emoji} ` : ''}
+                                {cs.text}
+                              </span>
+                            )
+                          })()}
+                          <span className='block truncate text-[11px] text-slate-400'>
+                            {(() => {
+                              const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                              // Instance config decides which parts appear and in
+                              // what order; the live page comes from the presence
+                              // heartbeat, so it tracks people as they navigate.
+                              const parts = presenceExtras.fields
+                                .map((f) => {
+                                  if (f === 'role') return humanLabel(x?.role_name ?? u.role_name)
+                                  if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
+                                  if (f === 'page') {
+                                    // The server renders a record's display template
+                                    // ("Workflows › CR26-79811"); prettyPath can only
+                                    // reach the raw id, so it is the fallback.
+                                    const page =
+                                      (x as { page?: string | null })?.page ??
+                                      (u as { page?: string | null }).page ??
+                                      prettyPath(x?.current_path ?? u.current_path)
+                                    const app =
+                                      (x as { app?: string | null })?.app ??
+                                      (u as { app?: string | null }).app
+                                    // Only unusual places are worth naming; the
+                                    // ordinary frontend sends no app at all.
+                                    return app
+                                      ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
+                                      : page
+                                  }
+                                  return null
+                                })
+                                .filter(Boolean)
+                              return parts.join(' · ') || 'Online'
+                            })()}
+                          </span>
+                        </span>
+                        {(() => {
+                          // Admin-only: jump straight into this person's live session
+                          // replay. Hidden unless a recording exists AND the host has
+                          // a replay route.
+                          const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                          if (!isAdmin || !x?.recording_id) return null
+                          const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
+                          // The app that OWNS /session-replays supplies its own
+                          // sessionUrl, so the default below is only ever used by a
+                          // headless host. There, a base that is empty or resolves to
+                          // this very origin cannot reach the replay page — it lands
+                          // the viewer back in their own router (a dashboard, not an
+                          // error), which reads as the feature being broken. Hide the
+                          // action instead of opening a tab that goes nowhere.
+                          const reachable =
+                            !!base &&
+                            (typeof window === 'undefined' ||
+                              new URL(base, window.location.origin).origin !==
+                                window.location.origin)
+                          const href = cfg.sessionUrl
+                            ? cfg.sessionUrl(x.recording_id, String(u.user_id))
+                            : reachable
+                              ? `${base}/session-replays?recording=${x.recording_id}`
+                              : null
+                          if (!href) return null
+                          return (
+                            <span
+                              role='link'
+                              tabIndex={0}
+                              title='Watch this session'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openSession(href)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.stopPropagation()
+                                  openSession(href)
+                                }
+                              }}
+                              className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'
+                            >
+                              <PlayCircle className='h-4 w-4' strokeWidth={1.8} />
+                            </span>
+                          )
+                        })()}
+                        <MessageCircle
+                          className='h-4 w-4 shrink-0 text-slate-300'
+                          strokeWidth={1.8}
+                        />
+                      </button>
                     )
-                  })()}
-                  <MessageCircle className='h-4 w-4 shrink-0 text-slate-300' strokeWidth={1.8} />
-                </button>
-                )
-              })}
+                  })}
                 </div>
               ))
             )}
