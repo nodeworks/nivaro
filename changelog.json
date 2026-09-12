@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-12T20:17:42.447Z",
+  "generated_at": "2026-09-12T20:29:18.366Z",
   "releases": [
+    {
+      "version": "0.1.265",
+      "tag": "v0.1.265",
+      "date": "2026-09-12T16:29:09-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "audience",
+              "text": "name record subscriptions by what they cover, one pill per person",
+              "hash": "16960cb9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.264",
       "tag": "v0.1.264",
-      "date": "2026-09-12T16:17:33-04:00",
+      "date": "2026-09-12T16:17:42-04:00",
       "sections": [
         {
           "label": "Added",
