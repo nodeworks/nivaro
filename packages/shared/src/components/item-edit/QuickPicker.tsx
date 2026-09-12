@@ -262,19 +262,35 @@ export function QuickPicker({
   }, [active?.field])
 
   const optionsEnabled = !!active?.target && activeMissingRequired.length === 0
+  // The field's own "Option sort" (options.option_sort — TableEditor field ⚙)
+  // orders the step exactly like the form's picker: a column ('-id') is a
+  // server sort, 'label' / '-label' sort the rendered label; default = label A→Z.
+  const optionSort = useMemo(() => {
+    const o = parseJson<{ option_sort?: unknown }>(active?.fc?.options ?? null)
+    return typeof o?.option_sort === 'string' && o.option_sort.trim() ? o.option_sort.trim() : ''
+  }, [active?.fc])
+  const serverSort = optionSort && !/^-?label$/.test(optionSort) ? optionSort : undefined
   const {
     data: options,
     isLoading: optionsLoading,
     isError: optionsError,
     refetch
   } = useQuery<Item[]>({
-    queryKey: ['quick-picker-opts', active?.target ?? '', activeFilterStr ?? '', fields, debounced],
+    queryKey: [
+      'quick-picker-opts',
+      active?.target ?? '',
+      activeFilterStr ?? '',
+      fields,
+      debounced,
+      serverSort ?? ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Item[] }>(
           get(`/items/${active!.target}`, {
             limit: OPTION_PAGE,
             picker: '1',
+            ...(serverSort ? { sort: serverSort } : {}),
             ...(fields ? { fields } : {}),
             ...(activeFilterStr ? { filter: activeFilterStr } : {}),
             ...(debounced ? { search: debounced } : {})
@@ -286,10 +302,12 @@ export function QuickPicker({
   })
   const labelOf = (it: Item) => applyDisplayTemplate(tmpl, it) || `#${String(it.id)}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: labelOf is a closure over tmpl, which IS listed
-  const sortedOptions = useMemo(
-    () => [...(options ?? [])].sort((a, b) => labelOf(a).localeCompare(labelOf(b))),
-    [options, tmpl]
-  )
+  const sortedOptions = useMemo(() => {
+    const list = [...(options ?? [])]
+    if (serverSort) return list // the server already ordered them
+    const dir = optionSort === '-label' ? -1 : 1
+    return list.sort((a, b) => dir * labelOf(a).localeCompare(labelOf(b)))
+  }, [options, tmpl, serverSort, optionSort])
   const listMode = !debounced && (options?.length ?? 0) > CHIP_LIMIT ? true : !!debounced
   const [autoPicked, setAutoPicked] = useState<Set<string>>(() => new Set())
   const [userCleared, setUserCleared] = useState<Set<string>>(() => new Set())

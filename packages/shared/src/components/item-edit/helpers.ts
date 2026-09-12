@@ -171,7 +171,12 @@ export function buildCascadeFilter(input: CascadeFilterInput): CascadeFilterResu
 // funding_years → divisions → regions → project_type → project → project_sub_types.
 
 export function seedQuickPickerSteps(
-  fieldConfig: Array<{ field: string; dependency_config?: unknown; hidden?: boolean }>,
+  fieldConfig: Array<{
+    field: string
+    dependency_config?: unknown
+    hidden?: boolean
+    required?: boolean
+  }>,
   relations: Array<{
     many_collection: string
     many_field: string | null
@@ -203,7 +208,16 @@ export function seedQuickPickerSteps(
   // empties the set, the graph has no spine — keep everyone.
   const childrenOf = (f: string, pool: Set<string>) =>
     [...pool].filter((c) => c !== f && (rulesOf.get(c) ?? []).some((r) => r.parent_field === f))
-  const leaves = new Set([...members].filter((f) => childrenOf(f, members).length === 0))
+  // …except a REQUIRED leaf whose options genuinely depend on its parents
+  // (a strict rule, not show_all_if_no_parent): that is the chain's
+  // destination — inventory_request.project narrows to nothing further but
+  // is the whole point of the walk.
+  const requiredOf = new Set(fieldConfig.filter((f) => f.required).map((f) => f.field))
+  const isDestination = (f: string) =>
+    requiredOf.has(f) && (rulesOf.get(f) ?? []).some((r) => r.show_all_if_no_parent !== true)
+  const leaves = new Set(
+    [...members].filter((f) => childrenOf(f, members).length === 0 && !isDestination(f))
+  )
   const afterLeaves = new Set([...members].filter((f) => !leaves.has(f)))
   const pruned = new Set(
     [...afterLeaves].filter((f) => childrenOf(f, afterLeaves).length > 0 || rulesOf.has(f))
