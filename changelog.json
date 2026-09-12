@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-11T22:26:41.473Z",
+  "generated_at": "2026-09-12T19:48:08.797Z",
   "releases": [
+    {
+      "version": "0.1.263",
+      "tag": "v0.1.263",
+      "date": "2026-09-12T15:47:58-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "cbv",
+              "text": "\"+ New item\" rows open the form directly, with a per-row Quick pick affordance",
+              "hash": "d838c6f5"
+            },
+            {
+              "section": "Added",
+              "scope": "bulk-actions",
+              "text": "built-in bar operations join the registry",
+              "hash": "c4b9e6b1"
+            },
+            {
+              "section": "Added",
+              "scope": "bulk-actions",
+              "text": "admin-defined bulk actions with per-surface enablement and access rules",
+              "hash": "e874e818"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "quick picker — anchored slide popover down a layout's dependency chain",
+              "hash": "71b7883d"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cbv",
+              "text": "bulk bar uses the neutral dark surface in dark mode",
+              "hash": "2788bb7d"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.262",
       "tag": "v0.1.262",
-      "date": "2026-09-11T18:26:33-04:00",
+      "date": "2026-09-11T18:26:41-04:00",
       "sections": [
         {
           "label": "Fixed",
