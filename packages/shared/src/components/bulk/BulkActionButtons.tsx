@@ -201,8 +201,8 @@ export function BulkActionButtons({
       ? cn(
           'h-8 rounded-md px-3 text-[12.5px] font-medium transition-colors disabled:opacity-50',
           a.variant === 'danger'
-            ? 'border border-red-400/50 text-red-200 hover:bg-red-500/20'
-            : 'border border-white/20 hover:bg-white/10',
+            ? 'border border-red-400/50 text-red-200 hover:bg-red-500/20 dark:border-red-500/40 dark:text-red-400 dark:hover:bg-red-500/10'
+            : 'border border-white/20 hover:bg-white/10 dark:border-border dark:hover:bg-muted',
           active && (a.variant === 'danger' ? 'bg-red-500/20' : 'bg-white/10')
         )
       : cn(

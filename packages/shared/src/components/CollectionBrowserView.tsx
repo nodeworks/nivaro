@@ -2771,7 +2771,7 @@ function RecordMergeForm({
 
   return (
     <span className='flex flex-wrap items-center gap-2'>
-      <span className='text-[12px] text-slate-300'>Keep</span>
+      <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>Keep</span>
       {ids.map((id) => (
         <button
           key={String(id)}
@@ -2781,13 +2781,13 @@ function RecordMergeForm({
             'h-8 rounded-md border px-3 font-mono text-[12px]',
             String(survivor) === String(id)
               ? 'border-[#00ceff] bg-[#00ceff22] text-[#7fe7ff]'
-              : 'border-white/20 text-slate-300 hover:bg-white/10'
+              : 'border-white/20 dark:border-border text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted'
           )}
         >
           {String(id)}
         </button>
       ))}
-      <span className='text-[11.5px] text-slate-300'>
+      <span className='text-[11.5px] text-slate-300 dark:text-muted-foreground'>
         {refTotal == null
           ? 'Scanning references…'
           : `${refTotal.toLocaleString()} reference(s) will repoint · ${merged} goes to trash`}
@@ -2797,14 +2797,14 @@ function RecordMergeForm({
         type='button'
         disabled={busy || refTotal == null}
         onClick={() => void run()}
-        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white disabled:opacity-50'
+        className='h-8 rounded-md bg-red-500 px-3 text-[12.5px] font-semibold text-white dark:text-foreground disabled:opacity-50'
       >
         {busy ? 'Merging…' : 'Merge'}
       </button>
       <button
         type='button'
         onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
       >
         Cancel
       </button>
@@ -2879,7 +2879,7 @@ function MessageStakeholdersForm({
         void send()
       }}
     >
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
+      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
         <input
           type='checkbox'
           checked={owners}
@@ -2888,7 +2888,7 @@ function MessageStakeholdersForm({
         />
         Owners
       </label>
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
+      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
         <input
           type='checkbox'
           checked={creators}
@@ -2897,7 +2897,7 @@ function MessageStakeholdersForm({
         />
         Creators
       </label>
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300'>
+      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
         <input
           type='checkbox'
           checked={email}
@@ -2917,13 +2917,13 @@ function MessageStakeholdersForm({
         value={subject}
         onChange={(e) => setSubject(e.target.value)}
         placeholder='Subject'
-        className='h-8 w-44 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+        className='h-8 w-44 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
       />
       <input
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         placeholder='Message'
-        className='h-8 w-64 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+        className='h-8 w-64 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
       />
       {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
       <button
@@ -2936,7 +2936,7 @@ function MessageStakeholdersForm({
       <button
         type='button'
         onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
       >
         Cancel
       </button>
@@ -3075,17 +3075,17 @@ function BulkBar({
   return (
     <div
       data-cbv-bulkbar
-      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white shadow-[0_-2px_12px_rgba(0,0,0,0.25)]'
+      className='nvr-slide-up flex shrink-0 flex-wrap items-center gap-3 border-t border-[#16233c] bg-[#0f1e2d] px-4 py-2.5 text-white dark:text-foreground shadow-[0_-2px_12px_rgba(0,0,0,0.25)] dark:border-border dark:bg-card dark:text-foreground dark:shadow-none'
     >
       <button
         type='button'
         onClick={onClear}
         aria-label='Clear selection'
-        className='text-slate-400 hover:text-white'
+        className='text-slate-400 hover:text-white dark:hover:text-foreground'
       >
         ✕
       </button>
-      <span className='text-[13px] font-medium text-[#00ceff]'>
+      <span className='text-[13px] font-medium text-[#00ceff] dark:text-nvr-cyan'>
         {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
       </span>
       {comparing && (
@@ -3097,7 +3097,9 @@ function BulkBar({
           onClose={() => setComparing(false)}
         />
       )}
-      {note && <span className='text-[12px] text-slate-300'>{note}</span>}
+      {note && (
+        <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>{note}</span>
+      )}
       <span className='flex-1' />
       {mode === 'actions' && (
         <span className='flex flex-wrap items-center gap-1.5'>
@@ -3133,7 +3135,7 @@ function BulkBar({
                           qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] })
                         )
                     }}
-                    className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white hover:bg-red-600 group-hover/recipe:flex'
+                    className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white dark:text-foreground hover:bg-red-600 group-hover/recipe:flex'
                   >
                     ✕
                   </button>
@@ -3144,7 +3146,7 @@ function BulkBar({
             <button
               type='button'
               onClick={() => setComparing(true)}
-              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             >
               Compare
             </button>
@@ -3154,7 +3156,7 @@ function BulkBar({
               type='button'
               onClick={() => setMode('merge')}
               title='Merge these two duplicates into one — every reference repoints to the survivor'
-              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             >
               Merge…
             </button>
@@ -3176,7 +3178,7 @@ function BulkBar({
             <button
               type='button'
               onClick={() => setMode('update')}
-              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             >
               Update Field
             </button>
@@ -3185,7 +3187,7 @@ function BulkBar({
             <button
               type='button'
               onClick={() => setMode('transition')}
-              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             >
               Transition
             </button>
@@ -3194,7 +3196,7 @@ function BulkBar({
             <button
               type='button'
               onClick={() => setMode('message')}
-              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             >
               Message…
             </button>
@@ -3256,13 +3258,13 @@ function BulkBar({
             value={field}
             onChange={(e) => setField(e.target.value)}
             placeholder='field'
-            className='h-8 w-32 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+            className='h-8 w-32 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
           />
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder='value'
-            className='h-8 w-32 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+            className='h-8 w-32 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
           />
           <button
             type='submit'
@@ -3279,14 +3281,14 @@ function BulkBar({
               setRecipeNaming({ action_type: 'update', config: { field: field.trim(), value } })
             }}
             title='Save this update as a reusable recipe'
-            className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
+            className='h-8 rounded-md border border-white/20 dark:border-border px-2.5 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted disabled:opacity-40'
           >
             ☆ Save recipe
           </button>
           <button
             type='button'
             onClick={() => setMode('actions')}
-            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+            className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
           >
             Cancel
           </button>
@@ -3319,7 +3321,7 @@ function BulkBar({
               ...transitions.map((t) => ({ value: t.id, label: t.label }))
             ]}
             ariaLabel='Choose transition'
-            className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white focus:ring-0'
+            className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white dark:text-foreground focus:ring-0 dark:border-border dark:bg-background dark:text-foreground'
           />
           <button
             type='submit'
@@ -3338,14 +3340,14 @@ function BulkBar({
               setRecipeNaming({ action_type: 'transition', config: { transition_label: t.label } })
             }}
             title='Save this transition as a reusable recipe'
-            className='h-8 rounded-md border border-white/20 px-2.5 text-[12.5px] text-slate-300 hover:bg-white/10 disabled:opacity-40'
+            className='h-8 rounded-md border border-white/20 dark:border-border px-2.5 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted disabled:opacity-40'
           >
             ☆ Save recipe
           </button>
           <button
             type='button'
             onClick={() => setMode('actions')}
-            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+            className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
           >
             Cancel
           </button>
@@ -3359,14 +3361,16 @@ function BulkBar({
             void saveRecipe()
           }}
         >
-          <span className='text-[12px] text-slate-300'>Recipe name:</span>
+          <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>
+            Recipe name:
+          </span>
           <input
             // biome-ignore lint/a11y/noAutofocus: single purpose inline form
             autoFocus
             value={recipeName}
             onChange={(e) => setRecipeName(e.target.value)}
             placeholder='e.g. Close out — duplicate'
-            className='h-8 w-56 rounded-md border border-white/20 bg-white/10 px-2 text-[12.5px] text-white placeholder:text-slate-400'
+            className='h-8 w-56 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
           />
           <button
             type='submit'
@@ -3378,7 +3382,7 @@ function BulkBar({
           <button
             type='button'
             onClick={() => setRecipeNaming(null)}
-            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+            className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
           >
             Cancel
           </button>
@@ -3386,7 +3390,7 @@ function BulkBar({
       )}
       {mode === 'confirm-delete' && (
         <span className='flex items-center gap-2'>
-          <span className='text-[12.5px] text-slate-300'>
+          <span className='text-[12.5px] text-slate-300 dark:text-muted-foreground'>
             Delete {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'}? Deleted records
             move to Trash for 30 days.
           </span>
@@ -3408,7 +3412,7 @@ function BulkBar({
           <button
             type='button'
             onClick={() => setMode('actions')}
-            className='h-8 px-2 text-[12.5px] text-slate-300 hover:text-white'
+            className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
           >
             Cancel
           </button>
