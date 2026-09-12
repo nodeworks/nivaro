@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-09-12T21:12:24.283Z",
+  "generated_at": "2026-09-12T22:17:09.928Z",
   "releases": [
+    {
+      "version": "0.1.267",
+      "tag": "v0.1.267",
+      "date": "2026-09-12T18:17:01-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "query-widgets",
+              "text": "theme colour roles for columns and stat tiles",
+              "hash": "9c231d57"
+            },
+            {
+              "section": "Added",
+              "scope": "pages",
+              "text": "Manage Forecast becomes a browse-then-edit grid",
+              "hash": "72baa31c"
+            },
+            {
+              "section": "Added",
+              "scope": "pages",
+              "text": "Manage Allocations inside the View Budget sheet; matrix editor redesign",
+              "hash": "868728b3"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.266",
       "tag": "v0.1.266",
-      "date": "2026-09-12T17:12:15-04:00",
+      "date": "2026-09-12T17:12:24-04:00",
       "sections": [
         {
           "label": "Added",
