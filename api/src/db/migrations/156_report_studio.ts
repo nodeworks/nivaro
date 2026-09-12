@@ -16,7 +16,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await knex.schema.createTable('nivaro_report_widgets', (t) => {
     t.uuid('id').primary()
-    t.uuid('report').notNullable().references('id').inTable('nivaro_report_defs').onDelete('CASCADE')
+    t.uuid('report')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_report_defs')
+      .onDelete('CASCADE')
     t.string('type', 30).notNullable() // kpi | bar | line | donut | table | divider
     t.string('title', 255).notNullable()
     t.string('collection', 255).nullable()
@@ -31,7 +35,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await knex.schema.createTable('nivaro_report_subscriptions', (t) => {
     t.increments('id').primary()
-    t.uuid('report').notNullable().references('id').inTable('nivaro_report_defs').onDelete('CASCADE')
+    t.uuid('report')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_report_defs')
+      .onDelete('CASCADE')
     t.uuid('user').notNullable().references('id').inTable('nivaro_users').onDelete('NO ACTION')
     t.string('cadence', 10).notNullable().defaultTo('daily') // daily | weekly
     t.boolean('delivery_email').notNullable().defaultTo(true)
@@ -43,7 +51,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await knex.schema.createTable('nivaro_report_alerts', (t) => {
     t.uuid('id').primary()
-    t.uuid('report').notNullable().references('id').inTable('nivaro_report_defs').onDelete('CASCADE')
+    t.uuid('report')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_report_defs')
+      .onDelete('CASCADE')
     t.uuid('widget').notNullable() // no FK — widget rows are bulk-replaced; alert keeps working by id match
     t.string('name', 255).notNullable()
     t.text('conditions').notNullable() // JSON [{ field: 'value'|'row_count', op, value }] AND

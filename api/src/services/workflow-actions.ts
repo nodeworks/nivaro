@@ -101,7 +101,12 @@ interface TransitionActionDef {
   record_link?: { link_type?: string; note?: string }
   m2m?: Record<
     string,
-    { junction_collection: string; parent_field: string; related_field: string; values_template: string }
+    {
+      junction_collection: string
+      parent_field: string
+      related_field: string
+      values_template: string
+    }
   >
 }
 
@@ -241,7 +246,12 @@ async function buildContext(
         IDENTIFIER_RE.test(jf.fk_to_row ?? '') &&
         IDENTIFIER_RE.test(jf.field ?? '')
       ) {
-        q = q.whereIn('id', db(jf.junction).select(jf.fk_to_row).where(jf.field, jf.value as never))
+        q = q.whereIn(
+          'id',
+          db(jf.junction)
+            .select(jf.fk_to_row)
+            .where(jf.field, jf.value as never)
+        )
       }
       if (cfg.sort) {
         const desc = cfg.sort.startsWith('-')
@@ -475,12 +485,14 @@ export async function runTransitionActions(opts: {
     if (journalId == null) return
     try {
       if (err !== undefined) {
-        await db('nivaro_action_journal').where({ id: journalId }).update({
-          status: 'error',
-          last_error: String(err instanceof Error ? err.message : err).slice(0, 2000),
-          actions_done: journalDone,
-          finished_at: new Date()
-        })
+        await db('nivaro_action_journal')
+          .where({ id: journalId })
+          .update({
+            status: 'error',
+            last_error: String(err instanceof Error ? err.message : err).slice(0, 2000),
+            actions_done: journalDone,
+            finished_at: new Date()
+          })
       } else {
         journalDone++
         await db('nivaro_action_journal')
@@ -561,7 +573,6 @@ export async function runTransitionActions(opts: {
       const rendered = await engine.parseAndRender(action.payload_template, scope)
       body = JSON.parse(rendered) as Record<string, unknown>
     } catch (err) {
-
       await recordSubmission(
         collection,
         item,
@@ -725,7 +736,9 @@ export async function runTransitionActions(opts: {
         // state and surfaces the error. on_failure writebacks (mdsi_status =
         // 'error') already landed, which is what the form banner keys off.
         await journalTick(`blocked: ${error ?? 'unknown error'}`)
-        return { blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}` }
+        return {
+          blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}`
+        }
       }
     } else {
       await applyWriteback(collection, item, action.on_success?.set, postScope)
@@ -768,10 +781,16 @@ async function applyChildWritebacks(
         IDENTIFIER_RE.test(jf.fk_to_row ?? '') &&
         IDENTIFIER_RE.test(jf.field ?? '')
       ) {
-        q = q.whereIn('id', db(jf.junction).select(jf.fk_to_row).where(jf.field, jf.value as never))
+        q = q.whereIn(
+          'id',
+          db(jf.junction)
+            .select(jf.fk_to_row)
+            .where(jf.field, jf.value as never)
+        )
       }
       const n = await q.update({ [e.field]: rendered })
-      if (n > 0) console.info(`[transition-action] child writeback: ${e.collection}.${e.field} on ${n} rows`)
+      if (n > 0)
+        console.info(`[transition-action] child writeback: ${e.collection}.${e.field} on ${n} rows`)
     } catch (err) {
       console.error({ err, entry: e }, 'transition action child writeback failed')
     }
@@ -820,7 +839,10 @@ async function runCreateRecordAction(
   try {
     // Reuse-existing check first — nothing is created when a match exists.
     let targetId: unknown = null
-    if (action.skip_if_exists?.match_field && IDENTIFIER_RE.test(action.skip_if_exists.match_field)) {
+    if (
+      action.skip_if_exists?.match_field &&
+      IDENTIFIER_RE.test(action.skip_if_exists.match_field)
+    ) {
       const matchVal = (
         await engine.parseAndRender(action.skip_if_exists.value_template ?? '', scope)
       ).trim()
@@ -899,7 +921,11 @@ async function runCreateRecordAction(
       // through the items service.
       if (before) {
         const { recalcAffectedRollups } = await import('./rollups.js')
-        await recalcAffectedRollups(collection, { ...before, [action.link_field]: targetId }, before)
+        await recalcAffectedRollups(
+          collection,
+          { ...before, [action.link_field]: targetId },
+          before
+        )
       }
     }
 

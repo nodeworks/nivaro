@@ -12,19 +12,35 @@ export interface PdfLayoutData {
     label: string
     /** Start this section on a fresh page (set for child-table sections). */
     pageBreak?: boolean
-    fields: Array<{ label: string; value: string; colSpan?: number; rawHtml?: boolean; hideLabel?: boolean }>
+    fields: Array<{
+      label: string
+      value: string
+      colSpan?: number
+      rawHtml?: boolean
+      hideLabel?: boolean
+    }>
   }>
 }
 
-function renderFieldsGrid(fields: Array<{ label: string; value: string; colSpan?: number; rawHtml?: boolean; hideLabel?: boolean }>): string {
-  return `<div class="fields-grid">${fields.map(f => {
-    const full = !f.colSpan || f.colSpan > 6
-    const valueHtml = f.rawHtml ? f.value : escHtml(f.value)
-    // field-rel = O2M table cell; allow page breaks so tall tables don't leave white gaps
-    const relClass = f.rawHtml ? ' field-rel' : ''
-    const labelHtml = f.hideLabel ? '' : `<div class="fcell-label">${escHtml(f.label)}</div>`
-    return `<div class="field-cell${full ? ' field-full' : ''}${relClass}">${labelHtml}<div class="fcell-value">${valueHtml}</div></div>`
-  }).join('')}</div>`
+function renderFieldsGrid(
+  fields: Array<{
+    label: string
+    value: string
+    colSpan?: number
+    rawHtml?: boolean
+    hideLabel?: boolean
+  }>
+): string {
+  return `<div class="fields-grid">${fields
+    .map((f) => {
+      const full = !f.colSpan || f.colSpan > 6
+      const valueHtml = f.rawHtml ? f.value : escHtml(f.value)
+      // field-rel = O2M table cell; allow page breaks so tall tables don't leave white gaps
+      const relClass = f.rawHtml ? ' field-rel' : ''
+      const labelHtml = f.hideLabel ? '' : `<div class="fcell-label">${escHtml(f.label)}</div>`
+      return `<div class="field-cell${full ? ' field-full' : ''}${relClass}">${labelHtml}<div class="fcell-value">${valueHtml}</div></div>`
+    })
+    .join('')}</div>`
 }
 
 export function escHtml(str: string): string {
@@ -43,16 +59,18 @@ export function classicTheme(data: PdfLayoutData): string {
   const totalFields = data.sections.reduce((n, s) => n + s.fields.length, 0)
   const initial = data.collectionLabel.charAt(0).toUpperCase()
 
-  const coverHtml = data.coverEnabled ? `
+  const coverHtml = data.coverEnabled
+    ? `
 <div class="cover">
   <div class="cover-bg-circle cover-bg-circle-1"></div>
   <div class="cover-bg-circle cover-bg-circle-2"></div>
   <div class="cover-bg-circle cover-bg-circle-3"></div>
 
   <div class="cover-header">
-    ${data.logoUrl
-      ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
-      : `<div class="cover-badge"><span>${escHtml(initial)}</span></div>`
+    ${
+      data.logoUrl
+        ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
+        : `<div class="cover-badge"><span>${escHtml(initial)}</span></div>`
     }
     <span class="cover-collection-label">${escHtml(data.collectionLabel)}</span>
   </div>
@@ -85,16 +103,21 @@ export function classicTheme(data: PdfLayoutData): string {
       </div>
     </div>
   </div>
-</div>` : ''
+</div>`
+    : ''
 
-  const sectionsHtml = data.sections.map(s => `
+  const sectionsHtml = data.sections
+    .map(
+      (s) => `
 <div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <h2 class="section-title">${escHtml(s.label)}</h2>
     <div class="section-rule"></div>
   </div>
   ${renderFieldsGrid(s.fields)}
-</div>`).join('')
+</div>`
+    )
+    .join('')
 
   const contentHeaderHtml = `
 <div class="content-header">
@@ -332,14 +355,16 @@ ${coverHtml}
 export function minimalTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
 
-  const coverHtml = data.coverEnabled ? `
+  const coverHtml = data.coverEnabled
+    ? `
 <div class="cover">
   <div class="cover-stripe"></div>
   <div class="cover-inner">
     <div class="cover-top">
-      ${data.logoUrl
-        ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
-        : `<div class="cover-badge">${escHtml(initial)}</div>`
+      ${
+        data.logoUrl
+          ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
+          : `<div class="cover-badge">${escHtml(initial)}</div>`
       }
       <div class="cover-top-meta">
         <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
@@ -365,16 +390,21 @@ export function minimalTheme(data: PdfLayoutData): string {
       </div>
     </div>
   </div>
-</div>` : ''
+</div>`
+    : ''
 
-  const sectionsHtml = data.sections.map(s => `
+  const sectionsHtml = data.sections
+    .map(
+      (s) => `
 <div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <div class="section-marker"></div>
     <h2 class="section-title">${escHtml(s.label)}</h2>
   </div>
   ${renderFieldsGrid(s.fields)}
-</div>`).join('')
+</div>`
+    )
+    .join('')
 
   const contentHeaderHtml = `
 <div class="content-header">
@@ -576,14 +606,16 @@ ${coverHtml}
 export function executiveTheme(data: PdfLayoutData): string {
   const initial = data.collectionLabel.charAt(0).toUpperCase()
 
-  const coverHtml = data.coverEnabled ? `
+  const coverHtml = data.coverEnabled
+    ? `
 <div class="cover">
   <div class="cover-accent-bar"></div>
   <div class="cover-content">
     <div class="cover-header">
-      ${data.logoUrl
-        ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
-        : `<div class="cover-badge"><span>${escHtml(initial)}</span></div>`
+      ${
+        data.logoUrl
+          ? `<img class="cover-logo" src="${escHtml(data.logoUrl)}" alt="">`
+          : `<div class="cover-badge"><span>${escHtml(initial)}</span></div>`
       }
       <span class="cover-collection">${escHtml(data.collectionLabel)}</span>
     </div>
@@ -615,16 +647,21 @@ export function executiveTheme(data: PdfLayoutData): string {
       </div>
     </div>
   </div>
-</div>` : ''
+</div>`
+    : ''
 
-  const sectionsHtml = data.sections.map(s => `
+  const sectionsHtml = data.sections
+    .map(
+      (s) => `
 <div class="section${s.pageBreak ? ' section-break' : ''}">
   <div class="section-header">
     <h2 class="section-title">${escHtml(s.label)}</h2>
     <div class="section-rule"></div>
   </div>
   ${renderFieldsGrid(s.fields)}
-</div>`).join('')
+</div>`
+    )
+    .join('')
 
   const contentHeaderHtml = `
 <div class="content-header">

@@ -119,7 +119,12 @@ describe('diffSnapshots', () => {
   })
 
   it('reports nothing when both sides match', () => {
-    const diff = diffSnapshots(mine, snapshot({ nivaro_queues: { q1: { id: 'q1', name: 'Workflows' }, q2: { id: 'q2', name: 'Inventory' } } }))
+    const diff = diffSnapshots(
+      mine,
+      snapshot({
+        nivaro_queues: { q1: { id: 'q1', name: 'Workflows' }, q2: { id: 'q2', name: 'Inventory' } }
+      })
+    )
     expect(diff.totals).toEqual({ added: 0, removed: 0, changed: 0, tables_differing: 0 })
     expect(diff.tables).toEqual([])
   })

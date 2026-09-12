@@ -293,14 +293,16 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
   const default_columns = Array.isArray(src.default_columns)
     ? [
         ...new Set(
-          src.default_columns.filter(
-            (c): c is string => typeof c === 'string' && c.trim() !== ''
-          )
+          src.default_columns.filter((c): c is string => typeof c === 'string' && c.trim() !== '')
         )
       ]
     : null
   const default_pins = (() => {
-    if (!src.default_pins || typeof src.default_pins !== 'object' || Array.isArray(src.default_pins))
+    if (
+      !src.default_pins ||
+      typeof src.default_pins !== 'object' ||
+      Array.isArray(src.default_pins)
+    )
       return null
     const out: Record<string, 'left' | 'right'> = {}
     for (const [k, v] of Object.entries(src.default_pins as Record<string, unknown>)) {
@@ -631,7 +633,11 @@ export function computePriorityScore(item: QueueItem, weights?: PriorityWeights 
   // reproduce the historic slaRank*1000 + 500 + min(age, 499) formula.
   const w = weights ?? { sla_warning: 1000, sla_breached: 2000, at_risk: 500, age_hour_cap: 499 }
   const sla =
-    item.sla_status === 'breached' ? w.sla_breached : item.sla_status === 'warning' ? w.sla_warning : 0
+    item.sla_status === 'breached'
+      ? w.sla_breached
+      : item.sla_status === 'warning'
+        ? w.sla_warning
+        : 0
   return sla + (item.at_risk ? w.at_risk : 0) + Math.min(item.aging_hours ?? 0, w.age_hour_cap)
 }
 
@@ -1091,7 +1097,8 @@ async function attachRelationPaths(
         db(rel.one_collection!).whereIn('id', chunk).select(pickCols)
       )) as Array<Record<string, unknown>>
       const deeper = [...subPaths].filter((p) => p.includes('.'))
-      if (deeper.length > 0) await attachRelationPaths(rel.one_collection, parents, deeper, depth + 1)
+      if (deeper.length > 0)
+        await attachRelationPaths(rel.one_collection, parents, deeper, depth + 1)
       const parentOf = new Map(parents.map((row) => [String(row.id), row]))
       for (const row of rows) {
         const fk = row[root]
@@ -1602,9 +1609,7 @@ export async function resolveCollectionSource(
   // 15s statement timeout on a 32k-row collection. That one case keeps the
   // fetch-then-filter path, which is what every case did before.
   const pushedDownState =
-    !!binding &&
-    listedStates.length > 0 &&
-    !(stateMode === 'include' && listsStateless)
+    !!binding && listedStates.length > 0 && !(stateMode === 'include' && listsStateless)
 
   let ids: string[]
   try {
@@ -1767,21 +1772,23 @@ export async function resolveCollectionSource(
   // only case `instances` was ever populated); when there's no binding we pass undefined
   // so computeStatusBatch falls back to its own query, matching prior behavior exactly.
   const slaMap = ids.length
-    ? await span('queue:sla', () => computeStatusBatch(
-        source.collection as string,
-        ids,
-        binding
-          ? instances.map(
-              (i): SlaInstanceRow => ({
-                id: i.instance_id,
-                item: i.item,
-                current_state: i.current_state,
-                template: i.template,
-                started_at: i.started_at
-              })
-            )
-          : undefined
-      ))
+    ? await span('queue:sla', () =>
+        computeStatusBatch(
+          source.collection as string,
+          ids,
+          binding
+            ? instances.map(
+                (i): SlaInstanceRow => ({
+                  id: i.instance_id,
+                  item: i.item,
+                  current_state: i.current_state,
+                  template: i.template,
+                  started_at: i.started_at
+                })
+              )
+            : undefined
+        )
+      )
     : {}
   ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
   const afterSla = new Set(ids)
@@ -1839,7 +1846,8 @@ export async function resolveCollectionSource(
     for (const item of ids) {
       const a = activeAddendums.get(item)
       if (!a) continue
-      if (a.state_key) stateById.set(item, { key: a.state_key, color: a.state_color, id: a.state_id })
+      if (a.state_key)
+        stateById.set(item, { key: a.state_key, color: a.state_color, id: a.state_id })
       const req = {
         key: item,
         stateId: a.state_id,
@@ -1898,59 +1906,63 @@ export async function resolveCollectionSource(
       )
       return evaluateRows(riskRows as Record<string, unknown>[], rules)
     }),
-    span('queue:extra-fields', async (): Promise<{
-      extraById: Map<string, Record<string, unknown>>
-      extraIdsById: Map<string, Record<string, string[]>>
-    }> => {
-      const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
-      const extraById = new Map<string, Record<string, unknown>>()
-      const extraIdsById = new Map<string, Record<string, string[]>>()
-      if (!extraFieldPaths.length || !ids.length) return { extraById, extraIdsById }
-      const relationsCache = new Map<string, CMSRelation[]>()
-      const aggregates =
-        (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? null
-      // Parallelized across paths. relationsCache is a shared Map populated via a
-      // check-then-fetch-then-set pattern — concurrent calls for the same collection may
-      // each miss the cache and independently re-fetch getRelations() (redundant work,
-      // not a correctness bug: every caller writes the same relations for that
-      // collection, so a duplicate write is harmless).
-      await Promise.all(
-        extraFieldPaths.map(async (path) => {
-          try {
-            const valuesByRowId = await resolveExtraPathValues(
-              source.collection as string,
-              ids,
-              path,
-              relationsCache,
-              aggregates
-            )
-            for (const [rowId, pv] of valuesByRowId) {
-              const extra = extraById.get(rowId) ?? {}
-              extra[path] = pv.value
-              extraById.set(rowId, extra)
-              if (pv.ids.length > 0) {
-                const idsRec = extraIdsById.get(rowId) ?? {}
-                idsRec[path] = pv.ids
-                extraIdsById.set(rowId, idsRec)
+    span(
+      'queue:extra-fields',
+      async (): Promise<{
+        extraById: Map<string, Record<string, unknown>>
+        extraIdsById: Map<string, Record<string, string[]>>
+      }> => {
+        const extraFieldPaths = (parseJson(source.extra_fields) as string[] | null) ?? []
+        const extraById = new Map<string, Record<string, unknown>>()
+        const extraIdsById = new Map<string, Record<string, string[]>>()
+        if (!extraFieldPaths.length || !ids.length) return { extraById, extraIdsById }
+        const relationsCache = new Map<string, CMSRelation[]>()
+        const aggregates =
+          (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? null
+        // Parallelized across paths. relationsCache is a shared Map populated via a
+        // check-then-fetch-then-set pattern — concurrent calls for the same collection may
+        // each miss the cache and independently re-fetch getRelations() (redundant work,
+        // not a correctness bug: every caller writes the same relations for that
+        // collection, so a duplicate write is harmless).
+        await Promise.all(
+          extraFieldPaths.map(async (path) => {
+            try {
+              const valuesByRowId = await resolveExtraPathValues(
+                source.collection as string,
+                ids,
+                path,
+                relationsCache,
+                aggregates
+              )
+              for (const [rowId, pv] of valuesByRowId) {
+                const extra = extraById.get(rowId) ?? {}
+                extra[path] = pv.value
+                extraById.set(rowId, extra)
+                if (pv.ids.length > 0) {
+                  const idsRec = extraIdsById.get(rowId) ?? {}
+                  idsRec[path] = pv.ids
+                  extraIdsById.set(rowId, idsRec)
+                }
               }
+            } catch {
+              // Degrade gracefully — a stale/deleted/relational field config must not
+              // break the whole queue's item list, and must not prevent OTHER extra
+              // field paths on the same source from resolving.
             }
-          } catch {
-            // Degrade gracefully — a stale/deleted/relational field config must not
-            // break the whole queue's item list, and must not prevent OTHER extra
-            // field paths on the same source from resolving.
-          }
-        })
-      )
-      return { extraById, extraIdsById }
-    })
+          })
+        )
+        return { extraById, extraIdsById }
+      }
+    )
   ])
   const addendumMap = await addendumMapPromise
 
   // Predictive risk: compare current time-in-state to the historical P80 for
   // that state (services/predictive-sla.ts). Non-fatal: prediction failures
   // never break the queue.
-  let durationStats: Awaited<ReturnType<typeof import('./predictive-sla.js').getStateDurationStats>> | null =
-    null
+  let durationStats: Awaited<
+    ReturnType<typeof import('./predictive-sla.js').getStateDurationStats>
+  > | null = null
   try {
     const { getStateDurationStats } = await import('./predictive-sla.js')
     durationStats = await span('queue:predictive-sla', () => getStateDurationStats())
@@ -2337,15 +2349,17 @@ export async function fetchQueueItems(
   // Outer span so the trace attributes time that falls between the per-stage
   // spans inside the resolvers — otherwise a slow resolver tail reads as
   // "unaccounted" and points nowhere.
-  const results = await span('queue:resolve-sources', () =>
-    Promise.all(
-      sources.map((source) => {
-        if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
-        if (source.type === 'tasks') return resolveTasksSource(ceiling)
-        if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
-        return resolveOwnedByMeSource(user.id, ceiling)
-      })
-    ),
+  const results = await span(
+    'queue:resolve-sources',
+    () =>
+      Promise.all(
+        sources.map((source) => {
+          if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
+          if (source.type === 'tasks') return resolveTasksSource(ceiling)
+          if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
+          return resolveOwnedByMeSource(user.id, ceiling)
+        })
+      ),
     `${sources.length} source(s)`
   )
 

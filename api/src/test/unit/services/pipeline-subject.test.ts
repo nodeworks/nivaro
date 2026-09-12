@@ -18,7 +18,9 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
     where: (cond: Record<string, unknown>) => ({
       first: async () =>
         (tables[table] ?? []).find((r) =>
-          Object.entries(cond).every(([k, v]) => String(r[k]).toUpperCase() === String(v).toUpperCase())
+          Object.entries(cond).every(
+            ([k, v]) => String(r[k]).toUpperCase() === String(v).toUpperCase()
+          )
         )
     })
   })) as unknown as typeof db

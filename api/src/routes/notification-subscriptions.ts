@@ -68,7 +68,12 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
         .where({ collection, item })
         .first()) as { id: string; current_state: string } | undefined
       if (instance?.current_state) {
-        const owners = await resolveStateOwners(instance.current_state, instance.id, collection, item)
+        const owners = await resolveStateOwners(
+          instance.current_state,
+          instance.id,
+          collection,
+          item
+        )
         if (owners.some((o) => String(o.id).toUpperCase() === userId)) reasons.push('owner')
       }
     } catch {

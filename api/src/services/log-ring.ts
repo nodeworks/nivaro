@@ -59,7 +59,10 @@ async function loadRules(): Promise<void> {
         // still cap complexity: JS regex has no timeout, so a catastrophic
         // pattern would stall log writes. Nested quantifiers are the classic
         // ReDoS shape; refuse them.
-        if (r.pattern.length <= 200 && !/(\([^)]*[+*][^)]*\)|\[[^\]]*\])[+*]\??[+*]/.test(r.pattern)) {
+        if (
+          r.pattern.length <= 200 &&
+          !/(\([^)]*[+*][^)]*\)|\[[^\]]*\])[+*]\??[+*]/.test(r.pattern)
+        ) {
           regex = new RegExp(r.pattern, 'i')
         }
       } catch {

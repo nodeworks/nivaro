@@ -320,13 +320,13 @@ const ownerGroupCache = new Map<
 
 // state→template + collection bindings ride the same TTL/bust — they answer
 // the owner-fallback question and change through the same admin surface.
-const fallbackMetaCache = new Map<
-  string,
-  { templateByState: Map<string, string>; at: number }
->()
+const fallbackMetaCache = new Map<string, { templateByState: Map<string, string>; at: number }>()
 const bindingsCache = new Map<
   string,
-  { rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>; at: number }
+  {
+    rows: Array<{ collection: string; template: string; owner_fallback_field?: string | null }>
+    at: number
+  }
 >()
 
 export function bustOwnerGroupCache(): void {
@@ -534,99 +534,105 @@ async function resolveFilterValues(
   // Fields resolve independently (each writes its own key into the per-item
   // maps), so their query chains run concurrently — serially, four dotted
   // dims stacked their round trips end to end.
-  await Promise.all(fields.map(async (field) => {
-    const segments = field.split('.')
-    if (segments.length < 2 || segments.length > 4) return
-    const prefix = segments[0]
-    try {
-      const m2o = baseRels.find(
-        (r) => r.many_collection === collection && r.many_field === prefix && r.one_collection
-      )
-      if (m2o) {
-        // Walk the M2O chain: fk per item hops through intermediate tables; the
-        // id-side value is the FK into the FINAL table, display is its column.
-        let fkByItem = new Map<string, unknown>()
-        for (const [itemId, rec] of records) fkByItem.set(itemId, rec[prefix])
-        let table = m2o.one_collection as string
-        for (let i = 1; i < segments.length - 1; i++) {
-          const hopField = segments[i]
-          const hopRels = await relsFor(table)
-          const hopRel = hopRels.find(
-            (r) => r.many_collection === table && r.many_field === hopField && r.one_collection
-          )
-          if (!hopRel) throw new Error(`no m2o hop ${table}.${hopField}`)
-          const ids = [...new Set([...fkByItem.values()].filter((v) => v != null))]
-          const rows = (await selectInChunks(ids as string[], 2000, (chunk) =>
-            database(table).whereIn('id', chunk).select('id', hopField)
-          )) as Array<Record<string, unknown>>
-          const hopByRowId = new Map(rows.map((r) => [String(r.id), r[hopField]]))
-          const next = new Map<string, unknown>()
-          for (const [itemId, fk] of fkByItem) {
-            next.set(itemId, fk == null ? null : (hopByRowId.get(String(fk)) ?? null))
-          }
-          fkByItem = next
-          table = hopRel.one_collection as string
-        }
-        const displayCol = segments[segments.length - 1]
-        const finalIds = [...new Set([...fkByItem.values()].filter((v) => v != null))]
-        const displayRows = (await selectInChunks(finalIds as string[], 2000, (chunk) =>
-          database(table).whereIn('id', chunk).select('id', displayCol)
-        )) as Array<Record<string, unknown>>
-        const displayByRowId = new Map(displayRows.map((r) => [String(r.id), r[displayCol]]))
-        for (const [itemId, fk] of fkByItem) {
-          setFor(itemId).set(field, {
-            ids: fk ?? null,
-            display: fk == null ? null : (displayByRowId.get(String(fk)) ?? null)
-          })
-        }
-        return
-      }
-
-      const alias = baseRels.find((r) => r.one_collection === collection && r.one_field === prefix)
-      if (alias?.junction_field) {
-        const junction = alias.many_collection
-        const ourCol = alias.many_field
-        const relCol = alias.junction_field
-        const junctionRels = await relsFor(junction)
-        const relatedRel = junctionRels.find(
-          (r) => r.many_collection === junction && r.many_field === relCol && r.one_collection
+  await Promise.all(
+    fields.map(async (field) => {
+      const segments = field.split('.')
+      if (segments.length < 2 || segments.length > 4) return
+      const prefix = segments[0]
+      try {
+        const m2o = baseRels.find(
+          (r) => r.many_collection === collection && r.many_field === prefix && r.one_collection
         )
-        const junctionRows = (await selectInChunks(itemIds, 2000, (chunk) =>
-          database(junction).whereIn(ourCol, chunk).select(`${ourCol} as our_id`, `${relCol} as rel_id`)
-        )) as Array<{ our_id: unknown; rel_id: unknown }>
-        const idsByItem = new Map<string, Set<string>>()
-        const allRelated = new Set<string>()
-        for (const row of junctionRows) {
-          if (row.rel_id == null) continue
-          const key = String(row.our_id)
-          if (!idsByItem.has(key)) idsByItem.set(key, new Set())
-          idsByItem.get(key)!.add(String(row.rel_id))
-          allRelated.add(String(row.rel_id))
-        }
-        const displayCol = segments[1]
-        const displayByRelId = new Map<string, string>()
-        if (relatedRel?.one_collection && allRelated.size > 0 && segments.length >= 2) {
-          const rows = (await selectInChunks([...allRelated], 2000, (chunk) =>
-            database(relatedRel.one_collection as string)
-              .whereIn('id', chunk)
-              .select('id', displayCol)
-          )) as Array<Record<string, unknown>>
-          for (const r of rows) displayByRelId.set(String(r.id), String(r[displayCol]))
-        }
-        for (const itemId of itemIds) {
-          const ids = idsByItem.get(itemId) ?? new Set<string>()
-          const display = new Set<string>()
-          for (const rid of ids) {
-            const d = displayByRelId.get(rid)
-            if (d != null) display.add(d)
+        if (m2o) {
+          // Walk the M2O chain: fk per item hops through intermediate tables; the
+          // id-side value is the FK into the FINAL table, display is its column.
+          let fkByItem = new Map<string, unknown>()
+          for (const [itemId, rec] of records) fkByItem.set(itemId, rec[prefix])
+          let table = m2o.one_collection as string
+          for (let i = 1; i < segments.length - 1; i++) {
+            const hopField = segments[i]
+            const hopRels = await relsFor(table)
+            const hopRel = hopRels.find(
+              (r) => r.many_collection === table && r.many_field === hopField && r.one_collection
+            )
+            if (!hopRel) throw new Error(`no m2o hop ${table}.${hopField}`)
+            const ids = [...new Set([...fkByItem.values()].filter((v) => v != null))]
+            const rows = (await selectInChunks(ids as string[], 2000, (chunk) =>
+              database(table).whereIn('id', chunk).select('id', hopField)
+            )) as Array<Record<string, unknown>>
+            const hopByRowId = new Map(rows.map((r) => [String(r.id), r[hopField]]))
+            const next = new Map<string, unknown>()
+            for (const [itemId, fk] of fkByItem) {
+              next.set(itemId, fk == null ? null : (hopByRowId.get(String(fk)) ?? null))
+            }
+            fkByItem = next
+            table = hopRel.one_collection as string
           }
-          setFor(itemId).set(field, { ids, display })
+          const displayCol = segments[segments.length - 1]
+          const finalIds = [...new Set([...fkByItem.values()].filter((v) => v != null))]
+          const displayRows = (await selectInChunks(finalIds as string[], 2000, (chunk) =>
+            database(table).whereIn('id', chunk).select('id', displayCol)
+          )) as Array<Record<string, unknown>>
+          const displayByRowId = new Map(displayRows.map((r) => [String(r.id), r[displayCol]]))
+          for (const [itemId, fk] of fkByItem) {
+            setFor(itemId).set(field, {
+              ids: fk ?? null,
+              display: fk == null ? null : (displayByRowId.get(String(fk)) ?? null)
+            })
+          }
+          return
         }
+
+        const alias = baseRels.find(
+          (r) => r.one_collection === collection && r.one_field === prefix
+        )
+        if (alias?.junction_field) {
+          const junction = alias.many_collection
+          const ourCol = alias.many_field
+          const relCol = alias.junction_field
+          const junctionRels = await relsFor(junction)
+          const relatedRel = junctionRels.find(
+            (r) => r.many_collection === junction && r.many_field === relCol && r.one_collection
+          )
+          const junctionRows = (await selectInChunks(itemIds, 2000, (chunk) =>
+            database(junction)
+              .whereIn(ourCol, chunk)
+              .select(`${ourCol} as our_id`, `${relCol} as rel_id`)
+          )) as Array<{ our_id: unknown; rel_id: unknown }>
+          const idsByItem = new Map<string, Set<string>>()
+          const allRelated = new Set<string>()
+          for (const row of junctionRows) {
+            if (row.rel_id == null) continue
+            const key = String(row.our_id)
+            if (!idsByItem.has(key)) idsByItem.set(key, new Set())
+            idsByItem.get(key)!.add(String(row.rel_id))
+            allRelated.add(String(row.rel_id))
+          }
+          const displayCol = segments[1]
+          const displayByRelId = new Map<string, string>()
+          if (relatedRel?.one_collection && allRelated.size > 0 && segments.length >= 2) {
+            const rows = (await selectInChunks([...allRelated], 2000, (chunk) =>
+              database(relatedRel.one_collection as string)
+                .whereIn('id', chunk)
+                .select('id', displayCol)
+            )) as Array<Record<string, unknown>>
+            for (const r of rows) displayByRelId.set(String(r.id), String(r[displayCol]))
+          }
+          for (const itemId of itemIds) {
+            const ids = idsByItem.get(itemId) ?? new Set<string>()
+            const display = new Set<string>()
+            for (const rid of ids) {
+              const d = displayByRelId.get(rid)
+              if (d != null) display.add(d)
+            }
+            setFor(itemId).set(field, { ids, display })
+          }
+        }
+      } catch {
+        // Unresolvable field — leave it out; legacy prefix fallback applies.
       }
-    } catch {
-      // Unresolvable field — leave it out; legacy prefix fallback applies.
-    }
-  }))
+    })
+  )
 
   return out
 }
@@ -705,12 +711,17 @@ export async function resolveStateOwnersBatch(
     )
     if (bindingRows.length > 0) {
       const byCollectionTemplate = new Map(
-        bindingRows.map((b) => [`${b.collection}::${String(b.template).toUpperCase()}`, b.owner_fallback_field])
+        bindingRows.map((b) => [
+          `${b.collection}::${String(b.template).toUpperCase()}`,
+          b.owner_fallback_field
+        ])
       )
       for (const req of requests) {
         const template = templateByState.get(String(req.stateId).toUpperCase())
         if (!template) continue
-        const field = byCollectionTemplate.get(`${req.collection}::${String(template).toUpperCase()}`)
+        const field = byCollectionTemplate.get(
+          `${req.collection}::${String(template).toUpperCase()}`
+        )
         if (field) fallbackFieldByKey.set(req.key, field)
       }
     }
@@ -879,8 +890,11 @@ export async function resolveStateOwnersBatch(
 
   const winningMemo = new Map<string, OwnerGroup[]>()
   for (const req of withGroups) {
-    const prepared =
-      preparedByState.get(req.stateId) ?? { candidates: [], defaults: [], filterFields: [] }
+    const prepared = preparedByState.get(req.stateId) ?? {
+      candidates: [],
+      defaults: [],
+      filterFields: []
+    }
     const record = recordsByCollectionAndId.get(req.collection)?.get(req.itemId) ?? {}
     const relations = relationsByCollection.get(req.collection) ?? []
     const resolved = resolvedByCollection.get(req.collection)?.get(req.itemId)
@@ -905,19 +919,23 @@ export async function resolveStateOwnersBatch(
     // cell they sit in follows. Deduped per group: a person can be a direct
     // member AND in a linked team.
     const [rows, teamRows] = await Promise.all([
-      span('owners:group-users', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
-        database('nivaro_pipeline_owner_group_users as ogu')
-          .join('nivaro_users as u', 'ogu.user', 'u.id')
-          .whereIn('ogu.group', chunk)
-          .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-      )),
-      span('owners:group-teams', () => selectInChunks([...allGroupIds], 2000, (chunk) =>
-        database('nivaro_pipeline_owner_group_teams as ogt')
-          .join('nivaro_user_group_members as m', 'm.group_id', 'ogt.team_id')
-          .join('nivaro_users as u', 'm.user', 'u.id')
-          .whereIn('ogt.group', chunk)
-          .select('ogt.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-      ))
+      span('owners:group-users', () =>
+        selectInChunks([...allGroupIds], 2000, (chunk) =>
+          database('nivaro_pipeline_owner_group_users as ogu')
+            .join('nivaro_users as u', 'ogu.user', 'u.id')
+            .whereIn('ogu.group', chunk)
+            .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+        )
+      ),
+      span('owners:group-teams', () =>
+        selectInChunks([...allGroupIds], 2000, (chunk) =>
+          database('nivaro_pipeline_owner_group_teams as ogt')
+            .join('nivaro_user_group_members as m', 'm.group_id', 'ogt.team_id')
+            .join('nivaro_users as u', 'm.user', 'u.id')
+            .whereIn('ogt.group', chunk)
+            .select('ogt.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+        )
+      )
     ])
     const seenByGroup = new Map<string, Set<string>>()
     for (const row of [...rows, ...teamRows] as Array<ResolvedOwner & { group: string }>) {
@@ -945,12 +963,14 @@ export async function resolveStateOwnersBatch(
     Array<ResolvedOwner & { state: string | null }>
   >()
   if (instanceIds.length > 0) {
-    const rows = await span('owners:instance-owners', () => selectInChunks(instanceIds, 2000, (chunk) =>
-      database('nivaro_pipeline_instance_owners as io')
-        .join('nivaro_users as u', 'io.user', 'u.id')
-        .whereIn('io.instance', chunk)
-        .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-    ))
+    const rows = await span('owners:instance-owners', () =>
+      selectInChunks(instanceIds, 2000, (chunk) =>
+        database('nivaro_pipeline_instance_owners as io')
+          .join('nivaro_users as u', 'io.user', 'u.id')
+          .whereIn('io.instance', chunk)
+          .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+      )
+    )
     for (const row of rows as Array<ResolvedOwner & { instance: string; state: string | null }>) {
       const list = instanceOwnerRowsByInstance.get(row.instance) ?? []
       list.push({
@@ -985,9 +1005,7 @@ export async function resolveStateOwnersBatch(
   const fallbackOwnerById = new Map<string, ResolvedOwner>()
   if (fallbackIdByKey.size > 0) {
     const rows = (await selectInChunks([...new Set(fallbackIdByKey.values())], 2000, (chunk) =>
-      database('nivaro_users')
-        .whereIn('id', chunk)
-        .select('id', 'email', 'first_name', 'last_name')
+      database('nivaro_users').whereIn('id', chunk).select('id', 'email', 'first_name', 'last_name')
     )) as ResolvedOwner[]
     for (const row of rows) fallbackOwnerById.set(String(row.id).toUpperCase(), row)
   }
@@ -1390,9 +1408,7 @@ export async function previewOwnerGroupImpact(
         if (sample.length < 10) {
           sample.push({
             item: id,
-            label: String(
-              record.workflow_id ?? record.name ?? record.title ?? record.label ?? id
-            )
+            label: String(record.workflow_id ?? record.name ?? record.title ?? record.label ?? id)
           })
         }
       }
@@ -1484,7 +1500,8 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
         const item = String(inst.item)
         const rv = resolved.get(item)
         const dims: Record<string, string> = {}
-        for (const f of fields) dims[f] = displayOf(rv?.get(f)) || String(records.get(item)?.[f] ?? '')
+        for (const f of fields)
+          dims[f] = displayOf(rv?.get(f)) || String(records.get(item)?.[f] ?? '')
         const clusterKey = `${sid}|${b.collection}|${JSON.stringify(dims)}`
         let cluster = clusters.get(clusterKey)
         if (!cluster) {

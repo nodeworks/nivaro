@@ -12,14 +12,19 @@ describe('logActivity', () => {
   it('calls db insert with the correct fields', async () => {
     // Arrange — make the table stub return a row with an id
     const insertStub = vi.fn().mockReturnValue({
-      returning: vi.fn().mockResolvedValue([{ id: 42 }]),
+      returning: vi.fn().mockResolvedValue([{ id: 42 }])
     })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue({
-      insert: insertStub,
+      insert: insertStub
     } as unknown as ReturnType<typeof db>)
 
     // Act
-    const id = await logActivity({ action: 'create', user: 'user-1', collection: 'articles', item: '99' })
+    const id = await logActivity({
+      action: 'create',
+      user: 'user-1',
+      collection: 'articles',
+      item: '99'
+    })
 
     // Assert
     expect(id).toBe(42)
@@ -34,10 +39,10 @@ describe('logActivity', () => {
 
   it('returns null when user is not provided', async () => {
     const insertStub = vi.fn().mockReturnValue({
-      returning: vi.fn().mockResolvedValue([{ id: 1 }]),
+      returning: vi.fn().mockResolvedValue([{ id: 1 }])
     })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue({
-      insert: insertStub,
+      insert: insertStub
     } as unknown as ReturnType<typeof db>)
 
     const id = await logActivity({ action: 'delete', user: null })
@@ -52,8 +57,8 @@ describe('logActivity', () => {
   it('returns null and does not throw when the DB insert fails', async () => {
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue({
       insert: vi.fn().mockReturnValue({
-        returning: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-      }),
+        returning: vi.fn().mockRejectedValue(new Error('DB connection lost'))
+      })
     } as unknown as ReturnType<typeof db>)
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -67,21 +72,21 @@ describe('logActivity', () => {
 
   it('includes ip and user_agent from req when provided', async () => {
     const insertStub = vi.fn().mockReturnValue({
-      returning: vi.fn().mockResolvedValue([{ id: 5 }]),
+      returning: vi.fn().mockResolvedValue([{ id: 5 }])
     })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue({
-      insert: insertStub,
+      insert: insertStub
     } as unknown as ReturnType<typeof db>)
 
     const fakeReq = {
       ip: '127.0.0.1',
-      headers: { 'user-agent': 'TestAgent/1.0' },
+      headers: { 'user-agent': 'TestAgent/1.0' }
     }
 
     await logActivity({
       action: 'read',
       user: 'user-2',
-      req: fakeReq as Parameters<typeof logActivity>[0]['req'],
+      req: fakeReq as Parameters<typeof logActivity>[0]['req']
     })
 
     const payload = insertStub.mock.calls[0][0] as Record<string, unknown>

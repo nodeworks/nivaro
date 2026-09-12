@@ -55,9 +55,11 @@ function buildApp() {
   app.decorateRequest('session', null)
   app.addHook('onRequest', async (req) => {
     if (!(req as unknown as { session?: unknown }).session) {
-      ;(req as unknown as { session: { userId: string | undefined; destroy: () => Promise<void> } }).session = {
+      ;(
+        req as unknown as { session: { userId: string | undefined; destroy: () => Promise<void> } }
+      ).session = {
         userId: undefined,
-        destroy: async () => {},
+        destroy: async () => {}
       }
     }
   })
@@ -81,7 +83,7 @@ function mockDbSequence(results: unknown[]) {
       where: vi.fn().mockReturnThis(),
       first: vi.fn().mockResolvedValue(result),
       update: vi.fn().mockResolvedValue(1),
-      catch: vi.fn(),
+      catch: vi.fn()
     } as unknown as ReturnType<typeof db>
   })
 }
@@ -107,7 +109,7 @@ describe('authenticate middleware', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/protected',
-      headers: { Authorization: 'Bearer invalid-token-xyz' },
+      headers: { Authorization: 'Bearer invalid-token-xyz' }
     })
     expect(res.statusCode).toBe(401)
   })
@@ -123,7 +125,7 @@ describe('authenticate middleware', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/protected',
-      headers: { Authorization: 'Bearer valid-token-abc' },
+      headers: { Authorization: 'Bearer valid-token-abc' }
     })
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body)).toEqual({ ok: true })
@@ -140,7 +142,7 @@ describe('authenticate middleware', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/protected',
-      headers: { Authorization: 'Bearer admin-static-token' },
+      headers: { Authorization: 'Bearer admin-static-token' }
     })
     expect(res.statusCode).toBe(200)
   })

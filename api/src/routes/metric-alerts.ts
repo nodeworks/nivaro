@@ -233,7 +233,10 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const rule = await db('nivaro_metric_alert_rules').where({ id }).first()
     if (!rule) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()) {
+    if (
+      !req.isAdmin &&
+      String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     const b = (req.body ?? {}) as Record<string, unknown>
@@ -264,7 +267,10 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const rule = await db('nivaro_metric_alert_rules').where({ id }).first()
     if (!rule) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()) {
+    if (
+      !req.isAdmin &&
+      String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     await db('nivaro_metric_alert_rules').where({ id }).del()
@@ -580,7 +586,10 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const rule = await db('nivaro_anomaly_rules').where({ id }).first()
     if (!rule) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()) {
+    if (
+      !req.isAdmin &&
+      String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     const b = (req.body ?? {}) as Record<string, unknown>
@@ -613,7 +622,10 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const rule = await db('nivaro_anomaly_rules').where({ id }).first()
     if (!rule) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()) {
+    if (
+      !req.isAdmin &&
+      String(rule.created_by).toLowerCase() !== String(req.user!.id).toLowerCase()
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     await db('nivaro_anomaly_rules').where({ id }).del()

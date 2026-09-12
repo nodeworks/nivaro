@@ -25,7 +25,10 @@ function formatValue(dbType: string, v: unknown): string {
   if (typeof v === 'boolean') return v ? 'Yes' : 'No'
   if (dbType === 'boolean') return v === 1 || v === true || v === 'true' ? 'Yes' : 'No'
   if (v instanceof Date) return v.toLocaleString('en-US')
-  if ((dbType === 'date' || dbType === 'datetime' || dbType === 'timestamp') && typeof v === 'string') {
+  if (
+    (dbType === 'date' || dbType === 'datetime' || dbType === 'timestamp') &&
+    typeof v === 'string'
+  ) {
     const d = new Date(v)
     if (!Number.isNaN(d.getTime()))
       return dbType === 'date' ? d.toLocaleDateString('en-US') : d.toLocaleString('en-US')
@@ -131,7 +134,8 @@ export async function sharePublicRoutes(app: FastifyInstance) {
           `<!doctype html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#334155"><h2>${esc(title)}</h2><p>${esc(msg)}</p></body></html>`
         )
 
-    if (!link || !link.is_active) return gone('Link not found', 'This share link does not exist or was revoked.')
+    if (!link || !link.is_active)
+      return gone('Link not found', 'This share link does not exist or was revoked.')
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return gone('Link expired', 'This share link is no longer available.')
     }

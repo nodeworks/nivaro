@@ -14,8 +14,8 @@ vi.mock('../../config.js', () => ({
     OIDC_CLIENT_ID: 'test',
     OIDC_CLIENT_SECRET: 'test',
     OIDC_REDIRECT_URI: 'http://localhost:3055/api/auth/callback',
-    STORAGE_LOCAL_ROOT: '/tmp',
-  },
+    STORAGE_LOCAL_ROOT: '/tmp'
+  }
 }))
 
 import Fastify from 'fastify'

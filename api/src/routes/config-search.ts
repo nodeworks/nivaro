@@ -160,8 +160,13 @@ function snippet(row: Record<string, unknown>, cols: string[], q: string): strin
   return ''
 }
 
-export async function searchConfigSurfaces(q: string): Promise<
-  Array<{ surface: string; hits: Array<{ id: unknown; name: string; snippet: string; link: string }> }>
+export async function searchConfigSurfaces(
+  q: string
+): Promise<
+  Array<{
+    surface: string
+    hits: Array<{ id: unknown; name: string; snippet: string; link: string }>
+  }>
 > {
   const like = `%${q.replace(/[%_[]/g, (c) => `[${c}]`)}%`
   const groups: Array<{

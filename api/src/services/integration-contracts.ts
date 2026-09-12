@@ -40,7 +40,10 @@ export function bustContractCache(): void {
 async function contractsFor(collection: string): Promise<ContractRow[]> {
   if (!cache || Date.now() - cache.at > TTL) {
     try {
-      const rows = (await db('nivaro_integration_contracts').where('is_active', true)) as ContractRow[]
+      const rows = (await db('nivaro_integration_contracts').where(
+        'is_active',
+        true
+      )) as ContractRow[]
       const m = new Map<string, ContractRow[]>()
       for (const r of rows) m.set(r.collection, [...(m.get(r.collection) ?? []), r])
       cache = { at: Date.now(), byCollection: m }
@@ -58,12 +61,18 @@ function typeOk(value: unknown, expected: string): boolean {
     case 'string':
       return typeof value === 'string'
     case 'number':
-      return typeof value === 'number' || (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value)))
+      return (
+        typeof value === 'number' ||
+        (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value)))
+      )
     case 'boolean':
-      return typeof value === 'boolean' || value === 0 || value === 1 || value === '0' || value === '1'
+      return (
+        typeof value === 'boolean' || value === 0 || value === 1 || value === '0' || value === '1'
+      )
     case 'date':
       return (
-        (typeof value === 'string' || value instanceof Date) && !Number.isNaN(new Date(value as string).getTime())
+        (typeof value === 'string' || value instanceof Date) &&
+        !Number.isNaN(new Date(value as string).getTime())
       )
     case 'object':
       return typeof value === 'object' && !Array.isArray(value)
@@ -84,7 +93,16 @@ export class ContractViolationError extends Error {
   }
 }
 
-const AUDIT_FIELDS = new Set(['id', 'date_created', 'date_updated', 'user_created', 'user_updated', 'created_at', 'updated_at', '_change_reason'])
+const AUDIT_FIELDS = new Set([
+  'id',
+  'date_created',
+  'date_updated',
+  'user_created',
+  'user_updated',
+  'created_at',
+  'updated_at',
+  '_change_reason'
+])
 
 /**
  * Validate a write. Throws ContractViolationError in reject mode; in flag
@@ -101,7 +119,8 @@ export async function enforceContracts(
   if (contracts.length === 0) return
 
   for (const c of contracts) {
-    if (c.user_id && String(c.user_id).toUpperCase() !== String(userId ?? '').toUpperCase()) continue
+    if (c.user_id && String(c.user_id).toUpperCase() !== String(userId ?? '').toUpperCase())
+      continue
     let cfg: ContractConfig
     try {
       cfg = c.config ? (JSON.parse(c.config) as ContractConfig) : {}
@@ -117,7 +136,9 @@ export async function enforceContracts(
     }
     for (const [f, expected] of Object.entries(cfg.types ?? {})) {
       if (f in payload && !typeOk(payload[f], expected)) {
-        violations.push(`"${f}" should be ${expected}, got ${Array.isArray(payload[f]) ? 'array' : typeof payload[f]} (${JSON.stringify(payload[f]).slice(0, 60)})`)
+        violations.push(
+          `"${f}" should be ${expected}, got ${Array.isArray(payload[f]) ? 'array' : typeof payload[f]} (${JSON.stringify(payload[f]).slice(0, 60)})`
+        )
       }
     }
     if (cfg.forbid_unknown) {
@@ -150,7 +171,12 @@ async function flagViolation(c: ContractRow, action: string, violations: string[
     if (existing) {
       await db('nivaro_issues')
         .where({ id: existing.id })
-        .update({ details, occurrence_count: db.raw('occurrence_count + 1'), last_seen_at: new Date(), updated_at: new Date() })
+        .update({
+          details,
+          occurrence_count: db.raw('occurrence_count + 1'),
+          last_seen_at: new Date(),
+          updated_at: new Date()
+        })
     } else {
       await db('nivaro_issues').insert({
         title: `Integration contract drift: ${c.name}`,

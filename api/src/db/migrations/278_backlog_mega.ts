@@ -76,7 +76,11 @@ export async function up(knex: Knex): Promise<void> {
   if (!(await has('nivaro_user_group_members'))) {
     await knex.schema.createTable('nivaro_user_group_members', (t) => {
       t.increments('id')
-      t.integer('group_id').notNullable().references('id').inTable('nivaro_user_groups').onDelete('CASCADE')
+      t.integer('group_id')
+        .notNullable()
+        .references('id')
+        .inTable('nivaro_user_groups')
+        .onDelete('CASCADE')
       t.uuid('user').notNullable()
       t.unique(['group_id', 'user'])
     })

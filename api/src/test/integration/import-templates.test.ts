@@ -882,7 +882,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
     expect(vi.mocked(recalcRollupsForParent)).not.toHaveBeenCalled()
   })
 
-  it('POST /:id/execute — happy path dedupes the created parent\'s rollup to ONE recalc despite 3 lines FKing to it', async () => {
+  it("POST /:id/execute — happy path dedupes the created parent's rollup to ONE recalc despite 3 lines FKing to it", async () => {
     const user = makeRegularUser({ id: 'user-1' })
     const template = {
       id: 'tmpl-1',
@@ -1657,7 +1657,10 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       many_collection: 'unit_workflow_lines_exec',
       many_field: 'deployment_order_id'
     }
-    const nestedRelationRow = { many_collection: 'unit_workflows_exec', many_field: 'workflow_line' }
+    const nestedRelationRow = {
+      many_collection: 'unit_workflows_exec',
+      many_field: 'workflow_line'
+    }
     vi.mocked(db)
       .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
       .mockReturnValueOnce(makeChain(childRelation) as unknown as ReturnType<typeof db>) // line child relation resolve
@@ -1834,7 +1837,10 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       }),
       attach_file_field: null
     }
-    const childRelation = { many_collection: 'deployment_lines_cap', many_field: 'deployment_order_id' }
+    const childRelation = {
+      many_collection: 'deployment_lines_cap',
+      many_field: 'deployment_order_id'
+    }
     const nestedRelationRow = { many_collection: 'workflows_cap', many_field: 'line_id' }
     vi.mocked(db)
       .mockReturnValueOnce(makeChain(template) as unknown as ReturnType<typeof db>) // template load
@@ -3508,16 +3514,17 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
         }) as unknown as ReturnType<typeof db>
       ) // relation resolve — line_map.target_field
       .mockReturnValueOnce(
-        makeChain([{ field: 'sku' }, { field: 'nested_items', type: null }]) as unknown as ReturnType<typeof db>
+        makeChain([
+          { field: 'sku' },
+          { field: 'nested_items', type: null }
+        ]) as unknown as ReturnType<typeof db>
       ) // child nivaro_fields — 'other_workflow' deliberately absent so nested.target_field
       // falls through to the relation-resolve branch below, and 'nested_items' resolves
       // via the fully-mocked getActualColumns() (services/items.js mock) with zero db() calls
       .mockReturnValueOnce(
         makeChain({ id: 2, collection: 'disperse_maps' }) as unknown as ReturnType<typeof db>
       ) // nivaro_collections for disperse map_collection
-      .mockReturnValueOnce(
-        makeChain([{ field: 'code' }]) as unknown as ReturnType<typeof db>
-      ) // nivaro_fields for disperse map_collection
+      .mockReturnValueOnce(makeChain([{ field: 'code' }]) as unknown as ReturnType<typeof db>) // nivaro_fields for disperse map_collection
       .mockReturnValueOnce(
         makeChain({
           one_collection: 'po_line_items',
@@ -3572,7 +3579,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/import-templates', () => {
       body.details.some(
         (d) =>
           d.path === 'line_map' &&
-          d.message === 'nested and disperse must target the same field when a relation target is used'
+          d.message ===
+            'nested and disperse must target the same field when a relation target is used'
       )
     ).toBe(true)
   })

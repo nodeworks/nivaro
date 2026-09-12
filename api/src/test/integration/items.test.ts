@@ -8,8 +8,8 @@ vi.mock('../../config.js', () => ({
     DB_DATABASE: 'testdb',
     DB_HOST: 'localhost',
     REDIS_URL: 'redis://localhost:6379',
-    ENCRYPTION_KEY: null,
-  },
+    ENCRYPTION_KEY: null
+  }
 }))
 
 vi.mock('../../middleware/authenticate.js', () => ({
@@ -17,20 +17,20 @@ vi.mock('../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async () => {}),
   requireAdmin: vi.fn(async () => {}),
   cidrMatch: vi.fn(() => true),
-  checkApiKeyScope: vi.fn(() => true),
+  checkApiKeyScope: vi.fn(() => true)
 }))
 
 vi.mock('../../services/activity.js', () => ({
-  logActivity: vi.fn().mockResolvedValue(1),
+  logActivity: vi.fn().mockResolvedValue(1)
 }))
 
 vi.mock('../../services/revisions.js', () => ({
-  writeRevision: vi.fn().mockResolvedValue(undefined),
+  writeRevision: vi.fn().mockResolvedValue(undefined)
 }))
 
 vi.mock('../../hooks/registry.js', () => ({
   runHooks: vi.fn().mockResolvedValue(undefined),
-  hookRegistry: { before: [], after: [] },
+  hookRegistry: { before: [], after: [] }
 }))
 
 import Fastify from 'fastify'
@@ -52,7 +52,7 @@ function makeDbChain(result: unknown) {
     update: vi.fn().mockReturnThis(),
     delete: vi.fn().mockResolvedValue(1),
     returning: vi.fn().mockResolvedValue([{ id: 1 }]),
-    then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(result).then(cb)),
+    then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(result).then(cb))
   }
   return chain
 }
@@ -120,7 +120,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/items', () => {
       method: 'POST',
       url: '/api/items/articles',
       headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ title: 'New Article' }),
+      payload: JSON.stringify({ title: 'New Article' })
     })
 
     expect([200, 201]).toContain(res.statusCode)
@@ -136,7 +136,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/items', () => {
       method: 'PATCH',
       url: '/api/items/articles/5',
       headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ title: 'Updated' }),
+      payload: JSON.stringify({ title: 'Updated' })
     })
 
     expect([200, 204]).toContain(res.statusCode)
@@ -150,7 +150,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/items', () => {
     const app = await buildItemsApp()
     const res = await app.inject({
       method: 'DELETE',
-      url: '/api/items/articles/5',
+      url: '/api/items/articles/5'
     })
 
     expect([200, 204]).toContain(res.statusCode)

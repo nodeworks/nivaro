@@ -37,17 +37,19 @@ async function main() {
 
   try {
     // Terminate existing connections to template DB (required before DROP/CREATE)
-    await adminClient.query(`
+    await adminClient.query(
+      `
       SELECT pg_terminate_backend(pid)
       FROM pg_stat_activity
       WHERE datname = $1 AND pid <> pg_backend_pid()
-    `, [TEMPLATE_DB])
-
-    // Create template DB if it doesn't exist
-    const exists = await adminClient.query(
-      `SELECT 1 FROM pg_database WHERE datname = $1`,
+    `,
       [TEMPLATE_DB]
     )
+
+    // Create template DB if it doesn't exist
+    const exists = await adminClient.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [
+      TEMPLATE_DB
+    ])
 
     if (exists.rows.length === 0) {
       console.log(`Creating ${TEMPLATE_DB}...`)

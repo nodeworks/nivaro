@@ -18,15 +18,16 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 export interface AvailableBulkAction {
   key: string
-  source: 'db' | 'extension'
+  source: 'db' | 'extension' | 'builtin'
   collection: string | null
   label: string
   icon: string | null
   variant: 'default' | 'danger'
-  kind: 'update_fields' | 'transition' | 'extension'
+  kind: 'update_fields' | 'transition' | 'extension' | 'builtin'
   require_reason: boolean
   confirm_text: string | null
   summary: string
+  surfaces?: Array<'browser' | 'queue'>
 }
 
 export interface BulkTarget {
@@ -78,7 +79,29 @@ export function bulkActionEnabled(
   return enabledKeys.includes(key) || enabledKeys.includes(`${collection}:${key}`)
 }
 
-/** Distinct actions across the targets' collections (merged by key + label). */
+/**
+ * Gate for the bars' BUILT-IN operations (Update Field, Transition, Message,
+ * Delete, Compare, Merge, recipes, Claim, Release): shown when at least one
+ * of the collections lists the built-in as available AND the surface's
+ * allow-list includes it. An API that returns no built-in entries at all
+ * (older server, request failed) leaves everything visible — the server
+ * still enforces on the endpoints behind each operation.
+ */
+export function useBuiltinGate(collections: string[], enabledKeys?: string[] | null) {
+  const { data } = useAvailableBulkActions(collections)
+  const known = !!data && Object.values(data).some((l) => l.some((a) => a.source === 'builtin'))
+  return (key: string): boolean => {
+    if (!known) return true
+    return collections.some(
+      (c) =>
+        (data?.[c] ?? []).some((a) => a.source === 'builtin' && a.key === key) &&
+        bulkActionEnabled(enabledKeys, c, key)
+    )
+  }
+}
+
+/** Distinct REGISTRY actions across the targets' collections (built-ins are
+ *  rendered by the host bars themselves — see useBuiltinGate). */
 export function mergeBulkActions(
   byCollection: Record<string, AvailableBulkAction[]> | undefined,
   collections: string[],
@@ -87,6 +110,7 @@ export function mergeBulkActions(
   const out = new Map<string, AvailableBulkAction & { collections: string[] }>()
   for (const c of collections) {
     for (const a of byCollection?.[c] ?? []) {
+      if (a.source === 'builtin') continue
       if (!bulkActionEnabled(enabledKeys, c, a.key)) continue
       const id = `${a.source}:${a.key}`
       const cur = out.get(id)

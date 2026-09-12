@@ -525,7 +525,10 @@ export async function flowsRoutes(app: FastifyInstance) {
     unregisterEventFlowHook(id)
     // nivaro_flow_versions references the flow with NO ACTION (MSSQL multi-
     // cascade rule) — clear the snapshots first or the delete 500s on the FK.
-    await db('nivaro_flow_versions').where({ flow: id }).delete().catch(() => undefined)
+    await db('nivaro_flow_versions')
+      .where({ flow: id })
+      .delete()
+      .catch(() => undefined)
     const deleted = await db('nivaro_flows').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
@@ -732,18 +735,19 @@ export async function flowsRoutes(app: FastifyInstance) {
     const truncated = rows.length > limit
     const matched = rows.slice(0, limit)
 
-    const deleteCount = ((opts.types ?? []).includes('delete') && collections.length)
-      ? Number(
-          (
-            await db('nivaro_activity')
-              .where('action', 'delete')
-              .whereBetween('timestamp', [from, to])
-              .whereIn('collection', collections)
-              .count('* as c')
-              .first()
-          )?.c ?? 0
-        )
-      : 0
+    const deleteCount =
+      (opts.types ?? []).includes('delete') && collections.length
+        ? Number(
+            (
+              await db('nivaro_activity')
+                .where('action', 'delete')
+                .whereBetween('timestamp', [from, to])
+                .whereIn('collection', collections)
+                .count('* as c')
+                .first()
+            )?.c ?? 0
+          )
+        : 0
 
     if (dryRun) {
       return reply.send({
@@ -763,9 +767,9 @@ export async function flowsRoutes(app: FastifyInstance) {
     for (const row of matched) {
       let record: Record<string, unknown> | undefined
       try {
-        record = (await db(row.collection)
-          .where({ id: row.item })
-          .first()) as Record<string, unknown> | undefined
+        record = (await db(row.collection).where({ id: row.item }).first()) as
+          | Record<string, unknown>
+          | undefined
       } catch {
         record = undefined
       }

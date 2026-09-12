@@ -37,7 +37,11 @@ async function bounds(table: string, collections: string[]): Promise<Bounds> {
     `SELECT MIN(id) AS lo, MAX(id) AS hi, COUNT(*) AS c
      FROM ${table} WHERE collection IN (${list}) AND legacy_id IS NULL`
   )) as unknown
-  const row = (Array.isArray(res) ? res[0] : res) as { lo: number | null; hi: number | null; c: number }
+  const row = (Array.isArray(res) ? res[0] : res) as {
+    lo: number | null
+    hi: number | null
+    c: number
+  }
   return { lo: row.lo, hi: row.hi, count: Number(row.c) || 0 }
 }
 
@@ -61,7 +65,9 @@ async function purge(table: string, collections: string[], dryRun: boolean): Pro
       )) as unknown
       affected =
         Number(
-          typeof res === 'number' ? res : ((res as { rowCount?: number })?.rowCount ?? (res as number[])?.[0] ?? 0)
+          typeof res === 'number'
+            ? res
+            : ((res as { rowCount?: number })?.rowCount ?? (res as number[])?.[0] ?? 0)
         ) || 0
     } catch (err) {
       const code = (err as { code?: string }).code
@@ -84,11 +90,15 @@ async function main(): Promise<void> {
 
   // Collections explicitly turned down to no-audit are exactly the ones whose
   // historic rows carry no audit value.
-  const rows = (await db('nivaro_collections')
-    .select('collection', 'accountability')) as Array<{ collection: string; accountability: string | null }>
+  const rows = (await db('nivaro_collections').select('collection', 'accountability')) as Array<{
+    collection: string
+    accountability: string | null
+  }>
   const collections = rows
     .filter((r) => {
-      const level = String(r.accountability ?? '').trim().toLowerCase()
+      const level = String(r.accountability ?? '')
+        .trim()
+        .toLowerCase()
       return level !== 'all' && level !== 'activity'
     })
     .map((r) => r.collection)

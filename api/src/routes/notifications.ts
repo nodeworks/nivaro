@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { builtinAllowed } from '../services/bulk-actions.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -220,6 +221,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).filter(Boolean).slice(0, 200)
     const subject = String(b.subject ?? '').trim()
     const message = String(b.message ?? '').trim()
+    if (collection && !(await builtinAllowed(collection, 'message', req)))
+      return reply.code(403).send({ error: 'Messaging stakeholders is not available to you here' })
     if (!/^[A-Za-z0-9_]+$/.test(collection) || /^nivaro_/i.test(collection)) {
       return reply.code(400).send({ error: 'Invalid collection' })
     }

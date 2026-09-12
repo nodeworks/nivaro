@@ -88,7 +88,8 @@ async function runOneTest(
   for (const [key, want] of Object.entries(exp.op_statuses ?? {})) {
     const step = trace.find((s) => s.key === key || s.name === key)
     if (!step) failures.push(`op "${key}" never ran`)
-    else if (step.status !== want) failures.push(`op "${key}" was ${step.status} (expected ${want})`)
+    else if (step.status !== want)
+      failures.push(`op "${key}" was ${step.status} (expected ${want})`)
   }
   for (const needle of exp.preview_contains ?? []) {
     const all = trace.map((s) => JSON.stringify(s.preview ?? '')).join('\n')
@@ -97,7 +98,9 @@ async function runOneTest(
   for (const oc of exp.output_contains ?? []) {
     const actual = getPath(output, oc.path)
     if (String(actual) !== String(oc.value)) {
-      failures.push(`output ${oc.path} = ${JSON.stringify(actual)} (expected ${JSON.stringify(oc.value)})`)
+      failures.push(
+        `output ${oc.path} = ${JSON.stringify(actual)} (expected ${JSON.stringify(oc.value)})`
+      )
     }
   }
 
@@ -200,7 +203,13 @@ Cover: the happy path, a condition-filtered path (payload that should NOT pass c
       })
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
-    await logActivity({ action: 'automation-test-create', user: req.user?.id, item: String(id), comment: name, req })
+    await logActivity({
+      action: 'automation-test-create',
+      user: req.user?.id,
+      item: String(id),
+      comment: name,
+      req
+    })
     return reply.code(201).send({ data: { id } })
   })
 
@@ -211,9 +220,11 @@ Cover: the happy path, a condition-filtered path (payload that should NOT pass c
     const patch: Record<string, unknown> = {}
     if (typeof b.name === 'string' && b.name.trim()) patch.name = b.name.trim().slice(0, 300)
     if (b.payload !== undefined) patch.payload = b.payload ? JSON.stringify(b.payload) : null
-    if (b.expectations !== undefined) patch.expectations = b.expectations ? JSON.stringify(b.expectations) : null
+    if (b.expectations !== undefined)
+      patch.expectations = b.expectations ? JSON.stringify(b.expectations) : null
     if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    if (Object.keys(patch).length > 0) await db('nivaro_automation_tests').where('id', row.id).update(patch)
+    if (Object.keys(patch).length > 0)
+      await db('nivaro_automation_tests').where('id', row.id).update(patch)
     return { data: { id: row.id } }
   })
 
@@ -221,12 +232,20 @@ Cover: the happy path, a condition-filtered path (payload that should NOT pass c
     const row = await db('nivaro_automation_tests').where('id', req.params.id).first('id', 'name')
     if (!row) return reply.code(404).send({ error: 'Not found' })
     await db('nivaro_automation_tests').where('id', row.id).del()
-    await logActivity({ action: 'automation-test-delete', user: req.user?.id, item: String(row.id), comment: String(row.name), req })
+    await logActivity({
+      action: 'automation-test-delete',
+      user: req.user?.id,
+      item: String(row.id),
+      comment: String(row.name),
+      req
+    })
     return { data: { deleted: true } }
   })
 
   app.post<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
-    const test = (await db('nivaro_automation_tests').where('id', req.params.id).first()) as TestRow | undefined
+    const test = (await db('nivaro_automation_tests').where('id', req.params.id).first()) as
+      | TestRow
+      | undefined
     if (!test) return reply.code(404).send({ error: 'Not found' })
     const result = await runOneTest(app, test, req.user?.id)
     return { data: result }
@@ -247,10 +266,23 @@ Cover: the happy path, a condition-filtered path (payload that should NOT pass c
         if (r.status === 'fail') failed++
         run.progress({ done: results.length, total: tests.length, failed })
       }
-      const summary = `${tests.length - failed}/${tests.length} passed${failed ? ` — failing: ${results.filter((r) => r.status === 'fail').map((r) => r.name).join(', ').slice(0, 300)}` : ''}`
+      const summary = `${tests.length - failed}/${tests.length} passed${
+        failed
+          ? ` — failing: ${results
+              .filter((r) => r.status === 'fail')
+              .map((r) => r.name)
+              .join(', ')
+              .slice(0, 300)}`
+          : ''
+      }`
       if (failed > 0) await run.fail(summary)
       else await run.complete(summary)
-      await logActivity({ action: 'automation-suite-run', user: req.user?.id, comment: summary.slice(0, 300), req })
+      await logActivity({
+        action: 'automation-suite-run',
+        user: req.user?.id,
+        comment: summary.slice(0, 300),
+        req
+      })
       return { data: { total: tests.length, failed, results } }
     } catch (err) {
       await run.fail(err)

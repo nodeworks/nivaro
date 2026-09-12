@@ -77,7 +77,9 @@ describe('normalizeAccess / accessAllows', () => {
 describe('normalizeGuard / summarize', () => {
   it('keeps only well-formed rules with known ops', () => {
     expect(
-      normalizeGuard('[{"field":"a","op":"eq","value":1},{"field":"","op":"eq"},{"field":"b","op":"zz"}]')
+      normalizeGuard(
+        '[{"field":"a","op":"eq","value":1},{"field":"","op":"eq"},{"field":"b","op":"zz"}]'
+      )
     ).toEqual([{ field: 'a', op: 'eq', value: 1 }])
     expect(normalizeGuard('[]')).toBeNull()
     expect(normalizeGuard('not json')).toBeNull()

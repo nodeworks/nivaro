@@ -155,9 +155,7 @@ export async function runAiValidation(
 ): Promise<AiViolation[]> {
   // validation_rules may also carry typed rule objects (e.g. sum_cap) owned by
   // other hooks — back-compat: only free-text string rules go to the model.
-  const stringRules = rules.filter(
-    (r): r is string => typeof r === 'string' && r.trim().length > 0
-  )
+  const stringRules = rules.filter((r): r is string => typeof r === 'string' && r.trim().length > 0)
   if (stringRules.length === 0) return []
 
   const client = await getAnthropicClient()

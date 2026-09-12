@@ -28,19 +28,28 @@ describe('changeSignature', () => {
   })
 
   it('reads dotted paths', () => {
-    expect(changeSignature(RECORD, ['nested.a'])).not.toBe(changeSignature({ nested: { a: 2 } }, ['nested.a']))
+    expect(changeSignature(RECORD, ['nested.a'])).not.toBe(
+      changeSignature({ nested: { a: 2 } }, ['nested.a'])
+    )
   })
 })
 
 describe('shouldPush', () => {
   const sig = 'aaa'
   it('pushes on every transition when unconfigured (historical behaviour)', () => {
-    expect(shouldPush({ pushWhen: undefined, stateChanged: true, signature: null, lastSignature: null })).toBe(true)
+    expect(
+      shouldPush({ pushWhen: undefined, stateChanged: true, signature: null, lastSignature: null })
+    ).toBe(true)
   })
 
   it('state_change alone pushes on the state change', () => {
     expect(
-      shouldPush({ pushWhen: { state_change: true }, stateChanged: true, signature: null, lastSignature: null })
+      shouldPush({
+        pushWhen: { state_change: true },
+        stateChanged: true,
+        signature: null,
+        lastSignature: null
+      })
     ).toBe(true)
   })
 
@@ -90,11 +99,21 @@ describe('shouldPush', () => {
 })
 
 describe('payloadSignature — the MWF case', () => {
-  const base = { token: 't', workflow_id: 'B1', efp_state: 'Waiting on Manager Approval', requisition_id: 'CR26-1' }
+  const base = {
+    token: 't',
+    workflow_id: 'B1',
+    efp_state: 'Waiting on Manager Approval',
+    requisition_id: 'CR26-1'
+  }
 
   it('ignores key order — the same payload rendered differently is the same payload', () => {
     expect(payloadSignature(base)).toBe(
-      payloadSignature({ requisition_id: 'CR26-1', efp_state: 'Waiting on Manager Approval', workflow_id: 'B1', token: 't' })
+      payloadSignature({
+        requisition_id: 'CR26-1',
+        efp_state: 'Waiting on Manager Approval',
+        workflow_id: 'B1',
+        token: 't'
+      })
     )
   })
 
@@ -109,7 +128,12 @@ describe('payloadSignature — the MWF case', () => {
   it('suppresses a transition that produced an identical payload', () => {
     const sig = payloadSignature(base)
     expect(
-      shouldPush({ pushWhen: { state_change: false, payload: true }, stateChanged: true, signature: sig, lastSignature: sig })
+      shouldPush({
+        pushWhen: { state_change: false, payload: true },
+        stateChanged: true,
+        signature: sig,
+        lastSignature: sig
+      })
     ).toBe(false)
   })
 

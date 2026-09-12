@@ -76,10 +76,7 @@ async function scan(
   }
 }
 
-export async function buildImpactReport(
-  collection: string,
-  field: string
-): Promise<ImpactReport> {
+export async function buildImpactReport(collection: string, field: string): Promise<ImpactReport> {
   const pats = tokenPatterns(field)
   const fieldEq = field
 
@@ -214,9 +211,7 @@ export async function buildImpactReport(
       const dims = (await db('nivaro_pipeline_owner_dimensions')
         .whereIn('binding', bindingIds)
         .where((b) => {
-          void b
-            .where('field', fieldEq)
-            .orWhere('field', 'like', `${likeEscape(field)}.%`)
+          void b.where('field', fieldEq).orWhere('field', 'like', `${likeEscape(field)}.%`)
         })
         .select('label', 'field')) as Array<{ label: string; field: string }>
       for (const d of dims) {

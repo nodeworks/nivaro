@@ -124,10 +124,7 @@ export async function restoreReportVersion(
   if (snap.widgets.length > 0) {
     await db('nivaro_report_widgets').insert(
       snap.widgets.map((w, i) => ({
-        id:
-          typeof w.id === 'string' && /^[0-9a-f-]{36}$/i.test(w.id)
-            ? w.id
-            : randomUUID(),
+        id: typeof w.id === 'string' && /^[0-9a-f-]{36}$/i.test(w.id) ? w.id : randomUUID(),
         report: reportId,
         type: w.type ?? 'kpi',
         title: w.title ?? '',

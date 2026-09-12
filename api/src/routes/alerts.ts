@@ -139,29 +139,31 @@ export async function alertsRoutes(app: FastifyInstance) {
     }
 
     const now = new Date()
-    const [idRow] = await db('nivaro_alert_definitions').insert({
-      name: body.name,
-      category: body.category ?? 'general',
-      collection: body.collection,
-      field: body.field,
-      operator: body.operator ?? 'gt',
-      threshold: body.threshold ?? 0,
-      unit: body.unit ?? 'count',
-      filters: body.filters ? JSON.stringify(body.filters) : null,
-      cooldown_minutes: body.cooldown_minutes ?? 60,
-      is_active: body.is_active !== false ? 1 : 0,
-      detection_type: detectionType,
-      sensitivity:
-        detectionType === 'anomaly'
-          ? body.sensitivity != null
-            ? Number(body.sensitivity)
-            : 2.0
-          : null,
-      created_by: req.user?.id ?? null,
-      created_at: now,
-      updated_at: now
-      // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
-    }).returning('id')
+    const [idRow] = await db('nivaro_alert_definitions')
+      .insert({
+        name: body.name,
+        category: body.category ?? 'general',
+        collection: body.collection,
+        field: body.field,
+        operator: body.operator ?? 'gt',
+        threshold: body.threshold ?? 0,
+        unit: body.unit ?? 'count',
+        filters: body.filters ? JSON.stringify(body.filters) : null,
+        cooldown_minutes: body.cooldown_minutes ?? 60,
+        is_active: body.is_active !== false ? 1 : 0,
+        detection_type: detectionType,
+        sensitivity:
+          detectionType === 'anomaly'
+            ? body.sensitivity != null
+              ? Number(body.sensitivity)
+              : 2.0
+            : null,
+        created_by: req.user?.id ?? null,
+        created_at: now,
+        updated_at: now
+        // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
+      })
+      .returning('id')
     const id = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
 
     const created = await db('nivaro_alert_definitions').where({ id }).first<AlertDefinitionRow>()
@@ -303,13 +305,15 @@ export async function alertsRoutes(app: FastifyInstance) {
       .where({ alert_definition: body.alert_definition, user: userId })
       .delete()
 
-    const [idRow] = await db('nivaro_alert_subscriptions').insert({
-      alert_definition: body.alert_definition,
-      user: userId,
-      notify_email: body.notify_email !== false ? 1 : 0,
-      notify_inapp: body.notify_inapp !== false ? 1 : 0
-      // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
-    }).returning('id')
+    const [idRow] = await db('nivaro_alert_subscriptions')
+      .insert({
+        alert_definition: body.alert_definition,
+        user: userId,
+        notify_email: body.notify_email !== false ? 1 : 0,
+        notify_inapp: body.notify_inapp !== false ? 1 : 0
+        // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
+      })
+      .returning('id')
     const id = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
 
     const created = await db('nivaro_alert_subscriptions').where({ id }).first()

@@ -152,14 +152,11 @@ export async function mergeRoutes(app: FastifyInstance) {
         if (ref.kind === 'm2m') {
           // Repoint junction rows one by one; drop rows that would duplicate
           // an existing (other-columns, survivor) pairing.
-          const junctionRows = (await db(ref.table).whereIn(
-            ref.column,
-            loser_ids
-          )) as Array<Record<string, unknown>>
+          const junctionRows = (await db(ref.table).whereIn(ref.column, loser_ids)) as Array<
+            Record<string, unknown>
+          >
           for (const jr of junctionRows) {
-            const otherCols = Object.entries(jr).filter(
-              ([k]) => k !== 'id' && k !== ref.column
-            )
+            const otherCols = Object.entries(jr).filter(([k]) => k !== 'id' && k !== ref.column)
             const dupQ = db(ref.table).where({ [ref.column]: survivor_id })
             for (const [k, v] of otherCols) {
               if (v === null) dupQ.whereNull(k)

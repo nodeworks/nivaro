@@ -125,9 +125,9 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
         and (character_maximum_length between 1 and 2000 or character_maximum_length = -1)
     `) as Promise<Array<{ table_name: string; column_name: string }>>,
     // Junction collections carry no human labels — searching them is noise.
-    db('nivaro_relations')
-      .whereNotNull('junction_field')
-      .select('many_collection') as Promise<Array<{ many_collection: string }>>,
+    db('nivaro_relations').whereNotNull('junction_field').select('many_collection') as Promise<
+      Array<{ many_collection: string }>
+    >,
     // Registry junk exists (sysdiagrams made it into nivaro_collections) —
     // every union arm selects `id`, so a table without one breaks the batch.
     db.raw(`select table_name from information_schema.columns where column_name = 'id'`) as Promise<
@@ -355,12 +355,10 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     if (q.length >= 4) {
       try {
         const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
-        const indexed = (await db('nivaro_embeddings')
-          .distinct('collection')
-          .limit(5)) as Array<{ collection: string }>
-        const targets = indexed
-          .map((r) => r.collection)
-          .filter((c) => readable.includes(c))
+        const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
+          collection: string
+        }>
+        const targets = indexed.map((r) => r.collection).filter((c) => readable.includes(c))
         if (targets.length > 0) {
           const vec = await embedText(q)
           const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
@@ -371,7 +369,10 @@ export async function globalSearchRoutes(app: FastifyInstance) {
             const labelField = fields[0] ?? 'id'
             const rows = (await db(collection)
               .select(['id', labelField])
-              .whereIn('id', hits.map((h) => h.item))) as Array<Record<string, unknown>>
+              .whereIn(
+                'id',
+                hits.map((h) => h.item)
+              )) as Array<Record<string, unknown>>
             for (const row of rows) {
               const key = `${collection}:${String(row.id)}`
               if (seen.has(key)) continue

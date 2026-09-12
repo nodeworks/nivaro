@@ -196,7 +196,8 @@ function parseRules(raw: unknown): ValidationRule[] {
   }
   if (!Array.isArray(parsed)) return []
   return parsed.filter(
-    (r): r is ValidationRule => !!r && typeof r === 'object' && typeof (r as ValidationRule).type === 'string'
+    (r): r is ValidationRule =>
+      !!r && typeof r === 'object' && typeof (r as ValidationRule).type === 'string'
   )
 }
 

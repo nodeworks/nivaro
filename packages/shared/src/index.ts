@@ -161,7 +161,8 @@ export {
   BulkActionButtons,
   bulkActionEnabled,
   mergeBulkActions,
-  useAvailableBulkActions
+  useAvailableBulkActions,
+  useBuiltinGate
 } from './components/bulk/BulkActionButtons'
 export type {
   AvailableBulkAction,

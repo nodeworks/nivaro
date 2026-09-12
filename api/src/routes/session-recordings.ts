@@ -124,72 +124,78 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     })
   })
 
-  app.post<{ Body: { app?: string; origin?: string; clip?: boolean; meta?: Record<string, unknown> } }>(
-    '/start',
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      // A clip start is gated by the error-replay bit, not the full-recording
-      // bit — clips exist precisely so operators can keep continuous
-      // recording OFF and still get the last minute before an error.
-      const isClip = req.body?.clip === true
-      if (isClip) {
-        const row = await db('nivaro_settings').where({ id: 1 }).first('error_replay_enabled')
-        if (!(row as { error_replay_enabled?: unknown } | undefined)?.error_replay_enabled) {
-          return reply.code(409).send({ error: 'Error replay is disabled' })
-        }
-      } else if (!(await recordingEnabled())) {
-        return reply.code(409).send({ error: 'Session recording is disabled' })
+  app.post<{
+    Body: { app?: string; origin?: string; clip?: boolean; meta?: Record<string, unknown> }
+  }>('/start', { preHandler: requireAuth }, async (req, reply) => {
+    // A clip start is gated by the error-replay bit, not the full-recording
+    // bit — clips exist precisely so operators can keep continuous
+    // recording OFF and still get the last minute before an error.
+    const isClip = req.body?.clip === true
+    if (isClip) {
+      const row = await db('nivaro_settings').where({ id: 1 }).first('error_replay_enabled')
+      if (!(row as { error_replay_enabled?: unknown } | undefined)?.error_replay_enabled) {
+        return reply.code(409).send({ error: 'Error replay is disabled' })
       }
-      const id = randomUUID()
-      const appLabel = isClip
-        ? 'error-clip'
-        : typeof req.body?.app === 'string'
-          ? req.body.app.slice(0, 100)
-          : null
-      // Where this happened. Taken from the client's own origin, falling back
-      // to the request's host — a recording whose environment is unknown is
-      // hard to act on, and the referer is the closest thing we have.
-      const claimed = typeof req.body?.origin === 'string' ? req.body.origin.slice(0, 255) : ''
-      const referer = typeof req.headers.referer === 'string' ? req.headers.referer : ''
-      const origin =
-        claimed ||
-        (() => {
-          try {
-            return referer ? new URL(referer).origin : ''
-          } catch {
-            return ''
-          }
-        })() ||
-        null
-      // Client environment (OS/browser via UA, screen, viewport, dpr, locale,
-      // timezone) — allowlisted keys, each value capped; junk shapes drop.
-      const META_KEYS = ['user_agent', 'platform', 'screen', 'viewport', 'dpr', 'language', 'timezone'] as const
-      let meta: string | null = null
-      if (req.body?.meta && typeof req.body.meta === 'object') {
-        const clean: Record<string, string> = {}
-        for (const k of META_KEYS) {
-          const v = (req.body.meta as Record<string, unknown>)[k]
-          if (v != null && (typeof v === 'string' || typeof v === 'number')) {
-            clean[k] = String(v).slice(0, k === 'user_agent' ? 400 : 80)
-          }
-        }
-        if (Object.keys(clean).length > 0) meta = JSON.stringify(clean)
-      }
-      await db('nivaro_session_recordings').insert({
-        id,
-        user: req.user!.id,
-        app: appLabel,
-        origin,
-        meta,
-        // Masquerade context: this recording shows the ADMIN driving, not the
-        // account it's attributed to — the list must say so.
-        masquerade_admin: req.masqueradeAdminId ?? null,
-        started_at: new Date(),
-        last_event_at: new Date()
-      })
-      return reply.send({ data: { id } })
+    } else if (!(await recordingEnabled())) {
+      return reply.code(409).send({ error: 'Session recording is disabled' })
     }
-  )
+    const id = randomUUID()
+    const appLabel = isClip
+      ? 'error-clip'
+      : typeof req.body?.app === 'string'
+        ? req.body.app.slice(0, 100)
+        : null
+    // Where this happened. Taken from the client's own origin, falling back
+    // to the request's host — a recording whose environment is unknown is
+    // hard to act on, and the referer is the closest thing we have.
+    const claimed = typeof req.body?.origin === 'string' ? req.body.origin.slice(0, 255) : ''
+    const referer = typeof req.headers.referer === 'string' ? req.headers.referer : ''
+    const origin =
+      claimed ||
+      (() => {
+        try {
+          return referer ? new URL(referer).origin : ''
+        } catch {
+          return ''
+        }
+      })() ||
+      null
+    // Client environment (OS/browser via UA, screen, viewport, dpr, locale,
+    // timezone) — allowlisted keys, each value capped; junk shapes drop.
+    const META_KEYS = [
+      'user_agent',
+      'platform',
+      'screen',
+      'viewport',
+      'dpr',
+      'language',
+      'timezone'
+    ] as const
+    let meta: string | null = null
+    if (req.body?.meta && typeof req.body.meta === 'object') {
+      const clean: Record<string, string> = {}
+      for (const k of META_KEYS) {
+        const v = (req.body.meta as Record<string, unknown>)[k]
+        if (v != null && (typeof v === 'string' || typeof v === 'number')) {
+          clean[k] = String(v).slice(0, k === 'user_agent' ? 400 : 80)
+        }
+      }
+      if (Object.keys(clean).length > 0) meta = JSON.stringify(clean)
+    }
+    await db('nivaro_session_recordings').insert({
+      id,
+      user: req.user!.id,
+      app: appLabel,
+      origin,
+      meta,
+      // Masquerade context: this recording shows the ADMIN driving, not the
+      // account it's attributed to — the list must say so.
+      masquerade_admin: req.masqueradeAdminId ?? null,
+      started_at: new Date(),
+      last_event_at: new Date()
+    })
+    return reply.send({ data: { id } })
+  })
 
   app.post<{ Params: { id: string }; Body: { seq?: number; events?: unknown[] } }>(
     '/:id/events',

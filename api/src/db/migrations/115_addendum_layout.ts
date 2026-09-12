@@ -29,10 +29,18 @@ export async function up(knex: Knex) {
 
 export async function down(knex: Knex) {
   // Drop FKs first (MSSQL requires explicit constraint drop)
-  try { await knex.raw(`ALTER TABLE nivaro_addendums DROP CONSTRAINT fk_addendum_addendum_layout`) } catch {}
-  try { await knex.raw(`ALTER TABLE nivaro_collection_layouts DROP CONSTRAINT fk_coll_layout_addendum_layout`) } catch {}
+  try {
+    await knex.raw(`ALTER TABLE nivaro_addendums DROP CONSTRAINT fk_addendum_addendum_layout`)
+  } catch {}
+  try {
+    await knex.raw(
+      `ALTER TABLE nivaro_collection_layouts DROP CONSTRAINT fk_coll_layout_addendum_layout`
+    )
+  } catch {}
 
-  await knex.schema.alterTable('nivaro_addendums', (t) => { t.dropColumn('addendum_layout_id') })
+  await knex.schema.alterTable('nivaro_addendums', (t) => {
+    t.dropColumn('addendum_layout_id')
+  })
   await knex.schema.alterTable('nivaro_collection_layouts', (t) => {
     t.dropColumn('addendum_layout_id')
     t.dropColumn('workflow_template_id')

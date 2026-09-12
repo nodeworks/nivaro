@@ -163,7 +163,13 @@ interface NormalizedPipeline {
   updated_at?: string
 }
 
-const GITLAB_ACTIVE = new Set(['created', 'waiting_for_resource', 'preparing', 'pending', 'running'])
+const GITLAB_ACTIVE = new Set([
+  'created',
+  'waiting_for_resource',
+  'preparing',
+  'pending',
+  'running'
+])
 
 async function gitlabPipelines(ctx: GitCtx): Promise<NormalizedPipeline[]> {
   const ref = ctx.ref ? `&ref=${encodeURIComponent(ctx.ref)}` : ''
@@ -489,7 +495,9 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
     try {
       const pipelines =
         ctx.provider === 'github' ? await githubPipelines(ctx) : await gitlabPipelines(ctx)
-      const active = pipelines.some((p) => GITLAB_ACTIVE.has(p.status) || p.status === 'in_progress')
+      const active = pipelines.some(
+        (p) => GITLAB_ACTIVE.has(p.status) || p.status === 'in_progress'
+      )
       return { data: { configured: true, active, pipelines } }
     } catch (err) {
       return {

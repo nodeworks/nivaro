@@ -643,7 +643,9 @@ export async function generatePdfFromLayout(params: {
         })
       // Child-record tables get their own page — a table starting mid-page
       // and immediately breaking reads badly; the first section never breaks.
-      const hasChildTable = groupFields.some((f) => f.rawHtml && String(f.value).startsWith('<table'))
+      const hasChildTable = groupFields.some(
+        (f) => f.rawHtml && String(f.value).startsWith('<table')
+      )
       return { label: group.label, pageBreak: hasChildTable, fields: groupFields }
     })
     .filter((s) => s.fields.length > 0)
@@ -724,9 +726,9 @@ export async function generatePdfFromLayout(params: {
   }
 
   return htmlToPdf(html, {
-    format: (['A4', 'Letter'].includes(layout.pdf_page_size ?? '')
-      ? layout.pdf_page_size
-      : 'A4') as 'A4' | 'Letter',
+    format: (['A4', 'Letter'].includes(layout.pdf_page_size ?? '') ? layout.pdf_page_size : 'A4') as
+      | 'A4'
+      | 'Letter',
     landscape: layout.pdf_orientation === 'landscape'
   })
 }

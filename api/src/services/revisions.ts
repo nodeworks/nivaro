@@ -119,10 +119,13 @@ export async function listRevisions(collection: string, item: string): Promise<R
       .where('a.item', item)
       .whereIn('a.action', ['o2m-create', 'o2m-update', 'o2m-delete'])
       .whereNull('r.id')
-      .limit(100) as Promise<Record<string, unknown>[]>,
+      .limit(100) as Promise<Record<string, unknown>[]>
   ])
 
-  const all = [...(revRows as Record<string, unknown>[]), ...(activityRows as Record<string, unknown>[])]
+  const all = [
+    ...(revRows as Record<string, unknown>[]),
+    ...(activityRows as Record<string, unknown>[])
+  ]
   all.sort((a, b) => {
     const ta = a.timestamp ? new Date(a.timestamp as string).getTime() : 0
     const tb = b.timestamp ? new Date(b.timestamp as string).getTime() : 0

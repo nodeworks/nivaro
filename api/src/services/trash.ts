@@ -94,10 +94,9 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
   }
 
   // Drop keys that no longer exist as physical columns (schema may have moved on)
-  const cols = (await db.raw(
-    'SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)',
-    [row.collection]
-  )) as Array<{ name: string }>
+  const cols = (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
+    row.collection
+  ])) as Array<{ name: string }>
   const valid = new Set(cols.map((c) => c.name))
   const insertData = Object.fromEntries(Object.entries(data).filter(([k]) => valid.has(k)))
 
@@ -153,7 +152,11 @@ export async function purgeExpiredTrash(): Promise<number> {
   }
   const cutoff = new Date(Date.now() - TRASH_RETENTION_DAYS * 86_400_000)
   const base = db('nivaro_trash').where('deleted_at', '<', cutoff)
-  if (overrides.length > 0) base.whereNotIn('collection', overrides.map((o) => o.collection))
+  if (overrides.length > 0)
+    base.whereNotIn(
+      'collection',
+      overrides.map((o) => o.collection)
+    )
   purged += await holdGuard(base).del()
   return purged
 }

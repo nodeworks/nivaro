@@ -199,7 +199,12 @@ async function executeWatch(asker: User, token: string): Promise<string> {
         .first('id')) as { id?: unknown } | undefined
       if (!row?.id) continue
       const existing = await db('nivaro_notification_subscriptions')
-        .where({ user: asker.id, collection: t.collection, filter_field: 'id', filter_value: String(row.id) })
+        .where({
+          user: asker.id,
+          collection: t.collection,
+          filter_field: 'id',
+          filter_value: String(row.id)
+        })
         .first('id')
       if (existing) return `You're already watching ${token}.`
       await db('nivaro_notification_subscriptions').insert({
@@ -224,14 +229,46 @@ async function executeWatch(asker: User, token: string): Promise<string> {
 /** Help topics (#224): "how do I…" answers, curated — the doc site isn't
  *  reachable from the server, so this table IS the bot's product knowledge. */
 const HELP_TOPICS: Array<{ match: RegExp; answer: string }> = [
-  { match: /subscri|watch|follow.*record|notif.*record/i, answer: 'Open the record and click the bell in its header — "State changes only" or "All changes". You can also tell me "watch <record id>". Mute a record from the same dialog.' },
-  { match: /saved view|save.*filter|default view/i, answer: 'Set your filters/columns in the collection browser, then Columns → "Save as preset…". Admins can star one view as the collection-wide default.' },
-  { match: /import|upload.*csv|spreadsheet/i, answer: 'Imports live under Monitoring → Imports. The CSV wizard maps columns (with an AI "Suggest mapping" button), previews changes, and failed rows can be repaired inline afterward.' },
-  { match: /export|excel|csv/i, answer: 'Any collection browser exports CSV from the Export menu (current filters apply). Admins can define server export presets (xlsx, with child sheets) in the same menu.' },
-  { match: /delegate|out of office|ooo|vacation/i, answer: 'Profile → delegation card: set your delegate and OOO window. Owned work routes to the delegate while you\u2019re out; open tasks move to them automatically.' },
-  { match: /queue|worklist|claim/i, answer: 'Queues (left nav) are cross-collection worklists. "Work Next" claims and opens the highest-priority unclaimed item; saved views keep your scope/filters.' },
-  { match: /report|dashboard|chart/i, answer: 'Report Studio (Reports nav) builds widget grids over any collection — filters, snapshots, alerts, subscriptions. "Build with AI" drafts one from a sentence.' },
-  { match: /digest|too many email|email.*settings/i, answer: 'Profile → Email delivery: switch to the daily action digest (pick your hour — it follows your timezone), or compact layout. Notification rules on the same page control quiet hours and sounds.' }
+  {
+    match: /subscri|watch|follow.*record|notif.*record/i,
+    answer:
+      'Open the record and click the bell in its header — "State changes only" or "All changes". You can also tell me "watch <record id>". Mute a record from the same dialog.'
+  },
+  {
+    match: /saved view|save.*filter|default view/i,
+    answer:
+      'Set your filters/columns in the collection browser, then Columns → "Save as preset…". Admins can star one view as the collection-wide default.'
+  },
+  {
+    match: /import|upload.*csv|spreadsheet/i,
+    answer:
+      'Imports live under Monitoring → Imports. The CSV wizard maps columns (with an AI "Suggest mapping" button), previews changes, and failed rows can be repaired inline afterward.'
+  },
+  {
+    match: /export|excel|csv/i,
+    answer:
+      'Any collection browser exports CSV from the Export menu (current filters apply). Admins can define server export presets (xlsx, with child sheets) in the same menu.'
+  },
+  {
+    match: /delegate|out of office|ooo|vacation/i,
+    answer:
+      'Profile → delegation card: set your delegate and OOO window. Owned work routes to the delegate while you\u2019re out; open tasks move to them automatically.'
+  },
+  {
+    match: /queue|worklist|claim/i,
+    answer:
+      'Queues (left nav) are cross-collection worklists. "Work Next" claims and opens the highest-priority unclaimed item; saved views keep your scope/filters.'
+  },
+  {
+    match: /report|dashboard|chart/i,
+    answer:
+      'Report Studio (Reports nav) builds widget grids over any collection — filters, snapshots, alerts, subscriptions. "Build with AI" drafts one from a sentence.'
+  },
+  {
+    match: /digest|too many email|email.*settings/i,
+    answer:
+      'Profile → Email delivery: switch to the daily action digest (pick your hour — it follows your timezone), or compact layout. Notification rules on the same page control quiet hours and sounds.'
+  }
 ]
 
 const HELP_TOOL: Anthropic.Tool = {
@@ -272,7 +309,10 @@ async function answerQuestion(
   const { CHAT_SYSTEM_PROMPT, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
     './ai-chat.js'
   )
-  const modelRow = await db('nivaro_settings').orderBy('id', 'asc').first('ai_model').catch(() => null)
+  const modelRow = await db('nivaro_settings')
+    .orderBy('id', 'asc')
+    .first('ai_model')
+    .catch(() => null)
   const model = String(modelRow?.ai_model ?? '') || 'claude-haiku-4-5-20251001'
 
   const contextBlock = roomContext
@@ -318,7 +358,9 @@ async function answerQuestion(
       try {
         if (block.name === 'set_reminder') {
           const when = new Date(String(input.when_iso ?? ''))
-          const note = String(input.note ?? '').trim().slice(0, 500)
+          const note = String(input.note ?? '')
+            .trim()
+            .slice(0, 500)
           if (Number.isNaN(when.getTime()) || !note) throw new Error('Invalid reminder')
           if (when.getTime() < Date.now()) throw new Error('That time is in the past')
           await db('nivaro_reminders').insert({

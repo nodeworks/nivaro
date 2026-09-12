@@ -166,11 +166,7 @@ export async function userScopesRoutes(app: FastifyInstance) {
         }
         const override = dim.overrides?.[c]
         const hops = await scopeHopsFor(dim, c)
-        const status = !hops
-          ? 'unreachable'
-          : override && override.length > 0
-            ? 'override'
-            : 'auto'
+        const status = !hops ? 'unreachable' : override && override.length > 0 ? 'override' : 'auto'
         rows.push({
           collection: c,
           status,
@@ -240,7 +236,9 @@ export async function userScopesRoutes(app: FastifyInstance) {
     if (!dim) return reply.code(404).send({ error: 'Unknown dimension' })
     const proposed = sanitizeValues(b.values)
 
-    const { scopeHopsFor, applyScopeHops, getUserScopes } = await import('../services/user-scopes.js')
+    const { scopeHopsFor, applyScopeHops, getUserScopes } = await import(
+      '../services/user-scopes.js'
+    )
     // Current restrict allowance for this dimension (if any).
     const currentRow = (await getUserScopes(req.params.userId)).find(
       (r) => r.dimension === dim.name && r.mode === 'restrict'
@@ -281,7 +279,8 @@ export async function userScopesRoutes(app: FastifyInstance) {
       seenTables.add(c.table_name.toLowerCase())
       ordered.push(c)
     }
-    const impact: Array<{ collection: string; total: number; current: number; proposed: number }> = []
+    const impact: Array<{ collection: string; total: number; current: number; proposed: number }> =
+      []
     for (const c of ordered) {
       if (impact.length >= 5) break
       if (!registered.has(c.table_name.toLowerCase())) continue
@@ -305,7 +304,9 @@ export async function userScopesRoutes(app: FastifyInstance) {
         // a collection whose hops fail to compile is skipped, not fatal
       }
     }
-    return { data: { dimension: dim.name, current_values: current, proposed_values: proposed, impact } }
+    return {
+      data: { dimension: dim.name, current_values: current, proposed_values: proposed, impact }
+    }
   })
 
   app.put<{
@@ -314,7 +315,8 @@ export async function userScopesRoutes(app: FastifyInstance) {
   }>('/user-scopes/:userId', { preHandler: requireAdmin }, async (req, reply) => {
     const b = req.body ?? {}
     const mode = String(b.mode ?? '')
-    if (!MODE.has(mode)) return reply.code(400).send({ error: "mode must be 'default' or 'restrict'" })
+    if (!MODE.has(mode))
+      return reply.code(400).send({ error: "mode must be 'default' or 'restrict'" })
     const dims = await listScopeDimensions(false)
     const dim = dims.find((d) => d.name === b.dimension)
     if (!dim) return reply.code(404).send({ error: 'Unknown dimension' })

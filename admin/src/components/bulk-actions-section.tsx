@@ -665,6 +665,176 @@ function BulkActionForm({
   )
 }
 
+// ─── Built-ins (the bars' own operations, switchable + access-gated per collection) ──
+
+interface BuiltinState {
+  key: string
+  label: string
+  summary: string
+  surfaces: Array<'browser' | 'queue'>
+  variant: 'default' | 'danger'
+  lockedAccess?: boolean
+  collection: string
+  override_id: number | null
+  is_active: boolean
+  access: { mode: AccessMode; role_ids?: string[] }
+}
+
+function AccessPicker({
+  value,
+  roles,
+  locked,
+  onChange
+}: {
+  value: { mode: AccessMode; role_ids?: string[] }
+  roles: RoleMeta[]
+  locked?: boolean
+  onChange: (next: { mode: AccessMode; role_ids?: string[] }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const label = accessLabel(value, roles)
+  if (locked)
+    return (
+      <span
+        className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-600'
+        title='Fixed — this operation is admin-only by design'
+      >
+        <Lock className='h-3 w-3' /> {label}
+      </span>
+    )
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+          title='Who can run it'
+        >
+          {value.mode === 'everyone' ? <Users className='h-3 w-3' /> : <Lock className='h-3 w-3' />}
+          {label}
+          <ChevronsUpDown className='h-3 w-3 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[280px] p-3' align='end'>
+        <p className='mb-2 text-[12px] font-medium text-slate-700'>Who can run it</p>
+        <Segmented
+          value={value.mode}
+          options={[
+            { value: 'everyone', label: 'Everyone' },
+            { value: 'admin', label: 'Admins' },
+            { value: 'roles', label: 'Roles' }
+          ]}
+          onChange={(mode) =>
+            onChange(mode === 'roles' ? { mode, role_ids: value.role_ids ?? [] } : { mode })
+          }
+        />
+        {value.mode === 'roles' && (
+          <div className='mt-2 flex flex-col gap-1'>
+            {roles
+              .filter((r) => !r.admin_access)
+              .map((r) => {
+                const id = `ba-bi-role-${r.id}`
+                const ids = value.role_ids ?? []
+                return (
+                  <label
+                    key={r.id}
+                    htmlFor={id}
+                    className='flex cursor-pointer items-center gap-1.5 text-[12.5px]'
+                  >
+                    <Checkbox
+                      id={id}
+                      checked={ids.includes(r.id)}
+                      onCheckedChange={(on) =>
+                        onChange({
+                          mode: 'roles',
+                          role_ids: on ? [...ids, r.id] : ids.filter((x) => x !== r.id)
+                        })
+                      }
+                    />
+                    {r.name}
+                  </label>
+                )
+              })}
+            <span className='text-[11px] text-slate-500'>Admins always can.</span>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function BuiltinRows({ tableName, roles }: { tableName: string; roles: RoleMeta[] }) {
+  const qc = useQueryClient()
+  const { data: builtins = [] } = useQuery<BuiltinState[]>({
+    queryKey: ['bulk-actions-builtins', tableName],
+    queryFn: () =>
+      api
+        .get('/bulk-actions/builtins', { params: { collection: tableName } })
+        .then((r) => r.data.data ?? []),
+    enabled: !!tableName
+  })
+  const put = useMutation({
+    mutationFn: ({ key, body }: { key: string; body: Record<string, unknown> }) =>
+      api.put(`/bulk-actions/builtins/${tableName}/${key}`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['bulk-actions-builtins', tableName] })
+      void qc.invalidateQueries({ queryKey: ['bulk-actions-catalog'] })
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? 'Save failed')
+  })
+  if (builtins.length === 0) return null
+  return (
+    <div className='border-t border-slate-100'>
+      <p className='px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+        Built-in
+      </p>
+      <ul className='divide-y divide-slate-100'>
+        {builtins.map((b) => (
+          <li
+            key={b.key}
+            data-bulk-builtin-row={b.key}
+            className={cn('flex items-center gap-3 px-4 py-2', !b.is_active && 'opacity-60')}
+          >
+            <div className='min-w-0 flex-1'>
+              <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
+                <span
+                  className={cn(
+                    'text-[13px] font-medium',
+                    b.variant === 'danger' ? 'text-red-700' : 'text-slate-800'
+                  )}
+                >
+                  {b.label}
+                </span>
+                {b.surfaces.map((sf) => (
+                  <span
+                    key={sf}
+                    className='rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] text-slate-500'
+                  >
+                    {sf === 'browser' ? 'Browser' : 'Queues'}
+                  </span>
+                ))}
+                <AccessPicker
+                  value={b.access}
+                  roles={roles}
+                  locked={b.lockedAccess}
+                  onChange={(access) => put.mutate({ key: b.key, body: { access } })}
+                />
+              </div>
+              <p className='mt-0.5 truncate text-[12px] text-slate-500'>{b.summary}</p>
+            </div>
+            <Switch
+              checked={b.is_active}
+              onCheckedChange={(v) => put.mutate({ key: b.key, body: { is_active: v } })}
+              aria-label={`${b.label} on`}
+            />
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 // ─── Section (list) ───────────────────────────────────────────────────────────
 
 function accessLabel(a: BulkActionDef['access'], roles: RoleMeta[]): string {
@@ -768,18 +938,24 @@ export function BulkActionsSection({ tableName }: { tableName: string }) {
           onCancel={() => setEditing(null)}
         />
       )}
+      <BuiltinRows tableName={tableName} roles={roles} />
+      {defs.length > 0 && (
+        <p className='border-t border-slate-100 px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+          Custom
+        </p>
+      )}
       {isLoading ? (
         <div className='border-t border-slate-100 px-4 py-3 text-[12px] text-slate-400'>
           Loading…
         </div>
       ) : defs.length === 0 && editing !== 'new' ? (
-        <div className='border-t border-slate-100 px-4 py-4 text-[12.5px] text-slate-500'>
-          No bulk actions yet. Add one to offer it in this collection's browser and in any queue
+        <div className='border-t border-slate-100 px-4 py-3 text-[12.5px] text-slate-500'>
+          No custom actions yet. Add one to offer it in this collection's browser and in any queue
           that lists these records — for example <em>On Hold</em> (set a flag) or <em>Cancel</em>{' '}
           (run the Cancel transition).
         </div>
       ) : (
-        <ul className='divide-y divide-slate-100 border-t border-slate-100'>
+        <ul className='divide-y divide-slate-100'>
           {defs.map((a, i) => {
             const guard = guardText(a.guard, fields)
             const summary =
@@ -931,12 +1107,13 @@ export function BulkActionsSection({ tableName }: { tableName: string }) {
 
 export interface CatalogAction {
   key: string
-  source: 'db' | 'extension'
+  source: 'db' | 'extension' | 'builtin'
   collection: string | null
   label: string
   variant: 'default' | 'danger'
   summary: string
   access: { mode: AccessMode; role_ids?: string[] }
+  surfaces?: Array<'browser' | 'queue'>
 }
 
 export function useBulkActionCatalog(collections: string[]) {
@@ -970,12 +1147,15 @@ export function BulkActionsPicker({
   value,
   onChange,
   keyed = false,
+  surface = 'browser',
   disabled
 }: {
   collections: string[]
   value: string[] | null | undefined
   onChange: (next: string[] | null) => void
   keyed?: boolean
+  /** Which bar this list feeds — built-ins are shown only for their surface. */
+  surface?: 'browser' | 'queue'
   disabled?: boolean
 }) {
   const { data, isLoading } = useBulkActionCatalog(collections)
@@ -983,11 +1163,13 @@ export function BulkActionsPicker({
   const entries = useMemo(() => {
     const out: Array<{ id: string; collection: string; action: CatalogAction }> = []
     for (const c of collections) {
-      for (const a of data?.[c] ?? [])
+      for (const a of data?.[c] ?? []) {
+        if (a.source === 'builtin' && a.surfaces && !a.surfaces.includes(surface)) continue
         out.push({ id: keyed ? `${c}:${a.key}` : a.key, collection: c, action: a })
+      }
     }
     return out
-  }, [data, collections, keyed])
+  }, [data, collections, keyed, surface])
   const explicit = Array.isArray(value)
   // Keep an explicit list honest when the catalog changes under it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the catalog lands or the mode flips; onChange is a fresh closure every render
@@ -1041,6 +1223,11 @@ export function BulkActionsPicker({
               <span className={cn(e.action.variant === 'danger' && 'text-red-700')}>
                 {e.action.label}
               </span>
+              {e.action.source === 'builtin' && (
+                <span className='rounded bg-slate-100 px-1 py-px text-[10px] text-slate-500'>
+                  built-in
+                </span>
+              )}
               {multi && <span className='text-[11px] text-slate-400'>{e.collection}</span>}
               {e.action.access.mode !== 'everyone' && <Lock className='h-3 w-3 text-slate-400' />}
             </label>

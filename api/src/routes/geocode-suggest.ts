@@ -26,7 +26,9 @@ export async function geocodeSuggestRoutes(app: FastifyInstance): Promise<void> 
     '/geocode/suggest',
     { preHandler: [requireAuth] },
     async (req, reply) => {
-      const q = String(req.body?.q ?? '').trim().slice(0, 300)
+      const q = String(req.body?.q ?? '')
+        .trim()
+        .slice(0, 300)
       if (q.length < 4) return reply.send({ data: [] })
       const key = q.toLowerCase()
       const hit = cache.get(key)

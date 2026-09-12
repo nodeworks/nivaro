@@ -238,7 +238,12 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
   const uid = String(user.id)
   const [memberships, dmRooms, chans] = await Promise.all([
     db('nivaro_chat_memberships').where('user', uid) as Promise<
-      Array<{ room: string; last_read_at: Date | null; is_muted: boolean; notify_mode: string | null }>
+      Array<{
+        room: string
+        last_read_at: Date | null
+        is_muted: boolean
+        notify_mode: string | null
+      }>
     >,
     // DMs are implicit: a message addressed to you creates the room.
     // NOTE: .distinct().pluck() is BROKEN on knex/mssql — it returns one
@@ -255,9 +260,9 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
           `dm:%:${uid.toUpperCase()}`
         )
       })
-      .then((rows) =>
-        [...new Set((rows as Array<{ room: string }>).map((r) => String(r.room)))]
-      ) as Promise<string[]>,
+      .then((rows) => [
+        ...new Set((rows as Array<{ room: string }>).map((r) => String(r.room)))
+      ]) as Promise<string[]>,
     channels()
   ])
 
@@ -303,7 +308,9 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
         : null,
       unread: unreadRows.get(room) ?? 0,
       muted: !!membership?.is_muted,
-      notify_mode: (membership?.notify_mode === 'mentions' ? 'mentions' : 'all') as 'all' | 'mentions',
+      notify_mode: (membership?.notify_mode === 'mentions' ? 'mentions' : 'all') as
+        | 'all'
+        | 'mentions',
       joined: !!membership,
       last_message: lastMessages.get(room) ?? null
     }
@@ -319,7 +326,9 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
 }
 
 /** One row per room — the newest message. Replaces "fetch 500 and group". */
-async function lastMessagePerRoom(rooms: string[]): Promise<Map<string, RoomSummary['last_message']>> {
+async function lastMessagePerRoom(
+  rooms: string[]
+): Promise<Map<string, RoomSummary['last_message']>> {
   const out = new Map<string, RoomSummary['last_message']>()
   if (rooms.length === 0) return out
   for (const chunk of chunked(rooms)) {
@@ -331,9 +340,14 @@ async function lastMessagePerRoom(rooms: string[]): Promise<Map<string, RoomSumm
       .whereRaw(
         'm.id = (SELECT MAX(m2.id) FROM chat_messages m2 WHERE m2.room = m.room AND m2.deleted_at IS NULL)'
       )
-      .select('m.id', 'm.room', 'm.message', 'm.sender', 'm.sender_name', 'm.date_created')) as Array<
-      Record<string, unknown>
-    >
+      .select(
+        'm.id',
+        'm.room',
+        'm.message',
+        'm.sender',
+        'm.sender_name',
+        'm.date_created'
+      )) as Array<Record<string, unknown>>
     for (const r of rows) {
       out.set(String(r.room), {
         id: Number(r.id),
@@ -360,7 +374,11 @@ async function unreadPerRoom(userId: string, rooms: string[]): Promise<Map<strin
       .whereIn('m.room', chunk)
       // A deleted message is not something to catch up on — no unread credit.
       .whereNull('m.deleted_at')
-      .andWhere((qb) => qb.whereNull('m.sender').orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [userId.toUpperCase()]))
+      .andWhere((qb) =>
+        qb
+          .whereNull('m.sender')
+          .orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [userId.toUpperCase()])
+      )
       .andWhere((qb) =>
         qb.whereNull('w.last_read_at').orWhereRaw('m.date_created > w.last_read_at')
       )

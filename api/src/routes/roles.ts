@@ -28,7 +28,11 @@ export async function rolesRoutes(app: FastifyInstance) {
   function formatRole(role: Role & { ui_permissions?: string | null }) {
     let uiPerms: string[] = []
     if (role.ui_permissions) {
-      try { uiPerms = JSON.parse(role.ui_permissions as unknown as string) } catch { /* ignore */ }
+      try {
+        uiPerms = JSON.parse(role.ui_permissions as unknown as string)
+      } catch {
+        /* ignore */
+      }
     }
     return { ...role, ui_permissions: uiPerms }
   }
@@ -74,43 +78,47 @@ export async function rolesRoutes(app: FastifyInstance) {
   /** Role cloning (#61): copy a role's policies + UI permissions as the
    *  starting point for a new role. Users are NOT copied — membership is an
    *  assignment, not part of the role's shape. */
-  app.post<{ Params: { id: string } }>('/:id/clone', { preHandler: requireAdmin }, async (req, reply) => {
-    const source = await db('nivaro_roles').where({ id: req.params.id }).first()
-    if (!source) return reply.code(404).send({ error: 'Role not found' })
-    const b = req.body as { name?: string }
-    const name = String(b?.name ?? '').trim() || `${source.name} (copy)`
-    const exists = await db('nivaro_roles').where({ name }).first('id')
-    if (exists) return reply.code(400).send({ error: `A role named "${name}" already exists` })
-    const id = randomUUID()
-    await db('nivaro_roles').insert({
-      id,
-      name,
-      description: source.description,
-      admin_access: source.admin_access,
-      app_access: source.app_access,
-      ui_permissions: source.ui_permissions,
-      workspace: source.workspace,
-      created_at: new Date(),
-      updated_at: new Date()
-    })
-    const policies = (await db('nivaro_policies').where({ role: req.params.id })) as Array<
-      Record<string, unknown>
-    >
-    for (const pol of policies) {
-      const { id: _pid, ...rest } = pol
-      await db('nivaro_policies').insert({ ...rest, role: id })
+  app.post<{ Params: { id: string } }>(
+    '/:id/clone',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const source = await db('nivaro_roles').where({ id: req.params.id }).first()
+      if (!source) return reply.code(404).send({ error: 'Role not found' })
+      const b = req.body as { name?: string }
+      const name = String(b?.name ?? '').trim() || `${source.name} (copy)`
+      const exists = await db('nivaro_roles').where({ name }).first('id')
+      if (exists) return reply.code(400).send({ error: `A role named "${name}" already exists` })
+      const id = randomUUID()
+      await db('nivaro_roles').insert({
+        id,
+        name,
+        description: source.description,
+        admin_access: source.admin_access,
+        app_access: source.app_access,
+        ui_permissions: source.ui_permissions,
+        workspace: source.workspace,
+        created_at: new Date(),
+        updated_at: new Date()
+      })
+      const policies = (await db('nivaro_policies').where({ role: req.params.id })) as Array<
+        Record<string, unknown>
+      >
+      for (const pol of policies) {
+        const { id: _pid, ...rest } = pol
+        await db('nivaro_policies').insert({ ...rest, role: id })
+      }
+      await logActivity({
+        action: 'role-clone',
+        user: req.user?.id,
+        collection: 'nivaro_roles',
+        item: id,
+        comment: `Cloned from "${source.name}" (${policies.length} policies)`,
+        req
+      })
+      const role = await db('nivaro_roles').where({ id }).first()
+      return reply.code(201).send({ data: role })
     }
-    await logActivity({
-      action: 'role-clone',
-      user: req.user?.id,
-      collection: 'nivaro_roles',
-      item: id,
-      comment: `Cloned from "${source.name}" (${policies.length} policies)`,
-      req
-    })
-    const role = await db('nivaro_roles').where({ id }).first()
-    return reply.code(201).send({ data: role })
-  })
+  )
 
   app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -138,10 +146,34 @@ export async function rolesRoutes(app: FastifyInstance) {
       await Promise.all([
         count(db('nivaro_users').where({ role: id }).count({ n: '*' }).first()),
         count(db('nivaro_policies').where({ role: id }).count({ n: '*' }).first()),
-        count(db('nivaro_saved_views').where({ role: id }).count({ n: '*' }).first().catch(() => undefined)),
-        count(db('nivaro_queues').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
-        count(db('nivaro_record_templates').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
-        count(db('nivaro_import_templates').where({ role_id: id }).count({ n: '*' }).first().catch(() => undefined)),
+        count(
+          db('nivaro_saved_views')
+            .where({ role: id })
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        ),
+        count(
+          db('nivaro_queues')
+            .where({ role_id: id })
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        ),
+        count(
+          db('nivaro_record_templates')
+            .where({ role_id: id })
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        ),
+        count(
+          db('nivaro_import_templates')
+            .where({ role_id: id })
+            .count({ n: '*' })
+            .first()
+            .catch(() => undefined)
+        ),
         count(
           db('nivaro_collection_layouts')
             .where('conditions', 'like', `%${id}%`)
@@ -158,7 +190,16 @@ export async function rolesRoutes(app: FastifyInstance) {
         )
       ])
     return reply.send({
-      data: { members, policies, saved_views: views, queues, record_templates: templates, import_templates: importTemplates, conditional_layouts: layouts, pages }
+      data: {
+        members,
+        policies,
+        saved_views: views,
+        queues,
+        record_templates: templates,
+        import_templates: importTemplates,
+        conditional_layouts: layouts,
+        pages
+      }
     })
   })
 
@@ -184,11 +225,14 @@ export async function rolesRoutes(app: FastifyInstance) {
   app.patch('/:id/ui-permissions', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as { disabled: string[] }
-    if (!Array.isArray(body.disabled)) return reply.code(400).send({ error: 'disabled must be an array' })
-    await db('nivaro_roles').where({ id }).update({
-      ui_permissions: JSON.stringify(body.disabled),
-      updated_at: new Date()
-    })
+    if (!Array.isArray(body.disabled))
+      return reply.code(400).send({ error: 'disabled must be an array' })
+    await db('nivaro_roles')
+      .where({ id })
+      .update({
+        ui_permissions: JSON.stringify(body.disabled),
+        updated_at: new Date()
+      })
     const role = await db<Role>('nivaro_roles').where({ id }).first()
     await logActivity({
       action: 'update',
@@ -427,7 +471,9 @@ export async function rolesRoutes(app: FastifyInstance) {
     }
     const parse = (raw: unknown) => {
       const r = parseRowFilter(typeof raw === 'string' ? raw : JSON.stringify(raw ?? null))
-      return r && 'error' in (r as object) ? null : (r as Array<{ field: string; op: string; value: unknown }> | null)
+      return r && 'error' in (r as object)
+        ? null
+        : (r as Array<{ field: string; op: string; value: unknown }> | null)
     }
     const proposed = parse(b.row_filter)
     const currentPolicy = (await db('nivaro_policies')

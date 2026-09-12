@@ -635,7 +635,9 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post('/schema', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {
-      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
     const b = req.body as { prompt?: string; collection?: string }
     if (!b.prompt?.trim()) return reply.code(400).send({ error: 'prompt is required' })
@@ -697,11 +699,19 @@ export async function aiRoutes(app: FastifyInstance) {
         for (const f of [op.field, op.new_name]) if (f && !IDENT.test(f)) return false
         return true
       })
-      await logActivity({ action: 'ai-schema', user: req.user?.id, comment: b.prompt.slice(0, 200), req })
+      await logActivity({
+        action: 'ai-schema',
+        user: req.user?.id,
+        comment: b.prompt.slice(0, 200),
+        req
+      })
       return {
         data: {
           operations,
-          text: text.replace(/```json[\s\S]*?```/, '').trim().slice(0, 800)
+          text: text
+            .replace(/```json[\s\S]*?```/, '')
+            .trim()
+            .slice(0, 800)
         }
       }
     } catch (err) {
@@ -713,10 +723,14 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post('/sql', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {
-      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
     const b = req.body as { prompt?: string; current_sql?: string; error?: string; mode?: string }
-    const mode = ['generate', 'explain', 'fix'].includes(String(b.mode)) ? String(b.mode) : 'generate'
+    const mode = ['generate', 'explain', 'fix'].includes(String(b.mode))
+      ? String(b.mode)
+      : 'generate'
     if (mode === 'generate' && !b.prompt?.trim()) {
       return reply.code(400).send({ error: 'prompt is required' })
     }
@@ -733,7 +747,10 @@ export async function aiRoutes(app: FastifyInstance) {
     const referenced = new Set<string>()
     const haystack = `${b.prompt ?? ''} ${b.current_sql ?? ''}`.toLowerCase()
     for (const n of names) {
-      if (haystack.includes(n.toLowerCase()) || haystack.includes(n.toLowerCase().replace(/_/g, ' '))) {
+      if (
+        haystack.includes(n.toLowerCase()) ||
+        haystack.includes(n.toLowerCase().replace(/_/g, ' '))
+      ) {
         referenced.add(n)
       }
     }
@@ -798,7 +815,9 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post('/formula', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getClient()
     if (!client) {
-      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
     const b = req.body as {
       prompt?: string
@@ -814,15 +833,19 @@ export async function aiRoutes(app: FastifyInstance) {
     // token set); else the collection's registered fields.
     let fieldLines: string[] = []
     if (Array.isArray(b.fields) && b.fields.length) {
-      fieldLines = b.fields
-        .slice(0, 120)
-        .map((f) => `${f.field}${f.label ? ` — ${f.label}` : ''}`)
+      fieldLines = b.fields.slice(0, 120).map((f) => `${f.field}${f.label ? ` — ${f.label}` : ''}`)
     } else if (b.collection && /^[A-Za-z_][A-Za-z0-9_]*$/.test(b.collection)) {
       try {
         const rows = (await db('nivaro_fields')
           .where({ collection: b.collection })
-          .select('field', 'label', 'type')) as Array<{ field: string; label: string | null; type: string }>
-        fieldLines = rows.slice(0, 120).map((r) => `${r.field} (${r.type})${r.label ? ` — ${r.label}` : ''}`)
+          .select('field', 'label', 'type')) as Array<{
+          field: string
+          label: string | null
+          type: string
+        }>
+        fieldLines = rows
+          .slice(0, 120)
+          .map((r) => `${r.field} (${r.type})${r.label ? ` — ${r.label}` : ''}`)
       } catch {
         /* no field context */
       }
@@ -833,7 +856,9 @@ export async function aiRoutes(app: FastifyInstance) {
         ? 'concat, join, upper, lower, trim, len, substr, replace, coalesce, networkdays(a,b), fiscal_year(d), fiscal_quarter(d), abs, round, floor, ceil'
         : 'networkdays(a,b), fiscal_year(d), fiscal_quarter(d), abs, round(n, places), floor, ceil'
     const system = `You write formulas for a CMS expression engine. Field references use the form ${tokenForm}. Supported: + - * / ( ) comparisons && ||, and functions: ${fnList}. ALL_CAPS names (e.g. TAX_RATE) reference instance-wide formula constants. Return ONLY the formula on the first line, then ONE plain-language sentence describing it. Never invent field names — use only the fields listed.`
-    const fieldsCtx = fieldLines.length ? `Available fields:\n${fieldLines.join('\n')}` : 'No field list provided.'
+    const fieldsCtx = fieldLines.length
+      ? `Available fields:\n${fieldLines.join('\n')}`
+      : 'No field list provided.'
 
     const { model } = await getAiSettings()
     try {
@@ -855,7 +880,12 @@ export async function aiRoutes(app: FastifyInstance) {
         .trim()
       const lines = text.split('\n').filter((l) => l.trim())
       const formula = (lines[0] ?? '').replace(/^`+|`+$/g, '').trim()
-      await logActivity({ action: 'ai-formula', user: req.user?.id, comment: b.collection ?? undefined, req })
+      await logActivity({
+        action: 'ai-formula',
+        user: req.user?.id,
+        comment: b.collection ?? undefined,
+        req
+      })
       return { data: { formula: formula || null, text: lines.slice(1).join(' ').trim() } }
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err)
@@ -943,7 +973,9 @@ export async function aiRoutes(app: FastifyInstance) {
       const aiRow = await db('nivaro_ai_collection_settings')
         .where({ collection })
         .first('prompt_overrides')
-      const ov = aiRow?.prompt_overrides ? (JSON.parse(aiRow.prompt_overrides) as { summarize?: string }) : null
+      const ov = aiRow?.prompt_overrides
+        ? (JSON.parse(aiRow.prompt_overrides) as { summarize?: string })
+        : null
       promptTemplate = ov?.summarize?.trim() || null
     } catch {
       promptTemplate = null
@@ -980,7 +1012,9 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post('/summarize-changes', { preHandler: authenticate }, async (req, reply) => {
     const client = await getClient()
     if (!client) {
-      return reply.code(503).send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
+      return reply
+        .code(503)
+        .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
     const b = req.body as { collection?: string; item?: string | number; days?: number }
     const collection = String(b.collection ?? '')
@@ -1020,7 +1054,9 @@ export async function aiRoutes(app: FastifyInstance) {
           last_name: string | null
         }>)
       : []
-    const nameOf = new Map(users.map((u) => [u.id, `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim()]))
+    const nameOf = new Map(
+      users.map((u) => [u.id, `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim()])
+    )
     const lines = revs
       .map((r) => {
         let delta: Record<string, unknown> = {}
@@ -1046,14 +1082,25 @@ export async function aiRoutes(app: FastifyInstance) {
         max_tokens: 400,
         system:
           'You summarize a database record\u2019s change history for a business reader. 2-5 sentences of plain prose: what changed, the overall direction, and who drove it. Note reversals or churn. Never invent changes not in the log.',
-        messages: [{ role: 'user', content: `Changes to ${collection}/${item} over the last ${days} days:\n${lines}` }]
+        messages: [
+          {
+            role: 'user',
+            content: `Changes to ${collection}/${item} over the last ${days} days:\n${lines}`
+          }
+        ]
       })
       const text = msg.content
         .filter((c) => c.type === 'text')
         .map((c) => ('text' in c ? c.text : ''))
         .join('\n')
         .trim()
-      await logActivity({ action: 'ai-summarize-changes', user: req.user?.id, collection, item, req })
+      await logActivity({
+        action: 'ai-summarize-changes',
+        user: req.user?.id,
+        collection,
+        item,
+        req
+      })
       return { data: { summary: text, changes: revs.length } }
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err)
@@ -1088,7 +1135,11 @@ export async function aiRoutes(app: FastifyInstance) {
       const rels = (await db('nivaro_relations')
         .where({ one_collection: collection })
         .whereNotNull('many_collection')
-        .limit(3)) as Array<{ many_collection: string; many_field: string; one_field: string | null }>
+        .limit(3)) as Array<{
+        many_collection: string
+        many_field: string
+        one_field: string | null
+      }>
       for (const rel of rels) {
         if (!rel.many_collection || !rel.many_field) continue
         if (!/^[A-Za-z0-9_]+$/.test(rel.many_collection) || !/^[A-Za-z0-9_]+$/.test(rel.many_field))
@@ -1118,7 +1169,9 @@ Record:
 ${JSON.stringify(record).slice(0, 8000)}
 
 ${Object.entries(children)
-  .map(([name, rows]) => `Related ${name} (${rows.length}):\n${JSON.stringify(rows).slice(0, 6000)}`)
+  .map(
+    ([name, rows]) => `Related ${name} (${rows.length}):\n${JSON.stringify(rows).slice(0, 6000)}`
+  )
   .join('\n\n')}
 
 Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"suggestion","field":"<field name or area>","message":"<specific, actionable finding>"}]. Return [] if the record looks ready.`
@@ -1139,7 +1192,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           findings = parsed
             .filter(
               (f): f is { severity: string; field: string; message: string } =>
-                !!f && typeof f === 'object' && typeof (f as { message?: unknown }).message === 'string'
+                !!f &&
+                typeof f === 'object' &&
+                typeof (f as { message?: unknown }).message === 'string'
             )
             .map((f) => ({
               severity: ['error', 'warning', 'suggestion'].includes(f.severity)
@@ -1407,9 +1462,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const readable: string[] = []
     for (const c of cols) {
       if (await can(req.user!, 'read', c.collection)) {
-        readable.push(
-          c.display_name ? `${c.collection} (${c.display_name})` : c.collection
-        )
+        readable.push(c.display_name ? `${c.collection} (${c.display_name})` : c.collection)
       }
     }
     if (readable.length === 0) return reply.code(403).send({ error: 'No readable collections' })
@@ -1542,15 +1595,31 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         description?: string
         trigger?: string
         trigger_options?: unknown
-        operations?: Array<{ key?: string; name?: string; type?: string; options?: unknown; resolve?: string | null; reject?: string | null }>
+        operations?: Array<{
+          key?: string
+          name?: string
+          type?: string
+          options?: unknown
+          resolve?: string | null
+          reject?: string | null
+        }>
       }
       try {
         draft = JSON.parse(text.replace(/^```(json)?\n?|```$/g, '').trim())
       } catch {
-        return reply.code(422).send({ error: 'The model did not return valid flow JSON — rephrase and retry' })
+        return reply
+          .code(422)
+          .send({ error: 'The model did not return valid flow JSON — rephrase and retry' })
       }
-      if (!draft.name || !['event', 'schedule', 'webhook'].includes(String(draft.trigger)) || !Array.isArray(draft.operations) || draft.operations.length === 0) {
-        return reply.code(422).send({ error: 'Draft was missing a name, valid trigger, or operations' })
+      if (
+        !draft.name ||
+        !['event', 'schedule', 'webhook'].includes(String(draft.trigger)) ||
+        !Array.isArray(draft.operations) ||
+        draft.operations.length === 0
+      ) {
+        return reply
+          .code(422)
+          .send({ error: 'Draft was missing a name, valid trigger, or operations' })
       }
 
       const { randomUUID } = await import('node:crypto')
@@ -1591,8 +1660,14 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           x += 220
         }
       } catch (err) {
-        await db('nivaro_flow_operations').where({ flow: flowId }).del().catch(() => {})
-        await db('nivaro_flows').where({ id: flowId }).del().catch(() => {})
+        await db('nivaro_flow_operations')
+          .where({ flow: flowId })
+          .del()
+          .catch(() => {})
+        await db('nivaro_flows')
+          .where({ id: flowId })
+          .del()
+          .catch(() => {})
         throw err
       }
       await logActivity({

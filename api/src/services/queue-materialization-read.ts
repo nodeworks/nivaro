@@ -87,7 +87,12 @@ export function filterAndOrderNarrowRows(
   rows: NarrowScanRow[],
   filters: Record<string, unknown>,
   sort: string,
-  weights?: { sla_warning: number; sla_breached: number; at_risk: number; age_hour_cap: number } | null
+  weights?: {
+    sla_warning: number
+    sla_breached: number
+    at_risk: number
+    age_hour_cap: number
+  } | null
 ): NarrowScanRow[] {
   let out = rows
   const sla = filters.sla_status
@@ -108,9 +113,18 @@ export function filterAndOrderNarrowRows(
     if (key === 'priority') {
       // Same formula as computePriorityScore in queues.ts (parity unit-tested);
       // weights come from display_config.priority_weights (#353).
-      const w = weights ?? { sla_warning: 1000, sla_breached: 2000, at_risk: 500, age_hour_cap: 499 }
+      const w = weights ?? {
+        sla_warning: 1000,
+        sla_breached: 2000,
+        at_risk: 500,
+        age_hour_cap: 499
+      }
       const sla =
-        r.sla_status === 'breached' ? w.sla_breached : r.sla_status === 'warning' ? w.sla_warning : 0
+        r.sla_status === 'breached'
+          ? w.sla_breached
+          : r.sla_status === 'warning'
+            ? w.sla_warning
+            : 0
       return sla + (r.at_risk ? w.at_risk : 0) + Math.min(r.aging_hours ?? 0, w.age_hour_cap)
     }
     if (key === 'aging_hours') return r.aging_hours
@@ -174,9 +188,7 @@ function computeSla(row: {
     ? businessHoursElapsed(
         new Date(row.entered_state_at),
         now,
-        row.sla_timezone
-          ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone }
-          : undefined
+        row.sla_timezone ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone } : undefined
       )
     : (now.getTime() - new Date(row.entered_state_at).getTime()) / (1000 * 60 * 60)
   const aging_hours = Math.round(elapsed * 10) / 10
@@ -280,10 +292,9 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
     })
     .count('* as n')
     .first()) as { n: number }
-  const atRiskRow = (await baseFactory()
-    .where('qi.at_risk', true)
-    .count('* as n')
-    .first()) as { n: number }
+  const atRiskRow = (await baseFactory().where('qi.at_risk', true).count('* as n').first()) as {
+    n: number
+  }
   const slaScanRows = (await baseFactory()
     .whereNotNull('qi.sla_duration_hours')
     .select(
@@ -291,7 +302,7 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
       'qi.sla_business_hours_only',
-    'qi.sla_timezone',
+      'qi.sla_timezone',
       'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
@@ -354,11 +365,9 @@ export async function fetchMaterializedStats(
   // warning/breached, so the JS scan is restricted to sla_duration_hours IS NOT
   // NULL (usually a small fraction; zero when no SLA rules are configured).
   // at_risk is a plain bit — SQL count, no scan.
-  const atRiskRow = (await scopeBase
-    .clone()
-    .where('qi.at_risk', true)
-    .count('* as n')
-    .first()) as { n: number }
+  const atRiskRow = (await scopeBase.clone().where('qi.at_risk', true).count('* as n').first()) as {
+    n: number
+  }
   const atRiskCount = Number(atRiskRow.n)
 
   const slaScanRows = (await scopeBase
@@ -369,7 +378,7 @@ export async function fetchMaterializedStats(
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
       'qi.sla_business_hours_only',
-    'qi.sla_timezone',
+      'qi.sla_timezone',
       'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
@@ -452,9 +461,9 @@ export async function fetchMaterializedQueueItems(
 
   // Priority weights (#353) from the queue's display_config — used by the
   // JS narrow-scan path's priority sort.
-  const queueCfgRow = (await db('nivaro_queues')
-    .where({ id: queueId })
-    .first('display_config')) as { display_config?: string | null } | undefined
+  const queueCfgRow = (await db('nivaro_queues').where({ id: queueId }).first('display_config')) as
+    | { display_config?: string | null }
+    | undefined
   const displayCfgWeights = normalizeDisplayConfig(
     parseJson(queueCfgRow?.display_config ?? null)
   ).priority_weights
@@ -586,7 +595,7 @@ export async function fetchMaterializedQueueItems(
         'qi.sla_warning_pct',
         'qi.sla_business_hours_only',
         'qi.sla_timezone',
-    'qi.sla_timezone',
+        'qi.sla_timezone',
         'qi.at_risk',
         db.raw(
           'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'
@@ -594,7 +603,9 @@ export async function fetchMaterializedQueueItems(
       )
     if (sortKey.startsWith('extra.')) {
       narrowQuery.select(
-        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [extraJsonPath(sortKey.slice('extra.'.length))])
+        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [
+          extraJsonPath(sortKey.slice('extra.'.length))
+        ])
       )
     }
     const narrowRaw = (await narrowQuery) as Array<{

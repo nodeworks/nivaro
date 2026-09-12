@@ -171,7 +171,9 @@ export async function opsDbRoutes(app: FastifyInstance) {
         row.is_unique ||
         row.is_unique_constraint
       ) {
-        return reply.code(400).send({ error: 'Only plain nonclustered indexes can be dropped here' })
+        return reply
+          .code(400)
+          .send({ error: 'Only plain nonclustered indexes can be dropped here' })
       }
       await db.raw(`DROP INDEX ${'[' + index + ']'} ON ${'[' + table + ']'}`)
       await logActivity({
@@ -353,7 +355,12 @@ export async function opsDbRoutes(app: FastifyInstance) {
     return reply.send({ data: await detectDanglingFks() })
   })
   app.post<{
-    Body: { many_collection?: string; many_field?: string; one_collection?: string; action?: string }
+    Body: {
+      many_collection?: string
+      many_field?: string
+      one_collection?: string
+      action?: string
+    }
   }>('/dangling-fks/repair', async (req, reply) => {
     const manyCollection = String(req.body?.many_collection ?? '')
     const manyField = String(req.body?.many_field ?? '')
@@ -372,7 +379,11 @@ export async function opsDbRoutes(app: FastifyInstance) {
     // Verify this IS a registered relation — the identifiers must come from
     // the sweep's own list, never free-typed table names.
     const rel = await db('nivaro_relations')
-      .where({ many_collection: manyCollection, many_field: manyField, one_collection: oneCollection })
+      .where({
+        many_collection: manyCollection,
+        many_field: manyField,
+        one_collection: oneCollection
+      })
       .first('id')
     if (!rel) return reply.code(404).send({ error: 'No such registered relation' })
 
@@ -394,11 +405,17 @@ export async function opsDbRoutes(app: FastifyInstance) {
         [manyCollection, manyField]
       )) as Array<{ IS_NULLABLE: string }>
       if (colInfo[0]?.IS_NULLABLE !== 'YES') {
-        return reply.code(400).send({ error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent` })
+        return reply
+          .code(400)
+          .send({
+            error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent`
+          })
       }
       const { selectInChunks } = await import('../services/db-batch.js')
       await selectInChunks(ids, 1000, async (chunk) => {
-        await db(manyCollection).whereIn('id', chunk).update({ [manyField]: null })
+        await db(manyCollection)
+          .whereIn('id', chunk)
+          .update({ [manyField]: null })
         return []
       })
       repaired = ids.length
@@ -427,10 +444,18 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #298 — Redis health: memory, evictions, keyspace, slowlog.
   app.get('/redis', async (_req, reply) => {
     try {
-      const redis = (app as unknown as { redis?: { info: () => Promise<string>; slowlog: (cmd: string, n: number) => Promise<unknown[]> } }).redis
+      const redis = (
+        app as unknown as {
+          redis?: {
+            info: () => Promise<string>
+            slowlog: (cmd: string, n: number) => Promise<unknown[]>
+          }
+        }
+      ).redis
       if (!redis) return reply.send({ unavailable: 'Redis is not connected' })
       const info = await redis.info()
-      const pick = (key: string) => info.match(new RegExp(`^${key}:(.+)$`, 'm'))?.[1]?.trim() ?? null
+      const pick = (key: string) =>
+        info.match(new RegExp(`^${key}:(.+)$`, 'm'))?.[1]?.trim() ?? null
       let slowlog: unknown[] = []
       try {
         slowlog = await redis.slowlog('GET', 10)
@@ -445,7 +470,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
           connected_clients: pick('connected_clients'),
           keyspace_hits: pick('keyspace_hits'),
           keyspace_misses: pick('keyspace_misses'),
-          total_keys: (info.match(/^db\d+:keys=(\d+)/m)?.[1] ?? null),
+          total_keys: info.match(/^db\d+:keys=(\d+)/m)?.[1] ?? null,
           uptime_in_days: pick('uptime_in_days'),
           slowlog
         }

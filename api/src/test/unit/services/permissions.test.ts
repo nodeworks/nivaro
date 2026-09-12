@@ -4,7 +4,7 @@ import {
   can,
   getAllowedFields,
   parseRowFilter,
-  type RowCondition,
+  type RowCondition
 } from '../../../services/permissions.js'
 import { makeAdminUser, makeRegularUser } from '../../helpers.js'
 
@@ -14,9 +14,11 @@ function mockDbFirst(result: unknown) {
     where: vi.fn().mockReturnThis(),
     orWhere: vi.fn().mockReturnThis(),
     orderByRaw: vi.fn().mockReturnThis(),
-    first: vi.fn().mockResolvedValue(result),
+    first: vi.fn().mockResolvedValue(result)
   }
-  vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(chain as unknown as ReturnType<typeof db>)
+  vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(
+    chain as unknown as ReturnType<typeof db>
+  )
   return chain
 }
 
@@ -29,7 +31,7 @@ function mockDbSequence(results: unknown[]) {
       where: vi.fn().mockReturnThis(),
       orWhere: vi.fn().mockReturnThis(),
       orderByRaw: vi.fn().mockReturnThis(),
-      first: vi.fn().mockResolvedValue(result),
+      first: vi.fn().mockResolvedValue(result)
     } as unknown as ReturnType<typeof db>
   })
 }
@@ -109,7 +111,7 @@ describe('can()', () => {
   it('returns true when a matching policy exists', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false, app_access: true }, // role
-      { id: 1, role: 'regular-role-id', collection: 'articles', action: 'read' }, // policy
+      { id: 1, role: 'regular-role-id', collection: 'articles', action: 'read' } // policy
     ])
     const user = makeRegularUser()
     const result = await can(user, 'read', 'articles')
@@ -119,7 +121,7 @@ describe('can()', () => {
   it('returns false when no matching policy exists', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false, app_access: true }, // role
-      null, // no policy
+      null // no policy
     ])
     const user = makeRegularUser()
     const result = await can(user, 'delete', 'articles')
@@ -146,7 +148,7 @@ describe('getAllowedFields()', () => {
   it('returns null (all fields) when policy has no fields restriction', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false }, // role
-      { id: 1, role: 'regular-role-id', collection: 'articles', action: 'read', fields: null }, // policy
+      { id: 1, role: 'regular-role-id', collection: 'articles', action: 'read', fields: null } // policy
     ])
     const user = makeRegularUser()
     const result = await getAllowedFields(user, 'read', 'articles')
@@ -156,7 +158,7 @@ describe('getAllowedFields()', () => {
   it('returns specific field list when policy restricts fields (JSON string)', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false },
-      { id: 1, fields: JSON.stringify(['title', 'status']) },
+      { id: 1, fields: JSON.stringify(['title', 'status']) }
     ])
     const user = makeRegularUser()
     const result = await getAllowedFields(user, 'read', 'articles')
@@ -166,7 +168,7 @@ describe('getAllowedFields()', () => {
   it('returns specific field list when policy restricts fields (already array)', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false },
-      { id: 1, fields: ['title', 'status'] },
+      { id: 1, fields: ['title', 'status'] }
     ])
     const user = makeRegularUser()
     const result = await getAllowedFields(user, 'read', 'articles')
@@ -174,10 +176,7 @@ describe('getAllowedFields()', () => {
   })
 
   it('returns empty array when no policy matches', async () => {
-    mockDbSequence([
-      { id: 'regular-role-id', admin_access: false },
-      null,
-    ])
+    mockDbSequence([{ id: 'regular-role-id', admin_access: false }, null])
     const user = makeRegularUser()
     const result = await getAllowedFields(user, 'read', 'articles')
     expect(result).toEqual([])

@@ -60,7 +60,6 @@ function amountChange(previous: unknown, next: unknown, impact: unknown): string
   return null
 }
 
-
 /**
  * Comment strings written by MACHINERY, not people: the legacy import stamped
  * every row it carried across, the reforecast proc marks its own writes, and
@@ -77,7 +76,6 @@ function isHumanNote(text: string | null | undefined): boolean {
   if (MACHINE_COMMENT_EXACT.has(t.toLowerCase())) return false
   return !MACHINE_COMMENT_PREFIXES.some((p) => t.toLowerCase().startsWith(p))
 }
-
 
 /** Addendum reasons are rich text; the thread shows plain prose. */
 function stripHtml(html: string): string {
@@ -96,7 +94,6 @@ function stripHtml(html: string): string {
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
-
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -123,17 +120,19 @@ const MENTION_RE = /(@[a-zA-Z0-9._-]+)/g
  *  record's pipeline owners — the author doesn't have to know their names. */
 const OWNERS_MENTION_RE = /(^|\s)@owners\b/i
 
-async function resolveOwnerMentions(
-  collection: string,
-  item: string
-): Promise<MentionUserRow[]> {
+async function resolveOwnerMentions(collection: string, item: string): Promise<MentionUserRow[]> {
   const instance = (await db('nivaro_workflow_instances')
     .where({ collection, item: String(item) })
     .whereNull('completed_at')
     .orderBy('started_at', 'desc')
     .first('id', 'current_state')) as { id: string; current_state: string } | undefined
   if (!instance?.current_state) return []
-  const owners = await resolveStateOwners(instance.current_state, instance.id, collection, String(item))
+  const owners = await resolveStateOwners(
+    instance.current_state,
+    instance.id,
+    collection,
+    String(item)
+  )
   return owners.map((o) => ({
     id: o.id,
     first_name: o.first_name,
@@ -282,7 +281,10 @@ export async function commentsRoutes(app: FastifyInstance) {
           .select('comment', 'user', 'emoji')
           .catch(() => [])) as Array<{ comment: string; user: string; emoji: string }>)
       : []
-    const reactionsByComment = new Map<string, Array<{ emoji: string; count: number; mine: boolean }>>()
+    const reactionsByComment = new Map<
+      string,
+      Array<{ emoji: string; count: number; mine: boolean }>
+    >()
     for (const r of reactionRows) {
       const list = reactionsByComment.get(r.comment) ?? []
       let agg = list.find((a) => a.emoji === r.emoji)
@@ -373,11 +375,21 @@ export async function commentsRoutes(app: FastifyInstance) {
           ? (db('nivaro_workflow_history as h')
               .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
               .leftJoin('nivaro_workflow_states as ts', 'h.to_state', 'ts.id')
-              .whereIn('h.instance', instances.map((i) => i.id))
+              .whereIn(
+                'h.instance',
+                instances.map((i) => i.id)
+              )
               .whereNotNull('h.comment')
               .orderBy('h.timestamp', 'desc')
               .limit(CAP)
-              .select('h.id', 'h.user', 'h.timestamp', 'h.comment', 'fs.label as from_label', 'ts.label as to_label')
+              .select(
+                'h.id',
+                'h.user',
+                'h.timestamp',
+                'h.comment',
+                'fs.label as from_label',
+                'ts.label as to_label'
+              )
               .catch(() => []) as Promise<Array<Record<string, unknown>>>)
           : Promise.resolve([]),
         db('nivaro_activity')
@@ -449,9 +461,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           if (childRows.length === 0) continue
           // "Forecasts" alone does not say WHICH forecast — carry whatever the
           // row identifies itself by so a reader can place the note.
-          const labelByChildId = new Map(
-            childRows.map((r) => [String(r.id), childRowLabel(r)])
-          )
+          const labelByChildId = new Map(childRows.map((r) => [String(r.id), childRowLabel(r)]))
           const rows = (await db('nivaro_activity')
             .where({ collection: rc.collection })
             .whereIn('item', [...labelByChildId.keys()])
@@ -609,7 +619,10 @@ export async function commentsRoutes(app: FastifyInstance) {
           // thread must offer the same chips the child grid's popover does.
           const reactionRows = rows.length
             ? ((await db('nivaro_comment_reactions')
-                .whereIn('comment', rows.map((r) => String(r.id)))
+                .whereIn(
+                  'comment',
+                  rows.map((r) => String(r.id))
+                )
                 .select('comment', 'user', 'emoji')
                 .catch(() => [])) as Array<{ comment: string; user: string; emoji: string }>)
             : []
@@ -623,7 +636,8 @@ export async function commentsRoutes(app: FastifyInstance) {
                 list.push(agg)
               }
               agg.count++
-              if (String(rr.user).toUpperCase() === String(req.user!.id).toUpperCase()) agg.mine = true
+              if (String(rr.user).toUpperCase() === String(req.user!.id).toUpperCase())
+                agg.mine = true
             }
             return list
           }
@@ -635,7 +649,11 @@ export async function commentsRoutes(app: FastifyInstance) {
                 cleanLabel(templateLabels[`${cc.collection}:${r.item}`]) ??
                 labelByChildId.get(String(r.item)) ??
                 null,
-              reactions: reactionsFor(String(r.id)) as Array<{ emoji: string; count: number; mine: boolean }>
+              reactions: reactionsFor(String(r.id)) as Array<{
+                emoji: string
+                count: number
+                mine: boolean
+              }>
             })
           }
         }
@@ -654,7 +672,9 @@ export async function commentsRoutes(app: FastifyInstance) {
           context: [titleCase(String(r.child)), r.child_label].filter(Boolean).join(' · ') || null,
           link: { collection: String(r.child), item_id: String(r.item) },
           comment_id: String(r.id),
-          reactions: r.reactions as Array<{ emoji: string; count: number; mine: boolean }> | undefined
+          reactions: r.reactions as
+            | Array<{ emoji: string; count: number; mine: boolean }>
+            | undefined
         })),
         ...transitions.map((h) => ({
           id: `transition:${h.id}`,
@@ -668,16 +688,21 @@ export async function commentsRoutes(app: FastifyInstance) {
         // A transition writes its own activity row ("A → B via Approve"); the
         // transition entry above already says that, better.
         ...ownReasons
-          .filter((a) => !String(a.action ?? '').toLowerCase().includes('transition'))
+          .filter(
+            (a) =>
+              !String(a.action ?? '')
+                .toLowerCase()
+                .includes('transition')
+          )
           .map((a) => ({
-          id: `reason:${a.id}`,
-          source: 'change_reason' as const,
-          label: 'Change reason',
-          text: String(a.comment ?? ''),
-          user: (a.user as string) ?? null,
-          created_at: a.timestamp as string,
-          context: ownChanged.get(String(a.id)) ?? null
-        })),
+            id: `reason:${a.id}`,
+            source: 'change_reason' as const,
+            label: 'Change reason',
+            text: String(a.comment ?? ''),
+            user: (a.user as string) ?? null,
+            created_at: a.timestamp as string,
+            context: ownChanged.get(String(a.id)) ?? null
+          })),
         ...childReasons.map((a) => ({
           id: `reason:${a.child}:${a.id}`,
           source: 'change_reason' as const,
@@ -726,7 +751,10 @@ export async function commentsRoutes(app: FastifyInstance) {
       const contextfulKeys = new Set(
         entries
           .filter((e) => !!e.context)
-          .map((e) => `${e.user ?? ''}|${e.text.trim()}|${new Date(e.created_at).toISOString().slice(0, 16)}`)
+          .map(
+            (e) =>
+              `${e.user ?? ''}|${e.text.trim()}|${new Date(e.created_at).toISOString().slice(0, 16)}`
+          )
       )
       const deduped = entries.filter(
         (e) =>
@@ -756,7 +784,8 @@ export async function commentsRoutes(app: FastifyInstance) {
               list.push(agg)
             }
             agg.count++
-            if (String(er.user).toUpperCase() === String(req.user!.id).toUpperCase()) agg.mine = true
+            if (String(er.user).toUpperCase() === String(req.user!.id).toUpperCase())
+              agg.mine = true
             byKey.set(er.entry_key, list)
           }
           for (const e of deduped) {
@@ -798,7 +827,11 @@ export async function commentsRoutes(app: FastifyInstance) {
   /** Per-row comment counts for a grid's badge column — one call per grid. */
   app.get<{ Querystring: { collection?: string; ids?: string } }>('/counts', async (req, reply) => {
     const { collection } = req.query
-    const ids = String(req.query.ids ?? '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+    const ids = String(req.query.ids ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 500)
     if (!collection || ids.length === 0) {
       return reply.code(400).send({ error: 'collection and ids are required' })
     }
@@ -823,10 +856,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       const REACTION_EMOJI = new Set(['👍', '✅', '👀', '🎉', '❤️', '😂'])
       const emoji = String(req.body?.emoji ?? '')
       if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
-      const comment = (await db('nivaro_comments').where('id', req.params.id).first(
-        'id',
-        'collection'
-      )) as { id: string; collection: string } | undefined
+      const comment = (await db('nivaro_comments')
+        .where('id', req.params.id)
+        .first('id', 'collection')) as { id: string; collection: string } | undefined
       if (!comment) return reply.code(404).send({ error: 'Comment not found' })
       if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
         return reply.code(403).send({ error: 'Forbidden' })

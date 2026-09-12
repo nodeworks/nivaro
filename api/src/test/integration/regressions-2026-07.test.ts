@@ -17,8 +17,8 @@ vi.mock('../../config.js', () => ({
     DB_HOST: 'localhost',
     REDIS_URL: 'redis://localhost:6379',
     ENCRYPTION_KEY: null,
-    STORAGE_LOCAL_ROOT: '/tmp',
-  },
+    STORAGE_LOCAL_ROOT: '/tmp'
+  }
 }))
 
 vi.mock('../../middleware/authenticate.js', () => ({
@@ -26,11 +26,11 @@ vi.mock('../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async () => {}),
   requireAdmin: vi.fn(async () => {}),
   cidrMatch: vi.fn(() => true),
-  checkApiKeyScope: vi.fn(() => true),
+  checkApiKeyScope: vi.fn(() => true)
 }))
 
 vi.mock('../../services/activity.js', () => ({
-  logActivity: vi.fn().mockResolvedValue(1),
+  logActivity: vi.fn().mockResolvedValue(1)
 }))
 
 vi.mock('../../services/retention.js', () => ({
@@ -38,8 +38,8 @@ vi.mock('../../services/retention.js', () => ({
   executeRetentionPolicy: vi.fn().mockResolvedValue({
     affectedCount: 2,
     affectedIds: ['user-a', 'user-b'],
-    errors: [],
-  }),
+    errors: []
+  })
 }))
 
 vi.mock('../../services/files.js', () => ({
@@ -50,12 +50,12 @@ vi.mock('../../services/files.js', () => ({
   updateFileMeta: vi.fn(),
   uploadFile: vi.fn(),
   deleteFile: vi.fn(),
-  createPresignedFile: vi.fn(),
+  createPresignedFile: vi.fn()
 }))
 
 vi.mock('../../services/storage/index.js', () => ({
   getStorage: vi.fn(() => ({ get: vi.fn(), put: vi.fn(), delete: vi.fn(), getUrl: vi.fn() })),
-  getStorageProviderName: vi.fn(() => 'local'),
+  getStorageProviderName: vi.fn(() => 'local')
 }))
 
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -71,7 +71,7 @@ function makeDbChain(overrides: Record<string, unknown> = {}) {
     update: vi.fn().mockResolvedValue(1),
     delete: vi.fn().mockResolvedValue(1),
     count: vi.fn().mockResolvedValue([{ total: 0 }]),
-    returning: vi.fn().mockResolvedValue([{ id: 42 }]),
+    returning: vi.fn().mockResolvedValue([{ id: 42 }])
   }
   for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'limit', 'offset']) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -108,7 +108,7 @@ describe('Retention regressions', () => {
       exclusion_emails: '[]',
       exclusion_roles: '[]',
       is_active: true,
-      dry_run_mode: false,
+      dry_run_mode: false
     }
     const chain = makeDbChain({ first: vi.fn().mockResolvedValue(policyRow) })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(
@@ -122,7 +122,7 @@ describe('Retention regressions', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/retention/',
-      payload: { name: 'p' },
+      payload: { name: 'p' }
     })
 
     expect(res.statusCode).toBe(201)
@@ -134,7 +134,15 @@ describe('Retention regressions', () => {
 
   it('POST /retention/:id/run returns snake_case result shape', async () => {
     const chain = makeDbChain({
-      first: vi.fn().mockResolvedValue({ id: 1, name: 'p', redact_fields: '[]', exclusion_emails: '[]', exclusion_roles: '[]' }),
+      first: vi
+        .fn()
+        .mockResolvedValue({
+          id: 1,
+          name: 'p',
+          redact_fields: '[]',
+          exclusion_emails: '[]',
+          exclusion_roles: '[]'
+        })
     })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(
       chain as unknown as ReturnType<typeof db>
@@ -153,7 +161,7 @@ describe('Retention regressions', () => {
       affected_count: 2,
       affected_ids: ['user-a', 'user-b'],
       errors: [],
-      dry_run: true,
+      dry_run: true
     })
     expect(data).not.toHaveProperty('affectedCount')
     await app.close()
@@ -162,7 +170,15 @@ describe('Retention regressions', () => {
 
 describe('Alert create regressions', () => {
   it('POST /alerts/definitions returns the OUTPUT identity', async () => {
-    const defRow = { id: 42, name: 'a', category: 'general', collection: 'c', field: 'f', filters: null, is_active: 1 }
+    const defRow = {
+      id: 42,
+      name: 'a',
+      category: 'general',
+      collection: 'c',
+      field: 'f',
+      filters: null,
+      is_active: 1
+    }
     const chain = makeDbChain({ first: vi.fn().mockResolvedValue(defRow) })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(
       chain as unknown as ReturnType<typeof db>
@@ -175,7 +191,7 @@ describe('Alert create regressions', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/alerts/definitions',
-      payload: { name: 'a', collection: 'c', field: 'f', operator: 'gt', threshold: 1 },
+      payload: { name: 'a', collection: 'c', field: 'f', operator: 'gt', threshold: 1 }
     })
 
     expect(res.statusCode).toBe(201)
@@ -198,7 +214,7 @@ describe('Analytics pageview regressions', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/analytics/pageview',
-      payload: { sessionId: 's1', pageUrl: '/home' },
+      payload: { sessionId: 's1', pageUrl: '/home' }
     })
 
     expect(res.statusCode).toBe(201)
@@ -217,7 +233,7 @@ describe('Files route regressions', () => {
     const filter = JSON.stringify({ id: { _in: ['aaa', 'bbb'] } })
     const res = await app.inject({
       method: 'GET',
-      url: `/api/files/?filter=${encodeURIComponent(filter)}`,
+      url: `/api/files/?filter=${encodeURIComponent(filter)}`
     })
 
     expect(res.statusCode).toBe(200)
@@ -232,7 +248,7 @@ describe('Files route regressions', () => {
       id: 'f1',
       filename_disk: 'f1.pdf',
       filename_download: 'report.pdf',
-      type: 'application/pdf',
+      type: 'application/pdf'
     } as never)
     vi.mocked(readFileBuffer).mockResolvedValue(Buffer.from('%PDF'))
 

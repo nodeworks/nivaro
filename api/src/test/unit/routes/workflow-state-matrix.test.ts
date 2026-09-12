@@ -345,7 +345,9 @@ describe('EFP approval chain — terminal states', () => {
       const res = await runTransition(`tx-${step.from}-${step.to}`)
 
       expect(res.statusCode).toBe(200)
-      expect((instanceUpdate.mock.calls[0][0] as { completed_at?: unknown }).completed_at).toBeInstanceOf(Date)
+      expect(
+        (instanceUpdate.mock.calls[0][0] as { completed_at?: unknown }).completed_at
+      ).toBeInstanceOf(Date)
     })
   }
 

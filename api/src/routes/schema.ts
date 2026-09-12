@@ -22,7 +22,6 @@ export async function schemaRoutes(app: FastifyInstance) {
     }
   )
 
-
   // OpenAPI 3.1 JSON spec — always fresh (queries nivaro_collections/fields each time)
   app.get('/schema.json', async (req, reply) => {
     const baseUrl = `${req.protocol}://${req.hostname}${config.PORT !== 443 && config.PORT !== 80 ? `:${config.PORT}` : ''}`

@@ -37,6 +37,102 @@ import { applyTransition, runAutoTransitions } from './workflow-transitions.js'
  */
 
 export type BulkActionKind = 'update_fields' | 'transition'
+/** Surfaces a built-in belongs to. */
+export type BulkSurface = 'browser' | 'queue'
+
+/**
+ * The bars' built-in operations, exposed through the same registry so a
+ * collection can switch them off or restrict who runs them. Overrides are
+ * `nivaro_bulk_actions` rows with kind 'builtin' (config '{}'); no row =
+ * default (active, default access). Server endpoints behind each one call
+ * `builtinAllowed()`.
+ */
+export interface BuiltinBulkAction {
+  key: string
+  label: string
+  summary: string
+  surfaces: BulkSurface[]
+  variant: 'default' | 'danger'
+  defaultAccess: BulkActionAccess
+  /** Access cannot be widened (record merge is admin-only by construction). */
+  lockedAccess?: boolean
+}
+export const BUILTIN_BULK_ACTIONS: BuiltinBulkAction[] = [
+  {
+    key: 'update-field',
+    label: 'Update Field',
+    summary: 'Set one field to one value on every selected record',
+    surfaces: ['browser'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'transition',
+    label: 'Transition',
+    summary: 'Run a pipeline transition on every selected record',
+    surfaces: ['browser', 'queue'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'message',
+    label: 'Message…',
+    summary: 'Notify the owners / creators of the selected records',
+    surfaces: ['browser'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'compare',
+    label: 'Compare',
+    summary: 'Side-by-side field comparison of 2–3 records',
+    surfaces: ['browser'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'merge',
+    label: 'Merge…',
+    summary: 'Merge two duplicate records into one (admins)',
+    surfaces: ['browser'],
+    variant: 'default',
+    defaultAccess: { mode: 'admin' },
+    lockedAccess: true
+  },
+  {
+    key: 'recipes',
+    label: 'Saved recipes',
+    summary: 'Personal / shared saved bulk-update and transition recipes',
+    surfaces: ['browser'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'delete',
+    label: 'Delete',
+    summary: 'Move the selected records to the trash',
+    surfaces: ['browser'],
+    variant: 'danger',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'claim',
+    label: 'Claim',
+    summary: 'Claim the selected queue items for yourself',
+    surfaces: ['queue'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'release',
+    label: 'Release',
+    summary: 'Release your claim on the selected queue items',
+    surfaces: ['queue'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  }
+]
+export const BUILTIN_KEYS = new Set(BUILTIN_BULK_ACTIONS.map((b) => b.key))
 
 export interface BulkActionRow {
   id: number
@@ -45,7 +141,7 @@ export interface BulkActionRow {
   label: string
   icon: string | null
   variant: 'default' | 'danger'
-  kind: BulkActionKind
+  kind: BulkActionKind | 'builtin'
   config: Record<string, unknown>
   guard: GuardRule[] | null
   access: BulkActionAccess
@@ -60,18 +156,28 @@ export interface BulkActionRow {
 /** The shape both surfaces render — DB rows and extension defs alike. */
 export interface AvailableBulkAction {
   key: string
-  source: 'db' | 'extension'
+  source: 'db' | 'extension' | 'builtin'
   collection: string | null
   label: string
   icon: string | null
   variant: 'default' | 'danger'
-  kind: BulkActionKind | 'extension'
+  kind: BulkActionKind | 'extension' | 'builtin'
   require_reason: boolean
   confirm_text: string | null
   guard: GuardRule[] | null
   access: BulkActionAccess
   /** Human summary of what the action does (editor lists + hover text). */
   summary: string
+  /** Built-ins only: which bars render it. */
+  surfaces?: BulkSurface[]
+}
+
+/** A built-in with its per-collection override state (editor rows). */
+export interface BuiltinState extends BuiltinBulkAction {
+  collection: string
+  override_id: number | null
+  is_active: boolean
+  access: BulkActionAccess
 }
 
 export const BULK_ACTION_KINDS: BulkActionKind[] = ['update_fields', 'transition']
@@ -114,7 +220,12 @@ export function formatRow(row: Record<string, unknown>): BulkActionRow {
     label: String(row.label),
     icon: (row.icon as string | null) ?? null,
     variant: row.variant === 'danger' ? 'danger' : 'default',
-    kind: row.kind === 'transition' ? 'transition' : 'update_fields',
+    kind:
+      row.kind === 'transition'
+        ? 'transition'
+        : row.kind === 'builtin'
+          ? 'builtin'
+          : 'update_fields',
     config: parseJsonLoose<Record<string, unknown>>(row.config) ?? {},
     guard: normalizeGuard(row.guard),
     access: normalizeAccess(row.access),
@@ -127,7 +238,11 @@ export function formatRow(row: Record<string, unknown>): BulkActionRow {
   }
 }
 
-export function summarize(kind: BulkActionKind, config: Record<string, unknown>): string {
+export function summarize(
+  kind: BulkActionKind | 'builtin',
+  config: Record<string, unknown>
+): string {
+  if (kind === 'builtin') return 'Built-in'
   if (kind === 'transition') return `Transition: ${String(config.transition_label ?? '')}`
   const set = (config.set as Record<string, unknown> | undefined) ?? {}
   const parts = Object.entries(set).map(([k, v]) => `${k} = ${v === null ? 'empty' : String(v)}`)
@@ -143,15 +258,95 @@ export function accessAllows(access: BulkActionAccess, req: FastifyRequest): boo
   return !!role && (access.role_ids ?? []).some((r) => String(r).toUpperCase() === role)
 }
 
+/** Custom (non-builtin) definitions for a collection, in order. */
 export async function listDefinitions(collection: string): Promise<BulkActionRow[]> {
   const rows = await db('nivaro_bulk_actions')
     .where({ collection })
+    .whereNot({ kind: 'builtin' })
     .orderBy([
       { column: 'sort', order: 'asc' },
       { column: 'id', order: 'asc' }
     ])
     .select('*')
   return rows.map((r) => formatRow(r as Record<string, unknown>))
+}
+
+/** Built-ins with this collection's override state applied. */
+export async function listBuiltins(collection: string): Promise<BuiltinState[]> {
+  const rows = (await db('nivaro_bulk_actions')
+    .where({ collection, kind: 'builtin' })
+    .select('*')) as Array<Record<string, unknown>>
+  return BUILTIN_BULK_ACTIONS.map((b) => {
+    const o = rows.find((r) => String(r.key) === b.key)
+    return {
+      ...b,
+      collection,
+      override_id: o ? Number(o.id) : null,
+      is_active: o ? coerceBool(o.is_active) : true,
+      access: b.lockedAccess ? b.defaultAccess : o ? normalizeAccess(o.access) : b.defaultAccess
+    }
+  })
+}
+
+/** Upsert a built-in's override (access / active) for a collection. */
+export async function setBuiltin(
+  collection: string,
+  key: string,
+  patch: { access?: unknown; is_active?: unknown },
+  userId: string | null
+): Promise<BuiltinState> {
+  const b = BUILTIN_BULK_ACTIONS.find((x) => x.key === key)
+  if (!b) throw new Error(`Unknown built-in bulk action "${key}"`)
+  const existing = await db('nivaro_bulk_actions')
+    .where({ collection, key, kind: 'builtin' })
+    .first()
+  const next: Record<string, unknown> = {}
+  if ('access' in patch && !b.lockedAccess)
+    next.access = JSON.stringify(normalizeAccess(patch.access))
+  if ('is_active' in patch) next.is_active = patch.is_active !== false
+  if (existing) {
+    if (Object.keys(next).length)
+      await db('nivaro_bulk_actions').where({ id: existing.id }).update(next)
+  } else {
+    await db('nivaro_bulk_actions').insert({
+      collection,
+      key,
+      label: b.label,
+      variant: b.variant,
+      kind: 'builtin',
+      config: '{}',
+      guard: null,
+      access: (next.access as string | undefined) ?? JSON.stringify(b.defaultAccess),
+      require_reason: false,
+      confirm_text: null,
+      is_active: 'is_active' in next ? (next.is_active as boolean) : true,
+      sort: 1000 + BUILTIN_BULK_ACTIONS.indexOf(b),
+      created_by: userId
+    })
+  }
+  const all = await listBuiltins(collection)
+  return all.find((x) => x.key === key) as BuiltinState
+}
+
+/**
+ * May this request use a built-in bar operation on the collection? Used by
+ * the endpoints behind them (bulk-update/-delete/-transition, message,
+ * queue claim/release) so a switched-off or restricted built-in cannot be
+ * driven from a stale client. Unknown key = allowed (nothing to restrict).
+ */
+export async function builtinAllowed(
+  collection: string,
+  key: string,
+  req: FastifyRequest
+): Promise<boolean> {
+  const b = BUILTIN_BULK_ACTIONS.find((x) => x.key === key)
+  if (!b) return true
+  const o = (await db('nivaro_bulk_actions')
+    .where({ collection, key, kind: 'builtin' })
+    .first('is_active', 'access')) as Record<string, unknown> | undefined
+  if (o && !coerceBool(o.is_active)) return req.isAdmin === true
+  const access = b.lockedAccess ? b.defaultAccess : o ? normalizeAccess(o.access) : b.defaultAccess
+  return accessAllows(access, req)
 }
 
 function fromExtension(def: BulkActionDef, collection: string): AvailableBulkAction {
@@ -188,11 +383,37 @@ function fromRow(row: BulkActionRow): AvailableBulkAction {
   }
 }
 
-/** Every action defined for the collection (admin editor lists — no access filter). */
+function fromBuiltin(b: BuiltinState): AvailableBulkAction {
+  return {
+    key: b.key,
+    source: 'builtin',
+    collection: b.collection,
+    label: b.label,
+    icon: null,
+    variant: b.variant,
+    kind: 'builtin',
+    require_reason: false,
+    confirm_text: null,
+    guard: null,
+    access: b.access,
+    summary: b.summary,
+    surfaces: b.surfaces
+  }
+}
+
+/** Every ACTIVE action for the collection, no access filter (editor pickers):
+ *  built-ins first, then custom definitions, then extension actions. */
 export async function listAllForCollection(collection: string): Promise<AvailableBulkAction[]> {
-  const rows = await listDefinitions(collection)
+  const [rows, builtins] = await Promise.all([
+    listDefinitions(collection),
+    listBuiltins(collection)
+  ])
   const ext = bulkActionRegistry.list(collection).map((d) => fromExtension(d, collection))
-  return [...rows.filter((r) => r.is_active).map(fromRow), ...ext]
+  return [
+    ...builtins.filter((b) => b.is_active).map(fromBuiltin),
+    ...rows.filter((r) => r.is_active).map(fromRow),
+    ...ext
+  ]
 }
 
 /** Active actions the CALLER may run for the collection (what the bars render). */

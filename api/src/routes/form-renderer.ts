@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { type FormLayoutField, type FormLayoutStructure, loadFormLayout } from '../services/form-layout.js'
+import {
+  type FormLayoutField,
+  type FormLayoutStructure,
+  loadFormLayout
+} from '../services/form-layout.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,9 +107,7 @@ function renderField(path: string, cfg: FieldConfig, dbType: string): string {
 }
 
 function renderLayoutField(f: FormLayoutField): string {
-  const visAttr = f.visibility?.length
-    ? ` data-vis='${escHtml(JSON.stringify(f.visibility))}'`
-    : ''
+  const visAttr = f.visibility?.length ? ` data-vis='${escHtml(JSON.stringify(f.visibility))}'` : ''
   const reqAttr = f.required ? ' required' : ''
   const reqMark = f.required ? '<span class="req" aria-hidden="true">*</span>' : ''
   const safeName = escHtml(f.path.replace(/\./g, '__'))
@@ -154,7 +156,8 @@ function buildHtml(params: {
   successMessage: string
   layout?: FormLayoutStructure | null
 }): string {
-  const { token, formName, formConfig, fields, fieldTypes, hasPassword, successMessage, layout } = params
+  const { token, formName, formConfig, fields, fieldTypes, hasPassword, successMessage, layout } =
+    params
   const steps = layout?.tab_mode === 'steps' && layout.sections.length > 1
 
   const heading = escHtml(formConfig.heading || formName)

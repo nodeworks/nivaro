@@ -7,8 +7,8 @@ vi.mock('../../../config.js', () => ({
     NODE_ENV: 'test',
     DB_DATABASE: 'testdb',
     DB_HOST: 'localhost',
-    REDIS_URL: 'redis://localhost:6379',
-  },
+    REDIS_URL: 'redis://localhost:6379'
+  }
 }))
 
 // Mock the requireAdmin middleware so /health/detailed doesn't need auth in these tests
@@ -17,7 +17,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async () => {}),
   requireAdmin: vi.fn(async () => {}),
   cidrMatch: vi.fn(() => true),
-  checkApiKeyScope: vi.fn(() => true),
+  checkApiKeyScope: vi.fn(() => true)
 }))
 
 import Fastify from 'fastify'

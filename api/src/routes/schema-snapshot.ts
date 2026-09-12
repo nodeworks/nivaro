@@ -318,18 +318,22 @@ export async function schemaSnapshotRoutes(app: FastifyInstance) {
   // ─── Environment Sync ───────────────────────────────────────────────────
 
   async function tableExists(name: string): Promise<boolean> {
-    const rows = rawRows<{ cnt: number }>(await db.raw(
-      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
-      [name]
-    ))
+    const rows = rawRows<{ cnt: number }>(
+      await db.raw(
+        `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        [name]
+      )
+    )
     return Number(rows[0]?.cnt ?? 0) > 0
   }
 
   async function columnExists(table: string, column: string): Promise<boolean> {
-    const rows = rawRows<{ cnt: number }>(await db.raw(
-      `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
-      [table, column]
-    ))
+    const rows = rawRows<{ cnt: number }>(
+      await db.raw(
+        `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        [table, column]
+      )
+    )
     return Number(rows[0]?.cnt ?? 0) > 0
   }
 

@@ -139,7 +139,13 @@ export async function evaluateTransitionRequirements(
     if (!raw || typeof raw !== 'object') continue
     const entry = raw as Record<string, unknown>
     if (entry.type === 'record_fields') {
-      const block = await evaluateRecordFieldsEntry(database, entry, itemId, recordCollection, logger)
+      const block = await evaluateRecordFieldsEntry(
+        database,
+        entry,
+        itemId,
+        recordCollection,
+        logger
+      )
       if (block) {
         blocking.push(block)
         if (!block.optional) hasBlockingEntry = true
@@ -217,7 +223,9 @@ export async function evaluateTransitionRequirements(
       typeof entry.optional_when === 'object' &&
       !Array.isArray(entry.optional_when)
     ) {
-      for (const [target, ruleRaw] of Object.entries(entry.optional_when as Record<string, unknown>)) {
+      for (const [target, ruleRaw] of Object.entries(
+        entry.optional_when as Record<string, unknown>
+      )) {
         const rule = ruleRaw as { field?: unknown; in?: unknown; placeholder?: unknown }
         if (
           IDENTIFIER_RE.test(target) &&
@@ -439,9 +447,7 @@ export async function evaluateTransitionRequirements(
     }
     const incompleteIds = new Set<unknown>()
     for (const row of childRows) {
-      if (
-        scalarRequired.some((f) => isEmptyRequirementValue(row[f]) && !ruleWaived(row, f))
-      ) {
+      if (scalarRequired.some((f) => isEmptyRequirementValue(row[f]) && !ruleWaived(row, f))) {
         incompleteIds.add(row.id)
       }
       for (const f of m2mRequired) {
@@ -622,7 +628,10 @@ async function evaluateRecordFieldsEntry(
     return null
   }
   if (!recordCollection || !IDENTIFIER_RE.test(recordCollection)) {
-    logger.warn({ entry }, 'transition requirements: record_fields without record collection, ignoring')
+    logger.warn(
+      { entry },
+      'transition requirements: record_fields without record collection, ignoring'
+    )
     return null
   }
   const requiredFields = fields as string[]
@@ -683,7 +692,13 @@ async function evaluateRecordFieldsEntry(
     const label = (typeof override === 'string' && override.trim()) || info?.label || f
     const related = m2oByField.get(f)
     return related
-      ? { field: f, label, type: info?.type ?? null, kind: 'm2o' as const, related_collection: related }
+      ? {
+          field: f,
+          label,
+          type: info?.type ?? null,
+          kind: 'm2o' as const,
+          related_collection: related
+        }
       : { field: f, label, type: info?.type ?? null }
   })
 
@@ -713,8 +728,7 @@ async function evaluateRecordFieldsEntry(
     !Array.isArray(entry.copy_to_lines)
       ? Object.fromEntries(
           Object.entries(entry.copy_to_lines as Record<string, unknown>).filter(
-            ([k, v]) =>
-              IDENTIFIER_RE.test(k) && typeof v === 'string' && IDENTIFIER_RE.test(v)
+            ([k, v]) => IDENTIFIER_RE.test(k) && typeof v === 'string' && IDENTIFIER_RE.test(v)
           )
         )
       : undefined

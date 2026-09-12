@@ -71,9 +71,10 @@ async function procParams(name: string): Promise<ProcParam[]> {
  * the named proc — deploying under one name while defining another is how
  * list state and reality diverge. */
 function definitionNameMatches(definition: string, name: string): boolean {
-  const m = /create\s+(?:or\s+alter\s+)?proc(?:edure)?\s+(?:\[?dbo\]?\s*\.\s*)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?/i.exec(
-    definition
-  )
+  const m =
+    /create\s+(?:or\s+alter\s+)?proc(?:edure)?\s+(?:\[?dbo\]?\s*\.\s*)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?/i.exec(
+      definition
+    )
   return !!m && m[1].toLowerCase() === name.toLowerCase()
 }
 
@@ -82,7 +83,9 @@ const toCreateOrAlter = (definition: string) =>
 
 /** Engine-accurate context for the AI routes: referenced base tables with
  * live columns/indexes/row counts, plus where the app invokes the proc. */
-async function gatherProcContext(name: string): Promise<{ tables: string[]; schemaCtx: string[]; usage: string[] }> {
+async function gatherProcContext(
+  name: string
+): Promise<{ tables: string[]; schemaCtx: string[]; usage: string[] }> {
   let tables: string[] = []
   try {
     const refs = (await db.raw(
@@ -136,7 +139,9 @@ async function gatherProcContext(name: string): Promise<{ tables: string[]; sche
       `TABLE ${t} (~${cnt[0]?.n ?? '?'} rows)\n  columns: ${cols
         .map((c) => `${c.column_name} ${c.data_type}${c.is_nullable === 'YES' ? '?' : ''}`)
         .join(', ')}\n  indexes: ${
-        idx.length ? idx.map((i) => `${i.name}(${i.cols})${i.is_unique ? ' UNIQUE' : ''}`).join('; ') : 'NONE beyond heap'
+        idx.length
+          ? idx.map((i) => `${i.name}(${i.cols})${i.is_unique ? ' UNIQUE' : ''}`).join('; ')
+          : 'NONE beyond heap'
       }`
     )
   }
@@ -232,7 +237,11 @@ export async function procedureRoutes(app: FastifyInstance) {
         // Server messages live in .errors.
         const errs = (e as { errors?: Array<{ message?: string }> })?.errors ?? [e as Error]
         return reply.code(400).send({
-          error: errs.map((x) => x?.message).filter(Boolean).join(' | ') || 'Deploy failed'
+          error:
+            errs
+              .map((x) => x?.message)
+              .filter(Boolean)
+              .join(' | ') || 'Deploy failed'
         })
       }
       await logActivity({
@@ -349,41 +358,41 @@ Rules: suggest an index ONLY when the definition's predicates/joins hit columns 
   app.post<{
     Params: { name: string }
     Body: { issue?: string; issues?: string[]; definition?: string }
-  }>(
-    '/:name/ai-fix',
-    async (req, reply) => {
-      const { name } = req.params
-      // Single finding or a whole section's worth — a batch goes to the model
-      // as ONE request so the fixes come out coherent instead of N sequential
-      // rewrites stepping on each other.
-      const issues = (
-        Array.isArray(req.body?.issues) ? req.body.issues.map((i) => String(i)) : [String(req.body?.issue ?? '')]
-      )
-        .map((i) => i.trim())
-        .filter(Boolean)
-        .slice(0, 12)
-      const issue = issues.map((it, i) => (issues.length > 1 ? `${i + 1}. ${it}` : it)).join('\n')
-      if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
-      if (!issue) return reply.code(400).send({ error: 'issue is required' })
-      // Fix against the editor's CURRENT draft when supplied, so sequential
-      // fixes stack instead of each starting from the deployed version.
-      let definition = String(req.body?.definition ?? '')
-      if (!definition.trim()) {
-        const row = (await db.raw(
-          `SELECT m.definition FROM sys.procedures p
+  }>('/:name/ai-fix', async (req, reply) => {
+    const { name } = req.params
+    // Single finding or a whole section's worth — a batch goes to the model
+    // as ONE request so the fixes come out coherent instead of N sequential
+    // rewrites stepping on each other.
+    const issues = (
+      Array.isArray(req.body?.issues)
+        ? req.body.issues.map((i) => String(i))
+        : [String(req.body?.issue ?? '')]
+    )
+      .map((i) => i.trim())
+      .filter(Boolean)
+      .slice(0, 12)
+    const issue = issues.map((it, i) => (issues.length > 1 ? `${i + 1}. ${it}` : it)).join('\n')
+    if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
+    if (!issue) return reply.code(400).send({ error: 'issue is required' })
+    // Fix against the editor's CURRENT draft when supplied, so sequential
+    // fixes stack instead of each starting from the deployed version.
+    let definition = String(req.body?.definition ?? '')
+    if (!definition.trim()) {
+      const row = (await db.raw(
+        `SELECT m.definition FROM sys.procedures p
            JOIN sys.sql_modules m ON m.object_id = p.object_id
            WHERE p.name = ? AND p.is_ms_shipped = 0`,
-          [name]
-        )) as Array<{ definition: string }>
-        if (!row.length) return reply.code(404).send({ error: 'Procedure not found' })
-        definition = row[0].definition
-      }
-      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
-      const client = await getAiClient()
-      if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
-      const { schemaCtx, usage } = await gatherProcContext(name)
-      const { model } = await getAiModelSettings()
-      const prompt = `You are fixing ${issues.length > 1 ? `${issues.length} specific issues` : 'ONE specific issue'} in a SQL Server stored procedure for a production system.
+        [name]
+      )) as Array<{ definition: string }>
+      if (!row.length) return reply.code(404).send({ error: 'Procedure not found' })
+      definition = row[0].definition
+    }
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const client = await getAiClient()
+    if (!client) return reply.code(503).send({ error: 'AI is not configured (no Anthropic key)' })
+    const { schemaCtx, usage } = await gatherProcContext(name)
+    const { model } = await getAiModelSettings()
+    const prompt = `You are fixing ${issues.length > 1 ? `${issues.length} specific issues` : 'ONE specific issue'} in a SQL Server stored procedure for a production system.
 
 CURRENT DEFINITION:
 ${definition.slice(0, 24000)}
@@ -403,45 +412,44 @@ Respond with ONLY a JSON object, no fences:
   "explanation": "2-4 sentences: exactly what changed and why it fixes the issue(s)"
 }
 Rules: change the MINIMUM needed to address the stated issue; preserve every other behavior, parameter, and output shape exactly; never reference tables or columns not shown above; the procedure name must remain ${name}.`
+    try {
+      const message = await client.messages.create({
+        model,
+        max_tokens: issues.length > 1 ? 12000 : 8000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      const text = message.content
+        .map((b) => ('text' in b ? b.text : ''))
+        .join('')
+        .trim()
+      const jsonText = text.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '')
+      let parsed: { definition?: string; explanation?: string }
       try {
-        const message = await client.messages.create({
-          model,
-          max_tokens: issues.length > 1 ? 12000 : 8000,
-          messages: [{ role: 'user', content: prompt }]
-        })
-        const text = message.content
-          .map((b) => ('text' in b ? b.text : ''))
-          .join('')
-          .trim()
-        const jsonText = text.replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '')
-        let parsed: { definition?: string; explanation?: string }
-        try {
-          parsed = JSON.parse(jsonText)
-        } catch {
-          return reply.code(502).send({ error: 'AI returned an unparseable fix — try again' })
-        }
-        const fixed = String(parsed.definition ?? '')
-        if (!fixed.trim() || !definitionNameMatches(fixed, name)) {
-          return reply.code(502).send({
-            error: 'AI produced a definition that does not match this procedure — nothing applied'
-          })
-        }
-        await logActivity({
-          action: 'procedure-ai-fix',
-          user: req.user?.id,
-          collection: 'sys.procedures',
-          item: name,
-          comment: issue.slice(0, 200),
-          req
-        })
-        return reply.send({
-          data: { definition: fixed, explanation: String(parsed.explanation ?? '') }
-        })
-      } catch (e) {
-        return reply.code(502).send({ error: `AI fix failed: ${(e as Error).message}` })
+        parsed = JSON.parse(jsonText)
+      } catch {
+        return reply.code(502).send({ error: 'AI returned an unparseable fix — try again' })
       }
+      const fixed = String(parsed.definition ?? '')
+      if (!fixed.trim() || !definitionNameMatches(fixed, name)) {
+        return reply.code(502).send({
+          error: 'AI produced a definition that does not match this procedure — nothing applied'
+        })
+      }
+      await logActivity({
+        action: 'procedure-ai-fix',
+        user: req.user?.id,
+        collection: 'sys.procedures',
+        item: name,
+        comment: issue.slice(0, 200),
+        req
+      })
+      return reply.send({
+        data: { definition: fixed, explanation: String(parsed.explanation ?? '') }
+      })
+    } catch (e) {
+      return reply.code(502).send({ error: `AI fix failed: ${(e as Error).message}` })
     }
-  )
+  })
 
   // ── AI generate (New procedure) ──────────────────────────────────────────
   // Describe what you want; the model writes the full CREATE OR ALTER against
@@ -463,7 +471,10 @@ Rules: change the MINIMUM needed to address the stated issue; preserve every oth
     const referenced = new Set<string>()
     const haystack = prompt.toLowerCase()
     for (const n of collections) {
-      if (haystack.includes(n.toLowerCase()) || haystack.includes(n.toLowerCase().replace(/_/g, ' '))) {
+      if (
+        haystack.includes(n.toLowerCase()) ||
+        haystack.includes(n.toLowerCase().replace(/_/g, ' '))
+      ) {
         referenced.add(n)
       }
     }
@@ -521,7 +532,9 @@ Rules: only reference tables and columns shown above; the procedure name must be
       }
       const definition = String(parsed.definition ?? '')
       if (!definition.trim() || !definitionNameMatches(definition, name)) {
-        return reply.code(502).send({ error: 'AI produced a definition that does not match the requested name' })
+        return reply
+          .code(502)
+          .send({ error: 'AI produced a definition that does not match the requested name' })
       }
       await logActivity({
         action: 'procedure-ai-generate',
@@ -603,7 +616,11 @@ Rules: only reference tables and columns shown above; the procedure name must be
       } catch (e) {
         const errs = (e as { errors?: Array<{ message?: string }> })?.errors ?? [e as Error]
         return reply.code(400).send({
-          error: errs.map((x) => x?.message).filter(Boolean).join(' | ') || 'Execution failed'
+          error:
+            errs
+              .map((x) => x?.message)
+              .filter(Boolean)
+              .join(' | ') || 'Execution failed'
         })
       }
     }

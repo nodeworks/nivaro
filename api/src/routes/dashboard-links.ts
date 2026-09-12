@@ -27,7 +27,9 @@ interface LinkRow {
 async function ownedDashboard(
   req: { user?: { id: string } | null; isAdmin?: boolean },
   dashboardId: string
-): Promise<{ error: 404 | 403 } | { error?: undefined; dash: { id: string; user: string; name: string } }> {
+): Promise<
+  { error: 404 | 403 } | { error?: undefined; dash: { id: string; user: string; name: string } }
+> {
   const dash = (await db('nivaro_dashboards').where({ id: dashboardId }).first()) as
     | { id: string; user: string; name: string }
     | undefined

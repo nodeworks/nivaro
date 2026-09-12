@@ -34,12 +34,27 @@ function parseJsonSafe(raw: unknown): unknown {
 
 /** Columns blocked on the PARENT business table write path (apply-back). */
 export const PARENT_WRITE_BLOCKED_COLUMNS = new Set([
-  'id', 'created_at', 'updated_at', 'created_by',
-  'password', 'password_hash', 'totp_secret', 'totp_enabled',
-  'static_token', 'admin_access', 'app_access',
-  'tenant_id', 'workspace_id', 'workspace', 'owner_id',
-  'deleted_at', 'is_deleted', 'is_redacted', 'redacted_at',
-  'external_id', 'role'
+  'id',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'password',
+  'password_hash',
+  'totp_secret',
+  'totp_enabled',
+  'static_token',
+  'admin_access',
+  'app_access',
+  'tenant_id',
+  'workspace_id',
+  'workspace',
+  'owner_id',
+  'deleted_at',
+  'is_deleted',
+  'is_redacted',
+  'redacted_at',
+  'external_id',
+  'role'
 ])
 
 export async function getAllowedAddendumFields(
@@ -131,9 +146,9 @@ async function applyGuardedLineChanges(
     if (Object.keys(patch).length === 0) continue
     try {
       // Ownership check: the row must point at THIS parent.
-      const owner = (await db(lc.collection)
-        .where({ id: rowId })
-        .first(fk)) as Record<string, unknown> | undefined
+      const owner = (await db(lc.collection).where({ id: rowId }).first(fk)) as
+        | Record<string, unknown>
+        | undefined
       if (!owner || String(owner[fk]) !== String(parentId)) {
         failed++
         continue
@@ -385,7 +400,13 @@ export async function applyAddendumApproval(
 
   // ── 4. Auto-PDF, exactly like a form save ─────────────────────────────────
   if (opts.app) {
-    void regenerateParentPdf(opts.app, parentCollection, parentId, approverUserId, opts.pdfAuthHeaders)
+    void regenerateParentPdf(
+      opts.app,
+      parentCollection,
+      parentId,
+      approverUserId,
+      opts.pdfAuthHeaders
+    )
   }
 
   return {
@@ -558,7 +579,11 @@ export async function revertAddendumApproval(
     updated_at: now
   })
 
-  return { ok: true, line_changes_applied: lineChangesApplied, line_changes_failed: lineChangesFailed }
+  return {
+    ok: true,
+    line_changes_applied: lineChangesApplied,
+    line_changes_failed: lineChangesFailed
+  }
 }
 
 /**
@@ -624,8 +649,16 @@ export async function canCreateAddendum(
             .first()) as { key: string } | undefined
           const currentKey = stateRow?.key ?? null
           const rule = stateRules.find((r) => r.pipeline_id === binding.template)
-          if (rule && rule.state_keys.length > 0 && currentKey && !rule.state_keys.includes(currentKey)) {
-            return { ok: false, reason: 'Addendums cannot be created in the current pipeline state' }
+          if (
+            rule &&
+            rule.state_keys.length > 0 &&
+            currentKey &&
+            !rule.state_keys.includes(currentKey)
+          ) {
+            return {
+              ok: false,
+              reason: 'Addendums cannot be created in the current pipeline state'
+            }
           }
         }
       }

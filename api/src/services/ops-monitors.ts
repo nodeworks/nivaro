@@ -45,7 +45,15 @@ function parseJson<T>(raw: unknown, fallback: T): T {
   }
 }
 
-const TIMESTAMP_CANDIDATES = ['date_updated', 'updated_at', 'date_created', 'created_at', 'timestamp', 'created', 'changed']
+const TIMESTAMP_CANDIDATES = [
+  'date_updated',
+  'updated_at',
+  'date_created',
+  'created_at',
+  'timestamp',
+  'created',
+  'changed'
+]
 
 /** Freshness: newest timestamp in the collection must be within max_age_hours. */
 async function evalFreshness(cfg: {
@@ -59,7 +67,10 @@ async function evalFreshness(cfg: {
   }
   const maxAge = Math.max(1, Number(cfg.max_age_hours) || 24)
 
-  let col = cfg.timestamp_column && /^[A-Za-z0-9_]+$/.test(cfg.timestamp_column) ? cfg.timestamp_column : null
+  let col =
+    cfg.timestamp_column && /^[A-Za-z0-9_]+$/.test(cfg.timestamp_column)
+      ? cfg.timestamp_column
+      : null
   const cols = (await db('information_schema.columns')
     .where('table_name', collection)
     .select('column_name')) as Array<{ column_name: string }>
@@ -71,11 +82,17 @@ async function evalFreshness(cfg: {
   if (!col) col = TIMESTAMP_CANDIDATES.find((c) => names.has(c)) ?? null
   if (!col) return { status: 'unknown', detail: `No timestamp column found on ${collection}` }
 
-  const row = (await db(collection).max({ newest: col }).first()) as { newest?: Date | string | null } | undefined
+  const row = (await db(collection).max({ newest: col }).first()) as
+    | { newest?: Date | string | null }
+    | undefined
   if (!row?.newest) return { status: 'failing', detail: `${collection}.${col} has no rows at all` }
   const ageHours = (Date.now() - new Date(row.newest).getTime()) / 3_600_000
   const detail = `Newest ${collection}.${col} is ${ageHours < 48 ? `${ageHours.toFixed(1)}h` : `${(ageHours / 24).toFixed(1)}d`} old (limit ${maxAge}h)`
-  return { status: ageHours > maxAge ? 'failing' : 'ok', detail, metric: Math.round(ageHours * 10) / 10 }
+  return {
+    status: ageHours > maxAge ? 'failing' : 'ok',
+    detail,
+    metric: Math.round(ageHours * 10) / 10
+  }
 }
 
 /** Synthetic: fetch a URL (or own-instance path), expect a status, watch latency. */
@@ -97,10 +114,18 @@ async function evalSynthetic(cfg: {
     const res = await fetch(target, { signal: AbortSignal.timeout(15_000), redirect: 'manual' })
     const ms = Date.now() - began
     if (res.status !== expect) {
-      return { status: 'failing', detail: `${target} answered ${res.status} (expected ${expect}) in ${ms}ms`, metric: ms }
+      return {
+        status: 'failing',
+        detail: `${target} answered ${res.status} (expected ${expect}) in ${ms}ms`,
+        metric: ms
+      }
     }
     if (ms > warnMs) {
-      return { status: 'failing', detail: `${target} answered ${res.status} but took ${ms}ms (limit ${warnMs}ms)`, metric: ms }
+      return {
+        status: 'failing',
+        detail: `${target} answered ${res.status} but took ${ms}ms (limit ${warnMs}ms)`,
+        metric: ms
+      }
     }
     return { status: 'ok', detail: `${res.status} in ${ms}ms`, metric: ms }
   } catch (err) {
@@ -119,7 +144,10 @@ interface RouteMetric {
 }
 
 /** Aggregate api-log metrics for a window, overall + worst routes. */
-async function windowMetrics(from: Date, to: Date): Promise<{ overall: RouteMetric; routes: Map<string, RouteMetric> }> {
+async function windowMetrics(
+  from: Date,
+  to: Date
+): Promise<{ overall: RouteMetric; routes: Map<string, RouteMetric> }> {
   const rows = (await db.raw(
     `SELECT [path] AS route,
             COUNT(*) AS n,
@@ -170,21 +198,34 @@ async function evalDeployRegression(
       state: {
         current_version: version,
         deploy_at: new Date(now).toISOString(),
-        baseline: { p95: base.overall.p95, errorRate: base.overall.errorRate, requests: base.overall.requests },
+        baseline: {
+          p95: base.overall.p95,
+          errorRate: base.overall.errorRate,
+          requests: base.overall.requests
+        },
         evaluated: false
       },
-      result: { status: 'ok', detail: `Deploy ${version} detected — baseline captured, comparing in ~1h` }
+      result: {
+        status: 'ok',
+        detail: `Deploy ${version} detected — baseline captured, comparing in ~1h`
+      }
     }
   }
 
   const deployAt = state.deploy_at ? new Date(String(state.deploy_at)).getTime() : 0
   if (!deployAt || state.evaluated === true) {
-    return { state, result: { status: 'ok', detail: `Watching for the next deploy (current ${version})` } }
+    return {
+      state,
+      result: { status: 'ok', detail: `Watching for the next deploy (current ${version})` }
+    }
   }
   if (now - deployAt < 3_600_000) {
     return {
       state,
-      result: { status: 'ok', detail: `Deploy ${version} ${(Math.round((now - deployAt) / 60000))}m ago — comparing at 60m` }
+      result: {
+        status: 'ok',
+        detail: `Deploy ${version} ${Math.round((now - deployAt) / 60000)}m ago — comparing at 60m`
+      }
     }
   }
 
@@ -192,7 +233,13 @@ async function evalDeployRegression(
   const post = await windowMetrics(new Date(deployAt), new Date(deployAt + 3_600_000))
   const nextState = { ...state, evaluated: true }
   if ((baseline.requests ?? 0) < minReq || post.overall.requests < minReq) {
-    return { state: nextState, result: { status: 'ok', detail: `Deploy ${version}: too little traffic to compare (${baseline.requests ?? 0} pre / ${post.overall.requests} post)` } }
+    return {
+      state: nextState,
+      result: {
+        status: 'ok',
+        detail: `Deploy ${version}: too little traffic to compare (${baseline.requests ?? 0} pre / ${post.overall.requests} post)`
+      }
+    }
   }
   const p95Delta = ((post.overall.p95 - (baseline.p95 ?? 0)) / Math.max(1, baseline.p95 ?? 1)) * 100
   const errDelta = post.overall.errorRate - (baseline.errorRate ?? 0)
@@ -201,7 +248,10 @@ async function evalDeployRegression(
       .filter(([, m]) => m.requests >= 5)
       .sort((a, b) => b[1].p95 - a[1].p95)
       .slice(0, 5)
-      .map(([route, m]) => `  ${route}: ~${Math.round(m.p95)}ms, ${(m.errorRate * 100).toFixed(1)}% errors (${m.requests} reqs)`)
+      .map(
+        ([route, m]) =>
+          `  ${route}: ~${Math.round(m.p95)}ms, ${(m.errorRate * 100).toFixed(1)}% errors (${m.requests} reqs)`
+      )
     return {
       state: nextState,
       result: {
@@ -216,11 +266,18 @@ async function evalDeployRegression(
   }
   return {
     state: nextState,
-    result: { status: 'ok', detail: `Deploy ${version} healthy: p95 ${p95Delta >= 0 ? '+' : ''}${p95Delta.toFixed(0)}%, error rate ${(post.overall.errorRate * 100).toFixed(1)}%` }
+    result: {
+      status: 'ok',
+      detail: `Deploy ${version} healthy: p95 ${p95Delta >= 0 ? '+' : ''}${p95Delta.toFixed(0)}%, error rate ${(post.overall.errorRate * 100).toFixed(1)}%`
+    }
   }
 }
 
-async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInstance | null): Promise<void> {
+async function raiseIssue(
+  monitor: MonitorRow,
+  detail: string,
+  app: FastifyInstance | null
+): Promise<void> {
   try {
     const fingerprint = createHash('sha256').update(`ops-monitor|${monitor.id}`).digest('hex')
     const existing = await db('nivaro_issues')
@@ -230,7 +287,12 @@ async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInsta
     if (existing) {
       await db('nivaro_issues')
         .where({ id: existing.id })
-        .update({ details: detail, occurrence_count: db.raw('occurrence_count + 1'), last_seen_at: new Date(), updated_at: new Date() })
+        .update({
+          details: detail,
+          occurrence_count: db.raw('occurrence_count + 1'),
+          last_seen_at: new Date(),
+          updated_at: new Date()
+        })
     } else {
       await db('nivaro_issues').insert({
         title: `Monitor failing: ${monitor.name}`,
@@ -264,13 +326,15 @@ async function raiseIssue(monitor: MonitorRow, detail: string, app: FastifyInsta
   }
 }
 
-
 /** Journey probe (#293): a scripted sequence of INTERNAL requests run through
  *  app.inject as a configured token's identity — "login → read a record →
  *  evaluate transitions" as a scheduled canary. Config:
  *  { token: '<static or api key>', steps: [{ path, method?, expect_status?, max_ms? }] } */
 async function evalJourney(
-  cfg: { token?: string; steps?: Array<{ path?: string; method?: string; expect_status?: number; max_ms?: number }> },
+  cfg: {
+    token?: string
+    steps?: Array<{ path?: string; method?: string; expect_status?: number; max_ms?: number }>
+  },
   app: FastifyInstance | null
 ): Promise<EvalResult> {
   if (!app) return { status: 'unknown', detail: 'No app instance in this context' }
@@ -297,7 +361,10 @@ async function evalJourney(
       }
     }
     if (step.max_ms && ms > step.max_ms) {
-      return { status: 'failing', detail: `Step ${i + 1} (${path}) took ${ms}ms, budget ${step.max_ms}ms` }
+      return {
+        status: 'failing',
+        detail: `Step ${i + 1} (${path}) took ${ms}ms, budget ${step.max_ms}ms`
+      }
     }
     results.push(`${path} ${res.statusCode} in ${ms}ms`)
   }
@@ -368,7 +435,10 @@ async function evalSslCert(cfg: {
   }
 }
 
-export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance | null): Promise<EvalResult> {
+export async function evaluateMonitor(
+  monitor: MonitorRow,
+  app: FastifyInstance | null
+): Promise<EvalResult> {
   const cfg = parseJson<Record<string, unknown>>(monitor.config, {})
   const state = parseJson<Record<string, unknown>>(monitor.state, {})
   const run = await startJobRun('monitor', `${monitor.type}:${monitor.name}`.slice(0, 200))
@@ -386,7 +456,10 @@ export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance 
       nextState = r.state
     }
   } catch (err) {
-    result = { status: 'unknown', detail: `Evaluator error: ${err instanceof Error ? err.message : String(err)}` }
+    result = {
+      status: 'unknown',
+      detail: `Evaluator error: ${err instanceof Error ? err.message : String(err)}`
+    }
   }
 
   // Flip detection BEFORE the row update reads the prior status.
@@ -403,7 +476,10 @@ export async function evaluateMonitor(monitor: MonitorRow, app: FastifyInstance 
     .catch(() => {})
   if (flippedToFailing) await raiseIssue(monitor, result.detail, app)
 
-  const outcome = result.metric != null ? `${result.status} · ${result.metric} · ${result.detail}` : `${result.status} · ${result.detail}`
+  const outcome =
+    result.metric != null
+      ? `${result.status} · ${result.metric} · ${result.detail}`
+      : `${result.status} · ${result.detail}`
   if (result.status === 'failing') await run.fail(result.detail)
   else await run.complete(outcome.slice(0, 500))
   return result

@@ -44,7 +44,8 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
 
   app.post<{ Body: { collection?: string; name?: string } }>('/', async (req, reply) => {
     const collection = String(req.body?.collection ?? '')
-    const name = String(req.body?.name ?? '').trim() || `Snapshot ${new Date().toISOString().slice(0, 16)}`
+    const name =
+      String(req.body?.name ?? '').trim() || `Snapshot ${new Date().toISOString().slice(0, 16)}`
     if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection)) {
       return reply.code(400).send({ error: 'Not a valid business collection' })
     }
@@ -79,9 +80,7 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
   })
 
   app.post<{ Params: { id: string } }>('/:id/restore', async (req, reply) => {
-    const snap = (await db('nivaro_collection_snapshots')
-      .where('id', req.params.id)
-      .first()) as
+    const snap = (await db('nivaro_collection_snapshots').where('id', req.params.id).first()) as
       | { collection: string; name: string; data: string }
       | undefined
     if (!snap) return reply.code(404).send({ error: 'Snapshot not found' })
@@ -116,7 +115,9 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
       if (currentIds.has(String(id))) {
         const { id: _pk, ...rest } = row
         if (Object.keys(rest).length > 0) {
-          await db(collection).where('id', id as string | number).update(rest)
+          await db(collection)
+            .where('id', id as string | number)
+            .update(rest)
           updated++
         }
       } else if (identity) {

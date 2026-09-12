@@ -53,9 +53,9 @@ describe('applyValidationRule (server)', () => {
   })
 
   it('a custom message wins over the default', () => {
-    expect(
-      applyValidationRule({ type: 'required', message: 'Pick a zone first' }, null, 'F')
-    ).toBe('Pick a zone first')
+    expect(applyValidationRule({ type: 'required', message: 'Pick a zone first' }, null, 'F')).toBe(
+      'Pick a zone first'
+    )
   })
 
   it('an unknown rule type never blocks the write', () => {

@@ -54,7 +54,10 @@ import { fetchQueueItems } from '../../../services/queues.js'
 function buildApp() {
   const app = Fastify({ logger: false })
   // The claim route broadcasts over app.io; decorate a no-op stand-in.
-  app.decorate('io', { to: () => ({ emit: () => true }), emit: () => true } as unknown as typeof app.io)
+  app.decorate('io', {
+    to: () => ({ emit: () => true }),
+    emit: () => true
+  } as unknown as typeof app.io)
   app.register(queuesRoutes, { prefix: '/queues' })
   return app
 }

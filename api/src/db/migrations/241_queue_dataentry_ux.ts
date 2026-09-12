@@ -34,7 +34,6 @@ export async function up(knex: Knex): Promise<void> {
       t.index(['collection'])
     })
   }
-
 }
 
 export async function down(knex: Knex): Promise<void> {

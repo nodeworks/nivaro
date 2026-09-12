@@ -51,7 +51,11 @@ export async function analyzeFieldImpact(
       )
       .select('l.name as layout_name', 'l.id as layout_id', 'a.field as assigned_field')
   )
-  for (const h of layoutHits as Array<{ layout_name: string; layout_id: number; assigned_field: string }>) {
+  for (const h of layoutHits as Array<{
+    layout_name: string
+    layout_id: number
+    assigned_field: string
+  }>) {
     impacts.push({
       source: 'layout',
       label: `Layout '${h.layout_name}'`,
@@ -69,7 +73,17 @@ export async function analyzeFieldImpact(
     db('nivaro_queue_sources as s')
       .join('nivaro_queues as q', 'q.id', 's.queue_id')
       .where('s.collection', collection)
-      .select('q.name as queue_name', 'q.id as queue_id', 's.extra_fields', 's.filters', 's.label_template', 's.aggregates', 's.drilldown', 's.column_formats', 's.state_values')
+      .select(
+        'q.name as queue_name',
+        'q.id as queue_id',
+        's.extra_fields',
+        's.filters',
+        's.label_template',
+        's.aggregates',
+        's.drilldown',
+        's.column_formats',
+        's.state_values'
+      )
   )
   for (const s of queueSources as Array<Record<string, unknown>>) {
     const uses: string[] = []
@@ -120,7 +134,16 @@ export async function analyzeFieldImpact(
     db('nivaro_fields')
       .where({ collection })
       .whereNot({ field })
-      .select('field', 'computed_formula', 'visibility_rules', 'lock_condition', 'dependency_config', 'default_formula', 'cross_record_defaults', 'validation_rules')
+      .select(
+        'field',
+        'computed_formula',
+        'visibility_rules',
+        'lock_condition',
+        'dependency_config',
+        'default_formula',
+        'cross_record_defaults',
+        'validation_rules'
+      )
   )
   for (const f of siblingFields as Array<Record<string, unknown>>) {
     const uses: string[] = []
@@ -155,7 +178,11 @@ export async function analyzeFieldImpact(
       .where((qb) => qb.where('trigger_field', field).orWhere('target_field', field))
       .select('id', 'trigger_field', 'target_field')
   )
-  for (const r of fieldRules as Array<{ id: number; trigger_field: string; target_field: string }>) {
+  for (const r of fieldRules as Array<{
+    id: number
+    trigger_field: string
+    target_field: string
+  }>) {
     impacts.push({
       source: 'field-rule',
       label: `Field rule #${r.id}`,

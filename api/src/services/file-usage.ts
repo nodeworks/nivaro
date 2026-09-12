@@ -40,7 +40,9 @@ export interface FileUsage {
 }
 
 /** Where is this file referenced? One count query per FK site (~10 sites). */
-export async function getFileUsage(fileId: string): Promise<{ usages: FileUsage[]; total: number }> {
+export async function getFileUsage(
+  fileId: string
+): Promise<{ usages: FileUsage[]; total: number }> {
   const refs = await getFileRefColumns()
   const usages: FileUsage[] = []
   for (const ref of refs) {

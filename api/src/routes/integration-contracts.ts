@@ -32,8 +32,10 @@ export async function integrationContractRoutes(app: FastifyInstance): Promise<v
     }
     const name = String(b.name ?? '').trim()
     const collection = String(b.collection ?? '').trim()
-    if (!name || !collection) return reply.code(400).send({ error: 'name and collection are required' })
-    if (/^nivaro_/i.test(collection)) return reply.code(400).send({ error: 'System collections cannot carry contracts' })
+    if (!name || !collection)
+      return reply.code(400).send({ error: 'name and collection are required' })
+    if (/^nivaro_/i.test(collection))
+      return reply.code(400).send({ error: 'System collections cannot carry contracts' })
     const [inserted] = await db('nivaro_integration_contracts')
       .insert({
         name: name.slice(0, 200),
@@ -48,7 +50,13 @@ export async function integrationContractRoutes(app: FastifyInstance): Promise<v
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
     bustContractCache()
-    await logActivity({ action: 'integration-contract-create', user: req.user?.id, item: String(id), comment: `${collection}: ${name}`, req })
+    await logActivity({
+      action: 'integration-contract-create',
+      user: req.user?.id,
+      item: String(id),
+      comment: `${collection}: ${name}`,
+      req
+    })
     return reply.code(201).send({ data: { id } })
   })
 
@@ -62,18 +70,32 @@ export async function integrationContractRoutes(app: FastifyInstance): Promise<v
     if (b.config !== undefined) patch.config = b.config ? JSON.stringify(b.config) : null
     if (b.mode !== undefined) patch.mode = b.mode === 'reject' ? 'reject' : 'flag'
     if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    if (Object.keys(patch).length > 0) await db('nivaro_integration_contracts').where('id', row.id).update(patch)
+    if (Object.keys(patch).length > 0)
+      await db('nivaro_integration_contracts').where('id', row.id).update(patch)
     bustContractCache()
-    await logActivity({ action: 'integration-contract-update', user: req.user?.id, item: String(row.id), req })
+    await logActivity({
+      action: 'integration-contract-update',
+      user: req.user?.id,
+      item: String(row.id),
+      req
+    })
     return { data: { id: row.id } }
   })
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
-    const row = await db('nivaro_integration_contracts').where('id', req.params.id).first('id', 'name')
+    const row = await db('nivaro_integration_contracts')
+      .where('id', req.params.id)
+      .first('id', 'name')
     if (!row) return reply.code(404).send({ error: 'Not found' })
     await db('nivaro_integration_contracts').where('id', row.id).del()
     bustContractCache()
-    await logActivity({ action: 'integration-contract-delete', user: req.user?.id, item: String(row.id), comment: String(row.name), req })
+    await logActivity({
+      action: 'integration-contract-delete',
+      user: req.user?.id,
+      item: String(row.id),
+      comment: String(row.name),
+      req
+    })
     return { data: { deleted: true } }
   })
 }

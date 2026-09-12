@@ -431,9 +431,14 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     // Drill hierarchies (#418): the viewer may override the widget's dimension
     // to the next configured drill level — field validated inside the resolver
     // like any config dimension, so an invalid override just 400s.
-    const dimOverride = (req.body as { dimension_override?: string } | undefined)?.dimension_override
+    const dimOverride = (req.body as { dimension_override?: string } | undefined)
+      ?.dimension_override
     let cfg = parseJson<WidgetQueryConfig>(widget.config)
-    if (dimOverride && typeof dimOverride === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(dimOverride)) {
+    if (
+      dimOverride &&
+      typeof dimOverride === 'string' &&
+      /^[A-Za-z_][A-Za-z0-9_]*$/.test(dimOverride)
+    ) {
       cfg = { ...(cfg ?? {}), dimension: { field: dimOverride } }
     }
     try {
@@ -640,9 +645,9 @@ export async function reportStudioRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { to?: string; widget_id?: string } }>(
     '/:id/email',
     async (req, reply) => {
-      const report = (await db('nivaro_report_defs')
-        .where({ id: req.params.id })
-        .first()) as ReportRow | undefined
+      const report = (await db('nivaro_report_defs').where({ id: req.params.id }).first()) as
+        | ReportRow
+        | undefined
       if (!report) return reply.code(404).send({ error: 'Report not found' })
       if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
       const to = String(req.body?.to ?? '').trim()
@@ -660,7 +665,10 @@ export async function reportStudioRoutes(app: FastifyInstance) {
       if (widgets.length === 0) return reply.code(400).send({ error: 'Report has no widgets' })
       const dateRange =
         parseJson<{ date_range?: DateRange }>(report.global_filters as string)?.date_range ?? null
-      const resolved: Array<{ widget: WidgetRow; data: Awaited<ReturnType<typeof resolveWidgetDataFull>> | { error: string } }> = []
+      const resolved: Array<{
+        widget: WidgetRow
+        data: Awaited<ReturnType<typeof resolveWidgetDataFull>> | { error: string }
+      }> = []
       for (const w of widgets) {
         try {
           resolved.push({
@@ -668,17 +676,30 @@ export async function reportStudioRoutes(app: FastifyInstance) {
             data: await resolveWidgetDataFull(
               req.user!,
               report.id,
-              { id: w.id, type: w.type, collection: w.collection, config: parseJson(w.config as string) },
+              {
+                id: w.id,
+                type: w.type,
+                collection: w.collection,
+                config: parseJson(w.config as string)
+              },
               dateRange
             )
           })
         } catch (err) {
-          resolved.push({ widget: w, data: { error: err instanceof Error ? err.message : 'failed' } })
+          resolved.push({
+            widget: w,
+            data: { error: err instanceof Error ? err.message : 'failed' }
+          })
         }
       }
       const { sendRawMail } = await import('../services/mail.js')
       const { config: appConfig } = await import('../config.js')
-      const html = renderReportEmailHtml(String(report.name), resolved as never, appConfig.ADMIN_URL, report.id)
+      const html = renderReportEmailHtml(
+        String(report.name),
+        resolved as never,
+        appConfig.ADMIN_URL,
+        report.id
+      )
       await sendRawMail({
         to,
         subject: `${report.name} — report snapshot`,

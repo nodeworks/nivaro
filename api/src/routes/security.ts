@@ -64,7 +64,8 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { prefix: string } }>('/sessions/:prefix', async (req, reply) => {
     const prefix = req.params.prefix
-    if (!/^[A-Za-z0-9_-]{8,40}$/.test(prefix)) return reply.code(400).send({ error: 'Bad session prefix' })
+    if (!/^[A-Za-z0-9_-]{8,40}$/.test(prefix))
+      return reply.code(400).send({ error: 'Bad session prefix' })
     // Resolve the prefix to the full key server-side — the client never held
     // the credential, so it can't hand us one.
     const matches: string[] = []
@@ -76,7 +77,8 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       matches.push(...keys)
       guard++
     } while (cursor !== '0' && guard < 100 && matches.length < 3)
-    if (matches.length === 0) return reply.code(404).send({ error: 'Session not found (already gone?)' })
+    if (matches.length === 0)
+      return reply.code(404).send({ error: 'Session not found (already gone?)' })
     if (matches.length > 1) {
       // 12 hex-ish chars colliding is astronomically unlikely, but a wrong
       // revoke logs someone else out — refuse rather than guess.
@@ -94,12 +96,14 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       .whereIn('action', ['masquerade-start', 'masquerade-stop'])
       .orderBy('id', 'desc')
       .limit(200)
-      .select('id', 'action', 'user', 'item', 'comment', 'timestamp')) as Array<Record<string, unknown>>
+      .select('id', 'action', 'user', 'item', 'comment', 'timestamp')) as Array<
+      Record<string, unknown>
+    >
     const ids = [...new Set(rows.flatMap((r) => [r.user, r.item]).filter(Boolean))] as string[]
     const users = ids.length
-      ? ((await db('nivaro_users').whereIn('id', ids).select('id', 'first_name', 'last_name', 'email')) as Array<
-          Record<string, unknown>
-        >)
+      ? ((await db('nivaro_users')
+          .whereIn('id', ids)
+          .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>)
       : []
     const nameOf = new Map(
       users.map((u) => [
@@ -150,8 +154,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
           const u = rows.find((r) => String(r.user) === uid)
           anomalies.push({
             user: uid,
-            name:
-              `${u?.first_name ?? ''} ${u?.last_name ?? ''}`.trim() || String(u?.email ?? uid),
+            name: `${u?.first_name ?? ''} ${u?.last_name ?? ''}`.trim() || String(u?.email ?? uid),
             ips: [...windowIps],
             window_start: new Date(events[i].at).toISOString()
           })
@@ -192,7 +195,6 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     return { data: rows, total: Number((totalRow as { c?: number } | undefined)?.c ?? 0) }
   })
 }
-
 
 /** Self-serve security (#103/#197/#199) — SEPARATE plugin: the admin-only
  *  hook above is plugin-scoped and must not gate a user reading their OWN
@@ -271,7 +273,12 @@ export async function securitySelfRoutes(app: FastifyInstance) {
     } catch {
       /* redis down */
     }
-    await logActivity({ action: 'sessions-sign-out-others', user: req.user!.id, comment: `${revoked} revoked`, req })
+    await logActivity({
+      action: 'sessions-sign-out-others',
+      user: req.user!.id,
+      comment: `${revoked} revoked`,
+      req
+    })
     return reply.send({ data: { revoked } })
   })
 
@@ -279,9 +286,9 @@ export async function securitySelfRoutes(app: FastifyInstance) {
   // scope limits with labels.
   app.get('/my/permissions', { preHandler: authenticate }, async (req) => {
     const roleRow = req.user?.role
-      ? ((await db('nivaro_roles')
-          .where({ id: req.user.role })
-          .first('name', 'admin_access')) as { name?: string; admin_access?: boolean } | undefined)
+      ? ((await db('nivaro_roles').where({ id: req.user.role }).first('name', 'admin_access')) as
+          | { name?: string; admin_access?: boolean }
+          | undefined)
       : undefined
     let policies: Array<{ collection: string; action: string }> = []
     if (!req.isAdmin && req.user?.role) {
@@ -303,7 +310,11 @@ export async function securitySelfRoutes(app: FastifyInstance) {
         .pluck('name')) as string[]
       const labelMap = await resolveScopeLabelsForUsers([req.user!.id], dims)
       const mine = labelMap.get(String(req.user!.id).toUpperCase()) ?? labelMap.get(req.user!.id)
-      if (mine) scopes = [...mine.entries()].map(([dimension, values]) => ({ dimension, values: [...values] }))
+      if (mine)
+        scopes = [...mine.entries()].map(([dimension, values]) => ({
+          dimension,
+          values: [...values]
+        }))
     } catch {
       /* scopes additive */
     }
@@ -311,7 +322,10 @@ export async function securitySelfRoutes(app: FastifyInstance) {
       data: {
         role: roleRow?.name ?? null,
         is_admin: !!req.isAdmin,
-        collections: [...byCollection.entries()].map(([collection, actions]) => ({ collection, actions })),
+        collections: [...byCollection.entries()].map(([collection, actions]) => ({
+          collection,
+          actions
+        })),
         scopes
       }
     }

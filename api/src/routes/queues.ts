@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { builtinAllowed } from '../services/bulk-actions.js'
 import { db } from '../db/index.js'
 import { enqueueQueueMaterializationBackfill } from '../functions/queue-materialization-jobs.js'
 import { requireAuth } from '../middleware/authenticate.js'
@@ -101,7 +102,13 @@ export async function queuesRoutes(app: FastifyInstance) {
     const readable = queues.filter((q) => canReadQueue(q, req))
     const out: Record<
       string,
-      { total: number; sla_breached: number; unowned: number; source: 'cache' | 'snapshot'; as_of: string | null }
+      {
+        total: number
+        sla_breached: number
+        unowned: number
+        source: 'cache' | 'snapshot'
+        as_of: string | null
+      }
     > = {}
     const matIds = readable.filter((q) => q.materialized).map((q) => q.id)
     if (matIds.length > 0) {
@@ -537,7 +544,6 @@ export async function queuesRoutes(app: FastifyInstance) {
     return reply.send({ data: out.sort() })
   })
 
-
   // ── Triage labels (#109) ──────────────────────────────────────────────────
   // Queue-local ad-hoc tags on items ("needs info", "vendor waiting") — claims
   // say WHOSE, labels say WHAT triage state. Toggle semantics; any queue
@@ -559,7 +565,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   app.post('/:id/triage-labels/toggle', async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as { collection?: string; item_id?: string; label?: string }
-    const label = String(body?.label ?? '').trim().slice(0, 60)
+    const label = String(body?.label ?? '')
+      .trim()
+      .slice(0, 60)
     const collection = String(body?.collection ?? '')
     const itemId = String(body?.item_id ?? '')
     if (!label || !collection || !itemId)
@@ -581,11 +589,11 @@ export async function queuesRoutes(app: FastifyInstance) {
       .where({ queue_id: id })
       .countDistinct('label as c')
       .first()) as { c?: number | string } | undefined
-    const isNewLabel = !(await db('nivaro_queue_labels')
-      .where({ queue_id: id, label })
-      .first('id'))
+    const isNewLabel = !(await db('nivaro_queue_labels').where({ queue_id: id, label }).first('id'))
     if (isNewLabel && Number(distinctCount?.c ?? 0) >= 30)
-      return reply.code(422).send({ error: 'This queue already has 30 distinct labels — reuse one.' })
+      return reply
+        .code(422)
+        .send({ error: 'This queue already has 30 distinct labels — reuse one.' })
     await db('nivaro_queue_labels').insert({
       queue_id: id,
       collection,
@@ -881,7 +889,9 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
     }
     if (wantsDefault) {
-      await db('nivaro_queue_views').where({ queue_id: id, is_default: true }).update({ is_default: false })
+      await db('nivaro_queue_views')
+        .where({ queue_id: id, is_default: true })
+        .update({ is_default: false })
     }
 
     const [row] = (await db('nivaro_queue_views')
@@ -925,16 +935,25 @@ export async function queuesRoutes(app: FastifyInstance) {
       .first()) as { id: number; user: string; queue_id: string } | undefined
     if (!view) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as { name?: string; is_shared?: boolean; state?: unknown; is_default?: boolean }
-    const queueForDefault = body.is_default !== undefined
-      ? ((await db<QueueRow>('nivaro_queues').where({ id: view.queue_id }).first()) as QueueRow | undefined)
-      : undefined
+    const body = req.body as {
+      name?: string
+      is_shared?: boolean
+      state?: unknown
+      is_default?: boolean
+    }
+    const queueForDefault =
+      body.is_default !== undefined
+        ? ((await db<QueueRow>('nivaro_queues').where({ id: view.queue_id }).first()) as
+            | QueueRow
+            | undefined)
+        : undefined
     const canEditView = req.isAdmin || view.user === req.user!.id
     const canSetDefault = req.isAdmin || (queueForDefault && queueForDefault.owner === req.user!.id)
     // Setting the queue default on a SHARED view someone else authored is a
     // queue-owner action, not a view edit — allow either authority.
     if (body.is_default !== undefined) {
-      if (!canSetDefault) return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
+      if (!canSetDefault)
+        return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
     } else if (!canEditView) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
@@ -980,7 +999,13 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     const updated = (await db('nivaro_queue_views')
       .where({ id: Number(viewId) })
-      .first()) as { id: number; name: string; is_shared: boolean; is_default?: boolean; state: string | null }
+      .first()) as {
+      id: number
+      name: string
+      is_shared: boolean
+      is_default?: boolean
+      state: string | null
+    }
     return reply.send({
       data: {
         ...updated,
@@ -1244,6 +1269,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (!body.source_collection || !body.item_id) {
       return reply.code(400).send({ error: 'source_collection and item_id are required' })
     }
+    if (
+      body.source_collection !== 'tasks' &&
+      !(await builtinAllowed(body.source_collection, 'claim', req))
+    ) {
+      return reply.code(403).send({ error: 'Bulk claim is not available to you here' })
+    }
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
       | QueueRow
@@ -1323,6 +1354,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     const body = req.body as { source_collection?: string; item_id?: string }
     if (!body.source_collection || !body.item_id) {
       return reply.code(400).send({ error: 'source_collection and item_id are required' })
+    }
+    if (
+      body.source_collection !== 'tasks' &&
+      !(await builtinAllowed(body.source_collection, 'release', req))
+    ) {
+      return reply.code(403).send({ error: 'Bulk release is not available to you here' })
     }
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as

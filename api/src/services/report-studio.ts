@@ -366,7 +366,8 @@ export function normalizeWidgetConfig(
   }
   if (cfg.bucket && cfg.dimension && !cfg.dimension.bucket) {
     const b = cfg.bucket
-    if (b === 'day' || b === 'week' || b === 'month') cfg.dimension = { ...cfg.dimension, bucket: b }
+    if (b === 'day' || b === 'week' || b === 'month')
+      cfg.dimension = { ...cfg.dimension, bucket: b }
   }
   if (!cfg.metric && cfg.aggregate) {
     const a = cfg.aggregate
@@ -446,13 +447,15 @@ export async function resolveWidgetData(
       }))
       .sort((a, b) => b.delta - a.delta)
     const gainers = scored.filter((r) => r.delta > 0).slice(0, n)
-    const decliners = scored.filter((r) => r.delta < 0).slice(-n).reverse()
+    const decliners = scored
+      .filter((r) => r.delta < 0)
+      .slice(-n)
+      .reverse()
     return {
       rows: [...gainers, ...decliners] as unknown as Array<Record<string, unknown>>,
       row_count: gainers.length + decliners.length
     }
   }
-
 
   // Multi-KPI summary — each tile is its own collection + aggregate
   if (widget.type === 'kpi_group') {
@@ -508,10 +511,13 @@ export async function resolveWidgetData(
     if (!queueRow) return { value: null }
     const { canReadQueue } = await import('../routes/queues.js')
     // canReadQueue takes (queue, req) — build the minimal shape it reads.
-    const readable = canReadQueue(queueRow as never, {
-      user,
-      isAdmin: (user as { admin_access?: boolean }).admin_access === true
-    } as never)
+    const readable = canReadQueue(
+      queueRow as never,
+      {
+        user,
+        isAdmin: (user as { admin_access?: boolean }).admin_access === true
+      } as never
+    )
     if (!readable) return { value: null }
     const snaps = (await db('nivaro_queue_stat_snapshots')
       .where({ queue_id: queueId })
@@ -599,10 +605,7 @@ export async function resolveWidgetData(
             .slice(0, 1)
     const value =
       metricFields.length > 0
-        ? rows.reduce(
-            (a, r) => a + metricFields.reduce((b, f) => b + (Number(r[f]) || 0), 0),
-            0
-          )
+        ? rows.reduce((a, r) => a + metricFields.reduce((b, f) => b + (Number(r[f]) || 0), 0), 0)
         : null
     return { rows, row_count: rows.length, value }
   }
@@ -638,7 +641,11 @@ export async function resolveWidgetData(
   if (widget.type === 'pareto') {
     const chart = await resolveWidgetData(
       user,
-      { type: 'bar', collection: widget.collection, config: { ...(widget.config ?? {}), compare: null } },
+      {
+        type: 'bar',
+        collection: widget.collection,
+        config: { ...(widget.config ?? {}), compare: null }
+      },
       dateRange,
       entityFilters
     )
@@ -840,9 +847,7 @@ export async function resolveWidgetData(
       if (ranked.length <= CAP) return { kept: ranked, dropped: 0 }
       // Keep the CAP largest even on a bucketed axis, then restore axis order.
       const largest = new Set(
-        [...all]
-          .sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
-          .slice(0, CAP)
+        [...all].sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0)).slice(0, CAP)
       )
       return { kept: ranked.filter((k) => largest.has(k)), dropped: ranked.length - CAP }
     }
@@ -911,13 +916,16 @@ export async function resolveWidgetData(
       .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
     const top = scored.slice(0, n)
     const restDelta = scored.slice(n).reduce((a, b) => a + b.delta, 0)
-    const steps = [...top, ...(restDelta !== 0 ? [{ dim: 'Everything else', delta: restDelta }] : [])]
+    const steps = [
+      ...top,
+      ...(restDelta !== 0 ? [{ dim: 'Everything else', delta: restDelta }] : [])
+    ]
     return { waterfall: { start, end, steps }, row_count: steps.length }
   }
 
   if (widget.type === 'table') {
     const columns = (cfg.columns ?? [])
-      .map((c) => (typeof c === 'string' ? c : (c as { field?: string })?.field ?? ''))
+      .map((c) => (typeof c === 'string' ? c : ((c as { field?: string })?.field ?? '')))
       .filter((c) => valid.has(c))
     const select = columns.length > 0 ? ['id', ...columns] : ['*']
     const q = base().select(select as string[])
@@ -988,7 +996,7 @@ export async function resolveWidgetData(
         .from(sub.select(`${collection}.*`).as('_s'))
         .select(
           db.raw(
-            "DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p90",
+            'DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p90',
             [metricField, metricField]
           )
         )
@@ -1007,7 +1015,10 @@ export async function resolveWidgetData(
       { stat: 'Median (p50)', value: p50 },
       { stat: 'p90', value: p90 }
     ]
-    return { rows: rows as unknown as Array<Record<string, unknown>>, row_count: Number(row?.n ?? 0) }
+    return {
+      rows: rows as unknown as Array<Record<string, unknown>>,
+      row_count: Number(row?.n ?? 0)
+    }
   }
 
   // Scatter (#173): raw x/y points (capped); the client draws the trendline.
@@ -1059,9 +1070,7 @@ export async function resolveWidgetData(
     const { getLabels } = await import('./queues.js')
     let labels: Record<string, string> = {}
     try {
-      labels = await getLabels(
-        new Map([[collection, new Set(kept.map((v) => String(v.item_id)))]])
-      )
+      labels = await getLabels(new Map([[collection, new Set(kept.map((v) => String(v.item_id)))]]))
     } catch {
       /* ids stand in */
     }
@@ -1155,7 +1164,13 @@ export async function resolveWidgetData(
           .orderBy('dim', 'asc')
       )) as never
     }
-    let series: Array<{ dim: string; value: number; prev?: number; band?: [number, number]; band_avg?: number }> = rows
+    let series: Array<{
+      dim: string
+      value: number
+      prev?: number
+      band?: [number, number]
+      band_avg?: number
+    }> = rows
       .filter((r) => r.dim != null)
       .map((r) => ({ dim: String(r.dim), value: Number(r.value) }))
     const range = resolveDateRange(dateRange)
@@ -1292,7 +1307,11 @@ export async function resolveWidgetData(
   // The tail folds into an explicit Other slice instead of silently vanishing
   // — a truncated donut's total must still agree with the KPI beside it.
   const tail = allRows.slice(limit)
-  let raw = rows.map((r) => ({ dim: r.dim, value: Number(r.value), prev: undefined as number | undefined }))
+  let raw = rows.map((r) => ({
+    dim: r.dim,
+    value: Number(r.value),
+    prev: undefined as number | undefined
+  }))
   // Compare on value dimensions too — previous window grouped by the same
   // dimension, matched by raw key before labels are applied.
   const vRange = resolveDateRange(dateRange)
@@ -1303,8 +1322,14 @@ export async function resolveWidgetData(
     const prevMap = new Map(prevRows.map((r) => [String(r.dim), Number(r.value)]))
     raw = raw.map((r) => ({ ...r, prev: prevMap.get(String(r.dim)) }))
   }
-  const series: Array<{ dim: string; value: number; prev?: number; raw?: unknown; value2?: number; other?: boolean }> =
-    await labelizeDimension(collection, dim.field, raw)
+  const series: Array<{
+    dim: string
+    value: number
+    prev?: number
+    raw?: unknown
+    value2?: number
+    other?: boolean
+  }> = await labelizeDimension(collection, dim.field, raw)
   if (tail.length > 0) {
     series.push({
       dim: `Other (${tail.length})`,
@@ -1350,7 +1375,12 @@ const aiInsightCache = new Map<string, string>()
 export async function resolveWidgetDataFull(
   user: User,
   reportId: string,
-  widget: { id?: string; type: string; collection: string | null; config: WidgetQueryConfig | null },
+  widget: {
+    id?: string
+    type: string
+    collection: string | null
+    config: WidgetQueryConfig | null
+  },
   dateRange: DateRange | null,
   entityFilters: EntityFilter[] = [],
   depth = 0,
@@ -1465,7 +1495,12 @@ export async function resolveWidgetDataFull(
           const sub = await resolveWidgetDataFull(
             user,
             reportId,
-            { id: ref.id, type: ref.type, collection: ref.collection, config: parseJson(ref.config) },
+            {
+              id: ref.id,
+              type: ref.type,
+              collection: ref.collection,
+              config: parseJson(ref.config)
+            },
             dateRange,
             entityFilters,
             depth + 1
@@ -1479,10 +1514,13 @@ export async function resolveWidgetDataFull(
             const refCfg = parseJson<WidgetQueryConfig>(ref.config)
             const f = refCfg?.format
             const n = Number(v)
-            const body = (f?.decimals != null ? n.toFixed(f.decimals) : Number.isInteger(n) ? String(n) : n.toFixed(2)).replace(
-              /\B(?=(\d{3})+(?!\d))/g,
-              ','
-            )
+            const body = (
+              f?.decimals != null
+                ? n.toFixed(f.decimals)
+                : Number.isInteger(n)
+                  ? String(n)
+                  : n.toFixed(2)
+            ).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
             rendered = `${f?.prefix ?? ''}${body}${f?.suffix ?? ''}`
           }
         }
@@ -1554,7 +1592,6 @@ export async function resolveWidgetDataFull(
     }
   }
 
-
   return resolveWidgetData(user, widget, dateRange, entityFilters)
 }
 
@@ -1569,7 +1606,12 @@ export function esc(s: unknown): string {
 
 function fmtNum(v: number | null | undefined, format?: WidgetQueryConfig['format']): string {
   if (v == null) return '—'
-  const n = format?.decimals != null ? v.toFixed(format.decimals) : Number.isInteger(v) ? String(v) : v.toFixed(2)
+  const n =
+    format?.decimals != null
+      ? v.toFixed(format.decimals)
+      : Number.isInteger(v)
+        ? String(v)
+        : v.toFixed(2)
   const withSep = n.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
   return `${format?.prefix ?? ''}${withSep}${format?.suffix ?? ''}`
 }
@@ -1601,7 +1643,11 @@ export function renderReportEmailHtml(
     } else if (widget.type === 'kpi_group' && (data as { tiles?: unknown[] }).tiles) {
       const tiles = (
         data as {
-          tiles: Array<{ label?: string; value?: number | null; format?: WidgetQueryConfig['format'] }>
+          tiles: Array<{
+            label?: string
+            value?: number | null
+            format?: WidgetQueryConfig['format']
+          }>
         }
       ).tiles
       const cells = tiles

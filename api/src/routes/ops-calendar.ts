@@ -160,9 +160,9 @@ export async function opsCalendarRoutes(app: FastifyInstance): Promise<void> {
 
     // Blackout dates.
     try {
-      const rows = (await db('nivaro_blackout_dates')
-        .limit(500)
-        .select('*')) as Array<Record<string, unknown>>
+      const rows = (await db('nivaro_blackout_dates').limit(500).select('*')) as Array<
+        Record<string, unknown>
+      >
       for (const r of rows) {
         const d = (r.date ?? r.start_date ?? r.blackout_date) as string | undefined
         if (!d || !inWindow(d)) continue

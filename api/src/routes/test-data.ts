@@ -27,13 +27,77 @@ import { createOne } from '../services/items.js'
 const TABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const MAX_COUNT = 100
 
-const FIRST_NAMES = ['Ava', 'Liam', 'Maya', 'Noah', 'Zoe', 'Ethan', 'Ruby', 'Owen', 'Isla', 'Levi', 'Nora', 'Silas']
-const LAST_NAMES = ['Hartwell', 'Okafor', 'Lindqvist', 'Moreau', 'Takeda', 'Alvarez', 'Whitfield', 'Novak', 'Iverson', 'Castellano']
-const CITIES = ['Portland', 'Denver', 'Austin', 'Raleigh', 'Madison', 'Boise', 'Savannah', 'Tacoma', 'Provo', 'Albany']
+const FIRST_NAMES = [
+  'Ava',
+  'Liam',
+  'Maya',
+  'Noah',
+  'Zoe',
+  'Ethan',
+  'Ruby',
+  'Owen',
+  'Isla',
+  'Levi',
+  'Nora',
+  'Silas'
+]
+const LAST_NAMES = [
+  'Hartwell',
+  'Okafor',
+  'Lindqvist',
+  'Moreau',
+  'Takeda',
+  'Alvarez',
+  'Whitfield',
+  'Novak',
+  'Iverson',
+  'Castellano'
+]
+const CITIES = [
+  'Portland',
+  'Denver',
+  'Austin',
+  'Raleigh',
+  'Madison',
+  'Boise',
+  'Savannah',
+  'Tacoma',
+  'Provo',
+  'Albany'
+]
 const STATES = ['OR', 'CO', 'TX', 'NC', 'WI', 'ID', 'GA', 'WA', 'UT', 'NY']
-const STREETS = ['Maple Ave', 'Cedar St', 'Oakridge Dr', 'Willow Ln', 'Summit Blvd', 'Harbor Rd', 'Foxglove Ct', 'Juniper Way']
-const COMPANIES = ['Northwind Labs', 'Bluepeak Systems', 'Cascade Works', 'Ironvale Group', 'Halcyon Partners', 'Stonebrook Co']
-const WORDS = ['alpha', 'harbor', 'summit', 'cobalt', 'meridian', 'lattice', 'quartz', 'beacon', 'delta', 'orchid', 'vertex', 'aurora']
+const STREETS = [
+  'Maple Ave',
+  'Cedar St',
+  'Oakridge Dr',
+  'Willow Ln',
+  'Summit Blvd',
+  'Harbor Rd',
+  'Foxglove Ct',
+  'Juniper Way'
+]
+const COMPANIES = [
+  'Northwind Labs',
+  'Bluepeak Systems',
+  'Cascade Works',
+  'Ironvale Group',
+  'Halcyon Partners',
+  'Stonebrook Co'
+]
+const WORDS = [
+  'alpha',
+  'harbor',
+  'summit',
+  'cobalt',
+  'meridian',
+  'lattice',
+  'quartz',
+  'beacon',
+  'delta',
+  'orchid',
+  'vertex',
+  'aurora'
+]
 const SENTENCES = [
   'Generated sample record for testing and demos.',
   'Placeholder content — replace with real data before launch.',
@@ -144,7 +208,12 @@ function fakeByName(rng: Rng, name: string, i: number): unknown {
   if (n.includes('url') || n.includes('website') || n.includes('link')) {
     return `https://example.com/${pick(rng, WORDS)}-${i}`
   }
-  if (n.includes('description') || n.includes('note') || n.includes('comment') || n.includes('summary')) {
+  if (
+    n.includes('description') ||
+    n.includes('note') ||
+    n.includes('comment') ||
+    n.includes('summary')
+  ) {
     return pick(rng, SENTENCES)
   }
   if (n.includes('color') || n.includes('colour')) return `#${fakeHex(rng, 6)}`
@@ -159,14 +228,21 @@ function fakeByType(rng: Rng, f: FieldMeta, name: string): unknown {
   const n = name.toLowerCase()
   if (t === 'boolean' || t === 'bit') return rng() < 0.5
   if (['integer', 'bigint', 'biginteger', 'int', 'smallint', 'tinyint'].includes(t)) {
-    if (n.includes('percent') || n.includes('progress') || n.includes('pct')) return int(rng, 0, 100)
+    if (n.includes('percent') || n.includes('progress') || n.includes('pct'))
+      return int(rng, 0, 100)
     if (n.includes('qty') || n.includes('quantity') || n.includes('count')) return int(rng, 1, 100)
     if (n.includes('year')) return int(rng, 2020, 2030)
     if (n.includes('rating')) return int(rng, 1, 5)
     return int(rng, 1, 1000)
   }
   if (['decimal', 'float', 'numeric', 'money', 'real', 'double', 'number'].includes(t)) {
-    if (n.includes('price') || n.includes('amount') || n.includes('cost') || n.includes('total') || n.includes('budget')) {
+    if (
+      n.includes('price') ||
+      n.includes('amount') ||
+      n.includes('cost') ||
+      n.includes('total') ||
+      n.includes('budget')
+    ) {
       return Math.round(rng() * 999_000 + 1000) / 100
     }
     return Math.round(rng() * 100_000) / 100
@@ -198,13 +274,16 @@ export async function testDataRoutes(app: FastifyInstance): Promise<void> {
     const meta = (await db('nivaro_collections').where({ collection }).first()) as
       | { collection: string; is_virtual?: boolean | number; singleton?: boolean | number }
       | undefined
-    if (!meta) return reply.code(404).send({ error: `Collection "${collection}" is not registered` })
+    if (!meta)
+      return reply.code(404).send({ error: `Collection "${collection}" is not registered` })
     if (meta.is_virtual) {
       return reply.code(400).send({ error: 'Virtual collections cannot receive generated rows' })
     }
 
     const countReq = Number(req.body?.count ?? 10)
-    const count = Number.isFinite(countReq) ? Math.max(1, Math.min(MAX_COUNT, Math.floor(countReq))) : 10
+    const count = Number.isFinite(countReq)
+      ? Math.max(1, Math.min(MAX_COUNT, Math.floor(countReq)))
+      : 10
     const respectRequired = req.body?.respect_required !== false
     const seedNum = Number(req.body?.seed)
     const rng = mulberry32(Number.isFinite(seedNum) ? seedNum : Math.floor(Math.random() * 2 ** 31))

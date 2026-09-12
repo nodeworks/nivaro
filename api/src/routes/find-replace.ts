@@ -22,7 +22,10 @@ interface FindReplaceBody {
   mode?: 'exact' | 'contains'
 }
 
-async function resolveHits(b: Required<Pick<FindReplaceBody, 'collection' | 'field' | 'find' | 'mode'>>, cap: number) {
+async function resolveHits(
+  b: Required<Pick<FindReplaceBody, 'collection' | 'field' | 'find' | 'mode'>>,
+  cap: number
+) {
   const like = `%${b.find.replace(/[%_[]/g, (c) => `[${c}]`)}%`
   let q = db(b.collection).select('id', b.field).limit(cap)
   q = b.mode === 'exact' ? q.where(b.field, b.find) : q.where(b.field, 'like', like)

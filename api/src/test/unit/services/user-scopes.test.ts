@@ -96,18 +96,16 @@ function installDb(fx: Fx = {}) {
       case 'nivaro_relations':
         return { select: vi.fn(() => Promise.resolve(relations)) }
       case 'information_schema.tables': {
-        const tables =
-          fx.tables ??
-          [
-            ...new Set(
-              [
-                ...relations.flatMap((r) => [r.many_collection, r.one_collection]),
-                ...dimensions.map((d) => d.target_collection),
-                'workflows',
-                'unrelated_collection'
-              ].filter((t): t is string => typeof t === 'string' && t.length > 0)
-            )
-          ]
+        const tables = fx.tables ?? [
+          ...new Set(
+            [
+              ...relations.flatMap((r) => [r.many_collection, r.one_collection]),
+              ...dimensions.map((d) => d.target_collection),
+              'workflows',
+              'unrelated_collection'
+            ].filter((t): t is string => typeof t === 'string' && t.length > 0)
+          )
+        ]
         return {
           select: vi.fn(() => Promise.resolve(tables.map((t) => ({ table_name: t }))))
         }

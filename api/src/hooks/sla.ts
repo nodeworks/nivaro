@@ -11,7 +11,6 @@ export function setApp(app: FastifyInstance) {
   _app = app
 }
 
-
 /**
  * Called after a workflow state transition — checks SLA immediately.
  * Intended to be called from the workflow transition handling code, or

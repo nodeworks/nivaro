@@ -48,9 +48,15 @@ interface OAuth2CCConfig {
 
 function slugifyEndpoint(method: string, path: string, operationId?: string): string {
   if (operationId) {
-    return operationId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    return operationId
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
   }
-  return `${method.toLowerCase()}-${path.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+  return `${method.toLowerCase()}-${path
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')}`
 }
 
 // ─── Schema skeleton builder (OpenAPI → default body) ───────────────────────
@@ -162,7 +168,13 @@ function mergeAuthConfig(
   // Nested token_headers: a still-masked header value keeps its stored secret.
   const inTh = out.token_headers
   const exTh = existing?.token_headers
-  if (inTh && typeof inTh === 'object' && !Array.isArray(inTh) && exTh && typeof exTh === 'object') {
+  if (
+    inTh &&
+    typeof inTh === 'object' &&
+    !Array.isArray(inTh) &&
+    exTh &&
+    typeof exTh === 'object'
+  ) {
     const merged: Record<string, unknown> = { ...(inTh as Record<string, unknown>) }
     for (const [hk, hv] of Object.entries(merged)) {
       if (hv === MASK && (exTh as Record<string, unknown>)[hk] != null) {
@@ -345,7 +357,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
         const max = Number(body.retry_policy.max_attempts)
         const back = Number(body.retry_policy.backoff_minutes)
         if (!Number.isFinite(max) || max < 1 || max > 10 || !Number.isFinite(back) || back < 1) {
-          return reply.code(400).send({ error: 'retry_policy needs max_attempts 1-10 and backoff_minutes >= 1' })
+          return reply
+            .code(400)
+            .send({ error: 'retry_policy needs max_attempts 1-10 and backoff_minutes >= 1' })
         }
         patch.retry_policy = JSON.stringify({ max_attempts: max, backoff_minutes: back })
       }
@@ -1054,15 +1068,17 @@ export async function externalApisRoutes(app: FastifyInstance) {
       const raw = req.body.spec.trimStart()
       try {
         // Try JSON first (faster, unambiguous), then fall back to YAML
-        spec = raw.startsWith('{') || raw.startsWith('[')
-          ? (JSON.parse(raw) as Record<string, unknown>)
-          : (yamlLoad(raw) as Record<string, unknown>)
+        spec =
+          raw.startsWith('{') || raw.startsWith('[')
+            ? (JSON.parse(raw) as Record<string, unknown>)
+            : (yamlLoad(raw) as Record<string, unknown>)
       } catch {
         // One format failed — try the other before giving up
         try {
-          spec = raw.startsWith('{') || raw.startsWith('[')
-            ? (yamlLoad(raw) as Record<string, unknown>)
-            : (JSON.parse(raw) as Record<string, unknown>)
+          spec =
+            raw.startsWith('{') || raw.startsWith('[')
+              ? (yamlLoad(raw) as Record<string, unknown>)
+              : (JSON.parse(raw) as Record<string, unknown>)
         } catch {
           return reply.code(400).send({ error: 'Invalid spec: could not parse as JSON or YAML' })
         }
@@ -1079,11 +1095,12 @@ export async function externalApisRoutes(app: FastifyInstance) {
     }
 
     // Determine version
-    const specVersion = typeof spec.openapi === 'string'
-      ? spec.openapi
-      : typeof spec.swagger === 'string'
-        ? spec.swagger
-        : null
+    const specVersion =
+      typeof spec.openapi === 'string'
+        ? spec.openapi
+        : typeof spec.swagger === 'string'
+          ? spec.swagger
+          : null
 
     const infoObj = spec.info as Record<string, unknown> | undefined
     const title = typeof infoObj?.title === 'string' ? infoObj.title : null
@@ -1093,9 +1110,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
 
     // Collect existing slugs for this api to deduplicate
     const existingSlugs = new Set<string>(
-      (await db('nivaro_external_api_endpoints')
-        .where({ api_id: apiId })
-        .pluck('slug') as string[])
+      (await db('nivaro_external_api_endpoints').where({ api_id: apiId }).pluck('slug')) as string[]
     )
 
     const now = new Date()
@@ -1103,10 +1118,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     let skipped = 0
 
     // Get max sort for appending
-    const maxSortRow = await db('nivaro_external_api_endpoints')
+    const maxSortRow = (await db('nivaro_external_api_endpoints')
       .where({ api_id: apiId })
       .max('sort as m')
-      .first() as { m: number | null } | undefined
+      .first()) as { m: number | null } | undefined
     let nextSort = (maxSortRow?.m ?? -1) + 1
 
     for (const [pathKey, pathItem] of Object.entries(paths)) {
@@ -1132,7 +1147,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
         const name = operationId ?? `${method} ${pathKey}`
 
         // Build default_query from parameters
-        const params = Array.isArray(op.parameters) ? op.parameters as Record<string, unknown>[] : []
+        const params = Array.isArray(op.parameters)
+          ? (op.parameters as Record<string, unknown>[])
+          : []
         const queryParams: Record<string, string> = {}
         for (const p of params) {
           if (p.in === 'query' && typeof p.name === 'string') {
@@ -1148,7 +1165,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
           if (reqBody) {
             const content = reqBody.content as Record<string, unknown> | undefined
             const jsonContent = content?.['application/json'] as Record<string, unknown> | undefined
-            const schema = (jsonContent?.schema ?? jsonContent?.example) as Record<string, unknown> | undefined
+            const schema = (jsonContent?.schema ?? jsonContent?.example) as
+              | Record<string, unknown>
+              | undefined
             if (schema) {
               const skeleton = buildSchemaSkeleton(schema)
               if (skeleton !== null) defaultBody = JSON.stringify(skeleton, null, 2)
@@ -1197,10 +1216,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
       imported_at: now,
       imported_by: req.user?.id ?? null
     })
-    const schemaRow = await db('nivaro_external_api_schemas')
+    const schemaRow = (await db('nivaro_external_api_schemas')
       .where({ external_api_id: apiId })
       .orderBy('id', 'desc')
-      .first() as SchemaRow
+      .first()) as SchemaRow
 
     await logActivity({
       action: 'external-api-spec-import',
@@ -1226,7 +1245,15 @@ export async function externalApisRoutes(app: FastifyInstance) {
       const rows = (await db('nivaro_external_api_schemas')
         .where({ external_api_id: apiId })
         .orderBy('id', 'desc')
-        .select('id', 'external_api_id', 'title', 'spec_version', 'endpoint_count', 'imported_at', 'imported_by')) as Omit<SchemaRow, 'raw_spec'>[]
+        .select(
+          'id',
+          'external_api_id',
+          'title',
+          'spec_version',
+          'endpoint_count',
+          'imported_at',
+          'imported_by'
+        )) as Omit<SchemaRow, 'raw_spec'>[]
 
       return { data: rows }
     }

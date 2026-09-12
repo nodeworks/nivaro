@@ -8,6 +8,9 @@ export function QueueBulkBar({
   states,
   busy,
   claimsEnabled = true,
+  showClaim = true,
+  showRelease = true,
+  showTransition = true,
   onClaim,
   onRelease,
   onTransition,
@@ -18,6 +21,10 @@ export function QueueBulkBar({
   states: Array<{ value: string; label: string }>
   busy: boolean
   claimsEnabled?: boolean
+  /** Built-in gates from the bulk-actions registry (useBuiltinGate). */
+  showClaim?: boolean
+  showRelease?: boolean
+  showTransition?: boolean
   onClaim: () => void
   onRelease: () => void
   onTransition: (state: string) => void
@@ -34,58 +41,60 @@ export function QueueBulkBar({
       <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
         {count} selected
       </span>
-      {claimsEnabled && (
-        <>
-          <button
-            type='button'
-            disabled={busy}
-            onClick={onClaim}
-            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
-          >
-            Claim
-          </button>
-          <button
-            type='button'
-            disabled={busy}
-            onClick={onRelease}
-            className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
-          >
-            Release
-          </button>
-        </>
+      {claimsEnabled && showClaim && (
+        <button
+          type='button'
+          disabled={busy}
+          onClick={onClaim}
+          className='rounded-md px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 disabled:opacity-50 dark:text-nvr-cyan'
+        >
+          Claim
+        </button>
+      )}
+      {claimsEnabled && showRelease && (
+        <button
+          type='button'
+          disabled={busy}
+          onClick={onRelease}
+          className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+        >
+          Release
+        </button>
       )}
       {children}
-      <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            disabled={busy || states.length === 0}
-            className='flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
-          >
-            Transition <ArrowRight className='h-3 w-3' />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className='w-[200px] p-0' align='center' side='top'>
-          <Command>
-            <CommandInput placeholder='Target state…' className='h-8 text-[12px]' />
-            <CommandList>
-              <CommandEmpty>No state found.</CommandEmpty>
-              {states.map((s) => (
-                <CommandItem
-                  key={s.value}
-                  value={s.label}
-                  onSelect={() => {
-                    setTransitionOpen(false)
-                    onTransition(s.value)
-                  }}
-                >
-                  {s.label}
-                </CommandItem>
-              ))}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
+      {showTransition && (
+        <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              disabled={busy || states.length === 0}
+              className='flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+            >
+              Transition <ArrowRight className='h-3 w-3' />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-[200px] p-0' align='center' side='top'>
+            <Command>
+              <CommandInput placeholder='Target state…' className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandEmpty>No state found.</CommandEmpty>
+                {states.map((s) => (
+                  <CommandItem
+                    key={s.value}
+                    value={s.label}
+                    onSelect={() => {
+                      setTransitionOpen(false)
+                      onTransition(s.value)
+                    }}
+                  >
+                    {s.label}
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      )}
       <button
         type='button'
         onClick={onClear}

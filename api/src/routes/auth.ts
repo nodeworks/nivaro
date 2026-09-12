@@ -258,13 +258,15 @@ export async function authRoutes(app: FastifyInstance) {
       .orderBy('sort', 'asc')
       .select('id', 'key', 'label', 'logo_url', 'button_color')
       .then((rows) =>
-        (rows as Array<{
-          id: number
-          key: string
-          label: string
-          logo_url: string | null
-          button_color: string | null
-        }>).map((r) => ({
+        (
+          rows as Array<{
+            id: number
+            key: string
+            label: string
+            logo_url: string | null
+            button_color: string | null
+          }>
+        ).map((r) => ({
           id: r.id,
           key: r.key,
           label: r.label,

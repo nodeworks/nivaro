@@ -49,7 +49,11 @@ export async function scheduledReportsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'cron_schedule must be a 5-part cron expression' })
     }
     const type =
-      b.report_type === 'queue' ? 'queue' : b.report_type === 'ops_brief' ? 'ops_brief' : 'collection'
+      b.report_type === 'queue'
+        ? 'queue'
+        : b.report_type === 'ops_brief'
+          ? 'ops_brief'
+          : 'collection'
     if (type === 'collection' && !b.collection) {
       return reply.code(400).send({ error: 'collection is required for collection reports' })
     }
@@ -100,16 +104,21 @@ export async function scheduledReportsRoutes(app: FastifyInstance) {
     }
     if (b.report_type !== undefined)
       u.report_type =
-        b.report_type === 'queue' ? 'queue' : b.report_type === 'ops_brief' ? 'ops_brief' : 'collection'
+        b.report_type === 'queue'
+          ? 'queue'
+          : b.report_type === 'ops_brief'
+            ? 'ops_brief'
+            : 'collection'
     if (b.filters !== undefined) u.filters = toJson(b.filters)
     if (b.fields !== undefined) u.fields = toJson(b.fields)
     if (b.recipients !== undefined) u.recipients = JSON.stringify(b.recipients)
-    if (b.row_limit !== undefined) u.row_limit = Math.min(500, Math.max(1, Number(b.row_limit) || 100))
+    if (b.row_limit !== undefined)
+      u.row_limit = Math.min(500, Math.max(1, Number(b.row_limit) || 100))
     if (b.is_active !== undefined) u.is_active = !!b.is_active
     await db('nivaro_scheduled_reports').where({ id }).update(u)
-    const row = (await db<ScheduledReport>('nivaro_scheduled_reports')
-      .where({ id })
-      .first()) as ScheduledReport | undefined
+    const row = (await db<ScheduledReport>('nivaro_scheduled_reports').where({ id }).first()) as
+      | ScheduledReport
+      | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'update',
@@ -122,7 +131,9 @@ export async function scheduledReportsRoutes(app: FastifyInstance) {
   })
 
   app.delete('/:id', async (req, reply) => {
-    await db('nivaro_scheduled_reports').where({ id: (req.params as { id: string }).id }).delete()
+    await db('nivaro_scheduled_reports')
+      .where({ id: (req.params as { id: string }).id })
+      .delete()
     await logActivity({
       action: 'delete',
       collection: 'nivaro_scheduled_reports',

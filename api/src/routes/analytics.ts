@@ -61,20 +61,22 @@ export async function analyticsRoutes(app: FastifyInstance) {
       // user_id / user_email / user_name are client-asserted — same pattern as
       // presence ping. They cannot be verified for public tracker requests.
       // Surface as "self-reported" in the admin UI rather than treating as authoritative.
-      const [idRow] = await db('nivaro_page_views').insert({
-        session_id: b.sessionId.slice(0, 64),
-        user_id: b.userId ?? null,
-        user_email: b.userEmail ?? null,
-        user_name: b.userName ?? null,
-        page_url: b.pageUrl,
-        page_title: b.pageTitle ?? null,
-        referrer: b.referrer ?? null,
-        device_type: b.deviceType ?? null,
-        ip: req.ip ?? null,
-        user_agent: ((req.headers['user-agent'] as string) ?? '').slice(0, 500) || null,
-        viewed_at: new Date()
-        // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
-      }).returning('id')
+      const [idRow] = await db('nivaro_page_views')
+        .insert({
+          session_id: b.sessionId.slice(0, 64),
+          user_id: b.userId ?? null,
+          user_email: b.userEmail ?? null,
+          user_name: b.userName ?? null,
+          page_url: b.pageUrl,
+          page_title: b.pageTitle ?? null,
+          referrer: b.referrer ?? null,
+          device_type: b.deviceType ?? null,
+          ip: req.ip ?? null,
+          user_agent: ((req.headers['user-agent'] as string) ?? '').slice(0, 500) || null,
+          viewed_at: new Date()
+          // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
+        })
+        .returning('id')
       const id = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
 
       return reply.code(201).send({ id })

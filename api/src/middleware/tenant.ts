@@ -21,7 +21,14 @@ export function getMetaDb(): Knex {
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
 // Paths that work without a tenant DB (health check, Inngest, admin provision).
-const TENANT_FREE_PATHS = ['/health', '/api/inngest', '/admin/provision', '/admin/migrate', '/admin/migration-status', '/admin/configure-storage']
+const TENANT_FREE_PATHS = [
+  '/health',
+  '/api/inngest',
+  '/admin/provision',
+  '/admin/migrate',
+  '/admin/migration-status',
+  '/admin/configure-storage'
+]
 
 // ---------------------------------------------------------------------------
 // HTML error pages
@@ -832,7 +839,7 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
       found: true,
       suspended: false,
       provisioning: true,
-      row: { name: row.name as string, slug: row.slug as string },
+      row: { name: row.name as string, slug: row.slug as string }
     }
   }
 
@@ -840,7 +847,7 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
     return {
       found: true,
       suspended: true,
-      row: { name: row.name as string, slug: row.slug as string, status: row.status as string },
+      row: { name: row.name as string, slug: row.slug as string, status: row.status as string }
     }
   }
 
@@ -850,7 +857,7 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
     provisioning: false,
     db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
     slug: row.slug as string,
-    tenantId: row.id as string,
+    tenantId: row.id as string
   }
 }
 
@@ -872,11 +879,12 @@ function wantsHtml(req: FastifyRequest): boolean {
  *  subsequent async operations in this request's lifecycle. */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
   // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
-  const hostname = (req.headers['x-tenant-host'] as string | undefined)
-    ?? (req.headers['x-forwarded-host'] as string | undefined)
-    ?? req.hostname
+  const hostname =
+    (req.headers['x-tenant-host'] as string | undefined) ??
+    (req.headers['x-forwarded-host'] as string | undefined) ??
+    req.hostname
   // Tenant-free paths bypass resolution entirely
-  if (TENANT_FREE_PATHS.some(p => req.url === p || req.url.startsWith(p + '/'))) {
+  if (TENANT_FREE_PATHS.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
   }
 
@@ -912,7 +920,13 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .header('cache-control', 'no-store')
             .send(provisioningPage(row.name))
         } else {
-          reply.code(503).send({ error: 'Workspace is being provisioned', slug: row.slug, status: 'provisioning' })
+          reply
+            .code(503)
+            .send({
+              error: 'Workspace is being provisioned',
+              slug: row.slug,
+              status: 'provisioning'
+            })
         }
         return
       }

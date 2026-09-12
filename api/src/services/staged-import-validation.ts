@@ -194,7 +194,10 @@ export async function validateStagedRows(
 
   // ── Per-row checks (file-derived — these can hard-error) ──────────────────
   const requiredCols = [
-    ...new Set([...(cfg?.required ?? []), ...(declared?.filter((c) => c.required).map((c) => c.name) ?? [])])
+    ...new Set([
+      ...(cfg?.required ?? []),
+      ...(declared?.filter((c) => c.required).map((c) => c.name) ?? [])
+    ])
   ]
   for (const col of requiredCols) {
     if (!headerOf(col)) continue // column absence already reported above
@@ -215,7 +218,8 @@ export async function validateStagedRows(
   const numericCols = [
     ...new Set([
       ...(cfg?.numeric ?? []),
-      ...(declared?.filter((c) => c.type === 'decimal' || c.type === 'int').map((c) => c.name) ?? [])
+      ...(declared?.filter((c) => c.type === 'decimal' || c.type === 'int').map((c) => c.name) ??
+        [])
     ])
   ]
   for (const col of numericCols) {
@@ -307,7 +311,11 @@ async function targetDiff(
   for (const r of scan) {
     const k = fileKey(r)
     if (k.replace(/\u0001/g, '') === '') continue
-    if (!keys.has(k)) keys.set(k, entries.map(([fileCol]) => (valueOf(r, fileCol) ?? '').trim()))
+    if (!keys.has(k))
+      keys.set(
+        k,
+        entries.map(([fileCol]) => (valueOf(r, fileCol) ?? '').trim())
+      )
     if (keys.size >= KEY_CAP) break
   }
   if (keys.size === 0) return
@@ -325,7 +333,13 @@ async function targetDiff(
       .select(entries.map(([, t]) => t))) as Array<Record<string, unknown>>
     for (const row of rows) {
       existing.add(
-        entries.map(([, t]) => String(row[t] ?? '').trim().toLowerCase()).join('\u0001')
+        entries
+          .map(([, t]) =>
+            String(row[t] ?? '')
+              .trim()
+              .toLowerCase()
+          )
+          .join('\u0001')
       )
     }
   }

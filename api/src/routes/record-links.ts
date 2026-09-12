@@ -123,7 +123,10 @@ export async function recordLinkRoutes(app: FastifyInstance) {
       to_collection: tc,
       to_item: ti,
       link_type: linkType,
-      note: String(b.note ?? '').trim().slice(0, 255) || null,
+      note:
+        String(b.note ?? '')
+          .trim()
+          .slice(0, 255) || null,
       created_by: req.user?.id ?? null
     })
     void logActivity({

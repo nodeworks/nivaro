@@ -362,7 +362,8 @@ describe('queueItemMatchesSource — state_mode exclude', () => {
   it('returns false when the item is in an excluded state', async () => {
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
       if (table === 'articles') return makeDbChain({ id: '1' })
-      if (table === 'nivaro_workflow_instances as wi') return makeDbChain({ state_key: 'completed' })
+      if (table === 'nivaro_workflow_instances as wi')
+        return makeDbChain({ state_key: 'completed' })
       throw new Error(`unexpected table: ${table}`)
     })
     const result = await queueItemMatchesSource(

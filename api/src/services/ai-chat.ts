@@ -60,7 +60,11 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         collection: { type: 'string' },
         filter: { type: 'object', description: 'e.g. {"status": {"_eq": "open"}}' },
         sort: { type: 'array', items: { type: 'string' } },
-        fields: { type: 'array', items: { type: 'string' }, description: 'Columns to return — keep small.' },
+        fields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Columns to return — keep small.'
+        },
         limit: { type: 'number', description: `Max ${MAX_ROWS}` }
       },
       required: ['collection']
@@ -90,13 +94,23 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {
         action_type: { type: 'string', enum: ['bulk_update', 'create_record', 'create_dashboard'] },
-        collection: { type: 'string', description: 'bulk_update/create_record target (omit for create_dashboard)' },
-        filter: { type: 'object', description: 'bulk_update: which records (query_items filter shape)' },
-        changes: { type: 'object', description: 'bulk_update: fields to set on every matched record' },
+        collection: {
+          type: 'string',
+          description: 'bulk_update/create_record target (omit for create_dashboard)'
+        },
+        filter: {
+          type: 'object',
+          description: 'bulk_update: which records (query_items filter shape)'
+        },
+        changes: {
+          type: 'object',
+          description: 'bulk_update: fields to set on every matched record'
+        },
         data: { type: 'object', description: 'create_record: fields for the new record' },
         dashboard: {
           type: 'object',
-          description: 'create_dashboard: {name, widgets:[{type,title,collection,field,filters?}]} (max 12 widgets)'
+          description:
+            'create_dashboard: {name, widgets:[{type,title,collection,field,filters?}]} (max 12 widgets)'
         }
       },
       required: ['action_type']
@@ -105,7 +119,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'semantic_search',
     description:
-      'Fuzzy meaning-based search over a collection\'s indexed text (titles, descriptions, notes). Use when exact filters cannot express the question.',
+      "Fuzzy meaning-based search over a collection's indexed text (titles, descriptions, notes). Use when exact filters cannot express the question.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -129,13 +143,19 @@ function assertBusinessCollection(name: unknown): string {
 }
 
 const FILTER_OPS = new Set([
-  '_eq', '_neq', '_gt', '_gte', '_lt', '_lte', '_contains', '_in', '_null', '_nnull'
+  '_eq',
+  '_neq',
+  '_gt',
+  '_gte',
+  '_lt',
+  '_lte',
+  '_contains',
+  '_in',
+  '_null',
+  '_nnull'
 ])
 
-function sanitizeFilter(
-  raw: unknown,
-  validFields: Set<string>
-): Record<string, unknown> {
+function sanitizeFilter(raw: unknown, validFields: Set<string>): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   const out: Record<string, unknown> = {}
   for (const [field, cond] of Object.entries(raw as Record<string, unknown>)) {
@@ -165,16 +185,36 @@ function applyAggFilter(
   for (const [field, cond] of Object.entries(filter)) {
     for (const [op, v] of Object.entries(cond as Record<string, unknown>)) {
       switch (op) {
-        case '_eq': q.where(field, v as never); break
-        case '_neq': q.whereNot(field, v as never); break
-        case '_gt': q.where(field, '>', v as never); break
-        case '_gte': q.where(field, '>=', v as never); break
-        case '_lt': q.where(field, '<', v as never); break
-        case '_lte': q.where(field, '<=', v as never); break
-        case '_contains': q.where(field, 'like', `%${String(v)}%`); break
-        case '_in': if (Array.isArray(v)) q.whereIn(field, v as never[]); break
-        case '_null': q.whereNull(field); break
-        case '_nnull': q.whereNotNull(field); break
+        case '_eq':
+          q.where(field, v as never)
+          break
+        case '_neq':
+          q.whereNot(field, v as never)
+          break
+        case '_gt':
+          q.where(field, '>', v as never)
+          break
+        case '_gte':
+          q.where(field, '>=', v as never)
+          break
+        case '_lt':
+          q.where(field, '<', v as never)
+          break
+        case '_lte':
+          q.where(field, '<=', v as never)
+          break
+        case '_contains':
+          q.where(field, 'like', `%${String(v)}%`)
+          break
+        case '_in':
+          if (Array.isArray(v)) q.whereIn(field, v as never[])
+          break
+        case '_null':
+          q.whereNull(field)
+          break
+        case '_nnull':
+          q.whereNotNull(field)
+          break
       }
     }
   }
@@ -296,9 +336,7 @@ export async function executeChatTool(
             limit
           })
           rows = (res as { data?: unknown[] }).data ?? []
-          const visibleIds = new Set(
-            (rows as Array<{ id?: unknown }>).map((r) => String(r.id))
-          )
+          const visibleIds = new Set((rows as Array<{ id?: unknown }>).map((r) => String(r.id)))
           visibleHits = rawHits.filter((h) => visibleIds.has(String(h.item)))
         } catch (err) {
           if (err instanceof ForbiddenError) throw new Error('No read access')

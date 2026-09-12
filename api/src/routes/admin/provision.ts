@@ -32,13 +32,19 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
 
     try {
       const [completed, pending] = await db.migrate.list()
-      const appliedNames: string[] = completed.map((m: { name?: string; file?: string } | string) =>
-        typeof m === 'string' ? m : (m.name ?? m.file ?? String(m))
+      const appliedNames: string[] = completed.map(
+        (m: { name?: string; file?: string } | string) =>
+          typeof m === 'string' ? m : (m.name ?? m.file ?? String(m))
       )
       const pendingNames: string[] = pending.map((m: { name?: string; file?: string } | string) =>
         typeof m === 'string' ? m : (m.name ?? m.file ?? String(m))
       )
-      return { ok: true, applied: appliedNames, pending: pendingNames, upToDate: pendingNames.length === 0 }
+      return {
+        ok: true,
+        applied: appliedNames,
+        pending: pendingNames,
+        upToDate: pendingNames.length === 0
+      }
     } catch (err: any) {
       app.log.error({ err }, 'Migration status check failed')
       return reply.code(500).send({ error: err.message })
@@ -81,25 +87,27 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
   })
 
-
   app.post('/admin/provision', async (req, reply) => {
     const secret = req.headers['x-provision-secret']
     if (!secret || secret !== process.env.PROVISION_SECRET) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 
-    const { connectionString, dbClient, slug, name, adminEmail, firstName, lastName } = req.body as {
-      connectionString: string
-      dbClient: 'pg' | 'mssql' | 'mysql2'
-      slug: string
-      name: string
-      adminEmail: string
-      firstName?: string
-      lastName?: string
-    }
+    const { connectionString, dbClient, slug, name, adminEmail, firstName, lastName } =
+      req.body as {
+        connectionString: string
+        dbClient: 'pg' | 'mssql' | 'mysql2'
+        slug: string
+        name: string
+        adminEmail: string
+        firstName?: string
+        lastName?: string
+      }
 
     if (!connectionString || !dbClient || !slug || !adminEmail) {
-      return reply.code(400).send({ error: 'connectionString, dbClient, slug, adminEmail required' })
+      return reply
+        .code(400)
+        .send({ error: 'connectionString, dbClient, slug, adminEmail required' })
     }
 
     const db = knex({
@@ -126,7 +134,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         name,
         slug,
         icon: '📦',
-        color: '#00ceff',
+        color: '#00ceff'
       })
 
       await db('nivaro_roles').insert({
@@ -134,7 +142,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         name: 'Administrator',
         admin_access: true,
         app_access: true,
-        workspace: workspaceId,
+        workspace: workspaceId
       })
 
       await db('nivaro_users').insert({
@@ -145,11 +153,13 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         role: roleId,
         status: 'active',
         static_token: staticToken,
-        current_workspace: workspaceId,
+        current_workspace: workspaceId
       })
 
       // Update project_name in settings to the tenant's company name
-      await db('nivaro_settings').update({ project_name: name }).catch(() => {})
+      await db('nivaro_settings')
+        .update({ project_name: name })
+        .catch(() => {})
 
       app.log.info({ slug }, 'Tenant provisioned — migrations and seed complete')
       return { ok: true, userId, workspaceId, staticToken }
@@ -184,7 +194,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       cdnUrl,
       keyPrefix,
       gatewayUrl,
-      provisionSecret,
+      provisionSecret
     } = req.body as {
       connectionString: string
       dbClient: 'pg' | 'mssql' | 'mysql2'
@@ -208,14 +218,16 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     const db = knex({
       client: dbClient,
       connection: connectionString,
-      pool: { min: 1, max: 3 },
+      pool: { min: 1, max: 3 }
     })
 
     try {
       // nivaro_settings is a single-row table. Fetch the row id then update it.
       const settings = await db('nivaro_settings').orderBy('id', 'asc').first('id')
       if (!settings) {
-        return reply.code(500).send({ error: 'nivaro_settings row not found — has the tenant been provisioned?' })
+        return reply
+          .code(500)
+          .send({ error: 'nivaro_settings row not found — has the tenant been provisioned?' })
       }
 
       const patch: Record<string, string | null> = {
@@ -228,7 +240,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         storage_cdn_url: cdnUrl ?? null,
         storage_key_prefix: keyPrefix ?? (slug ? `${slug}/` : null),
         gateway_url: gatewayUrl ?? null,
-        provision_secret: provisionSecret ?? null,
+        provision_secret: provisionSecret ?? null
       }
 
       await db('nivaro_settings').where({ id: settings.id }).update(patch)

@@ -31,7 +31,11 @@ export async function myWorkRoutes(app: FastifyInstance) {
     const userId = String(req.user?.id)
 
     const [ownedResult, tasks, approvalSteps, notifications] = await Promise.all([
-      resolveOwnedByMeSource(userId).catch(() => ({ items: [], matchedCount: 0, truncated: false })),
+      resolveOwnedByMeSource(userId).catch(() => ({
+        items: [],
+        matchedCount: 0,
+        truncated: false
+      })),
       db('nivaro_tasks')
         .where({ assignee: userId, status: 'open' })
         .orderByRaw("CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END")

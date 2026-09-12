@@ -34,9 +34,7 @@ export async function itemActionsRoutes(app: FastifyInstance) {
                 }
               }
               if (!a.applicable) return a
-              const ok = await a
-                .applicable({ collection, itemId: item })
-                .catch(() => true) // broken check must not hide a working action
+              const ok = await a.applicable({ collection, itemId: item }).catch(() => true) // broken check must not hide a working action
               return ok ? a : null
             })
           )

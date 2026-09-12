@@ -186,9 +186,9 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { collections?: string[] } }>(
     '/:id/preview',
     async (req, reply) => {
-      const key = (await db('nivaro_api_keys').where({ id: Number(req.params.id) }).first()) as
-        | Record<string, unknown>
-        | undefined
+      const key = (await db('nivaro_api_keys')
+        .where({ id: Number(req.params.id) })
+        .first()) as Record<string, unknown> | undefined
       if (!key) return reply.code(404).send({ error: 'Key not found' })
       const owner = (await db('nivaro_users').where({ id: key.user }).first()) as
         | Record<string, unknown>
@@ -210,7 +210,11 @@ export async function apiKeysRoutes(app: FastifyInstance) {
       for (const c of wanted) {
         try {
           const res = await readItems(synthetic, String(c), { limit: 1 })
-          out.push({ collection: String(c), visible: Number((res as { total?: number }).total ?? 0), error: null })
+          out.push({
+            collection: String(c),
+            visible: Number((res as { total?: number }).total ?? 0),
+            error: null
+          })
         } catch (err) {
           out.push({
             collection: String(c),

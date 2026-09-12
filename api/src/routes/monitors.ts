@@ -37,7 +37,9 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
 
   /** Recent evaluations for one monitor (latency trend for synthetics). */
   app.get<{ Params: { id: string } }>('/:id/runs', async (req, reply) => {
-    const row = (await db('nivaro_monitors').where('id', req.params.id).first()) as MonitorRow | undefined
+    const row = (await db('nivaro_monitors').where('id', req.params.id).first()) as
+      | MonitorRow
+      | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
     const runs = await db('nivaro_job_runs')
       .where('kind', 'monitor')
@@ -67,7 +69,13 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
-    await logActivity({ action: 'monitor-create', user: req.user?.id, item: String(id), comment: `${b.type}: ${name}`, req })
+    await logActivity({
+      action: 'monitor-create',
+      user: req.user?.id,
+      item: String(id),
+      comment: `${b.type}: ${name}`,
+      req
+    })
     return reply.code(201).send({ data: { id } })
   })
 
@@ -91,7 +99,13 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
     const row = await db('nivaro_monitors').where('id', req.params.id).first('id', 'name')
     if (!row) return reply.code(404).send({ error: 'Not found' })
     await db('nivaro_monitors').where('id', row.id).del()
-    await logActivity({ action: 'monitor-delete', user: req.user?.id, item: String(row.id), comment: String(row.name), req })
+    await logActivity({
+      action: 'monitor-delete',
+      user: req.user?.id,
+      item: String(row.id),
+      comment: String(row.name),
+      req
+    })
     return { data: { deleted: true } }
   })
 
@@ -121,22 +135,41 @@ export async function monitorRoutes(app: FastifyInstance): Promise<void> {
         user: userId,
         created_at: new Date()
       })
-      await logActivity({ action: 'monitor-subscribe', user: req.user?.id, item: String(row.id), comment: `${row.name} → ${userId}`, req })
+      await logActivity({
+        action: 'monitor-subscribe',
+        user: req.user?.id,
+        item: String(row.id),
+        comment: `${row.name} → ${userId}`,
+        req
+      })
     }
     return reply.code(201).send({ data: { subscribed: true } })
   })
 
-  app.delete<{ Params: { id: string; userId: string } }>('/:id/subscribers/:userId', async (req, reply) => {
-    const row = await db('nivaro_monitors').where('id', req.params.id).first('id', 'name')
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    await db('nivaro_monitor_subscribers').where({ monitor_id: row.id, user: req.params.userId }).del()
-    await logActivity({ action: 'monitor-unsubscribe', user: req.user?.id, item: String(row.id), comment: `${row.name} → ${req.params.userId}`, req })
-    return { data: { deleted: true } }
-  })
+  app.delete<{ Params: { id: string; userId: string } }>(
+    '/:id/subscribers/:userId',
+    async (req, reply) => {
+      const row = await db('nivaro_monitors').where('id', req.params.id).first('id', 'name')
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      await db('nivaro_monitor_subscribers')
+        .where({ monitor_id: row.id, user: req.params.userId })
+        .del()
+      await logActivity({
+        action: 'monitor-unsubscribe',
+        user: req.user?.id,
+        item: String(row.id),
+        comment: `${row.name} → ${req.params.userId}`,
+        req
+      })
+      return { data: { deleted: true } }
+    }
+  )
 
   /** Evaluate now — the create-form's "test this" and the row's refresh. */
   app.post<{ Params: { id: string } }>('/:id/check', async (req, reply) => {
-    const row = (await db('nivaro_monitors').where('id', req.params.id).first()) as MonitorRow | undefined
+    const row = (await db('nivaro_monitors').where('id', req.params.id).first()) as
+      | MonitorRow
+      | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
     const result = await evaluateMonitor(row, app)
     return { data: result }

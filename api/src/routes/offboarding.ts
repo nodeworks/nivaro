@@ -26,39 +26,49 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
   app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
-    const user = await db('nivaro_users').where({ id: req.params.id }).first('id', 'first_name', 'last_name', 'email', 'status')
+    const user = await db('nivaro_users')
+      .where({ id: req.params.id })
+      .first('id', 'first_name', 'last_name', 'email', 'status')
     if (!user) return reply.code(404).send({ error: 'User not found' })
     const uid = String(user.id)
-    const [claims, instanceOwners, openTasks, ownerGroups, delegatesToThem, managerOf, subscriptions, fieldWatches] =
-      await Promise.all([
-        count('nivaro_queue_claims', { claimed_by: uid }),
-        // Only OPEN instances matter — completed records need no owner.
-        db('nivaro_pipeline_instance_owners as o')
-          .join('nivaro_workflow_instances as i', 'i.id', 'o.instance')
-          .where('o.user', uid)
-          .whereNull('i.completed_at')
-          .count({ c: '*' })
-          .first()
-          .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
-          .catch(() => 0),
-        db('nivaro_tasks')
-          .where({ assignee: uid })
-          .whereNot('status', 'done')
-          .count({ c: '*' })
-          .first()
-          .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
-          .catch(() => 0),
-        count('nivaro_pipeline_owner_group_users', { user: uid }),
-        count('nivaro_users', { delegate_id: uid }),
-        count('nivaro_users', { manager_id: uid }),
-        db('nivaro_notification_subscriptions')
-          .where({ user: uid, is_active: true })
-          .count({ c: '*' })
-          .first()
-          .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
-          .catch(() => 0),
-        count('nivaro_field_watch_subscribers', { user: uid })
-      ])
+    const [
+      claims,
+      instanceOwners,
+      openTasks,
+      ownerGroups,
+      delegatesToThem,
+      managerOf,
+      subscriptions,
+      fieldWatches
+    ] = await Promise.all([
+      count('nivaro_queue_claims', { claimed_by: uid }),
+      // Only OPEN instances matter — completed records need no owner.
+      db('nivaro_pipeline_instance_owners as o')
+        .join('nivaro_workflow_instances as i', 'i.id', 'o.instance')
+        .where('o.user', uid)
+        .whereNull('i.completed_at')
+        .count({ c: '*' })
+        .first()
+        .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
+        .catch(() => 0),
+      db('nivaro_tasks')
+        .where({ assignee: uid })
+        .whereNot('status', 'done')
+        .count({ c: '*' })
+        .first()
+        .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
+        .catch(() => 0),
+      count('nivaro_pipeline_owner_group_users', { user: uid }),
+      count('nivaro_users', { delegate_id: uid }),
+      count('nivaro_users', { manager_id: uid }),
+      db('nivaro_notification_subscriptions')
+        .where({ user: uid, is_active: true })
+        .count({ c: '*' })
+        .first()
+        .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))
+        .catch(() => 0),
+      count('nivaro_field_watch_subscribers', { user: uid })
+    ])
     return {
       data: {
         user: {
@@ -86,15 +96,23 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       include?: Record<string, boolean>
       suspend?: boolean
     }
-    const departing = await db('nivaro_users').where({ id: req.params.id }).first('id', 'first_name', 'last_name', 'email')
+    const departing = await db('nivaro_users')
+      .where({ id: req.params.id })
+      .first('id', 'first_name', 'last_name', 'email')
     if (!departing) return reply.code(404).send({ error: 'User not found' })
     const successor = b.successor
-      ? await db('nivaro_users').where({ id: b.successor }).first('id', 'first_name', 'last_name', 'email', 'status')
+      ? await db('nivaro_users')
+          .where({ id: b.successor })
+          .first('id', 'first_name', 'last_name', 'email', 'status')
       : null
     const inc = b.include ?? {}
-    const needsSuccessor = ['queue_claims', 'instance_ownerships', 'open_tasks', 'owner_group_memberships', 'delegates'].some(
-      (k) => inc[k] !== false
-    )
+    const needsSuccessor = [
+      'queue_claims',
+      'instance_ownerships',
+      'open_tasks',
+      'owner_group_memberships',
+      'delegates'
+    ].some((k) => inc[k] !== false)
     if (needsSuccessor && !successor) {
       return reply.code(400).send({ error: 'A successor is required for the selected categories' })
     }
@@ -126,7 +144,10 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       const successorOwned = new Set(
         (
           (await db('nivaro_pipeline_instance_owners')
-            .whereIn('instance', rows.map((r) => r.instance))
+            .whereIn(
+              'instance',
+              rows.map((r) => r.instance)
+            )
             .where('user', sid)
             .select('instance')) as Array<{ instance: string }>
         ).map((r) => String(r.instance))
@@ -209,7 +230,11 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
     // Their own delegation window is moot once offboarded.
     await db('nivaro_users')
       .where({ id: uid })
-      .update({ delegate_id: null, is_out_of_office: false, ...(b.suspend ? { status: 'suspended' } : {}) })
+      .update({
+        delegate_id: null,
+        is_out_of_office: false,
+        ...(b.suspend ? { status: 'suspended' } : {})
+      })
       .catch(() => {})
     if (b.suspend) result.suspended = 1
 
@@ -218,9 +243,12 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       user: req.user?.id,
       collection: 'nivaro_users',
       item: uid,
-      comment: `→ ${successor ? `${successor.first_name ?? ''} ${successor.last_name ?? ''}`.trim() || successor.email : 'no successor'}: ${Object.entries(result)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(', ')}`.slice(0, 300),
+      comment:
+        `→ ${successor ? `${successor.first_name ?? ''} ${successor.last_name ?? ''}`.trim() || successor.email : 'no successor'}: ${Object.entries(
+          result
+        )
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ')}`.slice(0, 300),
       req
     })
     return { data: result }
@@ -237,10 +265,14 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string } }>('/:id/merge', async (req, reply) => {
     const b = req.body as { into?: string; dry_run?: boolean }
-    const twin = await db('nivaro_users').where({ id: req.params.id }).first('id', 'first_name', 'last_name', 'email')
+    const twin = await db('nivaro_users')
+      .where({ id: req.params.id })
+      .first('id', 'first_name', 'last_name', 'email')
     if (!twin) return reply.code(404).send({ error: 'User not found' })
     if (!b.into) return reply.code(400).send({ error: 'into (survivor user id) is required' })
-    const survivor = await db('nivaro_users').where({ id: b.into }).first('id', 'first_name', 'last_name', 'email')
+    const survivor = await db('nivaro_users')
+      .where({ id: b.into })
+      .first('id', 'first_name', 'last_name', 'email')
     if (!survivor) return reply.code(404).send({ error: 'Survivor user not found' })
     if (String(survivor.id).toUpperCase() === String(twin.id).toUpperCase()) {
       return reply.code(400).send({ error: 'Cannot merge a user into itself' })
@@ -258,9 +290,24 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       WHERE fk.referenced_object_id = OBJECT_ID('nivaro_users')
     `)) as Array<{ table_name: string; column_name: string }>
     const USERISH = [
-      'user', 'user_created', 'user_updated', 'creator', 'created_by', 'owner', 'assignee',
-      'recipient', 'sender', 'claimed_by', 'approved_by', 'placed_by', 'released_by',
-      'triggered_by', 'added_by', 'imported_by', 'user_id', 'escalation_user'
+      'user',
+      'user_created',
+      'user_updated',
+      'creator',
+      'created_by',
+      'owner',
+      'assignee',
+      'recipient',
+      'sender',
+      'claimed_by',
+      'approved_by',
+      'placed_by',
+      'released_by',
+      'triggered_by',
+      'added_by',
+      'imported_by',
+      'user_id',
+      'escalation_user'
     ]
     const namedCols = (await db('information_schema.columns')
       .whereIn('column_name', USERISH)
@@ -271,7 +318,11 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
     for (const r of [...fkCols, ...namedCols]) {
       const table = String(r.table_name)
       if (SKIP_TABLES.has(table.toLowerCase())) continue
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(r.column_name))) continue
+      if (
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) ||
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(r.column_name))
+      )
+        continue
       targets.set(`${table}.${r.column_name}`, { table, column: String(r.column_name) })
     }
 
@@ -312,7 +363,11 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       user: req.user?.id,
       collection: 'nivaro_users',
       item: String(survivor.id),
-      comment: `Merged ${twin.email} into ${survivor.email}: ${Object.keys(applied).length} table(s) repointed`.slice(0, 300),
+      comment:
+        `Merged ${twin.email} into ${survivor.email}: ${Object.keys(applied).length} table(s) repointed`.slice(
+          0,
+          300
+        ),
       req
     })
     return { data: { merged: true, applied } }

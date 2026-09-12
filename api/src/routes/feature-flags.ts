@@ -61,7 +61,9 @@ export async function featureFlagRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/feature-flags', { preHandler: requireAdmin }, async () => {
     const rows = (await db('nivaro_feature_flags').orderBy('key')) as FlagRow[]
-    return { data: rows.map((r) => ({ ...r, role_ids: (parseJson(r.role_ids) as string[] | null) ?? [] })) }
+    return {
+      data: rows.map((r) => ({ ...r, role_ids: (parseJson(r.role_ids) as string[] | null) ?? [] }))
+    }
   })
 
   app.post<{ Body: Partial<FlagRow> & { role_ids?: string[] } }>(
@@ -120,9 +122,9 @@ export async function featureFlagRoutes(app: FastifyInstance): Promise<void> {
     '/feature-flags/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const row = (await db('nivaro_feature_flags').where('id', Number(req.params.id)).first('key')) as
-        | { key: string }
-        | undefined
+      const row = (await db('nivaro_feature_flags')
+        .where('id', Number(req.params.id))
+        .first('key')) as { key: string } | undefined
       const n = await db('nivaro_feature_flags').where('id', Number(req.params.id)).del()
       if (!n) return reply.code(404).send({ error: 'Flag not found' })
       bust()

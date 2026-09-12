@@ -200,9 +200,9 @@ export async function promotionRoutes(app: FastifyInstance) {
           continue
         }
         try {
-          const cur = (await db(name).where({ id: row.id as string | number }).first()) as
-            | Record<string, unknown>
-            | undefined
+          const cur = (await db(name)
+            .where({ id: row.id as string | number })
+            .first()) as Record<string, unknown> | undefined
           if (cur) {
             if (!rowChanged(row, cur)) {
               stats.skipped++
@@ -213,7 +213,9 @@ export async function promotionRoutes(app: FastifyInstance) {
                 .filter((k) => k !== 'id')
                 .map((k) => [k, row[k]])
             )
-            await db(name).where({ id: row.id as string | number }).update(safePatch)
+            await db(name)
+              .where({ id: row.id as string | number })
+              .update(safePatch)
             stats.updated++
           } else {
             const cols = safeCols(row)

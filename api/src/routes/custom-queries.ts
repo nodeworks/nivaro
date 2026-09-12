@@ -1,13 +1,17 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { buildFinalParams, execCustomQuerySql, explainSqlPlan, type ParamDef, type ParamType } from '../services/custom-query-exec.js'
+import {
+  buildFinalParams,
+  execCustomQuerySql,
+  explainSqlPlan,
+  type ParamDef,
+  type ParamType
+} from '../services/custom-query-exec.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-
 
 interface CustomQueryRow {
   id: number
@@ -58,7 +62,6 @@ function serialize(row: CustomQueryRow) {
   }
 }
 
-
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 /** Delete every cached result for a slug (cq:<slug>:*) via SCAN. */
@@ -94,9 +97,7 @@ async function applyScopeParams(
   const declared = parseJson<Record<string, ScopeParamDef>>(scopeParamsRaw)
   if (!declared || typeof declared !== 'object') return
 
-  const entries = Object.entries(declared).filter(
-    ([, d]) => d && typeof d.dimension === 'string'
-  )
+  const entries = Object.entries(declared).filter(([, d]) => d && typeof d.dimension === 'string')
   if (entries.length === 0) return
 
   const [scopes, dimensions] = await Promise.all([getUserScopes(userId), listScopeDimensions()])
@@ -140,7 +141,13 @@ async function applyScopeParams(
 }
 
 export async function bustCustomQueryCache(
-  redis: { scanStream(o: { match: string; count: number }): NodeJS.ReadableStream; del(...k: string[]): Promise<number> } | null | undefined,
+  redis:
+    | {
+        scanStream(o: { match: string; count: number }): NodeJS.ReadableStream
+        del(...k: string[]): Promise<number>
+      }
+    | null
+    | undefined,
   slug: string
 ): Promise<number> {
   if (!redis) return 0
@@ -400,7 +407,9 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         const index = obj ? attr(obj[1], 'Index') : null
         ops.push({
           op: attr(attrs, 'PhysicalOp') ?? 'Unknown',
-          object: table ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}` : null,
+          object: table
+            ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}`
+            : null,
           est_rows: Math.round(Number(attr(attrs, 'EstimateRows') ?? 0)),
           cost: Number(attr(attrs, 'EstimatedTotalSubtreeCost') ?? 0)
         })
@@ -482,11 +491,15 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { id } = req.params
-      const query = await db('nivaro_custom_queries').where({ id: Number(id) }).first('id')
+      const query = await db('nivaro_custom_queries')
+        .where({ id: Number(id) })
+        .first('id')
       if (!query) return reply.code(404).send({ error: 'Not found' })
       const { randomBytes } = await import('node:crypto')
       const token = randomBytes(24).toString('hex')
-      await db('nivaro_custom_queries').where({ id: Number(id) }).update({ public_token: token })
+      await db('nivaro_custom_queries')
+        .where({ id: Number(id) })
+        .update({ public_token: token })
       await logActivity({
         action: 'custom-query-publish',
         user: req.user?.id,
@@ -503,7 +516,9 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { id } = req.params
-      await db('nivaro_custom_queries').where({ id: Number(id) }).update({ public_token: null })
+      await db('nivaro_custom_queries')
+        .where({ id: Number(id) })
+        .update({ public_token: null })
       await logActivity({
         action: 'custom-query-unpublish',
         user: req.user?.id,
@@ -540,9 +555,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       const rows = await runCustomQueryBySlug(query.slug, finalParams)
       return reply.send({ data: rows })
     } catch (err) {
-      return reply
-        .code(422)
-        .send({ error: err instanceof Error ? err.message : 'Query failed' })
+      return reply.code(422).send({ error: err instanceof Error ? err.message : 'Query failed' })
     }
   })
 
@@ -633,18 +646,13 @@ export async function customQueriesRoutes(app: FastifyInstance) {
 
       // Dashboards and page widgets re-execute on every refresh; one row per
       // (query, viewer) per 5 minutes keeps the access trail without the flood.
-      await logActivityThrottled(
-        app.redis,
-        `cq:${query.id}:${req.user?.id ?? 'anon'}`,
-        300,
-        {
-          action: 'run',
-          collection: 'nivaro_custom_queries',
-          item: String(query.id),
-          user: req.user?.id,
-          req
-        }
-      )
+      await logActivityThrottled(app.redis, `cq:${query.id}:${req.user?.id ?? 'anon'}`, 300, {
+        action: 'run',
+        collection: 'nivaro_custom_queries',
+        item: String(query.id),
+        user: req.user?.id,
+        req
+      })
       return { data: rows, cached: false, executed_at: new Date().toISOString() }
     }
   )

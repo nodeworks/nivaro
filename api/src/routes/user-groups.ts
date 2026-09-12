@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { resolveStateOwnersBatch, type OwnerResolutionRequest } from '../services/pipeline-engine.js'
+import {
+  resolveStateOwnersBatch,
+  type OwnerResolutionRequest
+} from '../services/pipeline-engine.js'
 import { computeStatusBatch } from './sla.js'
 import { getLabels } from '../services/queues.js'
 import { listUsers } from '../services/users.js'
@@ -21,11 +24,13 @@ function parseJson(val: unknown): unknown {
 async function loadTeamScopes(teamIds: number[]): Promise<Map<number, Record<string, unknown[]>>> {
   const out = new Map<number, Record<string, unknown[]>>()
   if (teamIds.length === 0) return out
-  const rows = (await db('nivaro_team_scopes').whereIn('team_id', teamIds).select(
-    'team_id',
-    'dimension',
-    'values'
-  )) as Array<{ team_id: number; dimension: string; values: string }>
+  const rows = (await db('nivaro_team_scopes')
+    .whereIn('team_id', teamIds)
+    .select('team_id', 'dimension', 'values')) as Array<{
+    team_id: number
+    dimension: string
+    values: string
+  }>
   for (const r of rows) {
     const vals = parseJson(r.values)
     if (!Array.isArray(vals) || vals.length === 0) continue
@@ -166,12 +171,11 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       }
 
       const dimLabels = new Map(
-        ((await db('nivaro_scope_dimensions')
-          .whereIn('name', scopedDims)
-          .select('name', 'label')) as Array<{ name: string; label: string }>).map((d) => [
-          d.name,
-          d.label
-        ])
+        (
+          (await db('nivaro_scope_dimensions')
+            .whereIn('name', scopedDims)
+            .select('name', 'label')) as Array<{ name: string; label: string }>
+        ).map((d) => [d.name, d.label])
       )
       const restrictRows = (await db('nivaro_user_scopes')
         .whereIn(
@@ -470,15 +474,24 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       // Legacy owner groups key filters POSITIONALLY, current ones by dimension
       // id — the two collide, so the dims table alone mislabels. Infer the
       // dimension from the VALUE domain first; the table is the fallback.
-      const dimRows = (await db('nivaro_pipeline_owner_dimensions').select('id', 'label')) as Array<{
+      const dimRows = (await db('nivaro_pipeline_owner_dimensions').select(
+        'id',
+        'label'
+      )) as Array<{
         id: number
         label: string
       }>
       const dimLabel = new Map(dimRows.map((d) => [String(d.id), d.label]))
       const [zoneNames, regionNames, ptNames] = await Promise.all([
-        db('divisions').pluck('short_name').catch(() => [] as string[]),
-        db('regions').pluck('short_name').catch(() => [] as string[]),
-        db('project_types').pluck('name').catch(() => [] as string[])
+        db('divisions')
+          .pluck('short_name')
+          .catch(() => [] as string[]),
+        db('regions')
+          .pluck('short_name')
+          .catch(() => [] as string[]),
+        db('project_types')
+          .pluck('name')
+          .catch(() => [] as string[])
       ])
       const zoneSet = new Set((zoneNames as string[]).map(String))
       const regionSet = new Set((regionNames as string[]).map(String))
@@ -490,7 +503,11 @@ export async function userGroupsRoutes(app: FastifyInstance) {
         if (frac(zoneSet) >= 0.8) return 'Zone'
         if (frac(regionSet) >= 0.8) return 'Region'
         if (frac(ptSet) >= 0.8) return 'Project Type'
-        if (arr.filter((v) => /^\d{5,7}$/.test(v) || /^[A-Z0-9 _-]*\d[A-Z0-9 _-]*$/.test(v)).length / arr.length >= 0.8)
+        if (
+          arr.filter((v) => /^\d{5,7}$/.test(v) || /^[A-Z0-9 _-]*\d[A-Z0-9 _-]*$/.test(v)).length /
+            arr.length >=
+          0.8
+        )
           return 'Project'
         return null
       }
@@ -573,12 +590,7 @@ export async function userGroupsRoutes(app: FastifyInstance) {
           .leftJoin('nivaro_workflow_states as st', 'st.id', 'h.to_state')
           .whereIn('h.user', rosterIds)
           .where('h.timestamp', '>', since90)
-          .select(
-            'h.user',
-            'h.timestamp',
-            'sf.sort as from_sort',
-            'st.sort as to_sort'
-          )) as Array<{
+          .select('h.user', 'h.timestamp', 'sf.sort as from_sort', 'st.sort as to_sort')) as Array<{
           user: string
           timestamp: Date | string
           from_sort: number | null
@@ -594,11 +606,7 @@ export async function userGroupsRoutes(app: FastifyInstance) {
             const uid = String(h.user).toUpperCase()
             perMember[uid] ??= { actions_30d: 0, last_action_at: null }
             perMember[uid].actions_30d += 1
-            if (
-              h.from_sort != null &&
-              h.to_sort != null &&
-              h.to_sort < h.from_sort
-            )
+            if (h.from_sort != null && h.to_sort != null && h.to_sort < h.from_sort)
               sendbacks30 += 1
           }
           // Week bucket (Monday-start, UTC)
@@ -659,9 +667,9 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       const team = await db('nivaro_user_groups').where({ id }).first()
       if (!team) return reply.code(404).send({ error: 'Team not found' })
       const rosterIds = new Set(
-        ((await db('nivaro_user_group_members').where('group_id', id).pluck('user')) as string[]).map(
-          (u) => String(u).toUpperCase()
-        )
+        (
+          (await db('nivaro_user_group_members').where('group_id', id).pluck('user')) as string[]
+        ).map((u) => String(u).toUpperCase())
       )
       if (rosterIds.size === 0)
         return reply.send({ data: { total: 0, by_state: [], members: [], records: [] } })
@@ -728,8 +736,8 @@ export async function userGroupsRoutes(app: FastifyInstance) {
           item: String(i.item),
           state_id: String(i.current_state).toUpperCase(),
           started_at: i.started_at ? new Date(i.started_at).toISOString() : null,
-          owners: teamOwners.map((o) =>
-            `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
+          owners: teamOwners.map(
+            (o) => `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
           )
         })
       }
@@ -745,7 +753,10 @@ export async function userGroupsRoutes(app: FastifyInstance) {
         try {
           const sla = await computeStatusBatch(collection, ids)
           for (const [itemId, entry] of Object.entries(sla)) {
-            slaByKey.set(`${collection}:${itemId}`, (entry as { status?: string | null })?.status ?? null)
+            slaByKey.set(
+              `${collection}:${itemId}`,
+              (entry as { status?: string | null })?.status ?? null
+            )
           }
         } catch {
           /* SLA optional — a failing rule must not take the workload down */
@@ -754,7 +765,13 @@ export async function userGroupsRoutes(app: FastifyInstance) {
 
       const byState = new Map<
         string,
-        { state_label: string; template_name: string; count: number; sla_warning: number; sla_breached: number }
+        {
+          state_label: string
+          template_name: string
+          count: number
+          sla_warning: number
+          sla_breached: number
+        }
       >()
       for (const k of kept) {
         const meta = stateById.get(k.state_id)
@@ -777,7 +794,9 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       }
 
       // Labels for the record list (oldest waiting first — those need eyes)
-      const list = [...kept].sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? '')).slice(0, 25)
+      const list = [...kept]
+        .sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? ''))
+        .slice(0, 25)
       const labelReq = new Map<string, Set<string>>()
       for (const k of list) {
         if (!labelReq.has(k.collection)) labelReq.set(k.collection, new Set())
@@ -791,10 +810,7 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       }
 
       const memberNames = (await db('nivaro_users')
-        .whereIn(
-          'id',
-          [...memberCounts.keys()]
-        )
+        .whereIn('id', [...memberCounts.keys()])
         .select('id', 'first_name', 'last_name')) as Array<{
         id: string
         first_name: string | null

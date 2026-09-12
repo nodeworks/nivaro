@@ -10,10 +10,7 @@ import { notifyUser } from './notification-channels.js'
  * (the delegate may be mid-way through them); reassignment is visible on each
  * task and in the activity log.
  */
-export async function delegateOpenTasks(
-  userId: string,
-  app?: FastifyInstance
-): Promise<number> {
+export async function delegateOpenTasks(userId: string, app?: FastifyInstance): Promise<number> {
   try {
     const user = (await db('nivaro_users')
       .where({ id: userId })
@@ -26,16 +23,18 @@ export async function delegateOpenTasks(
         }
       | undefined
     if (!user?.delegate_id) return 0
-    if (
-      user.delegate_expires_at &&
-      new Date(user.delegate_expires_at).getTime() < Date.now()
-    )
+    if (user.delegate_expires_at && new Date(user.delegate_expires_at).getTime() < Date.now())
       return 0
     // The delegate must themselves be able to act.
     const delegate = (await db('nivaro_users')
       .where({ id: user.delegate_id })
       .first('id', 'status', 'is_out_of_office', 'is_redacted')) as
-      | { id: string; status: string | null; is_out_of_office: boolean | number; is_redacted: boolean | number }
+      | {
+          id: string
+          status: string | null
+          is_out_of_office: boolean | number
+          is_redacted: boolean | number
+        }
       | undefined
     if (!delegate || delegate.status === 'suspended' || delegate.is_redacted) return 0
     if (delegate.is_out_of_office) return 0

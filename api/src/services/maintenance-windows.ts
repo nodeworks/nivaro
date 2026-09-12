@@ -22,7 +22,11 @@ export async function runSmokeCheck(app: FastifyInstance): Promise<SmokeResult> 
       const detail = await fn()
       checks.push({ name, ok: true, ...(detail ? { detail } : {}) })
     } catch (err) {
-      checks.push({ name, ok: false, detail: err instanceof Error ? err.message.slice(0, 200) : String(err) })
+      checks.push({
+        name,
+        ok: false,
+        detail: err instanceof Error ? err.message.slice(0, 200) : String(err)
+      })
     }
   }
   await add('database', async () => {
@@ -64,11 +68,14 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
       .first('id')
       .then((row) =>
         row
-          ? db('nivaro_settings').where({ id: row.id }).update({
-              maintenance_mode: 1,
-              maintenance_message:
-                w.message ?? `Scheduled maintenance (${w.title}) — changes are temporarily disabled.`
-            })
+          ? db('nivaro_settings')
+              .where({ id: row.id })
+              .update({
+                maintenance_mode: 1,
+                maintenance_message:
+                  w.message ??
+                  `Scheduled maintenance (${w.title}) — changes are temporarily disabled.`
+              })
           : null
       )
     await db('nivaro_maintenance_windows')
@@ -80,15 +87,17 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
 
   const expired = (await db('nivaro_maintenance_windows')
     .where('status', 'active')
-    .where('ends_at', '<=', now)) as Array<{ id: number; title: string; send_all_clear: boolean | number }>
+    .where('ends_at', '<=', now)) as Array<{
+    id: number
+    title: string
+    send_all_clear: boolean | number
+  }>
   for (const w of expired) {
     await db('nivaro_settings')
       .orderBy('id', 'asc')
       .first('id')
       .then((row) =>
-        row
-          ? db('nivaro_settings').where({ id: row.id }).update({ maintenance_mode: 0 })
-          : null
+        row ? db('nivaro_settings').where({ id: row.id }).update({ maintenance_mode: 0 }) : null
       )
     bustMaintenanceCache()
     await db('nivaro_maintenance_windows')
@@ -102,7 +111,10 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
         source: 'server',
         route: 'maintenance-window',
         severity: 'high',
-        message: `Maintenance window "${w.title}" ended but the smoke check FAILED: ${smoke.checks.filter((c) => !c.ok).map((c) => `${c.name} (${c.detail})`).join(', ')} — no all-clear was sent`
+        message: `Maintenance window "${w.title}" ended but the smoke check FAILED: ${smoke.checks
+          .filter((c) => !c.ok)
+          .map((c) => `${c.name} (${c.detail})`)
+          .join(', ')} — no all-clear was sent`
       })
       continue
     }
@@ -117,7 +129,9 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
           is_active: 0,
           created_at: now
         })
-        const row = (await db('nivaro_announcements').orderBy('id', 'desc').first('id')) as { id: number }
+        const row = (await db('nivaro_announcements').orderBy('id', 'desc').first('id')) as {
+          id: number
+        }
         const { deliverAnnouncement } = await import('../routes/announcements.js')
         await deliverAnnouncement(app, row.id)
       } catch (err) {
@@ -132,7 +146,14 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
  *  one this Redis saw, run the smoke suite once and record a verdict. */
 export async function postDeploySmoke(app: FastifyInstance): Promise<void> {
   try {
-    const redis = (app as unknown as { redis?: { get: (k: string) => Promise<string | null>; set: (k: string, v: string) => Promise<unknown> } }).redis
+    const redis = (
+      app as unknown as {
+        redis?: {
+          get: (k: string) => Promise<string | null>
+          set: (k: string, v: string) => Promise<unknown>
+        }
+      }
+    ).redis
     if (!redis) return
     const prev = await redis.get('nvr:last-version')
     if (prev === NIVARO_VERSION) return
@@ -140,14 +161,19 @@ export async function postDeploySmoke(app: FastifyInstance): Promise<void> {
     if (!prev) return // first ever boot — nothing to compare against
     const smoke = await runSmokeCheck(app)
     if (smoke.ok) {
-      app.log.info(`Post-deploy smoke PASSED on ${prev} → ${NIVARO_VERSION} (${smoke.checks.length} checks)`)
+      app.log.info(
+        `Post-deploy smoke PASSED on ${prev} → ${NIVARO_VERSION} (${smoke.checks.length} checks)`
+      )
     } else {
       const { trackError } = await import('./error-tracking.js')
       await trackError({
         source: 'server',
         route: 'post-deploy-smoke',
         severity: 'critical',
-        message: `Deploy ${prev} → ${NIVARO_VERSION}: smoke check FAILED — ${smoke.checks.filter((c) => !c.ok).map((c) => `${c.name} (${c.detail})`).join(', ')}`
+        message: `Deploy ${prev} → ${NIVARO_VERSION}: smoke check FAILED — ${smoke.checks
+          .filter((c) => !c.ok)
+          .map((c) => `${c.name} (${c.detail})`)
+          .join(', ')}`
       })
     }
   } catch {

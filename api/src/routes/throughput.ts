@@ -135,7 +135,13 @@ export async function throughputRoutes(app: FastifyInstance) {
       String(r.comment).slice(0, 300)
     )
     if (comments.length < 5) {
-      return { data: { themes: [], sample_size: comments.length, note: 'Not enough send-back comments to cluster.' } }
+      return {
+        data: {
+          themes: [],
+          sample_size: comments.length,
+          note: 'Not enough send-back comments to cluster.'
+        }
+      }
     }
     const client = await getAiClient()
     if (!client) return reply.code(503).send({ error: 'AI is not configured' })
@@ -156,7 +162,7 @@ export async function throughputRoutes(app: FastifyInstance) {
     let themes: unknown = []
     try {
       const m = text.match(/\{[\s\S]*\}/)
-      themes = m ? (JSON.parse(m[0]) as { themes?: unknown }).themes ?? [] : []
+      themes = m ? ((JSON.parse(m[0]) as { themes?: unknown }).themes ?? []) : []
     } catch {
       themes = []
     }

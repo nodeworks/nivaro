@@ -80,7 +80,12 @@ const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 // In cloud mode DB_HOST is empty so we must not create a real pool (it crashes).
 // The Proxy below always prefers getTenantDb() in cloud mode, so _staticDb is never queried.
 export const _staticDb = process.env.CLOUD_META_DB_URL
-  ? knex({ client: 'pg', connection: { host: 'localhost', database: 'unused' }, pool: { min: 0, max: 0 }, migrations: { migrationSource, tableName: 'nivaro_migrations' } })
+  ? knex({
+      client: 'pg',
+      connection: { host: 'localhost', database: 'unused' },
+      pool: { min: 0, max: 0 },
+      migrations: { migrationSource, tableName: 'nivaro_migrations' }
+    })
   : knex({
       client: config.DB_CLIENT,
       connection: buildConnection(config.DB_HOST, writePort),
@@ -114,7 +119,9 @@ function silentQueryBuilder(): any {
       if (prop === 'finally') return resolved.finally.bind(resolved)
       return (..._args: unknown[]) => new Proxy({}, handler)
     },
-    apply() { return new Proxy({}, handler) }
+    apply() {
+      return new Proxy({}, handler)
+    }
   }
   return new Proxy({}, handler)
 }
@@ -137,9 +144,18 @@ export const db = new Proxy(_staticDb as any, {
       if (prop === 'destroy') return () => Promise.resolve()
       if (prop === 'raw') return () => silentQueryBuilder()
       if (prop === 'schema') return silentQueryBuilder()
-      if (prop === 'transaction') return (fn: (trx: any) => any) => fn(new Proxy({}, {
-        get(_, p) { return (..._a: unknown[]) => silentQueryBuilder() }
-      }))
+      if (prop === 'transaction')
+        return (fn: (trx: any) => any) =>
+          fn(
+            new Proxy(
+              {},
+              {
+                get(_, p) {
+                  return (..._a: unknown[]) => silentQueryBuilder()
+                }
+              }
+            )
+          )
       return (..._args: unknown[]) => silentQueryBuilder()
     }
     const value = (d as any)[prop]

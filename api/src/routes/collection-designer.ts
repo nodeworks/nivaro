@@ -164,9 +164,9 @@ async function detectRelationEvidence(
   rows: unknown[][]
 ): Promise<RelationEvidence[]> {
   const collections = (
-    (await db('nivaro_collections').whereNot('collection', 'like', 'nivaro_%').pluck(
-      'collection'
-    )) as string[]
+    (await db('nivaro_collections')
+      .whereNot('collection', 'like', 'nivaro_%')
+      .pluck('collection')) as string[]
   ).map((c) => c.toLowerCase())
   const collSet = new Set(collections)
   const out: RelationEvidence[] = []
@@ -188,7 +188,9 @@ async function detectRelationEvidence(
     // distinct sample values from the sheet column
     const vals = new Set<string>()
     for (const row of rows.slice(1, 801)) {
-      const v = String(row?.[i] ?? '').trim().toLowerCase()
+      const v = String(row?.[i] ?? '')
+        .trim()
+        .toLowerCase()
       if (v && vals.size < 25) vals.add(v)
     }
     if (vals.size < 1) continue
@@ -202,7 +204,9 @@ async function detectRelationEvidence(
           if (!lower.includes(mf)) continue
           const targetVals = new Set(
             ((await db(cand).limit(20000).pluck(mf)) as unknown[]).map((v) =>
-              String(v ?? '').trim().toLowerCase()
+              String(v ?? '')
+                .trim()
+                .toLowerCase()
             )
           )
           let matched = 0
@@ -350,7 +354,11 @@ async function schemaContext(hint: string): Promise<string> {
   const hay = hint.toLowerCase()
   const wanted = collections.filter((c) => {
     const base = c.toLowerCase()
-    return hay.includes(base) || hay.includes(base.replace(/s$/, '')) || hay.includes(base.replace(/_/g, ' '))
+    return (
+      hay.includes(base) ||
+      hay.includes(base.replace(/s$/, '')) ||
+      hay.includes(base.replace(/_/g, ' '))
+    )
   })
   const blocks: string[] = []
   for (const t of wanted.slice(0, 10)) {
@@ -439,7 +447,8 @@ export async function collectionDesignerRoutes(app: FastifyInstance) {
         row_count: Math.max(0, rows.length - 1)
       })
     }
-    if (!inventory.length) return reply.code(400).send({ error: 'No usable sheets found in the file' })
+    if (!inventory.length)
+      return reply.code(400).send({ error: 'No usable sheets found in the file' })
     sweepCache()
     const token = randomUUID()
     fileCache.set(token, { name: file.filename, sheets, ts: Date.now() })
@@ -474,9 +483,7 @@ export async function collectionDesignerRoutes(app: FastifyInstance) {
     } else if (b.file_token) {
       const cached = fileCache.get(b.file_token)
       if (!cached) {
-        return reply
-          .code(410)
-          .send({ error: 'The uploaded file has expired — upload it again' })
+        return reply.code(410).send({ error: 'The uploaded file has expired — upload it again' })
       }
       const sheetName = b.sheet && cached.sheets[b.sheet] ? b.sheet : Object.keys(cached.sheets)[0]
       const rows = cached.sheets[sheetName]
@@ -510,11 +517,16 @@ ${stats
   .join('\n')}
 
 Sample rows:
-${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBlock}`
+${sample
+  .map((r) => JSON.stringify(r))
+  .join('\n')
+  .slice(0, 16000)}${evidenceBlock}`
     } else if (b.prompt?.trim()) {
       userContent = `Design collection(s) for this request:\n${b.prompt.slice(0, 4000)}`
     } else {
-      return reply.code(400).send({ error: 'Provide a prompt, a file_token, or a plan + instruction' })
+      return reply
+        .code(400)
+        .send({ error: 'Provide a prompt, a file_token, or a plan + instruction' })
     }
 
     const context = await schemaContext(hint)
@@ -614,10 +626,9 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
     const junctionInfo = new Map<string, { junction: string; parentFk: string; targetFk: string }>()
 
     for (const c of plan.collections) {
-      const exists = await db.raw(
-        `SELECT 1 FROM information_schema.tables WHERE table_name = ?`,
-        [c.collection]
-      )
+      const exists = await db.raw(`SELECT 1 FROM information_schema.tables WHERE table_name = ?`, [
+        c.collection
+      ])
       if ((exists as unknown[]).length) {
         errors.push(`Table "${c.collection}" already exists — skipped`)
         continue
@@ -848,10 +859,9 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
               staging_columns: JSON.stringify(svc.stagingColumns)
             }
           } else {
-            const procExists = (await db.raw(
-              `SELECT 1 FROM sys.procedures WHERE name = ?`,
-              [procName]
-            )) as unknown[]
+            const procExists = (await db.raw(`SELECT 1 FROM sys.procedures WHERE name = ?`, [
+              procName
+            ])) as unknown[]
             if (procExists.length) {
               errors.push(`Procedure ${procName} already exists — import pipeline skipped`)
               continue
@@ -883,7 +893,8 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
           const existingDef = await db('nivaro_import_definitions')
             .where({ key: c.collection })
             .first()
-          if (existingDef) await db('nivaro_import_definitions').where({ key: c.collection }).update(defRow)
+          if (existingDef)
+            await db('nivaro_import_definitions').where({ key: c.collection }).update(defRow)
           else await db('nivaro_import_definitions').insert(defRow)
           if (m2mSkipped.length) {
             errors.push(
@@ -958,11 +969,13 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
                 }
               }
               const lookup = new Map<string, unknown>()
-              const targetRows = (await db(targetCol)
-                .select('id', mf)
-                .limit(50000)) as Array<Record<string, unknown>>
+              const targetRows = (await db(targetCol).select('id', mf).limit(50000)) as Array<
+                Record<string, unknown>
+              >
               for (const r of targetRows) {
-                const key = String(r[mf] ?? '').trim().toLowerCase()
+                const key = String(r[mf] ?? '')
+                  .trim()
+                  .toLowerCase()
                 if (key) lookup.set(key, r.id)
               }
               lookups.set(f.field, lookup)
@@ -989,7 +1002,9 @@ ${sample.map((r) => JSON.stringify(r)).join('\n').slice(0, 16000)}${evidenceBloc
               let v: unknown
               const lookup = lookups.get(f.field)
               if (lookup) {
-                const key = String(row?.[idx] ?? '').trim().toLowerCase()
+                const key = String(row?.[idx] ?? '')
+                  .trim()
+                  .toLowerCase()
                 v = key ? (lookup.get(key) ?? null) : null
                 if (key && v === null) unmatched[f.field] = (unmatched[f.field] ?? 0) + 1
               } else {
@@ -1132,9 +1147,7 @@ export function generateServiceConfig(c: DesignCollection): {
   skipped: string[]
 } {
   const mapped = c.fields.filter((f) => f.source_column && f.type !== 'm2m')
-  const skipped = c.fields
-    .filter((f) => f.source_column && f.type === 'm2m')
-    .map((f) => f.field)
+  const skipped = c.fields.filter((f) => f.source_column && f.type === 'm2m').map((f) => f.field)
   const columns: Record<string, unknown> = {}
   const stagingColumns: string[] = []
   for (const f of mapped) {
@@ -1185,9 +1198,7 @@ export function generateImportProc(
   stagingTable: string
 ): { sql: string; stagingColumns: string[]; skipped: string[] } {
   const mapped = c.fields.filter((f) => f.source_column && f.type !== 'm2m')
-  const skipped = c.fields
-    .filter((f) => f.source_column && f.type === 'm2m')
-    .map((f) => f.field)
+  const skipped = c.fields.filter((f) => f.source_column && f.type === 'm2m').map((f) => f.field)
   const stagingColumns = mapped.map((f) => normalizeHeader(f.source_column!))
   const pivot = (c.import_key ?? []).filter((k) => mapped.some((f) => f.field === k))
 
@@ -1242,7 +1253,10 @@ export function generateImportProc(
     ? `        MERGE [${c.collection}] AS target
         USING (SELECT ${mapped.map((f) => `[${f.field}]`).join(', ')} FROM cte_src WHERE _rn = 1) AS source
         ON ${pivot
-          .map((k) => `((target.[${k}] = source.[${k}]) OR (target.[${k}] IS NULL AND source.[${k}] IS NULL))`)
+          .map(
+            (k) =>
+              `((target.[${k}] = source.[${k}]) OR (target.[${k}] IS NULL AND source.[${k}] IS NULL))`
+          )
           .join(' AND ')}
         WHEN MATCHED THEN
             UPDATE SET

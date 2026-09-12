@@ -160,11 +160,20 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
 
     // OAuth token health (#421): for oauth2_cc APIs, whether a token can be
     // minted RIGHT NOW and when it expires — checked live, secrets never leave.
-    const oauthHealth: Array<{ api: string; ok: boolean; expires_in_s: number | null; error: string | null }> = []
+    const oauthHealth: Array<{
+      api: string
+      ok: boolean
+      expires_in_s: number | null
+      error: string | null
+    }> = []
     try {
       const oauthApis = (await db('nivaro_external_apis')
         .where({ auth_type: 'oauth2_cc', enabled: true })
-        .select('id', 'name', 'auth_config')) as Array<{ id: number; name: string; auth_config: string | null }>
+        .select('id', 'name', 'auth_config')) as Array<{
+        id: number
+        name: string
+        auth_config: string | null
+      }>
       for (const a of oauthApis.slice(0, 10)) {
         try {
           const cfg = JSON.parse(a.auth_config ?? '{}') as {
@@ -194,7 +203,12 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
             signal: ctrl.signal
           }).finally(() => clearTimeout(t))
           if (!resp.ok) {
-            oauthHealth.push({ api: a.name, ok: false, expires_in_s: null, error: `HTTP ${resp.status}` })
+            oauthHealth.push({
+              api: a.name,
+              ok: false,
+              expires_in_s: null,
+              error: `HTTP ${resp.status}`
+            })
             continue
           }
           const tok = (await resp.json().catch(() => ({}))) as { expires_in?: number }

@@ -300,7 +300,6 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
   app.log.info('GraphQL API registered at /api/graphql')
 }
 
-
 // Depth + selection count for the cost limiter (#162). Fragments count at
 // their spread site; a fragment cycle is impossible past validation.
 function measureQueryCost(document: ReturnType<typeof parse>): {

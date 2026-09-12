@@ -30,7 +30,11 @@ async function geocodeOfficeForUser(userId: string): Promise<void> {
     const u = (await db('nivaro_users')
       .where({ id: userId })
       .first('id', 'office_location', 'office_geocoded_for', 'office_lat')) as
-      | { office_location: string | null; office_geocoded_for: string | null; office_lat: number | null }
+      | {
+          office_location: string | null
+          office_geocoded_for: string | null
+          office_lat: number | null
+        }
       | undefined
     const addr = (u?.office_location ?? '').trim()
     if (!addr) return

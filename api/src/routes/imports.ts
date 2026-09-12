@@ -145,7 +145,10 @@ async function fetchRemoteCsv(rawUrl: string): Promise<{ csv: string; fileName: 
 /** Insert and get the new id back. OUTPUT fails on tables with triggers —
  *  fall back to a plain insert with an unknown id (rollback skips it and
  *  says so, rather than guessing which row was ours). */
-async function insertReturningId(collection: string, rowData: Record<string, unknown>): Promise<unknown> {
+async function insertReturningId(
+  collection: string,
+  rowData: Record<string, unknown>
+): Promise<unknown> {
   try {
     const [row] = await db(collection).insert(rowData).returning('id')
     return typeof row === 'object' ? (row as { id: unknown }).id : row
@@ -171,7 +174,10 @@ function applyColumnTransform(v: unknown, t: string | undefined): unknown {
     case 'lower':
       return v.trim().toLowerCase()
     case 'title':
-      return v.trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+      return v
+        .trim()
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase())
     case 'null_empty':
       return v.trim() === '' ? null : v
     default:
@@ -263,7 +269,8 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
               skipped++
             } else if (strategy === 'overwrite' || strategy === 'merge') {
               const prior: Record<string, unknown> = {}
-              for (const k of Object.keys(rowData)) prior[k] = (existing as Record<string, unknown>)[k]
+              for (const k of Object.keys(rowData))
+                prior[k] = (existing as Record<string, unknown>)[k]
               await db(collection)
                 .where({ [idField]: rowData[idField] })
                 .update(rowData)
@@ -804,11 +811,15 @@ export async function importsRoutes(app: FastifyInstance) {
   // column map + transforms, editable client-side and resubmitted one by one
   // through the ITEMS service (POST /imports/:id/repair-row).
   app.get('/:id/failed-rows', async (req, reply) => {
-    const job = await db('nivaro_import_jobs').where({ id: (req.params as { id: string }).id }).first()
+    const job = await db('nivaro_import_jobs')
+      .where({ id: (req.params as { id: string }).id })
+      .first()
     if (!job) return reply.code(404).send({ error: 'Import job not found' })
     const errors = parseJson<Array<{ row: number; error: string }>>(job.errors) ?? []
     if (errors.length === 0) return reply.send({ data: [] })
-    const lines = String(job.csv_data ?? '').split(/\r?\n/).filter((l) => l.trim())
+    const lines = String(job.csv_data ?? '')
+      .split(/\r?\n/)
+      .filter((l) => l.trim())
     if (lines.length < 2) return reply.send({ data: [] })
     const headers = parseCSVLine(lines[0])
     const columnMap = parseJson<Record<string, string>>(job.column_map) ?? {}
@@ -823,7 +834,8 @@ export async function importsRoutes(app: FastifyInstance) {
       for (const [csvCol, fieldName] of Object.entries(columnMap)) {
         if (!fieldName) continue
         const idx = headers.indexOf(csvCol)
-        if (idx >= 0) rowData[fieldName] = applyColumnTransform(values[idx] ?? null, transforms[csvCol])
+        if (idx >= 0)
+          rowData[fieldName] = applyColumnTransform(values[idx] ?? null, transforms[csvCol])
       }
       out.push({ row: e.row, error: e.error, values: rowData })
     }
@@ -833,7 +845,9 @@ export async function importsRoutes(app: FastifyInstance) {
   // Resubmit one repaired row through the items service — hooks/validation/
   // RLS apply exactly like any create.
   app.post('/:id/repair-row', async (req, reply) => {
-    const job = await db('nivaro_import_jobs').where({ id: (req.params as { id: string }).id }).first()
+    const job = await db('nivaro_import_jobs')
+      .where({ id: (req.params as { id: string }).id })
+      .first()
     if (!job) return reply.code(404).send({ error: 'Import job not found' })
     const collection = String(job.collection)
     if (/^nivaro_/i.test(collection)) return reply.code(403).send({ error: 'System table' })
@@ -846,7 +860,9 @@ export async function importsRoutes(app: FastifyInstance) {
       return reply.send({ data: created })
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 422
-      return reply.code(status).send({ error: err instanceof Error ? err.message : 'Create failed' })
+      return reply
+        .code(status)
+        .send({ error: err instanceof Error ? err.message : 'Create failed' })
     }
   })
 
@@ -854,14 +870,17 @@ export async function importsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const job = await db('nivaro_import_jobs').where({ id }).first()
     if (!job) return reply.code(404).send({ error: 'Import not found' })
-    if (job.status !== 'complete') return reply.code(400).send({ error: 'Only completed imports can roll back' })
+    if (job.status !== 'complete')
+      return reply.code(400).send({ error: 'Only completed imports can roll back' })
     if (job.rolled_back_at) return reply.code(400).send({ error: 'Already rolled back' })
     const rb = parseJson<{
       created?: Array<{ id: unknown }>
       updated?: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }>
     }>(job.rollback_data)
     if (!rb) {
-      return reply.code(400).send({ error: 'This import predates rollback capture — nothing recorded to undo' })
+      return reply
+        .code(400)
+        .send({ error: 'This import predates rollback capture — nothing recorded to undo' })
     }
     const collection = String(job.collection)
     const { startJobRun } = await import('../services/job-runs.js')

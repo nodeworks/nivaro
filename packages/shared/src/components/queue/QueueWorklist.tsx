@@ -86,7 +86,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { OwnerAvatars } from './OwnerAvatars'
-import { BulkActionButtons } from '../bulk/BulkActionButtons'
+import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
@@ -647,6 +647,18 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   const allowedViews = displayConfig?.views ?? ['table', 'kanban', 'workload']
   const workNextEnabled = displayConfig?.work_next !== false
   const bulkActionsEnabled = displayConfig?.bulk_actions !== false
+  // Built-in bar operations (Claim / Release / Transition) can be switched off
+  // or restricted per source collection in Data Model → Settings → Bulk actions.
+  const builtinGate = useBuiltinGate(
+    [
+      ...new Set(
+        (queue?.sources ?? [])
+          .filter((sr) => sr.type === 'collection' && sr.collection)
+          .map((sr) => sr.collection as string)
+      )
+    ],
+    displayConfig?.bulk_action_keys ?? null
+  )
   const aliasFor = (key: string, fallback: string): string =>
     queue?.column_aliases?.[key]?.trim() || fallback
 
@@ -3180,6 +3192,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         <QueueBulkBar
           count={selectedIds.length}
           claimsEnabled={claimsEnabled}
+          showClaim={builtinGate('claim')}
+          showRelease={builtinGate('release')}
+          showTransition={builtinGate('transition')}
           states={(data?.available_values.state ?? []).map((s) => ({
             value: s,
             label: stateLabel(s)

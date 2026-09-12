@@ -78,12 +78,10 @@ export async function dossierRoutes(app: FastifyInstance) {
 
       let record: Record<string, unknown>
       try {
-        record = (await readOne(
-          req.user!,
-          collection,
-          id,
-          req.workspaceId ?? undefined
-        )) as Record<string, unknown>
+        record = (await readOne(req.user!, collection, id, req.workspaceId ?? undefined)) as Record<
+          string,
+          unknown
+        >
       } catch (err) {
         if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
         if (err instanceof ItemNotFoundError) return reply.code(404).send({ error: 'Not found' })
@@ -164,7 +162,8 @@ export async function dossierRoutes(app: FastifyInstance) {
           )
         }
       }
-      const who = (uid: unknown): string => (uid ? (userMap.get(String(uid)) ?? 'System') : 'System')
+      const who = (uid: unknown): string =>
+        uid ? (userMap.get(String(uid)) ?? 'System') : 'System'
 
       // M2O labels: FK relations on this collection, resolved via getLabels.
       const rels = (await db('nivaro_relations')

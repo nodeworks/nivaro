@@ -83,11 +83,7 @@ const attr = (node: SerializedNode, name: string): string | null => {
  * div chain — especially here, where nodes added after the snapshot have no
  * recorded sibling order to count against.
  */
-function visibleText(
-  node: SerializedNode,
-  nodes: Map<number, SerializedNode>,
-  depth = 0
-): string {
+function visibleText(node: SerializedNode, nodes: Map<number, SerializedNode>, depth = 0): string {
   if (depth > 4) return ''
   let out = ''
   for (const child of node.childNodes ?? []) {
@@ -121,7 +117,8 @@ export function selectorFor(
     (attr(node, 'id') && `#${attr(node, 'id')}`) ||
     (attr(node, 'data-testid') && `[data-testid="${q(attr(node, 'data-testid') as string)}"]`) ||
     (attr(node, 'name') && `${node.tagName}[name="${q(attr(node, 'name') as string)}"]`) ||
-    (attr(node, 'aria-label') && `${node.tagName}[aria-label="${q(attr(node, 'aria-label') as string)}"]`)
+    (attr(node, 'aria-label') &&
+      `${node.tagName}[aria-label="${q(attr(node, 'aria-label') as string)}"]`)
   if (direct) return direct
 
   // What it says, when that is a sane handle — survives re-renders and layout
@@ -221,7 +218,8 @@ export function buildReplayPlan(events: RrwebEvent[]): ReplayPlan {
           const parent = index.nodes.get(add.parentId)
           if (parent) {
             parent.childNodes = parent.childNodes ?? []
-            if (!parent.childNodes.some((c) => c.id === add.node?.id)) parent.childNodes.push(add.node)
+            if (!parent.childNodes.some((c) => c.id === add.node?.id))
+              parent.childNodes.push(add.node)
           }
         }
       }
@@ -277,7 +275,10 @@ export function buildReplayPlan(events: RrwebEvent[]): ReplayPlan {
 }
 
 /** Emit the plan as a standalone Playwright script. */
-export function renderPlaywrightScript(plan: ReplayPlan, meta: { id: string; user?: string | null; startedAt?: string | null }): string {
+export function renderPlaywrightScript(
+  plan: ReplayPlan,
+  meta: { id: string; user?: string | null; startedAt?: string | null }
+): string {
   const path = (() => {
     try {
       const u = new URL(plan.startUrl)
@@ -289,7 +290,8 @@ export function renderPlaywrightScript(plan: ReplayPlan, meta: { id: string; use
 
   const lines: string[] = []
   lines.push(`// Replay of session ${meta.id}`)
-  if (meta.user) lines.push(`// Recorded by ${meta.user}${meta.startedAt ? ` on ${meta.startedAt}` : ''}`)
+  if (meta.user)
+    lines.push(`// Recorded by ${meta.user}${meta.startedAt ? ` on ${meta.startedAt}` : ''}`)
   lines.push(`// Recorded against: ${plan.startUrl || '(unknown)'}`)
   lines.push('//')
   lines.push('// Run:  BASE_URL=http://localhost:3057 npx playwright test replay.spec.ts --headed')
@@ -301,7 +303,9 @@ export function renderPlaywrightScript(plan: ReplayPlan, meta: { id: string; use
     lines.push('// everything typed, so the values are asterisks. Each is marked TODO below.')
   }
   if (plan.unresolved > 0) {
-    lines.push(`// ${plan.unresolved} interaction(s) hit nodes missing from the snapshot and were skipped.`)
+    lines.push(
+      `// ${plan.unresolved} interaction(s) hit nodes missing from the snapshot and were skipped.`
+    )
   }
   lines.push('')
   lines.push("import { expect, test } from '@playwright/test'")
@@ -310,14 +314,20 @@ export function renderPlaywrightScript(plan: ReplayPlan, meta: { id: string; use
   lines.push('')
   lines.push('// A replay performs real actions as the logged-in user. Anything but a')
   lines.push('// local host has to be asked for explicitly.')
-  lines.push("if (!/^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\])(:|\\/|$)/.test(BASE_URL) && process.env.REPLAY_CONFIRM !== '1') {")
-  lines.push('  throw new Error(`Refusing to replay against ${BASE_URL} — set REPLAY_CONFIRM=1 to allow it.`)')
+  lines.push(
+    "if (!/^https?:\\/\\/(localhost|127\\.0\\.0\\.1|\\[::1\\])(:|\\/|$)/.test(BASE_URL) && process.env.REPLAY_CONFIRM !== '1') {"
+  )
+  lines.push(
+    '  throw new Error(`Refusing to replay against ${BASE_URL} — set REPLAY_CONFIRM=1 to allow it.`)'
+  )
   lines.push('}')
   lines.push('')
   lines.push(`test('replay ${meta.id}', async ({ page }) => {`)
   lines.push('  test.setTimeout(10 * 60 * 1000)')
   if (plan.viewport) {
-    lines.push(`  await page.setViewportSize({ width: ${plan.viewport.width}, height: ${plan.viewport.height} })`)
+    lines.push(
+      `  await page.setViewportSize({ width: ${plan.viewport.width}, height: ${plan.viewport.height} })`
+    )
   }
   lines.push(`  await page.goto(\`\${BASE_URL}${path}\`)`)
   lines.push('')

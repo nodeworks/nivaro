@@ -9,14 +9,14 @@ import type { Knex } from 'knex'
  */
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.alterTable('nivaro_settings', (t) => {
-    t.string('storage_provider', 50).nullable()      // 's3' | 'azure' | 'local'
+    t.string('storage_provider', 50).nullable() // 's3' | 'azure' | 'local'
     t.string('storage_s3_bucket', 255).nullable()
     t.string('storage_s3_endpoint', 500).nullable()
     t.string('storage_s3_access_key', 255).nullable()
     t.string('storage_s3_secret', 500).nullable()
     t.string('storage_s3_region', 50).nullable()
     t.string('storage_cdn_url', 500).nullable()
-    t.string('storage_key_prefix', 255).nullable()   // e.g. '{slug}/'
+    t.string('storage_key_prefix', 255).nullable() // e.g. '{slug}/'
     t.string('gateway_url', 500).nullable()
     t.string('provision_secret', 500).nullable()
   })

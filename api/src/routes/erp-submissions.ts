@@ -224,9 +224,11 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       const apiIds = [...new Set(rows.map((r) => r.external_api).filter((v) => v != null))]
       const names = apiIds.length
         ? new Map(
-            ((await db('nivaro_external_apis')
-              .whereIn('id', apiIds as number[])
-              .select('id', 'name')) as Array<{ id: number; name: string }>).map((a) => [a.id, a.name])
+            (
+              (await db('nivaro_external_apis')
+                .whereIn('id', apiIds as number[])
+                .select('id', 'name')) as Array<{ id: number; name: string }>
+            ).map((a) => [a.id, a.name])
           )
         : new Map<number, string>()
       return {
@@ -263,7 +265,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         .where({ id })
         .update({
           status: outcome.status,
-        response: serializeResponseBody(outcome.response),
+          response: serializeResponseBody(outcome.response),
           external_ref: outcome.external_ref ?? row.external_ref,
           attempts: row.attempts + 1,
           last_error: outcome.error,
@@ -333,10 +335,16 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
             })
           results.push({ id, status: outcome.status, error: outcome.error ?? undefined })
         } catch (err) {
-          results.push({ id, status: 'error', error: err instanceof Error ? err.message : String(err) })
+          results.push({
+            id,
+            status: 'error',
+            error: err instanceof Error ? err.message : String(err)
+          })
         }
       }
-      const recovered = results.filter((r) => r.status === 'pending' || r.status === 'accepted').length
+      const recovered = results.filter(
+        (r) => r.status === 'pending' || r.status === 'accepted'
+      ).length
       await logActivity({
         action: 'erp-bulk-retry',
         user: req.user?.id,
@@ -383,7 +391,6 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     return { data: serialize(updated) }
   })
 }
-
 
 /**
  * Auto-retry sweep (#469): failed submissions whose external API declares a
@@ -438,7 +445,9 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
         // Exponential-ish backoff: base * 2^retries, capped at a day.
         next_retry_at: ok
           ? null
-          : new Date(now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000),
+          : new Date(
+              now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000
+            ),
         last_error: outcome.error,
         updated_at: new Date()
       })

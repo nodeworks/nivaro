@@ -17,15 +17,21 @@ export async function searchRoutes(app: FastifyInstance) {
     }
     const outcome = await globalSearch(req.user!, q, {
       collections: req.query.collections
-        ? req.query.collections.split(',').map((c) => c.trim()).filter(Boolean)
+        ? req.query.collections
+            .split(',')
+            .map((c) => c.trim())
+            .filter(Boolean)
         : undefined,
       limit: req.query.limit ? Number(req.query.limit) : undefined,
       perCollection: req.query.per_collection ? Number(req.query.per_collection) : undefined
     })
-    return reply.send({ data: outcome.hits, meta: {
-      searched: outcome.searched.length,
-      skipped: outcome.skipped,
-      truncated: outcome.truncated
-    } })
+    return reply.send({
+      data: outcome.hits,
+      meta: {
+        searched: outcome.searched.length,
+        skipped: outcome.skipped,
+        truncated: outcome.truncated
+      }
+    })
   })
 }

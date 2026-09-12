@@ -38,7 +38,9 @@ function validZone(tz: string): boolean {
 }
 
 async function loadConfig(): Promise<SlaZoneConfig | null> {
-  const row = await db('nivaro_settings').first('sla_zone_map').catch(() => null)
+  const row = await db('nivaro_settings')
+    .first('sla_zone_map')
+    .catch(() => null)
   const raw = row?.sla_zone_map ? String(row.sla_zone_map) : null
   if (!raw) return null
   try {
@@ -207,10 +209,7 @@ export async function resolveRecordZones(
         db(route.junction)
           .whereIn(route.parentFk, chunk)
           .orderBy('id')
-          .select(
-            db.raw('?? as parent', [route.parentFk]),
-            db.raw('?? as src', [route.sourceFk])
-          )
+          .select(db.raw('?? as parent', [route.parentFk]), db.raw('?? as src', [route.sourceFk]))
       )) as Array<{ parent: unknown; src: unknown }>
       for (const r of rows) {
         const pid = String(r.parent)

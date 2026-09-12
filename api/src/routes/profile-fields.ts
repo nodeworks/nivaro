@@ -77,18 +77,22 @@ export async function profileFieldsRoutes(app: FastifyInstance) {
   })
 
   /** Another user's profile fields — directory-visible like DIRECTORY_USER_COLS. */
-  app.get<{ Params: { id: string } }>('/user/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const target = (await db('nivaro_users')
-      .where({ id: req.params.id })
-      .first('id', 'is_redacted')
-      .catch(() => null)) as { id: string; is_redacted?: boolean | number } | null
-    if (!target || target.is_redacted === true || target.is_redacted === 1) {
-      return reply.code(404).send({ error: 'Not found' })
+  app.get<{ Params: { id: string } }>(
+    '/user/:id',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const target = (await db('nivaro_users')
+        .where({ id: req.params.id })
+        .first('id', 'is_redacted')
+        .catch(() => null)) as { id: string; is_redacted?: boolean | number } | null
+      if (!target || target.is_redacted === true || target.is_redacted === 1) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
+      const defs = await activeDefs()
+      const values = await valuesFor(String(target.id))
+      return reply.send({ data: serialize(defs, values) })
     }
-    const defs = await activeDefs()
-    const values = await valuesFor(String(target.id))
-    return reply.send({ data: serialize(defs, values) })
-  })
+  )
 
   /** Write OWN values only. Keys without an active definition are ignored;
    *  select values must be one of the definition's choices. */
@@ -126,7 +130,9 @@ export async function profileFieldsRoutes(app: FastifyInstance) {
                 )
               : []
           if (choices.length > 0 && !choices.includes(value)) {
-            return reply.code(400).send({ error: `"${def.label}" must be one of the offered choices` })
+            return reply
+              .code(400)
+              .send({ error: `"${def.label}" must be one of the offered choices` })
           }
         }
       }

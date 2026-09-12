@@ -5,16 +5,19 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import {
   accessAllows,
+  BUILTIN_KEYS,
   BULK_ACTION_KINDS,
   type BulkActionKind,
   formatRow,
   KEY_RE,
   listAllForCollection,
   listAvailable,
+  listBuiltins,
   listDefinitions,
   normalizeAccess,
   normalizeGuard,
   runDefinition,
+  setBuiltin,
   transitionLabelsFor
 } from '../services/bulk-actions.js'
 import { can } from '../services/permissions.js'
@@ -137,7 +140,10 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user as User, 'update', collection)))
       return reply.code(403).send({ error: 'Forbidden' })
 
-    const row = await db('nivaro_bulk_actions').where({ collection, key, is_active: true }).first()
+    const row = await db('nivaro_bulk_actions')
+      .where({ collection, key, is_active: true })
+      .whereNot({ kind: 'builtin' })
+      .first()
     if (!row) return reply.code(404).send({ error: 'Bulk action not found' })
     const def = formatRow(row as Record<string, unknown>)
     if (!accessAllows(def.access, req))
@@ -160,6 +166,36 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     })
     return { data: result }
   })
+
+  // ── Built-ins (override state per collection) ─────────────────────────────
+  app.get<{ Querystring: { collection?: string } }>(
+    '/bulk-actions/builtins',
+    { preHandler: [requireAdmin] },
+    async (req, reply) => {
+      const collection = String(req.query.collection ?? '').trim()
+      if (!collection) return reply.code(400).send({ error: 'collection is required' })
+      return { data: await listBuiltins(collection) }
+    }
+  )
+
+  app.put<{ Params: { collection: string; key: string } }>(
+    '/bulk-actions/builtins/:collection/:key',
+    { preHandler: [requireAdmin] },
+    async (req, reply) => {
+      const { collection, key } = req.params
+      if (!BUILTIN_KEYS.has(key)) return reply.code(404).send({ error: 'Unknown built-in action' })
+      const b = (req.body ?? {}) as { access?: unknown; is_active?: unknown }
+      const state = await setBuiltin(collection, key, b, req.user?.id ?? null)
+      await logActivity({
+        action: 'bulk-action-update',
+        user: req.user?.id,
+        collection,
+        comment: `built-in ${key}: ${state.is_active ? 'on' : 'off'}, ${state.access.mode}`,
+        req
+      })
+      return { data: state }
+    }
+  )
 
   // ── Admin CRUD ────────────────────────────────────────────────────────────
   app.get<{ Querystring: { collection?: string } }>(
@@ -186,6 +222,7 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
         .trim()
         .toLowerCase()
       if (!KEY_RE.test(key)) errs.push('key must be a slug (a-z, 0-9, -, _)')
+      else if (BUILTIN_KEYS.has(key)) errs.push(`"${key}" is a built-in action's key`)
       out.key = key
     }
     if (!partial || 'kind' in b) {
@@ -265,7 +302,8 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     { preHandler: [requireAdmin] },
     async (req, reply) => {
       const existing = await db('nivaro_bulk_actions').where({ id: req.params.id }).first()
-      if (!existing) return reply.code(404).send({ error: 'Not found' })
+      if (!existing || existing.kind === 'builtin')
+        return reply.code(404).send({ error: 'Not found' })
       const b = (req.body ?? {}) as Record<string, unknown>
       // config validation needs the kind — fall back to the stored one
       const { out, errs } = validate({ ...b, kind: b.kind ?? existing.kind }, true)
@@ -297,7 +335,8 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     { preHandler: [requireAdmin] },
     async (req, reply) => {
       const existing = await db('nivaro_bulk_actions').where({ id: req.params.id }).first()
-      if (!existing) return reply.code(404).send({ error: 'Not found' })
+      if (!existing || existing.kind === 'builtin')
+        return reply.code(404).send({ error: 'Not found' })
       await db('nivaro_bulk_actions').where({ id: req.params.id }).del()
       await logActivity({
         action: 'bulk-action-delete',

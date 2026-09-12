@@ -3,7 +3,11 @@ import type { Knex } from 'knex'
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_dashboard_links', (t) => {
     t.increments('id').primary()
-    t.uuid('dashboard').notNullable().references('id').inTable('nivaro_dashboards').onDelete('CASCADE')
+    t.uuid('dashboard')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_dashboards')
+      .onDelete('CASCADE')
     t.string('token', 96).notNullable().unique()
     t.dateTime('expires_at').nullable()
     t.boolean('is_active').notNullable().defaultTo(true)

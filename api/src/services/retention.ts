@@ -3,12 +3,23 @@ import { logActivity } from './activity.js'
 import { execCustomQuerySql } from './custom-query-exec.js'
 
 export const DEFAULT_REDACT_FIELDS = [
-  'first_name', 'last_name', 'email', 'external_id', 'job_title', 'avatar'
+  'first_name',
+  'last_name',
+  'email',
+  'external_id',
+  'job_title',
+  'avatar'
 ]
 
 function parseJson<T>(val: unknown): T {
   if (!val) return [] as unknown as T
-  if (typeof val === 'string') { try { return JSON.parse(val) as T } catch { return [] as unknown as T } }
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val) as T
+    } catch {
+      return [] as unknown as T
+    }
+  }
   return val as T
 }
 

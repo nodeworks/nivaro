@@ -12,7 +12,9 @@ export async function up(knex: Knex): Promise<void> {
     await knex.raw(`ALTER TABLE nivaro_field_groups ADD hide_when_empty bit NOT NULL DEFAULT 0`)
   }
   if (!existing.has('visibility_mode')) {
-    await knex.raw(`ALTER TABLE nivaro_field_groups ADD visibility_mode varchar(20) NOT NULL DEFAULT 'always'`)
+    await knex.raw(
+      `ALTER TABLE nivaro_field_groups ADD visibility_mode varchar(20) NOT NULL DEFAULT 'always'`
+    )
   }
   if (!existing.has('summary_fields')) {
     await knex.raw(`ALTER TABLE nivaro_field_groups ADD summary_fields varchar(500) NULL`)

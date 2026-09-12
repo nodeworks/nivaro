@@ -9,7 +9,12 @@ export const bulkActionsGuide: DocSection = {
       type: 'p',
       text: 'Bulk actions are admin-defined buttons offered over a selection — in the collection browser\'s selection bar and in a queue\'s selection pill — that apply one change to every selected record: On Hold, Remove Hold, Cancel, Uncancel and whatever else a collection needs. Each action is defined once per collection (Data Model → collection → Settings → Bulk actions) and each surface chooses which of the enabled actions it shows.'
     },
-    { type: 'h3', text: 'What an action does' },
+    { type: 'h3', text: 'Built-in operations' },
+    {
+      type: 'p',
+      text: 'The bars\' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release).'
+    },
+    { type: 'h3', text: 'Custom actions' },
     {
       type: 'table',
       head: ['Kind', 'Behaviour'],

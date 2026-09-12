@@ -10,10 +10,14 @@ import {
   snapshotTemplateVersion,
   diffSnapshots,
   readCurrentSnapshot,
-  type TemplateSnapshot} from '../services/workflow-template-versions.js'
+  type TemplateSnapshot
+} from '../services/workflow-template-versions.js'
 import { can } from '../services/permissions.js'
 import {
-  bustOwnerGroupCache, resolveStateOwners, resolveStateOwnersBatch } from '../services/pipeline-engine.js'
+  bustOwnerGroupCache,
+  resolveStateOwners,
+  resolveStateOwnersBatch
+} from '../services/pipeline-engine.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { getCollection } from '../services/collections.js'
 import { ADDENDUM_COLLECTION, fetchPipelineRecord } from '../services/pipeline-subject.js'
@@ -239,7 +243,6 @@ function formatTransition(t: WorkflowTransition) {
   }
 }
 
-
 // ─── Transition requirements (child-field gates) ───────────────────────────
 //
 // The gate itself (evaluateTransitionRequirements) lives in
@@ -296,7 +299,6 @@ function validateRequirements(value: unknown): string | null {
   return null
 }
 
-
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 export async function pipelinesRoutes(app: FastifyInstance) {
@@ -306,7 +308,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // metadata-cache hook in routes/index.ts).
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
-    if (/owner-group|owner_group|owner-cleanup|bindings|restore/.test(req.url)) bustOwnerGroupCache()
+    if (/owner-group|owner_group|owner-cleanup|bindings|restore/.test(req.url))
+      bustOwnerGroupCache()
   })
 
   // ─── Template CRUD (admin only) ───────────────────────────────────────────
@@ -317,85 +320,108 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // AI config reviewer (#361): deterministic structure analysis + AI critique
   // of a workflow template — unreachable states, dead ends, missing
   // send-backs, states with no owner coverage.
-  app.post<{ Params: { id: string }; Body: { mode?: string } }>('/:id/ai-review', { preHandler: requireAdmin }, async (req, reply) => {
-    const tid = req.params.id
-    // #428: 'explain' walks the template in plain language; 'critique'
-    // (default) hunts design risks. One surface, two modes.
-    const mode = (req.body as { mode?: string } | undefined)?.mode === 'explain' ? 'explain' : 'critique'
-    const [states, transitions, groups] = await Promise.all([
-      db('nivaro_workflow_states').where({ template: tid }).orderBy('sort').select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort'),
-      db('nivaro_workflow_transitions').where({ template: tid }).select('id', 'from_state', 'to_state', 'label', 'condition_rules', 'auto_trigger'),
-      db('nivaro_pipeline_owner_groups').where({ template: tid }).select('state').catch(() => [] as Array<{ state: string }>)
-    ])
-    if (states.length === 0) return reply.code(404).send({ error: 'Template has no states' })
-    // Deterministic findings first — the AI never has to discover graph facts.
-    const byId = new Map(states.map((st) => [String(st.id), st]))
-    const inbound = new Map<string, number>()
-    const outbound = new Map<string, number>()
-    for (const t of transitions) {
-      if (t.to_state) inbound.set(String(t.to_state), (inbound.get(String(t.to_state)) ?? 0) + 1)
-      if (t.from_state) outbound.set(String(t.from_state), (outbound.get(String(t.from_state)) ?? 0) + 1)
-    }
-    const anyFrom = transitions.some((t) => !t.from_state)
-    const ownered = new Set((groups as Array<{ state: string }>).map((g) => String(g.state)))
-    const structural: string[] = []
-    for (const st of states) {
-      const sid = String(st.id)
-      if (!st.is_initial && !anyFrom && !(inbound.get(sid) ?? 0)) {
-        structural.push(`State "${st.label}" is unreachable (no inbound transition).`)
+  app.post<{ Params: { id: string }; Body: { mode?: string } }>(
+    '/:id/ai-review',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const tid = req.params.id
+      // #428: 'explain' walks the template in plain language; 'critique'
+      // (default) hunts design risks. One surface, two modes.
+      const mode =
+        (req.body as { mode?: string } | undefined)?.mode === 'explain' ? 'explain' : 'critique'
+      const [states, transitions, groups] = await Promise.all([
+        db('nivaro_workflow_states')
+          .where({ template: tid })
+          .orderBy('sort')
+          .select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort'),
+        db('nivaro_workflow_transitions')
+          .where({ template: tid })
+          .select('id', 'from_state', 'to_state', 'label', 'condition_rules', 'auto_trigger'),
+        db('nivaro_pipeline_owner_groups')
+          .where({ template: tid })
+          .select('state')
+          .catch(() => [] as Array<{ state: string }>)
+      ])
+      if (states.length === 0) return reply.code(404).send({ error: 'Template has no states' })
+      // Deterministic findings first — the AI never has to discover graph facts.
+      const byId = new Map(states.map((st) => [String(st.id), st]))
+      const inbound = new Map<string, number>()
+      const outbound = new Map<string, number>()
+      for (const t of transitions) {
+        if (t.to_state) inbound.set(String(t.to_state), (inbound.get(String(t.to_state)) ?? 0) + 1)
+        if (t.from_state)
+          outbound.set(String(t.from_state), (outbound.get(String(t.from_state)) ?? 0) + 1)
       }
-      if (!st.is_terminal && !(outbound.get(sid) ?? 0)) {
-        structural.push(`State "${st.label}" is a dead end (non-terminal, no outbound transition).`)
+      const anyFrom = transitions.some((t) => !t.from_state)
+      const ownered = new Set((groups as Array<{ state: string }>).map((g) => String(g.state)))
+      const structural: string[] = []
+      for (const st of states) {
+        const sid = String(st.id)
+        if (!st.is_initial && !anyFrom && !(inbound.get(sid) ?? 0)) {
+          structural.push(`State "${st.label}" is unreachable (no inbound transition).`)
+        }
+        if (!st.is_terminal && !(outbound.get(sid) ?? 0)) {
+          structural.push(
+            `State "${st.label}" is a dead end (non-terminal, no outbound transition).`
+          )
+        }
+        if (!st.is_initial && !st.is_terminal && !ownered.has(sid)) {
+          structural.push(`State "${st.label}" has no owner groups — records there resolve nobody.`)
+        }
       }
-      if (!st.is_initial && !st.is_terminal && !ownered.has(sid)) {
-        structural.push(`State "${st.label}" has no owner groups — records there resolve nobody.`)
+      const sendBacks = transitions.filter((t) => {
+        const from = byId.get(String(t.from_state))
+        const to = byId.get(String(t.to_state))
+        return from && to && Number(to.sort) < Number(from.sort)
+      })
+      if (sendBacks.length === 0 && states.length > 2) {
+        structural.push('No send-back transitions exist — a rejected record has no path backward.')
       }
-    }
-    const sendBacks = transitions.filter((t) => {
-      const from = byId.get(String(t.from_state))
-      const to = byId.get(String(t.to_state))
-      return from && to && Number(to.sort) < Number(from.sort)
-    })
-    if (sendBacks.length === 0 && states.length > 2) {
-      structural.push('No send-back transitions exist — a rejected record has no path backward.')
-    }
-    // AI critique over the summarized graph.
-    let critique: string | null = null
-    try {
-      const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
-      const aiClient = await getAiClient()
-      if (aiClient) {
-        const { model } = await getAiModelSettings()
-        const graph = states
-          .map((st) => {
-            const outs = transitions
-              .filter((t) => String(t.from_state) === String(st.id))
-              .map((t) => `${t.auto_trigger ? '[auto] ' : ''}${t.label} → ${byId.get(String(t.to_state))?.label ?? '?'}`)
-            return `${st.label}${st.is_initial ? ' (initial)' : ''}${st.is_terminal ? ' (terminal)' : ''}: ${outs.join('; ') || 'no outbound'}`
+      // AI critique over the summarized graph.
+      let critique: string | null = null
+      try {
+        const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+        const aiClient = await getAiClient()
+        if (aiClient) {
+          const { model } = await getAiModelSettings()
+          const graph = states
+            .map((st) => {
+              const outs = transitions
+                .filter((t) => String(t.from_state) === String(st.id))
+                .map(
+                  (t) =>
+                    `${t.auto_trigger ? '[auto] ' : ''}${t.label} → ${byId.get(String(t.to_state))?.label ?? '?'}`
+                )
+              return `${st.label}${st.is_initial ? ' (initial)' : ''}${st.is_terminal ? ' (terminal)' : ''}: ${outs.join('; ') || 'no outbound'}`
+            })
+            .join('\n')
+          const resp = await aiClient.messages.create({
+            model,
+            max_tokens: 500,
+            system:
+              mode === 'explain'
+                ? 'You explain workflow state machines to non-technical staff. Given the state graph, describe how a record moves through it in plain language: where it starts, what each step means, who acts, how it ends. 4-8 short sentences, no jargon, no preamble.'
+                : 'You review workflow state machines for a business process tool. Given the state graph, point out design risks in 3-6 short bullets: approval loops without escape, missing rejection paths, states that trap records, redundant states. Be concrete, reference state names. No preamble.',
+            messages: [
+              {
+                role: 'user',
+                content: `State graph:\n${graph}\n\nKnown structural findings:\n${structural.join('\n') || '(none)'}`
+              }
+            ]
           })
-          .join('\n')
-        const resp = await aiClient.messages.create({
-          model,
-          max_tokens: 500,
-          system:
-            mode === 'explain'
-              ? 'You explain workflow state machines to non-technical staff. Given the state graph, describe how a record moves through it in plain language: where it starts, what each step means, who acts, how it ends. 4-8 short sentences, no jargon, no preamble.'
-              : 'You review workflow state machines for a business process tool. Given the state graph, point out design risks in 3-6 short bullets: approval loops without escape, missing rejection paths, states that trap records, redundant states. Be concrete, reference state names. No preamble.',
-          messages: [
-            {
-              role: 'user',
-              content: `State graph:\n${graph}\n\nKnown structural findings:\n${structural.join('\n') || '(none)'}`
-            }
-          ]
-        })
-        critique = resp.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim() || null
+          critique =
+            resp.content
+              .map((b) => (b.type === 'text' ? b.text : ''))
+              .join('')
+              .trim() || null
+        }
+      } catch {
+        /* critique degrades to structural-only */
       }
-    } catch {
-      /* critique degrades to structural-only */
+      await logActivity({ action: 'pipeline-ai-review', user: req.user?.id, item: tid, req })
+      return reply.send({ data: { structural, critique } })
     }
-    await logActivity({ action: 'pipeline-ai-review', user: req.user?.id, item: tid, req })
-    return reply.send({ data: { structural, critique } })
-  })
+  )
 
   app.get('/:id/owner-gaps', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -414,7 +440,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         })
         .groupBy('u.id', 'u.first_name', 'u.last_name', 'u.email', 'u.is_redacted')
         .count('gu.id as seats')
-        .select('u.id', 'u.first_name', 'u.last_name', 'u.email', 'u.is_redacted') as unknown as Promise<
+        .select(
+          'u.id',
+          'u.first_name',
+          'u.last_name',
+          'u.email',
+          'u.is_redacted'
+        ) as unknown as Promise<
         Array<{
           id: string
           first_name: string | null
@@ -619,17 +651,28 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const states = (await db('nivaro_workflow_states')
       .where({ template: id })
-      .select('id', 'key', 'label', 'color')) as Array<{ id: string; key: string; label: string; color: string | null }>
+      .select('id', 'key', 'label', 'color')) as Array<{
+      id: string
+      key: string
+      label: string
+      color: string | null
+    }>
     const stateById = new Map(states.map((st) => [String(st.id).toUpperCase(), st]))
     const counts = (await db('nivaro_workflow_instances')
       .where({ template: id })
       .whereNull('completed_at')
       .groupBy('current_state', 'collection')
       .count({ c: '*' })
-      .select('current_state', 'collection')) as Array<{ current_state: string | null; collection: string; c: number }>
+      .select('current_state', 'collection')) as Array<{
+      current_state: string | null
+      collection: string
+      c: number
+    }>
     return reply.send({
       data: counts.map((row) => {
-        const st = row.current_state ? stateById.get(String(row.current_state).toUpperCase()) : undefined
+        const st = row.current_state
+          ? stateById.get(String(row.current_state).toUpperCase())
+          : undefined
         return {
           state_id: row.current_state,
           collection: row.collection,
@@ -657,7 +700,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const target = (await db('nivaro_workflow_states')
       .where({ template: id, id: b.to_state })
       .first('id', 'key', 'label')) as { id: string; key: string; label: string } | undefined
-    if (!target) return reply.code(400).send({ error: 'to_state must be a current state of this template' })
+    if (!target)
+      return reply.code(400).send({ error: 'to_state must be a current state of this template' })
     if (String(b.from_state).toUpperCase() === String(target.id).toUpperCase()) {
       return reply.code(400).send({ error: 'from and to are the same state' })
     }
@@ -683,7 +727,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const { syncStateField } = await import('../services/workflow-transitions.js')
       const { syncMaterializedQueueItem } = await import('../services/queue-materialization.js')
       for (const inst of instances) {
-        await db('nivaro_workflow_instances').where({ id: inst.id }).update({ current_state: target.id })
+        await db('nivaro_workflow_instances')
+          .where({ id: inst.id })
+          .update({ current_state: target.id })
         await db('nivaro_workflow_history').insert({
           instance: inst.id,
           from_state: b.from_state,
@@ -918,8 +964,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // group_users CASCADE off groups
     await db('nivaro_pipeline_owner_groups').where({ template: id }).delete()
     await db('nivaro_pipeline_owner_dimensions').whereIn('binding', bindingIds).delete()
-    await db('nivaro_sla_escalations').whereIn('rule', slaRuleIds).delete().catch(() => 0)
-    await db('nivaro_sla_acks').whereIn('rule', slaRuleIds).delete().catch(() => 0)
+    await db('nivaro_sla_escalations')
+      .whereIn('rule', slaRuleIds)
+      .delete()
+      .catch(() => 0)
+    await db('nivaro_sla_acks')
+      .whereIn('rule', slaRuleIds)
+      .delete()
+      .catch(() => 0)
     await db('nivaro_sla_rules').where({ workflow_template: id }).delete()
     await db('nivaro_workflow_transitions').where({ template: id }).delete()
     await db('nivaro_workflow_bindings').where({ template: id }).delete()
@@ -1184,8 +1236,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         actions: body.actions !== undefined ? toJsonStr(body.actions) : tx.actions,
         auto_trigger:
           body.auto_trigger !== undefined ? (body.auto_trigger ? 1 : 0) : tx.auto_trigger,
-        to_previous:
-          body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
+        to_previous: body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
         sort: body.sort ?? tx.sort,
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,
@@ -1518,9 +1569,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const instance = (await db('nivaro_workflow_instances')
         .where({ collection, item: String(item) })
         .orderBy('started_at', 'desc')
-        .first()) as
-        | { id: string; current_state: string | null; started_at: Date }
-        | undefined
+        .first()) as { id: string; current_state: string | null; started_at: Date } | undefined
       if (!instance) return reply.send({ data: null })
 
       // When the record entered its CURRENT state: the latest history row
@@ -1675,9 +1724,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const truncated = instances.length > limit
     const sample = instances.slice(0, limit)
 
-    const { evaluateSkipCriteriaDetailed } = await import(
-      '../services/workflow-transitions.js'
-    )
+    const { evaluateSkipCriteriaDetailed } = await import('../services/workflow-transitions.js')
 
     const changes: Array<{
       collection: string
@@ -1690,9 +1737,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     for (const inst of sample) {
       let record: Record<string, unknown> | undefined
       try {
-        record = (await db(inst.collection)
-          .where({ id: inst.item })
-          .first()) as Record<string, unknown> | undefined
+        record = (await db(inst.collection).where({ id: inst.item }).first()) as
+          | Record<string, unknown>
+          | undefined
       } catch {
         record = undefined
       }
@@ -1905,7 +1952,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // so conditional branching can filter the offered transitions.
     const hasConditionRules = transitions.some((tx) => tx.condition_rules)
     const conditionRecord = hasConditionRules
-      ? await fetchRecordForConditions(collection, item, transitions.map((tx) => tx.condition_rules))
+      ? await fetchRecordForConditions(
+          collection,
+          item,
+          transitions.map((tx) => tx.condition_rules)
+        )
       : {}
 
     const availableTransitions = transitions
@@ -2197,7 +2248,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const { collection } = req.params as { collection: string }
     const rawIds = (req.query as { ids?: string })?.ids
     const ids = rawIds
-      ? rawIds.split(',').map((v) => v.trim()).filter(Boolean).slice(0, 500)
+      ? rawIds
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean)
+          .slice(0, 500)
       : null
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2588,49 +2643,65 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // members move to the target (already-present ones skipped), the source
   // group is deleted. Both groups must sit on the same state — merging across
   // states would silently reassign responsibility.
-  app.post('/owner-groups/:groupId/merge-into', { preHandler: requireAdmin }, async (req, reply) => {
-    const { groupId } = req.params as { groupId: string }
-    const { target_group_id } = (req.body ?? {}) as { target_group_id?: string }
-    if (!target_group_id) return reply.code(400).send({ error: 'target_group_id is required' })
-    if (String(target_group_id) === String(groupId)) {
-      return reply.code(400).send({ error: 'A group cannot merge into itself' })
-    }
-    const [source, target] = await Promise.all([
-      db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: groupId }).first(),
-      db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: target_group_id }).first()
-    ])
-    if (!source || !target) return reply.code(404).send({ error: 'Group not found' })
-    if (String(source.state).toUpperCase() !== String(target.state).toUpperCase()) {
-      return reply.code(400).send({ error: 'Groups belong to different states — merge only covers duplicates within one state' })
-    }
-    await snapshotTemplateVersion(String(source.template), req.user?.id, 'before owner-group merge')
+  app.post(
+    '/owner-groups/:groupId/merge-into',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { groupId } = req.params as { groupId: string }
+      const { target_group_id } = (req.body ?? {}) as { target_group_id?: string }
+      if (!target_group_id) return reply.code(400).send({ error: 'target_group_id is required' })
+      if (String(target_group_id) === String(groupId)) {
+        return reply.code(400).send({ error: 'A group cannot merge into itself' })
+      }
+      const [source, target] = await Promise.all([
+        db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: groupId }).first(),
+        db<OwnerGroup>('nivaro_pipeline_owner_groups').where({ id: target_group_id }).first()
+      ])
+      if (!source || !target) return reply.code(404).send({ error: 'Group not found' })
+      if (String(source.state).toUpperCase() !== String(target.state).toUpperCase()) {
+        return reply
+          .code(400)
+          .send({
+            error:
+              'Groups belong to different states — merge only covers duplicates within one state'
+          })
+      }
+      await snapshotTemplateVersion(
+        String(source.template),
+        req.user?.id,
+        'before owner-group merge'
+      )
 
-    const [sourceMembers, targetMembers] = await Promise.all([
-      db('nivaro_pipeline_owner_group_users').where({ group: groupId }).select('user'),
-      db('nivaro_pipeline_owner_group_users').where({ group: target_group_id }).select('user')
-    ])
-    const existing = new Set(
-      (targetMembers as Array<{ user: string }>).map((m) => String(m.user).toUpperCase())
-    )
-    let moved = 0
-    for (const m of sourceMembers as Array<{ user: string }>) {
-      if (existing.has(String(m.user).toUpperCase())) continue
-      await db('nivaro_pipeline_owner_group_users').insert({ group: target_group_id, user: m.user })
-      existing.add(String(m.user).toUpperCase())
-      moved++
+      const [sourceMembers, targetMembers] = await Promise.all([
+        db('nivaro_pipeline_owner_group_users').where({ group: groupId }).select('user'),
+        db('nivaro_pipeline_owner_group_users').where({ group: target_group_id }).select('user')
+      ])
+      const existing = new Set(
+        (targetMembers as Array<{ user: string }>).map((m) => String(m.user).toUpperCase())
+      )
+      let moved = 0
+      for (const m of sourceMembers as Array<{ user: string }>) {
+        if (existing.has(String(m.user).toUpperCase())) continue
+        await db('nivaro_pipeline_owner_group_users').insert({
+          group: target_group_id,
+          user: m.user
+        })
+        existing.add(String(m.user).toUpperCase())
+        moved++
+      }
+      await db('nivaro_pipeline_owner_group_users').where({ group: groupId }).delete()
+      await db('nivaro_pipeline_owner_groups').where({ id: groupId }).delete()
+      await logActivity({
+        action: 'owner-group-merge',
+        collection: 'nivaro_pipeline_owner_groups',
+        item: String(target_group_id),
+        user: req.user?.id,
+        comment: `merged group ${groupId} into ${target_group_id} (${moved} member(s) moved)`,
+        req
+      })
+      return reply.send({ data: { moved, deleted_group: groupId } })
     }
-    await db('nivaro_pipeline_owner_group_users').where({ group: groupId }).delete()
-    await db('nivaro_pipeline_owner_groups').where({ id: groupId }).delete()
-    await logActivity({
-      action: 'owner-group-merge',
-      collection: 'nivaro_pipeline_owner_groups',
-      item: String(target_group_id),
-      user: req.user?.id,
-      comment: `merged group ${groupId} into ${target_group_id} (${moved} member(s) moved)`,
-      req
-    })
-    return reply.send({ data: { moved, deleted_group: groupId } })
-  })
+  )
 
   app.post('/owner-groups/:groupId/users', { preHandler: requireAdmin }, async (req, reply) => {
     const { groupId } = req.params as { groupId: string }
@@ -2837,61 +2908,65 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   // POST /instance/:collection/owners/batch {ids} → resolved owner display
   // names per record, one batched engine pass (browser Owners columns).
-  app.post('/instance/:collection/owners/batch', { preHandler: requireAuth }, async (req, reply) => {
-    const { collection } = req.params as { collection: string }
-    const { ids } = (req.body ?? {}) as { ids?: Array<string | number> }
-    const idList = (ids ?? []).map(String).filter(Boolean).slice(0, 500)
-    if (!idList.length) return reply.send({ data: {} })
-    const instances = (await db('nivaro_workflow_instances')
-      .where({ collection })
-      .whereIn('item', idList)
-      .select('id', 'item', 'current_state')) as Array<{
-      id: string
-      item: string
-      current_state: string | null
-    }>
-    const requests = instances
-      .filter((i) => i.current_state)
-      .map((i) => ({
-        key: String(i.item),
-        stateId: i.current_state as string,
-        instanceId: i.id,
-        collection,
-        itemId: String(i.item)
-      }))
-    // Records with an addendum in flight answer with the ADDENDUM's owners —
-    // the people whose approval is pending (pipeline-subject.ts maps the
-    // addendum's rules back onto the parent record).
-    if (collection !== ADDENDUM_COLLECTION) {
-      try {
-        if ((await getCollection(collection))?.addendums_enabled) {
-          const active = await activeAddendumInstances(collection, idList)
-          for (const [item, a] of active) {
-            const idx = requests.findIndex((r) => r.key === item)
-            const req = {
-              key: item,
-              stateId: a.state_id,
-              instanceId: a.instance_id,
-              collection: ADDENDUM_COLLECTION,
-              itemId: a.addendum_id
+  app.post(
+    '/instance/:collection/owners/batch',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection } = req.params as { collection: string }
+      const { ids } = (req.body ?? {}) as { ids?: Array<string | number> }
+      const idList = (ids ?? []).map(String).filter(Boolean).slice(0, 500)
+      if (!idList.length) return reply.send({ data: {} })
+      const instances = (await db('nivaro_workflow_instances')
+        .where({ collection })
+        .whereIn('item', idList)
+        .select('id', 'item', 'current_state')) as Array<{
+        id: string
+        item: string
+        current_state: string | null
+      }>
+      const requests = instances
+        .filter((i) => i.current_state)
+        .map((i) => ({
+          key: String(i.item),
+          stateId: i.current_state as string,
+          instanceId: i.id,
+          collection,
+          itemId: String(i.item)
+        }))
+      // Records with an addendum in flight answer with the ADDENDUM's owners —
+      // the people whose approval is pending (pipeline-subject.ts maps the
+      // addendum's rules back onto the parent record).
+      if (collection !== ADDENDUM_COLLECTION) {
+        try {
+          if ((await getCollection(collection))?.addendums_enabled) {
+            const active = await activeAddendumInstances(collection, idList)
+            for (const [item, a] of active) {
+              const idx = requests.findIndex((r) => r.key === item)
+              const req = {
+                key: item,
+                stateId: a.state_id,
+                instanceId: a.instance_id,
+                collection: ADDENDUM_COLLECTION,
+                itemId: a.addendum_id
+              }
+              if (idx >= 0) requests[idx] = req
+              else requests.push(req)
             }
-            if (idx >= 0) requests[idx] = req
-            else requests.push(req)
           }
+        } catch {
+          /* fall back to the record's own owners */
         }
-      } catch {
-        /* fall back to the record's own owners */
       }
+      const byKey = await resolveStateOwnersBatch(requests)
+      const out: Record<string, Array<{ id: string; name: string }>> = {}
+      for (const [k, owners] of byKey)
+        out[k] = owners.map((o) => ({
+          id: o.id,
+          name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
+        }))
+      return reply.send({ data: out })
     }
-    const byKey = await resolveStateOwnersBatch(requests)
-    const out: Record<string, Array<{ id: string; name: string }>> = {}
-    for (const [k, owners] of byKey)
-      out[k] = owners.map((o) => ({
-        id: o.id,
-        name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
-      }))
-    return reply.send({ data: out })
-  })
+  )
 
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
@@ -3223,7 +3298,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         const conditioned = transitions.filter((t) => t.condition_rules)
         const conditionRecord =
           conditioned.length > 0
-            ? await fetchRecordForConditions(collection, item, conditioned.map((t) => t.condition_rules))
+            ? await fetchRecordForConditions(
+                collection,
+                item,
+                conditioned.map((t) => t.condition_rules)
+              )
             : record
         const DISCRIMINATOR_OPS = new Set(['eq', 'neq', 'in', 'notin'])
         const passes = (t: { condition_rules: string | null }) => {
@@ -3385,7 +3464,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           .leftJoin('nivaro_users as u', 'u.id', 'gu.user')
           .whereIn('gu.group', ids)
           // `group` is reserved-ish on this stack — always alias-select it.
-          .select('gu.group as owner_group', 'gu.user', 'u.status', 'u.is_redacted', 'u.first_name', 'u.last_name', 'u.email')
+          .select(
+            'gu.group as owner_group',
+            'gu.user',
+            'u.status',
+            'u.is_redacted',
+            'u.first_name',
+            'u.last_name',
+            'u.email'
+          )
     )) as Array<{
       owner_group: string
       user: string
@@ -3428,12 +3515,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     }> = []
     const groupLabel = (g: (typeof groups)[number]) => {
       if (g.name?.trim()) return g.name
-      const filters = (parseJson(g.filters) as Array<{ field: string; value: unknown }> | null) ?? []
+      const filters =
+        (parseJson(g.filters) as Array<{ field: string; value: unknown }> | null) ?? []
       return filters.map((f) => String(f.value)).join(' · ') || '(unnamed)'
     }
     const filterSig = (g: (typeof groups)[number]) => {
       const filters =
-        (parseJson(g.filters) as Array<{ field?: string; op?: string; value?: unknown }> | null) ?? []
+        (parseJson(g.filters) as Array<{ field?: string; op?: string; value?: unknown }> | null) ??
+        []
       return filters
         .map((f) => `${String(f.field ?? '')}|${String(f.op ?? 'eq')}|${String(f.value ?? '')}`)
         .sort()
@@ -3521,7 +3610,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const groups = (await db('nivaro_pipeline_owner_groups')
       .where({ template: id })
       .select('id')) as Array<{ id: number }>
-    if (groups.length === 0) return reply.code(404).send({ error: 'Template not found or has no owner groups' })
+    if (groups.length === 0)
+      return reply.code(404).send({ error: 'Template not found or has no owner groups' })
     const groupIds = groups.map((g) => g.id)
 
     const deadUsers = (await db('nivaro_users')
@@ -3538,7 +3628,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       email: string | null
     }>
     if (deadUsers.length === 0) {
-      return reply.send({ data: { group_members_removed: 0, instance_owners_removed: 0, users: [] } })
+      return reply.send({
+        data: { group_members_removed: 0, instance_owners_removed: 0, users: [] }
+      })
     }
     const deadIds = deadUsers.map((u) => u.id)
     const nameOf = new Map(
@@ -3558,7 +3650,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           .whereIn('user', chunk)
           .select('user') as unknown as Promise<Array<{ user: string }>>
     )
-    const removedNames = [...new Set(memberRows.map((r) => nameOf.get(String(r.user).toUpperCase()) ?? r.user))]
+    const removedNames = [
+      ...new Set(memberRows.map((r) => nameOf.get(String(r.user).toUpperCase()) ?? r.user))
+    ]
 
     let groupMembersRemoved = 0
     for (let i = 0; i < deadIds.length; i += 500) {
@@ -3648,32 +3742,26 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
-  app.post(
-    '/:id/versions/:versionId/restore',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      const { id, versionId } = req.params as { id: string; versionId: string }
-      // Snapshot the CURRENT config first so the restore itself is reversible.
-      await snapshotTemplateVersion(id, req.user?.id, 'before restore')
-      let result: Awaited<ReturnType<typeof restoreTemplateVersion>>
-      try {
-        result = await restoreTemplateVersion(id, Number(versionId))
-      } catch (err) {
-        return reply
-          .code(400)
-          .send({ error: err instanceof Error ? err.message : 'Restore failed' })
-      }
-      await logActivity({
-        action: 'update',
-        collection: 'nivaro_workflow_templates',
-        item: id,
-        user: req.user?.id,
-        req,
-        comment: `restore-version:${versionId}`
-      })
-      return reply.send({ data: result })
+  app.post('/:id/versions/:versionId/restore', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    // Snapshot the CURRENT config first so the restore itself is reversible.
+    await snapshotTemplateVersion(id, req.user?.id, 'before restore')
+    let result: Awaited<ReturnType<typeof restoreTemplateVersion>>
+    try {
+      result = await restoreTemplateVersion(id, Number(versionId))
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Restore failed' })
     }
-  )
+    await logActivity({
+      action: 'update',
+      collection: 'nivaro_workflow_templates',
+      item: id,
+      user: req.user?.id,
+      req,
+      comment: `restore-version:${versionId}`
+    })
+    return reply.send({ data: result })
+  })
 
   app.get('/:id/export', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }

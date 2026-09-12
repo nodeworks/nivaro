@@ -84,7 +84,9 @@ export async function opsLogsRoutes(app: FastifyInstance) {
 
   // #253 — log alert rules CRUD.
   app.get('/rules', async (_req, reply) => {
-    const rows = await db('nivaro_log_alert_rules').orderBy('id', 'desc').catch(() => [])
+    const rows = await db('nivaro_log_alert_rules')
+      .orderBy('id', 'desc')
+      .catch(() => [])
     return reply.send({ data: rows })
   })
   app.post<{ Body: { name?: string; pattern?: string; level?: string | null } }>(
@@ -130,7 +132,9 @@ export async function opsLogsRoutes(app: FastifyInstance) {
     }
   )
   app.delete<{ Params: { id: string } }>('/rules/:id', async (req, reply) => {
-    const n = await db('nivaro_log_alert_rules').where({ id: Number(req.params.id) }).del()
+    const n = await db('nivaro_log_alert_rules')
+      .where({ id: Number(req.params.id) })
+      .del()
     if (!n) return reply.code(404).send({ error: 'Rule not found' })
     bustLogRules()
     await logActivity({
@@ -146,9 +150,9 @@ export async function opsLogsRoutes(app: FastifyInstance) {
   // ready-to-run curl script — shaped payload with typed placeholders, aimed
   // at dev, caller supplies the token.
   app.get<{ Params: { id: string } }>('/repro/:id', async (req, reply) => {
-    const issue = (await db('nivaro_issues').where({ id: Number(req.params.id) }).first()) as
-      | { title: string; details: string | null }
-      | undefined
+    const issue = (await db('nivaro_issues')
+      .where({ id: Number(req.params.id) })
+      .first()) as { title: string; details: string | null } | undefined
     if (!issue) return reply.code(404).send({ error: 'Issue not found' })
     const m = issue.details?.match(/Request context: (\{.*\})/)
     if (!m) {
@@ -189,7 +193,12 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'TOKEN=${TOKEN:?set TOKEN}',
       `curl -s -X ${method} "http://localhost:3055${url}" \\`,
       '  -H "Authorization: Bearer $TOKEN" \\',
-      ...(body ? ['  -H "Content-Type: application/json" \\', `  -d '${body.replace(/'/g, "'\\''").replace(/\\(?!n)/g, '')}'`] : []),
+      ...(body
+        ? [
+            '  -H "Content-Type: application/json" \\',
+            `  -d '${body.replace(/'/g, "'\\''").replace(/\\(?!n)/g, '')}'`
+          ]
+        : []),
       ''
     ].join('\n')
     reply.header('Content-Type', 'text/plain')
@@ -255,7 +264,9 @@ export async function opsLogsRoutes(app: FastifyInstance) {
         })
       }
       events.sort((a, b) => b.at.localeCompare(a.at))
-      return reply.send({ data: { around: around.toISOString(), window_minutes: win / 60_000, events } })
+      return reply.send({
+        data: { around: around.toISOString(), window_minutes: win / 60_000, events }
+      })
     }
   )
 }

@@ -10,6 +10,8 @@ export async function up(knex: Knex): Promise<void> {
 export async function down(knex: Knex): Promise<void> {
   const has = await knex.schema.hasColumn('nivaro_field_groups', 'swap_config')
   if (has) {
-    await knex.schema.alterTable('nivaro_field_groups', (t) => { t.dropColumn('swap_config') })
+    await knex.schema.alterTable('nivaro_field_groups', (t) => {
+      t.dropColumn('swap_config')
+    })
   }
 }

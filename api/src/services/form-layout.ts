@@ -65,7 +65,17 @@ export async function loadFormLayout(
       .orderBy('sort'),
     db('nivaro_fields')
       .where({ collection })
-      .select('field', 'label', 'type', 'required', 'placeholder', 'options', 'visibility_rules', 'hidden', 'readonly'),
+      .select(
+        'field',
+        'label',
+        'type',
+        'required',
+        'placeholder',
+        'options',
+        'visibility_rules',
+        'hidden',
+        'readonly'
+      ),
     db.raw(`SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`, [
       collection
     ]) as Promise<Array<{ name: string }>>
@@ -96,7 +106,12 @@ export async function loadFormLayout(
             c && typeof c === 'object'
               ? {
                   value: String((c as { value?: unknown }).value ?? ''),
-                  text: String((c as { text?: unknown; label?: unknown }).text ?? (c as { label?: unknown }).label ?? (c as { value?: unknown }).value ?? '')
+                  text: String(
+                    (c as { text?: unknown; label?: unknown }).text ??
+                      (c as { label?: unknown }).label ??
+                      (c as { value?: unknown }).value ??
+                      ''
+                  )
                 }
               : { value: String(c), text: String(c) }
           )

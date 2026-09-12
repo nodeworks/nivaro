@@ -123,10 +123,9 @@ export async function recordGraphRoutes(app: FastifyInstance) {
     // this collection, so they need their own fetch.
     const junctionNames = m2mRels.map((r) => String(r.many_collection))
     const companions = junctionNames.length
-      ? ((await db('nivaro_relations').whereIn(
-          'many_collection',
-          junctionNames
-        )) as Array<Record<string, unknown>>)
+      ? ((await db('nivaro_relations').whereIn('many_collection', junctionNames)) as Array<
+          Record<string, unknown>
+        >)
       : []
     for (const r of m2mRels) {
       const junction = String(r.many_collection)
@@ -138,9 +137,7 @@ export async function recordGraphRoutes(app: FastifyInstance) {
       // Companion relation names the other side's collection
       const companion = companions.find(
         (c) =>
-          c.many_collection === junction &&
-          String(c.many_field) !== parentCol &&
-          c.one_collection
+          c.many_collection === junction && String(c.many_field) !== parentCol && c.one_collection
       )
       const target = companion ? String(companion.one_collection) : null
       if (!target) continue
@@ -159,11 +156,15 @@ export async function recordGraphRoutes(app: FastifyInstance) {
           .limit(CHILD_CAP + 1)
           .select(relatedCol)) as Array<Record<string, unknown>>
         if (links.length > CHILD_CAP) truncated = true
-        const ids = links.slice(0, CHILD_CAP).map((l) => l[relatedCol]).filter((v) => v != null)
+        const ids = links
+          .slice(0, CHILD_CAP)
+          .map((l) => l[relatedCol])
+          .filter((v) => v != null)
         if (ids.length === 0) continue
-        const rows = (await db(targetCollection).whereIn('id', ids as Array<string | number>)) as Array<
-          Record<string, unknown>
-        >
+        const rows = (await db(targetCollection).whereIn(
+          'id',
+          ids as Array<string | number>
+        )) as Array<Record<string, unknown>>
         const byId = new Map(rows.map((row) => [String(row.id), row]))
         for (const rid of ids) {
           edges.push({

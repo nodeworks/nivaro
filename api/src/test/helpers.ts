@@ -32,7 +32,7 @@ export function makeAdminUser(): User {
     delegate_expires_at: null,
     is_out_of_office: false,
     created_at: new Date(),
-    updated_at: new Date(),
+    updated_at: new Date()
   }
 }
 
@@ -56,6 +56,6 @@ export function makeRegularUser(overrides: Partial<User> = {}): User {
     is_out_of_office: false,
     created_at: new Date(),
     updated_at: new Date(),
-    ...overrides,
+    ...overrides
   }
 }

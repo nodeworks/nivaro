@@ -22,9 +22,7 @@
 import { db } from '../db/index.js'
 
 export function instanceKey(): string {
-  return (
-    process.env.NIVARO_INSTANCE?.trim() || process.env.NODE_ENV?.trim() || 'default'
-  )
+  return process.env.NIVARO_INSTANCE?.trim() || process.env.NODE_ENV?.trim() || 'default'
 }
 
 // ── Env layer (parsed once) ─────────────────────────────────────────────────

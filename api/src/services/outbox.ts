@@ -20,10 +20,7 @@ export function registerOutboxHandler(kind: string, fn: OutboxHandler): void {
   handlers.set(kind, fn)
 }
 
-export async function enqueueOutbox(
-  kind: string,
-  payload: Record<string, unknown>
-): Promise<void> {
+export async function enqueueOutbox(kind: string, payload: Record<string, unknown>): Promise<void> {
   await db('nivaro_outbox')
     .insert({
       kind,

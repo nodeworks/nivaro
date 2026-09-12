@@ -103,7 +103,6 @@ export function isTracing(): boolean {
   return als.getStore() !== undefined
 }
 
-
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────
 const followBudget = new Map<string, { remaining: number; until: number }>()
 

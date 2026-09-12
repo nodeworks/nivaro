@@ -82,9 +82,9 @@ export async function proposeAction(
   }
 
   const validFields = new Set(
-    ((await db('nivaro_fields').where({ collection }).select('field')) as Array<{ field: string }>).map(
-      (r) => r.field
-    )
+    (
+      (await db('nivaro_fields').where({ collection }).select('field')) as Array<{ field: string }>
+    ).map((r) => r.field)
   )
 
   let payload: Record<string, unknown>
@@ -149,7 +149,8 @@ export async function proposeAction(
   return {
     proposal_id: id,
     ...preview,
-    expires_note: 'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
+    expires_note:
+      'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
   }
 }
 
@@ -171,7 +172,13 @@ async function proposeDashboard(
   const rawWidgets = Array.isArray(dashboard.widgets) ? dashboard.widgets.slice(0, 12) : []
   if (rawWidgets.length === 0) throw new Error('dashboard.widgets must have at least one widget')
 
-  const widgets: Array<{ type: string; title: string; collection: string; field: string | null; filters: string | null }> = []
+  const widgets: Array<{
+    type: string
+    title: string
+    collection: string
+    field: string | null
+    filters: string | null
+  }> = []
   for (const w of rawWidgets) {
     const type = String(w.type ?? '')
     if (!WIDGET_TYPES.has(type)) {
@@ -185,9 +192,11 @@ async function proposeDashboard(
       throw new Error(`You cannot read ${collection}`)
     }
     const valid = new Set(
-      ((await db('nivaro_fields').where({ collection }).select('field')) as Array<{ field: string }>).map(
-        (r) => r.field
-      )
+      (
+        (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
+          field: string
+        }>
+      ).map((r) => r.field)
     )
     const field = w.field != null && valid.has(String(w.field)) ? String(w.field) : null
     if (type !== 'count' && type !== 'latest' && !field) {
@@ -221,7 +230,12 @@ async function proposeDashboard(
     count: widgets.length,
     changes: { name },
     sample: [],
-    widgets: widgets.map((w) => ({ type: w.type, title: w.title, collection: w.collection, field: w.field })),
+    widgets: widgets.map((w) => ({
+      type: w.type,
+      title: w.title,
+      collection: w.collection,
+      field: w.field
+    })),
     expires_note:
       'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
   }
@@ -313,11 +327,13 @@ export async function executeProposal(
     result = { updated, failed: ids.length - updated, errors }
   }
 
-  await db('nivaro_ai_proposals').where({ id: proposalId }).update({
-    status: 'executed',
-    result: JSON.stringify(result),
-    executed_at: new Date()
-  })
+  await db('nivaro_ai_proposals')
+    .where({ id: proposalId })
+    .update({
+      status: 'executed',
+      result: JSON.stringify(result),
+      executed_at: new Date()
+    })
   return { status: 'executed', result }
 }
 

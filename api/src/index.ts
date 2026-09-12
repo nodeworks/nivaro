@@ -114,7 +114,10 @@ async function main() {
             `Shutdown is cutting ${running.length} running job(s): ${running.map((r) => r.job_id).join(', ')}`
           )
           await db('nivaro_job_runs')
-            .whereIn('id', running.map((r) => r.id))
+            .whereIn(
+              'id',
+              running.map((r) => r.id)
+            )
             .update({ status: 'interrupted', finished_at: new Date() })
         }
       } catch {

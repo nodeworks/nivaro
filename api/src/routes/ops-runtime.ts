@@ -112,7 +112,13 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
   app.post<{
-    Body: { title?: string; message?: string; starts_at?: string; ends_at?: string; send_all_clear?: boolean }
+    Body: {
+      title?: string
+      message?: string
+      starts_at?: string
+      ends_at?: string
+      send_all_clear?: boolean
+    }
   }>('/maintenance-windows', async (req, reply) => {
     const title = String(req.body?.title ?? '').trim()
     const starts = req.body?.starts_at ? new Date(req.body.starts_at) : null
@@ -132,7 +138,12 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       created_by: req.user?.id ?? null,
       created_at: new Date()
     })
-    await logActivity({ action: 'maintenance-window-create', user: req.user?.id, comment: title, req })
+    await logActivity({
+      action: 'maintenance-window-create',
+      user: req.user?.id,
+      comment: title,
+      req
+    })
     const row = await db('nivaro_maintenance_windows').orderBy('id', 'desc').first()
     return reply.code(201).send({ data: row })
   })
@@ -153,7 +164,12 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       const { bustMaintenanceCache } = await import('../services/security.js')
       bustMaintenanceCache()
     }
-    await logActivity({ action: 'maintenance-window-cancel', user: req.user?.id, comment: row.title, req })
+    await logActivity({
+      action: 'maintenance-window-cancel',
+      user: req.user?.id,
+      comment: row.title,
+      req
+    })
     return reply.code(204).send()
   })
 
@@ -184,7 +200,9 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
         return /^[0-3]$/.test(hour ?? '')
       })
       .map((j) => ({ id: j.id, expression: j.expression }))
-    return reply.send({ data: { db_skew_ms: skewMs === null ? null : Math.round(skewMs), dst_band_crons: dstBand } })
+    return reply.send({
+      data: { db_skew_ms: skewMs === null ? null : Math.round(skewMs), dst_band_crons: dstBand }
+    })
   })
 
   // #301 — heap snapshot before a restart destroys the evidence. Written to
@@ -226,7 +244,8 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
         .limit(10)
         .select('job_id')
         .catch(() => [])) as Array<{ job_id: string }>
-      if (runningJobs.length > 0) busy.push(`jobs running: ${runningJobs.map((r) => r.job_id).join(', ')}`)
+      if (runningJobs.length > 0)
+        busy.push(`jobs running: ${runningJobs.map((r) => r.job_id).join(', ')}`)
       const imports = (await db('nivaro_import_queue')
         .where('status', 'running')
         .count('* as n')

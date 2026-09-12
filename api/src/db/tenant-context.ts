@@ -6,7 +6,7 @@ import knex, { type Knex } from 'knex'
 export interface TenantStore {
   db: Knex
   slug: string
-  tenantId: string  // immutable UUID — used as R2 prefix so slug changes never cause collisions
+  tenantId: string // immutable UUID — used as R2 prefix so slug changes never cause collisions
 }
 
 const store = new AsyncLocalStorage<TenantStore>()
@@ -26,7 +26,12 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
 
 /** Run `done` (Fastify lifecycle callback) within the ALS context for this tenant.
  *  All async operations initiated from `done` inherit the context automatically. */
-export function runWithTenantDb(tenantDb: Knex, slug: string, done: () => void, tenantId = ''): void {
+export function runWithTenantDb(
+  tenantDb: Knex,
+  slug: string,
+  done: () => void,
+  tenantId = ''
+): void {
   store.run({ db: tenantDb, slug, tenantId }, done)
 }
 
@@ -42,5 +47,5 @@ export function getTenantSlug(): string | undefined {
 
 /** Returns the tenant UUID for the current request — used as R2 key prefix (immutable, slug-change-safe). */
 export function getTenantId(): string | undefined {
-  return store.getStore()?.tenantId || store.getStore()?.slug  // fallback to slug for backwards compat
+  return store.getStore()?.tenantId || store.getStore()?.slug // fallback to slug for backwards compat
 }

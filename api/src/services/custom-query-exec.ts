@@ -105,7 +105,10 @@ export async function execCustomQuerySql(
       const req = new Driver.Request(resolvedSql, (err: Error | null) => {
         if (err) done(() => reject(err))
       }) as {
-        on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
+        on(
+          ev: 'row',
+          h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
+        ): unknown
         on(ev: 'error', h: (e: Error) => void): unknown
         once(ev: 'requestCompleted', h: () => void): unknown
         setTimeout?: (ms: number) => void
@@ -164,7 +167,10 @@ export async function explainSqlPlan(
       const req = new Driver.Request(sql, (err: Error | null) => {
         if (err) done(() => reject(err))
       }) as {
-        on(ev: 'row', h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void): unknown
+        on(
+          ev: 'row',
+          h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
+        ): unknown
         on(ev: 'error', h: (e: Error) => void): unknown
         once(ev: 'requestCompleted', h: () => void): unknown
         setTimeout?: (ms: number) => void

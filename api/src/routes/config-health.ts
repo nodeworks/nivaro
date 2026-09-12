@@ -26,7 +26,9 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/run', async (req) => {
     const { startJobRun } = await import('../services/job-runs.js')
-    const run = await startJobRun('cron', 'config-health-sweep', { triggeredBy: req.user?.id ?? null })
+    const run = await startJobRun('cron', 'config-health-sweep', {
+      triggeredBy: req.user?.id ?? null
+    })
     try {
       const outcome = await runConfigHealthSweep()
       await run.complete(outcome)
@@ -68,12 +70,14 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     // Register the collection (hidden — junctions never show in nav).
     const existing = await db('nivaro_collections').where({ collection: table }).first()
     if (!existing) {
-      await db('nivaro_collections').insert({
-        collection: table,
-        display_name: table,
-        hidden: true,
-        created_at: new Date()
-      }).catch(() => {})
+      await db('nivaro_collections')
+        .insert({
+          collection: table,
+          display_name: table,
+          hidden: true,
+          created_at: new Date()
+        })
+        .catch(() => {})
     }
     // Both legs as mutual junction relations (each names the OTHER's column
     // as junction_field — the healthy-pair invariant).
@@ -102,7 +106,11 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     }
     // Parent-side alias on the FIRST leg's target (convention: parent is the
     // table the junction name starts with, else leg A).
-    const parent = table.startsWith(a.target) ? a.target : table.startsWith(b.target) ? b.target : a.target
+    const parent = table.startsWith(a.target)
+      ? a.target
+      : table.startsWith(b.target)
+        ? b.target
+        : a.target
     const other = parent === a.target ? b : a
     const alias = other.target
     const haveField = await db('nivaro_fields').where({ collection: parent, field: alias }).first()

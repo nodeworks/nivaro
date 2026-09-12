@@ -13,8 +13,10 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
   app.get('/status', async () => {
-    const settings = ((await db('nivaro_settings').where({ id: 1 }).first().catch(() => undefined)) ??
-      {}) as Record<string, unknown>
+    const settings = ((await db('nivaro_settings')
+      .where({ id: 1 })
+      .first()
+      .catch(() => undefined)) ?? {}) as Record<string, unknown>
 
     const [collectionCount, userCount, roleCount, flowCount, layoutCount] = await Promise.all([
       db('nivaro_collections')
@@ -100,7 +102,9 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
         id: 'branding',
         label: 'Brand the instance',
         done: !!(settings.project_name || settings.brand_logo),
-        detail: settings.project_name ? `Named "${settings.project_name}"` : 'Default Nivaro branding',
+        detail: settings.project_name
+          ? `Named "${settings.project_name}"`
+          : 'Default Nivaro branding',
         link: '/settings'
       },
       {
@@ -115,7 +119,10 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
         id: 'ai',
         label: 'Add an AI key (optional)',
         done: !!(settings.anthropic_api_key || config.ANTHROPIC_API_KEY),
-        detail: settings.anthropic_api_key || config.ANTHROPIC_API_KEY ? 'AI features available' : 'AI features disabled',
+        detail:
+          settings.anthropic_api_key || config.ANTHROPIC_API_KEY
+            ? 'AI features available'
+            : 'AI features disabled',
         link: '/settings',
         optional: true
       }

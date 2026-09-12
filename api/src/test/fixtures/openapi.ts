@@ -6,27 +6,27 @@ export const MINIMAL_OPENAPI_SPEC = {
       get: {
         operationId: 'listUsers',
         summary: 'List users',
-        responses: { '200': { description: 'OK' } },
+        responses: { '200': { description: 'OK' } }
       },
       post: {
         operationId: 'createUser',
         summary: 'Create user',
         requestBody: {
-          content: { 'application/json': { schema: { type: 'object' } } },
+          content: { 'application/json': { schema: { type: 'object' } } }
         },
-        responses: { '201': { description: 'Created' } },
-      },
+        responses: { '201': { description: 'Created' } }
+      }
     },
     '/users/{id}': {
       get: {
         operationId: 'getUser',
         parameters: [{ name: 'id', in: 'path', required: true }],
-        responses: { '200': { description: 'OK' } },
+        responses: { '200': { description: 'OK' } }
       },
       delete: {
         operationId: 'deleteUser',
-        responses: { '204': { description: 'No content' } },
-      },
-    },
-  },
+        responses: { '204': { description: 'No content' } }
+      }
+    }
+  }
 }

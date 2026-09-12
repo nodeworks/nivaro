@@ -106,7 +106,12 @@ export function scoreRow(
 export async function globalSearch(
   user: User,
   q: string,
-  opts: { collections?: string[]; perCollection?: number; maxCollections?: number; limit?: number } = {}
+  opts: {
+    collections?: string[]
+    perCollection?: number
+    maxCollections?: number
+    limit?: number
+  } = {}
 ): Promise<SearchOutcome> {
   const query = q.trim()
   if (query === '') return { hits: [], searched: [], skipped: [], truncated: false }
@@ -119,8 +124,11 @@ export async function globalSearch(
   const perCollectionTimeoutMs = 4000
   const limit = Math.min(Math.max(opts.limit ?? 30, 1), 100)
 
-  const registered = (await db('nivaro_collections')
-    .select('collection', 'display_template', 'hidden')) as Array<{
+  const registered = (await db('nivaro_collections').select(
+    'collection',
+    'display_template',
+    'hidden'
+  )) as Array<{
     collection: string
     display_template: string | null
     hidden: boolean | number
@@ -202,12 +210,21 @@ export async function globalSearch(
   // no-op, which is how `workflows` ended up outside the searched set. Select
   // rows and map them explicitly.
   const [layoutRows, bindingRows, queueRows] = (await Promise.all([
-    db('nivaro_collection_layouts').select('collection').catch(() => []),
-    db('nivaro_workflow_bindings').select('collection').catch(() => []),
-    db('nivaro_queue_sources').whereNotNull('collection').select('collection').catch(() => [])
+    db('nivaro_collection_layouts')
+      .select('collection')
+      .catch(() => []),
+    db('nivaro_workflow_bindings')
+      .select('collection')
+      .catch(() => []),
+    db('nivaro_queue_sources')
+      .whereNotNull('collection')
+      .select('collection')
+      .catch(() => [])
   ])) as Array<Array<{ collection: string | null }>>
   const names = (rows: Array<{ collection: string | null }>) =>
-    new Set(rows.map((r) => (r?.collection ? String(r.collection).toLowerCase() : '')).filter(Boolean))
+    new Set(
+      rows.map((r) => (r?.collection ? String(r.collection).toLowerCase() : '')).filter(Boolean)
+    )
   const bound = names(bindingRows)
   const queued = names(queueRows)
   const formed = names(layoutRows)
@@ -237,37 +254,40 @@ export async function globalSearch(
   // longer deadline.
   const CONCURRENCY = 4
   const searchOne = async (c: (typeof searchSet)[number]) => {
-      const cols = identityColumns(c.collection, c.display_template)
-      const rows = (await Promise.race([
-        readItems(user, c.collection, {
-          // Still readItems, so permissions, row filters and user scopes all
-          // apply — only the columns considered are narrowed.
-          filter: { _or: cols.map((col) => ({ [col]: { _contains: query } })) },
-          // Ask for the identity columns only. With `*`, readItems computes
-          // virtual rollups per row — real work for data a search result never
-          // shows, and enough of it to blow the per-collection timeout.
-          fields: ['id', ...cols],
-          limit: perCollection
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`search timed out: ${c.collection}`)), perCollectionTimeoutMs)
+    const cols = identityColumns(c.collection, c.display_template)
+    const rows = (await Promise.race([
+      readItems(user, c.collection, {
+        // Still readItems, so permissions, row filters and user scopes all
+        // apply — only the columns considered are narrowed.
+        filter: { _or: cols.map((col) => ({ [col]: { _contains: query } })) },
+        // Ask for the identity columns only. With `*`, readItems computes
+        // virtual rollups per row — real work for data a search result never
+        // shows, and enough of it to blow the per-collection timeout.
+        fields: ['id', ...cols],
+        limit: perCollection
+      }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`search timed out: ${c.collection}`)),
+          perCollectionTimeoutMs
         )
-      ])) as unknown as { data?: Record<string, unknown>[] } | Record<string, unknown>[]
-      const list = Array.isArray(rows) ? rows : (rows?.data ?? [])
-      const meta = await getCollection(c.collection).catch(() => null)
-      return list.map((row) => {
-        const label = labelFor(row, c.display_template)
-        const { score, matched } = scoreRow(row, label, query)
-        return {
-          collection: c.collection,
-          collection_label:
-            (meta as { name?: string } | null)?.name ?? c.collection.replace(/_/g, ' '),
-          id: String(row.id ?? ''),
-          label,
-          score,
-          matched_field: matched
-        } satisfies SearchHit
-      })
+      )
+    ])) as unknown as { data?: Record<string, unknown>[] } | Record<string, unknown>[]
+    const list = Array.isArray(rows) ? rows : (rows?.data ?? [])
+    const meta = await getCollection(c.collection).catch(() => null)
+    return list.map((row) => {
+      const label = labelFor(row, c.display_template)
+      const { score, matched } = scoreRow(row, label, query)
+      return {
+        collection: c.collection,
+        collection_label:
+          (meta as { name?: string } | null)?.name ?? c.collection.replace(/_/g, ' '),
+        id: String(row.id ?? ''),
+        label,
+        score,
+        matched_field: matched
+      } satisfies SearchHit
+    })
   }
 
   const settled: Array<PromiseSettledResult<SearchHit[]>> = []

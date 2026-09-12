@@ -55,7 +55,12 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
   try {
     // Deduped issue for the ops surface + direct inbox rows for admins.
     const { trackError } = await import('./error-tracking.js')
-    void trackError({ source: 'server', route: 'api-changelog', message: `${subject}: ${message}`, severity: 'high' })
+    void trackError({
+      source: 'server',
+      route: 'api-changelog',
+      message: `${subject}: ${message}`,
+      severity: 'high'
+    })
     const admins = (await db('nivaro_users as u')
       .join('nivaro_roles as r', 'r.id', 'u.role')
       .where('r.admin_access', true)

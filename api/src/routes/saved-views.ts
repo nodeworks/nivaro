@@ -195,7 +195,9 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       collection: 'nivaro_saved_views',
       item: String(id),
       data: formatView(updated) as unknown as Record<string, unknown>,
-      delta: Object.fromEntries(Object.keys(update).map((k) => [k, (formatView(updated) as Record<string, unknown>)[k]]))
+      delta: Object.fromEntries(
+        Object.keys(update).map((k) => [k, (formatView(updated) as Record<string, unknown>)[k]])
+      )
     })
 
     return reply.send({ data: formatView(updated) })

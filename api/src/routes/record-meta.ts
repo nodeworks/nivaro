@@ -209,7 +209,9 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
         if (!p) continue
         const reason = reasonFor(sub)
         const key = `${sub.event_type}:${sub.digest_frequency}:${reason ?? ''}`
-        if (!p.subscriptions.some((s) => `${s.event_type}:${s.cadence}:${s.reason ?? ''}` === key)) {
+        if (
+          !p.subscriptions.some((s) => `${s.event_type}:${s.cadence}:${s.reason ?? ''}` === key)
+        ) {
           p.subscriptions.push({
             event_type: sub.event_type,
             cadence: sub.digest_frequency,
@@ -240,7 +242,9 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
           .catch(() => []),
         db('nivaro_webhook_deliveries as d')
           .join('nivaro_webhooks as w', 'w.id', 'd.webhook')
-          .whereRaw("d.payload LIKE ?", [`%"id":${JSON.stringify(String(item)).replace(/^"|"$/g, '')}%`])
+          .whereRaw('d.payload LIKE ?', [
+            `%"id":${JSON.stringify(String(item)).replace(/^"|"$/g, '')}%`
+          ])
           .where('w.collection', collection)
           .orderBy('d.id', 'desc')
           .limit(20)
@@ -290,12 +294,12 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
         let owners = ownerCache.get(h.to_state)
         if (!owners) {
           try {
-            owners = (
-              await resolveStateOwners(h.to_state, inst.id, collection, String(item))
-            ).map((o) => ({
-              id: o.id,
-              name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
-            }))
+            owners = (await resolveStateOwners(h.to_state, inst.id, collection, String(item))).map(
+              (o) => ({
+                id: o.id,
+                name: [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+              })
+            )
           } catch {
             owners = []
           }

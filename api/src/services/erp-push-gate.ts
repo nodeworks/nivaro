@@ -46,7 +46,10 @@ export function payloadSignature(body: unknown): string | null {
     return v
   }
   try {
-    return createHash('sha256').update(JSON.stringify(canonical(body))).digest('hex').slice(0, 64)
+    return createHash('sha256')
+      .update(JSON.stringify(canonical(body)))
+      .digest('hex')
+      .slice(0, 64)
   } catch {
     return null
   }

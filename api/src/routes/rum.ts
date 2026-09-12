@@ -19,7 +19,11 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
     const b = req.body as { events?: Array<Record<string, unknown>> }
     const events = (Array.isArray(b?.events) ? b.events : []).slice(0, MAX_EVENTS)
     const rows = events
-      .filter((e) => typeof e.route === 'string' && (e.kind === 'load' || e.kind === 'route' || e.kind === 'rage'))
+      .filter(
+        (e) =>
+          typeof e.route === 'string' &&
+          (e.kind === 'load' || e.kind === 'route' || e.kind === 'rage')
+      )
       .map((e) => ({
         route: String(e.route).slice(0, 300),
         kind: e.kind,
@@ -31,7 +35,10 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
         user: req.user?.id ?? null,
         created_at: new Date()
       }))
-    if (rows.length > 0) await db('nivaro_rum_events').insert(rows).catch(() => {})
+    if (rows.length > 0)
+      await db('nivaro_rum_events')
+        .insert(rows)
+        .catch(() => {})
     return { data: { accepted: rows.length } }
   })
 

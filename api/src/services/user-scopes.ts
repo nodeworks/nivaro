@@ -142,7 +142,14 @@ interface RelRow {
 export type ScopeHop =
   | { kind: 'm2o'; from: string; to: string; fk: string }
   | { kind: 'o2m'; from: string; to: string; childFk: string }
-  | { kind: 'junction'; from: string; to: string; junction: string; parentFk: string; targetFk: string }
+  | {
+      kind: 'junction'
+      from: string
+      to: string
+      junction: string
+      parentFk: string
+      targetFk: string
+    }
 
 interface Edge {
   hop: ScopeHop
@@ -165,9 +172,7 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
     // _project_types). Routing a scope through one produced SQL against a
     // non-existent table and 500'd EVERY read of that collection for any
     // scoped user. Metadata is a claim; information_schema is the truth.
-    db('information_schema.tables').select('table_name') as Promise<
-      Array<{ table_name: string }>
-    >
+    db('information_schema.tables').select('table_name') as Promise<Array<{ table_name: string }>>
   ])
   const realTables = new Set(tableRows.map((t) => String(t.table_name).toLowerCase()))
   const adj = new Map<string, Edge[]>()
@@ -306,14 +311,14 @@ export async function resolveScopeHops(
       // the safe direction — the items service still enforces RBAC and RLS.
       .filter((e) => e.hop.kind !== 'o2m')
       .sort((a, b) => {
-      const kindRank = (h: ScopeHop) => (h.kind === 'o2m' ? 1 : 0)
-      return (
-        kindRank(a.hop) - kindRank(b.hop) ||
-        nameRank(a.hop) - nameRank(b.hop) ||
-        // Last resort: shortest link name — fewer qualifiers is the plain one.
-        (linkName(a.hop) ?? '').length - (linkName(b.hop) ?? '').length
-      )
-    })
+        const kindRank = (h: ScopeHop) => (h.kind === 'o2m' ? 1 : 0)
+        return (
+          kindRank(a.hop) - kindRank(b.hop) ||
+          nameRank(a.hop) - nameRank(b.hop) ||
+          // Last resort: shortest link name — fewer qualifiers is the plain one.
+          (linkName(a.hop) ?? '').length - (linkName(b.hop) ?? '').length
+        )
+      })
     for (const e of edges) {
       const nextHops = [...hops, e.hop]
       if (e.hop.to === target) {
@@ -523,7 +528,8 @@ async function segmentsToHops(collection: string, segments: string[]): Promise<S
     if (alias?.many_collection) {
       if (alias.junction_field) {
         const targetLeg = rels.find(
-          (r) => r.many_collection === alias.many_collection && r.many_field === alias.junction_field
+          (r) =>
+            r.many_collection === alias.many_collection && r.many_field === alias.junction_field
         )
         if (!targetLeg?.one_collection) return null
         const parentLeg = rels.find(
@@ -589,9 +595,10 @@ export async function getUserScopeEnforcement(
   // keys are almost always minted by admins.
   const keyRestrictions = user.api_key_scope_restrictions ?? []
   if (keyRestrictions.length === 0 && (await isAdminRole(user.role))) return none
-  const scopes = keyRestrictions.length > 0 && (await isAdminRole(user.role))
-    ? [] // admin's own (empty) scopes; only the key's restrictions apply
-    : await getUserScopes(user.id)
+  const scopes =
+    keyRestrictions.length > 0 && (await isAdminRole(user.role))
+      ? [] // admin's own (empty) scopes; only the key's restrictions apply
+      : await getUserScopes(user.id)
   const restricts: Array<{ dimension: string; values: Array<string | number> }> = [
     ...scopes.filter((s) => s.mode === 'restrict' && s.values.length > 0),
     ...keyRestrictions.filter((r) => r.values.length > 0)

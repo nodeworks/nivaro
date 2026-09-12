@@ -7,8 +7,8 @@ export async function up(knex: Knex): Promise<void> {
     t.text('description').nullable()
     t.string('icon', 100).nullable()
     t.string('widget_type', 50).notNullable() // stat | action-buttons | custom-query | external-api | list
-    t.specificType('inputs', 'nvarchar(max)').nullable()  // JSON: [{key,label,type,required,default}]
-    t.specificType('config', 'nvarchar(max)').nullable()  // JSON: type-specific
+    t.specificType('inputs', 'nvarchar(max)').nullable() // JSON: [{key,label,type,required,default}]
+    t.specificType('config', 'nvarchar(max)').nullable() // JSON: type-specific
     t.boolean('is_active').notNullable().defaultTo(true)
     t.uuid('created_by').nullable().references('id').inTable('nivaro_users')
     t.datetime('created_at').notNullable().defaultTo(knex.fn.now())

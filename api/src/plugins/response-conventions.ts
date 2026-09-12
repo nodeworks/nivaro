@@ -29,7 +29,7 @@ const ENVELOPE_EXEMPT: RegExp[] = [
   /^\/api\/zapier\//,
   /^\/api\/flows\/registered-/,
   /\/stats$/, // dashboard/stat endpoints return bare aggregates
-  /\/trends$/,
+  /\/trends$/
 ]
 
 // Keys allowed to be camelCase (external contracts we don't control).

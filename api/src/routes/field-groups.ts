@@ -25,7 +25,29 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     let q = db('nivaro_field_groups')
       .where({ collection })
-      .select('id', 'collection', 'key', 'label', 'type', 'icon', 'sort', 'is_collapsed', 'layout_id', 'container_id', 'tab_mode', 'hide_when_empty', 'visibility_mode', 'summary_fields', 'summary_hide_empty', 'swap_config', 'skip_if_filled', 'content', 'content_tone', 'visible_when', 'hidden_for_roles')
+      .select(
+        'id',
+        'collection',
+        'key',
+        'label',
+        'type',
+        'icon',
+        'sort',
+        'is_collapsed',
+        'layout_id',
+        'container_id',
+        'tab_mode',
+        'hide_when_empty',
+        'visibility_mode',
+        'summary_fields',
+        'summary_hide_empty',
+        'swap_config',
+        'skip_if_filled',
+        'content',
+        'content_tone',
+        'visible_when',
+        'hidden_for_roles'
+      )
       .orderBy('sort', 'asc')
 
     if (targetLayoutId !== null) {
@@ -64,8 +86,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       sort: body.sort ?? 0,
       is_collapsed: body.is_collapsed ? 1 : 0,
       layout_id: body.layout_id ?? null,
-      container_id: (body as Record<string,unknown>).container_id ?? null,
-      tab_mode: (body as Record<string,unknown>).tab_mode ?? null,
+      container_id: (body as Record<string, unknown>).container_id ?? null,
+      tab_mode: (body as Record<string, unknown>).tab_mode ?? null,
       content: (body as Record<string, unknown>).content ?? null,
       content_tone: (body as Record<string, unknown>).content_tone ?? null
     })
@@ -120,17 +142,21 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if (body.hide_when_empty !== undefined) patch.hide_when_empty = body.hide_when_empty ? 1 : 0
     if (body.visibility_mode !== undefined) patch.visibility_mode = body.visibility_mode
     if ('summary_fields' in body) patch.summary_fields = body.summary_fields ?? null
-    if (body.summary_hide_empty !== undefined) patch.summary_hide_empty = body.summary_hide_empty ? 1 : 0
-    if ('container_id' in body) patch.container_id = (body as Record<string,unknown>).container_id ?? null
-    if ('tab_mode' in body) patch.tab_mode = (body as Record<string,unknown>).tab_mode ?? null
+    if (body.summary_hide_empty !== undefined)
+      patch.summary_hide_empty = body.summary_hide_empty ? 1 : 0
+    if ('container_id' in body)
+      patch.container_id = (body as Record<string, unknown>).container_id ?? null
+    if ('tab_mode' in body) patch.tab_mode = (body as Record<string, unknown>).tab_mode ?? null
     if ('swap_config' in body) patch.swap_config = body.swap_config ?? null
     if ('content' in body) patch.content = (body as Record<string, unknown>).content ?? null
-    if ('content_tone' in body) patch.content_tone = (body as Record<string, unknown>).content_tone ?? null
+    if ('content_tone' in body)
+      patch.content_tone = (body as Record<string, unknown>).content_tone ?? null
     if ('skip_if_filled' in body) patch.skip_if_filled = body.skip_if_filled ?? null
     if ('visible_when' in body) patch.visible_when = body.visible_when ?? null
     if ('hidden_for_roles' in body) patch.hidden_for_roles = body.hidden_for_roles ?? null
 
-    if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'No fields to update' })
+    if (Object.keys(patch).length === 0)
+      return reply.code(400).send({ error: 'No fields to update' })
 
     await db('nivaro_field_groups').where({ id }).update(patch)
     const updated = await db('nivaro_field_groups').where({ id }).first()

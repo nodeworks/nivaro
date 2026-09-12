@@ -28,7 +28,7 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { del, get, patch, post } from '../lib/commands'
-import { BulkActionButtons } from './bulk/BulkActionButtons'
+import { BulkActionButtons, useBuiltinGate } from './bulk/BulkActionButtons'
 import {
   type ColumnFormatConfig,
   countFromResolved,
@@ -2972,6 +2972,9 @@ function BulkBar({
   const [mode, setMode] = useState<
     'actions' | 'update' | 'transition' | 'message' | 'confirm-delete' | 'merge'
   >('actions')
+  // Built-in operations are registry entries too (Data Model → Settings →
+  // Bulk actions): a collection can switch them off or restrict who sees them.
+  const builtin = useBuiltinGate([collection], registryKeys)
 
   // Saved bulk-action recipes (#26) — shared + own, run through the same
   // bulk endpoints as a hand-configured action.
@@ -3098,43 +3101,46 @@ function BulkBar({
       <span className='flex-1' />
       {mode === 'actions' && (
         <span className='flex flex-wrap items-center gap-1.5'>
-          {recipes.map((r) => (
-            <span key={r.id} className='group/recipe relative inline-flex'>
-              <button
-                type='button'
-                disabled={
-                  busy ||
-                  (r.action_type === 'transition' &&
-                    !transitions.some((t) => t.label === r.config?.transition_label))
-                }
-                onClick={() => runRecipe(r)}
-                title={
-                  r.action_type === 'update'
-                    ? `Set ${r.config?.field} = ${r.config?.value}`
-                    : `Transition: ${r.config?.transition_label}`
-                }
-                className='h-8 rounded-md border border-[#00ceff55] bg-[#00ceff14] px-3 text-[12.5px] font-medium text-[#7fe7ff] hover:bg-[#00ceff22] disabled:opacity-40'
-              >
-                {r.name}
-              </button>
-              {r.mine && (
+          {builtin('recipes') &&
+            recipes.map((r) => (
+              <span key={r.id} className='group/recipe relative inline-flex'>
                 <button
                   type='button'
-                  aria-label={`Delete recipe ${r.name}`}
-                  onClick={() => {
-                    if (!window.confirm(`Delete the recipe "${r.name}"?`)) return
-                    void client
-                      .request(del(`/bulk-recipes/${r.id}`))
-                      .then(() => qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] }))
-                  }}
-                  className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white hover:bg-red-600 group-hover/recipe:flex'
+                  disabled={
+                    busy ||
+                    (r.action_type === 'transition' &&
+                      !transitions.some((t) => t.label === r.config?.transition_label))
+                  }
+                  onClick={() => runRecipe(r)}
+                  title={
+                    r.action_type === 'update'
+                      ? `Set ${r.config?.field} = ${r.config?.value}`
+                      : `Transition: ${r.config?.transition_label}`
+                  }
+                  className='h-8 rounded-md border border-[#00ceff55] bg-[#00ceff14] px-3 text-[12.5px] font-medium text-[#7fe7ff] hover:bg-[#00ceff22] disabled:opacity-40'
                 >
-                  ✕
+                  {r.name}
                 </button>
-              )}
-            </span>
-          ))}
-          {selectedIds.length >= 2 && selectedIds.length <= 3 && (
+                {r.mine && (
+                  <button
+                    type='button'
+                    aria-label={`Delete recipe ${r.name}`}
+                    onClick={() => {
+                      if (!window.confirm(`Delete the recipe "${r.name}"?`)) return
+                      void client
+                        .request(del(`/bulk-recipes/${r.id}`))
+                        .then(() =>
+                          qc.invalidateQueries({ queryKey: ['bulk-recipes', collection] })
+                        )
+                    }}
+                    className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white hover:bg-red-600 group-hover/recipe:flex'
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            ))}
+          {builtin('compare') && selectedIds.length >= 2 && selectedIds.length <= 3 && (
             <button
               type='button'
               onClick={() => setComparing(true)}
@@ -3143,7 +3149,7 @@ function BulkBar({
               Compare
             </button>
           )}
-          {selectedIds.length === 2 && auth.isAdmin && (
+          {builtin('merge') && selectedIds.length === 2 && auth.isAdmin && (
             <button
               type='button'
               onClick={() => setMode('merge')}
@@ -3166,14 +3172,16 @@ function BulkBar({
               if (r.failed === 0) onClear()
             }}
           />
-          <button
-            type='button'
-            onClick={() => setMode('update')}
-            className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
-          >
-            Update Field
-          </button>
-          {transitions.length > 0 && (
+          {builtin('update-field') && (
+            <button
+              type='button'
+              onClick={() => setMode('update')}
+              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+            >
+              Update Field
+            </button>
+          )}
+          {builtin('transition') && transitions.length > 0 && (
             <button
               type='button'
               onClick={() => setMode('transition')}
@@ -3182,20 +3190,24 @@ function BulkBar({
               Transition
             </button>
           )}
-          <button
-            type='button'
-            onClick={() => setMode('message')}
-            className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
-          >
-            Message…
-          </button>
-          <button
-            type='button'
-            onClick={() => setMode('confirm-delete')}
-            className='h-8 rounded-md bg-red-600 px-3 text-[12.5px] font-medium hover:bg-red-700'
-          >
-            Delete
-          </button>
+          {builtin('message') && (
+            <button
+              type='button'
+              onClick={() => setMode('message')}
+              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10'
+            >
+              Message…
+            </button>
+          )}
+          {builtin('delete') && (
+            <button
+              type='button'
+              onClick={() => setMode('confirm-delete')}
+              className='h-8 rounded-md bg-red-600 px-3 text-[12.5px] font-medium hover:bg-red-700'
+            >
+              Delete
+            </button>
+          )}
         </span>
       )}
       {mode === 'merge' && (

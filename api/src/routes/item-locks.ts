@@ -391,8 +391,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!existing) return reply.code(404).send({ error: 'Nobody holds this lock' })
       if (existing.user === me.id)
         return reply.code(400).send({ error: 'You already hold this lock' })
-      const fromName =
-        [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id
+      const fromName = [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id
       app.io?.to(`user:${existing.user}`).emit('lock:requested', {
         collection,
         item: String(item),

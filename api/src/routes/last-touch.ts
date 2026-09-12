@@ -26,14 +26,7 @@ export async function lastTouchRoutes(app: FastifyInstance) {
         .where({ 'a.collection': collection, 'a.item': String(id) })
         .whereIn('a.action', ['create', 'update'])
         .orderBy('a.id', 'desc')
-        .first(
-          'a.action',
-          'a.timestamp',
-          'a.user',
-          'u.first_name',
-          'u.last_name',
-          'u.email'
-        )) as
+        .first('a.action', 'a.timestamp', 'a.user', 'u.first_name', 'u.last_name', 'u.email')) as
         | {
             action: string
             timestamp: Date
@@ -49,8 +42,7 @@ export async function lastTouchRoutes(app: FastifyInstance) {
           action: row.action,
           timestamp: new Date(row.timestamp).toISOString(),
           user_id: row.user ?? null,
-          user_name:
-            [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email || null
+          user_name: [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email || null
         }
       })
     }
@@ -113,7 +105,10 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       if (first.legacy_id != null) origin = 'Legacy import'
       else if (first.action !== 'create') origin = 'No creation record — likely imported'
       else if (!first.user) origin = 'Public form'
-      else if (first.status === 'suspended' && /@(nivaro|invalid)\.local$/i.test(String(first.email ?? ''))) {
+      else if (
+        first.status === 'suspended' &&
+        /@(nivaro|invalid)\.local$/i.test(String(first.email ?? ''))
+      ) {
         origin = 'Integration'
       } else if (/import/i.test(String(first.comment ?? ''))) origin = 'Import'
       else {

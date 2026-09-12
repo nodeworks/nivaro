@@ -481,9 +481,7 @@ export async function devToolsRoutes(app: FastifyInstance) {
     const { collections, fieldsByCollection, relations, projectName } = await loadSchema()
     const types = generateTypes(collections, fieldsByCollection, relations, projectName)
     const names = collections.map((c) => c.collection)
-    const mapEntries = names
-      .map((n) => `  ${JSON.stringify(n)}: ${pascalCase(n)}`)
-      .join('\n')
+    const mapEntries = names.map((n) => `  ${JSON.stringify(n)}: ${pascalCase(n)}`).join('\n')
     const wrapper = `
 
 // ─── Typed client wrapper ─────────────────────────────────────────────────────

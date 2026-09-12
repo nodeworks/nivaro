@@ -160,14 +160,34 @@ export async function healthRoutes(app: FastifyInstance) {
         redis_degradation: {
           redis_ok: redisOk,
           consumers: [
-            { name: 'sessions', posture: 'closed', note: 'cookie sessions live in Redis — logins stop until it returns (static tokens unaffected)' },
-            { name: 'ws-token', posture: 'closed', note: 'session-cookie users cannot mint new socket tokens; existing sockets keep working' },
+            {
+              name: 'sessions',
+              posture: 'closed',
+              note: 'cookie sessions live in Redis — logins stop until it returns (static tokens unaffected)'
+            },
+            {
+              name: 'ws-token',
+              posture: 'closed',
+              note: 'session-cookie users cannot mint new socket tokens; existing sockets keep working'
+            },
             { name: 'rate-limit', posture: 'open', note: 'requests pass unthrottled' },
-            { name: 'event-journal', posture: 'open', note: 'emits fall back to plain (unjournaled) broadcasts; catch-up degrades to full refresh' },
+            {
+              name: 'event-journal',
+              posture: 'open',
+              note: 'emits fall back to plain (unjournaled) broadcasts; catch-up degrades to full refresh'
+            },
             { name: 'custom-query-cache', posture: 'open', note: 'queries execute uncached' },
-            { name: 'activity-throttle', posture: 'open', note: 'repeats log normally (duplicate rows beat lost audit)' },
+            {
+              name: 'activity-throttle',
+              posture: 'open',
+              note: 'repeats log normally (duplicate rows beat lost audit)'
+            },
             { name: 'masquerade', posture: 'closed', note: 'masquerade tokens cannot resolve' },
-            { name: 'socket-adapter', posture: 'open', note: 'events stay node-local; single-node deployments unaffected' }
+            {
+              name: 'socket-adapter',
+              posture: 'open',
+              note: 'events stay node-local; single-node deployments unaffected'
+            }
           ]
         },
         db_posture: (await import('../services/db-health.js')).dbHealthState(),

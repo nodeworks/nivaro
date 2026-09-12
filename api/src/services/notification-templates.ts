@@ -71,7 +71,9 @@ export function renderChangesToken(
     if (k.startsWith('_') || k === 'updated_at' || k === 'date_updated') continue
     const before = previous ? previous[k] : undefined
     const fmt = (x: unknown) =>
-      x == null || x === '' ? '(empty)' : String(typeof x === 'object' ? JSON.stringify(x) : x).slice(0, 60)
+      x == null || x === ''
+        ? '(empty)'
+        : String(typeof x === 'object' ? JSON.stringify(x) : x).slice(0, 60)
     lines.push(before !== undefined ? `${k}: ${fmt(before)} → ${fmt(v)}` : `${k}: ${fmt(v)}`)
     if (lines.length >= cap) break
   }

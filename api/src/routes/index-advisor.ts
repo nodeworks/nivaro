@@ -54,7 +54,9 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
       'table_name',
       'column_name'
     )) as Array<{ table_name: string; column_name: string }>
-    const colExists = new Set(physicalCols.map((r) => `${r.table_name}.${r.column_name}`.toLowerCase()))
+    const colExists = new Set(
+      physicalCols.map((r) => `${r.table_name}.${r.column_name}`.toLowerCase())
+    )
 
     // Candidate columns with the config source that makes them hot.
     const candidates = new Map<string, Set<string>>() // table.column -> reasons
@@ -72,17 +74,25 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     const rels = (await db('nivaro_relations')
       .whereNotNull('many_collection')
       .whereNotNull('many_field')
-      .select('many_collection', 'many_field')) as Array<{ many_collection: string; many_field: string }>
-    for (const r of rels) add(r.many_collection, r.many_field, 'M2O foreign key (joins + relation filters)')
+      .select('many_collection', 'many_field')) as Array<{
+      many_collection: string
+      many_field: string
+    }>
+    for (const r of rels)
+      add(r.many_collection, r.many_field, 'M2O foreign key (joins + relation filters)')
 
     const sources = (await db('nivaro_queue_sources')
       .whereNotNull('filters')
-      .select('collection', 'filters')) as Array<{ collection: string | null; filters: string | null }>
+      .select('collection', 'filters')) as Array<{
+      collection: string | null
+      filters: string | null
+    }>
     for (const srow of sources) {
       if (!srow.collection) continue
       try {
         for (const f of JSON.parse(srow.filters ?? '[]') as Array<{ field?: string }>) {
-          if (f?.field && !f.field.includes('.')) add(srow.collection, f.field, 'queue source filter')
+          if (f?.field && !f.field.includes('.'))
+            add(srow.collection, f.field, 'queue source filter')
         }
       } catch {
         // unparseable filter config — skip
@@ -91,12 +101,16 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
 
     const policies = (await db('nivaro_policies')
       .whereNotNull('row_filter')
-      .select('collection', 'row_filter')) as Array<{ collection: string; row_filter: string | null }>
+      .select('collection', 'row_filter')) as Array<{
+      collection: string
+      row_filter: string | null
+    }>
     for (const p of policies) {
       try {
         const rf = JSON.parse(p.row_filter ?? '{}') as Record<string, unknown>
         for (const key of Object.keys(rf)) {
-          if (!key.startsWith('_') && !key.includes('.')) add(p.collection, key, 'row-level security filter')
+          if (!key.startsWith('_') && !key.includes('.'))
+            add(p.collection, key, 'row-level security filter')
         }
       } catch {
         // skip
@@ -106,7 +120,8 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     const bindings = (await db('nivaro_workflow_bindings')
       .whereNotNull('state_field')
       .select('collection', 'state_field')) as Array<{ collection: string; state_field: string }>
-    for (const b of bindings) add(b.collection, b.state_field, 'workflow state mirror (state filters)')
+    for (const b of bindings)
+      add(b.collection, b.state_field, 'workflow state mirror (state filters)')
 
     const suggestions: Suggestion[] = []
     for (const [key, reasons] of candidates) {
@@ -143,7 +158,12 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     try {
       const name = await createIndex(table, column)
       await run.complete(`created ${name}`)
-      await logActivity({ action: 'index-create', user: req.user?.id, comment: `${table}.${column}`, req })
+      await logActivity({
+        action: 'index-create',
+        user: req.user?.id,
+        comment: `${table}.${column}`,
+        req
+      })
       return { data: { created: name } }
     } catch (err) {
       await run.fail(err)
@@ -181,10 +201,17 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
         try {
           await createIndex(item.table, item.column)
         } catch (err) {
-          failures.push(`${item.table}.${item.column}: ${err instanceof Error ? err.message : String(err)}`)
+          failures.push(
+            `${item.table}.${item.column}: ${err instanceof Error ? err.message : String(err)}`
+          )
         }
         done++
-        run.progress({ done, total: items.length, current: `${item.table}.${item.column}`, failed: failures.length })
+        run.progress({
+          done,
+          total: items.length,
+          current: `${item.table}.${item.column}`,
+          failed: failures.length
+        })
       }
       const summary = `${done - failures.length} created, ${failures.length} failed${failures.length ? ` — ${failures.slice(0, 3).join('; ').slice(0, 300)}` : ''}`
       if (failures.length === items.length) await run.fail(summary)

@@ -29,7 +29,11 @@ export function isDbHealthy(): boolean {
   return healthy
 }
 
-export function dbHealthState(): { healthy: boolean; down_since: Date | null; error: string | null } {
+export function dbHealthState(): {
+  healthy: boolean
+  down_since: Date | null
+  error: string | null
+} {
   return { healthy, down_since: downSince, error: lastError }
 }
 

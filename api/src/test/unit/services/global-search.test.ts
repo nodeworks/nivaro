@@ -3,9 +3,9 @@ import { labelFor, scoreRow } from '../../../services/global-search.js'
 
 describe('labelFor', () => {
   it('renders the display template when there is one', () => {
-    expect(labelFor({ id: 1, workflow_id: 'PW26-1', name: 'Thing' }, '{{workflow_id}} · {{name}}')).toBe(
-      'PW26-1 · Thing'
-    )
+    expect(
+      labelFor({ id: 1, workflow_id: 'PW26-1', name: 'Thing' }, '{{workflow_id}} · {{name}}')
+    ).toBe('PW26-1 · Thing')
   })
 
   it('falls back through the usual naming columns', () => {

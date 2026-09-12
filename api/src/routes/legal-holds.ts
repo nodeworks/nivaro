@@ -49,7 +49,9 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
     const isRecord = !!(b.collection && b.item_id)
     const isUser = !!b.user
     if (isRecord === isUser) {
-      return reply.code(400).send({ error: 'A hold names either a record (collection + item_id) or a user' })
+      return reply
+        .code(400)
+        .send({ error: 'A hold names either a record (collection + item_id) or a user' })
     }
     if (isRecord && !/^[A-Za-z0-9_]+$/.test(String(b.collection))) {
       return reply.code(400).send({ error: 'Invalid collection' })
@@ -76,19 +78,26 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ data: { id } })
   })
 
-  app.post<{ Params: { id: string } }>('/:id/release', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_legal_holds').where('id', req.params.id).whereNull('released_at').first()
-    if (!row) return reply.code(404).send({ error: 'Active hold not found' })
-    await db('nivaro_legal_holds')
-      .where('id', row.id)
-      .update({ released_at: new Date(), released_by: req.user?.id ?? null })
-    await logActivity({
-      action: 'legal-hold-release',
-      user: req.user?.id,
-      collection: row.collection ?? 'nivaro_users',
-      item: String(row.item_id ?? row.user),
-      req
-    })
-    return { data: { released: true } }
-  })
+  app.post<{ Params: { id: string } }>(
+    '/:id/release',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_legal_holds')
+        .where('id', req.params.id)
+        .whereNull('released_at')
+        .first()
+      if (!row) return reply.code(404).send({ error: 'Active hold not found' })
+      await db('nivaro_legal_holds')
+        .where('id', row.id)
+        .update({ released_at: new Date(), released_by: req.user?.id ?? null })
+      await logActivity({
+        action: 'legal-hold-release',
+        user: req.user?.id,
+        collection: row.collection ?? 'nivaro_users',
+        item: String(row.item_id ?? row.user),
+        req
+      })
+      return { data: { released: true } }
+    }
+  )
 }

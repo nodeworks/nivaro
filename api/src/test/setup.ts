@@ -11,16 +11,34 @@ vi.mock('../db/index.js', () => {
       delete: vi.fn().mockResolvedValue(1),
       del: vi.fn().mockResolvedValue(1),
       first: vi.fn().mockResolvedValue(null),
-      count: vi.fn().mockResolvedValue([{ total: 0 }]),
+      count: vi.fn().mockResolvedValue([{ total: 0 }])
     }
     // Chainable methods return the same chain object
     for (const m of [
-      'where', 'orWhere', 'andWhere', 'whereIn', 'whereNotIn',
-      'whereNull', 'whereNotNull', 'whereLike', 'whereRaw',
-      'orderBy', 'orderByRaw', 'limit', 'offset',
-      'returning', 'join', 'leftJoin', 'rightJoin',
-      'groupBy', 'having', 'distinct', 'modify',
-      'onConflict', 'ignore', 'merge',
+      'where',
+      'orWhere',
+      'andWhere',
+      'whereIn',
+      'whereNotIn',
+      'whereNull',
+      'whereNotNull',
+      'whereLike',
+      'whereRaw',
+      'orderBy',
+      'orderByRaw',
+      'limit',
+      'offset',
+      'returning',
+      'join',
+      'leftJoin',
+      'rightJoin',
+      'groupBy',
+      'having',
+      'distinct',
+      'modify',
+      'onConflict',
+      'ignore',
+      'merge'
     ]) {
       chain[m] = vi.fn().mockReturnValue(chain)
     }

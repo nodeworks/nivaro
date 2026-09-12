@@ -253,7 +253,9 @@ export async function atRiskRoutes(app: FastifyInstance) {
   // the rule's collection. Never throws, never blocks the mutation response.
   // Dynamic import breaks the cycle (queue-materialization-jobs.ts imports
   // evaluateRows from this file).
-  async function refreshCachesForCollections(collections: Array<string | undefined>): Promise<void> {
+  async function refreshCachesForCollections(
+    collections: Array<string | undefined>
+  ): Promise<void> {
     try {
       const names = [...new Set(collections.filter((c): c is string => !!c))]
       if (names.length === 0) return

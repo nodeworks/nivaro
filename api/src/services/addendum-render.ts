@@ -174,9 +174,7 @@ export async function buildAddendumRenderOverlay(
         break
       }
       const kept = rows.filter((r) => rowMatches(r, src.filter as FilterSpec | undefined))
-      const nums = kept
-        .map((r) => Number(r[src.value_field]))
-        .filter((n) => Number.isFinite(n))
+      const nums = kept.map((r) => Number(r[src.value_field])).filter((n) => Number.isFinite(n))
       let v: number | null = null
       switch (src.aggregate) {
         case 'count':

@@ -145,10 +145,7 @@ function zoneFormatter(tz: string): Intl.DateTimeFormat {
 }
 
 /** The instant's wall clock in the schedule's zone (server-local when unset). */
-function wallClock(
-  d: Date,
-  tz: string | null
-): { day: number; hour: number; key: string } {
+function wallClock(d: Date, tz: string | null): { day: number; hour: number; key: string } {
   if (!tz) return { day: d.getDay(), hour: d.getHours(), key: dateKey(d) }
   const parts = zoneFormatter(tz).formatToParts(d)
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''

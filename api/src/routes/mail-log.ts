@@ -21,7 +21,10 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       const limit = 50
       let q = db('nivaro_mail_log').orderBy('id', 'desc')
       let countQ = db('nivaro_mail_log')
-      if (req.query.status && ['sent', 'failed', 'dropped', 'deferred'].includes(req.query.status)) {
+      if (
+        req.query.status &&
+        ['sent', 'failed', 'dropped', 'deferred'].includes(req.query.status)
+      ) {
         q = q.where({ status: req.query.status })
         countQ = countQ.where({ status: req.query.status })
       }
@@ -39,7 +42,11 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
           .select('id', 'to', 'subject', 'template', 'status', 'error', 'created_at'),
         countQ.count({ c: '*' }).first()
       ])
-      return { data: rows, total: Number((totalRow as { c?: number | string } | undefined)?.c ?? 0), page }
+      return {
+        data: rows,
+        total: Number((totalRow as { c?: number | string } | undefined)?.c ?? 0),
+        page
+      }
     }
   )
 
@@ -52,7 +59,8 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/:id/resend', async (req, reply) => {
     const row = await db('nivaro_mail_log').where('id', req.params.id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    if (!row.body) return reply.code(400).send({ error: 'No stored body for this send (older row)' })
+    if (!row.body)
+      return reply.code(400).send({ error: 'No stored body for this send (older row)' })
     try {
       await sendRawMail({
         to: String(row.to),
@@ -74,7 +82,6 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 }
-
 
 /** Record communications view (#261) — separate plugin: the admin-only hook
  *  above is plugin-scoped, and this read is for anyone who can read the

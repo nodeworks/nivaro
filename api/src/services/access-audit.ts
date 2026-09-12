@@ -75,9 +75,9 @@ async function buildLabelMap(collection: string, ids: string[]): Promise<Map<str
   const map = new Map<string, string>()
   if (ids.length === 0) return map
   try {
-    const meta = (await db('nivaro_collections')
-      .where({ collection })
-      .first('display_template')) as { display_template?: string | null } | undefined
+    const meta = (await db('nivaro_collections').where({ collection }).first('display_template')) as
+      | { display_template?: string | null }
+      | undefined
     const tmpl = meta?.display_template ?? null
     let plain: string[] = []
     if (tmpl) {
@@ -101,9 +101,9 @@ async function buildLabelMap(collection: string, ids: string[]): Promise<Map<str
     // No usable template — friendly-id registry, then common label columns.
     let labelCol: string | null = null
     try {
-      const rt = (await db('nivaro_chat_room_types')
-        .where({ collection })
-        .first('match_field')) as { match_field?: string | null } | undefined
+      const rt = (await db('nivaro_chat_room_types').where({ collection }).first('match_field')) as
+        | { match_field?: string | null }
+        | undefined
       if (rt?.match_field && rt.match_field !== 'id' && IDENT_RE.test(rt.match_field)) {
         labelCol = rt.match_field
       }
@@ -112,8 +112,7 @@ async function buildLabelMap(collection: string, ids: string[]): Promise<Map<str
     }
     if (!labelCol) {
       const cols = await db(collection).columnInfo()
-      labelCol =
-        ['name', 'title', 'label', 'subject'].find((c) => c in cols) ?? null
+      labelCol = ['name', 'title', 'label', 'subject'].find((c) => c in cols) ?? null
     }
     if (!labelCol) return map
     for (const chunk of chunks(ids, CHUNK)) {
@@ -168,9 +167,9 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
 
     for (const s of subjects) {
       if (s.type === 'field' && s.field && IDENT_RE.test(s.field)) {
-        const rows = (await db(collection)
-          .whereNotNull(s.field)
-          .select('id', s.field)) as Array<Record<string, unknown>>
+        const rows = (await db(collection).whereNotNull(s.field).select('id', s.field)) as Array<
+          Record<string, unknown>
+        >
         const label = s.label || s.field
         for (const r of rows) addPair(String(r[s.field as string]), String(r.id), label)
       } else if (s.type === 'pipeline_owners') {
@@ -217,9 +216,9 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
       )
     }
     const adminRoles = new Set(
-      ((await db('nivaro_roles').where('admin_access', 1).select('id')) as Array<{ id: string }>).map(
-        (r) => String(r.id).toUpperCase()
-      )
+      (
+        (await db('nivaro_roles').where('admin_access', 1).select('id')) as Array<{ id: string }>
+      ).map((r) => String(r.id).toUpperCase())
     )
     const checkUsers = userRows.filter(
       (u) => !u.role || !adminRoles.has(String(u.role).toUpperCase())
@@ -406,7 +405,11 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
         for (const id of violating) {
           const reasons = reasonMap.get(id)!
           if (reasons.length === 0) {
-            reasons.push({ type: 'unknown', message: 'Record not visible (gate could not be attributed — it may have been deleted mid-run)' })
+            reasons.push({
+              type: 'unknown',
+              message:
+                'Record not visible (gate could not be attributed — it may have been deleted mid-run)'
+            })
           }
           findings.push({
             item_id: id,
@@ -423,9 +426,7 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
     }
 
     // ── 4. Persist ────────────────────────────────────────────────────────
-    const labelMap = await buildLabelMap(collection, [
-      ...new Set(findings.map((f) => f.item_id))
-    ])
+    const labelMap = await buildLabelMap(collection, [...new Set(findings.map((f) => f.item_id))])
     // 7 bound params per row against MSSQL's ~2100-parameter statement cap:
     // 250 rows = 1750 params. 400 was over the cap and failed on big runs.
     for (const chunk of chunks(findings, 250)) {

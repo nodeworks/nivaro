@@ -75,7 +75,8 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
       req
     })
 
-    if (pending.length === 0) return reply.send({ data: { queued: 0, message: 'Nothing to geocode' } })
+    if (pending.length === 0)
+      return reply.send({ data: { queued: 0, message: 'Nothing to geocode' } })
 
     running = true
     void (async () => {
@@ -124,7 +125,8 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
     const q = req.query as { collection?: string; address_field?: string; lat_field?: string }
     const { collection, address_field, lat_field } = q
     for (const v of [collection, address_field, lat_field]) {
-      if (!v || !IDENT_RE.test(v)) return reply.code(400).send({ error: 'collection, address_field, lat_field required' })
+      if (!v || !IDENT_RE.test(v))
+        return reply.code(400).send({ error: 'collection, address_field, lat_field required' })
     }
     if (/^(nivaro|directus)_/i.test(collection!)) {
       return reply.code(400).send({ error: 'Business collections only' })

@@ -21,13 +21,16 @@ export function broadcastCollectionUpdate(
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
   // SSE mirror (#602): /events/stream consumers get the same minimal payload.
-  publishSseEvent({ collection, item, action: extra?.action, changed_fields: extra?.changed_fields?.slice(0, 50) })
+  publishSseEvent({
+    collection,
+    item,
+    action: extra?.action,
+    changed_fields: extra?.changed_fields?.slice(0, 50)
+  })
   void journaledEmit(`collection:${collection}`, 'collection:update', {
     collection,
     item,
     ...(extra?.action ? { action: extra.action } : {}),
-    ...(extra?.changed_fields?.length
-      ? { changed_fields: extra.changed_fields.slice(0, 50) }
-      : {})
+    ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {})
   })
 }

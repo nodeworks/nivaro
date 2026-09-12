@@ -17,7 +17,10 @@ function sanitizeSubjects(raw: unknown): AuditSubject[] {
   for (const s of raw as Array<Record<string, unknown>>) {
     if (!s || typeof s !== 'object') continue
     if (s.type === 'pipeline_owners') {
-      out.push({ type: 'pipeline_owners', label: typeof s.label === 'string' ? s.label.slice(0, 100) : 'Owner' })
+      out.push({
+        type: 'pipeline_owners',
+        label: typeof s.label === 'string' ? s.label.slice(0, 100) : 'Owner'
+      })
     } else if (s.type === 'field' && typeof s.field === 'string' && IDENT_RE.test(s.field)) {
       out.push({
         type: 'field',
@@ -38,7 +41,10 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
     >
     // Latest run per audit rides along so the list can show status at a glance.
     const runs = (await db('nivaro_access_audit_runs')
-      .whereIn('audit', audits.map((a) => a.id as number))
+      .whereIn(
+        'audit',
+        audits.map((a) => a.id as number)
+      )
       .orderBy('id', 'desc')) as Array<Record<string, unknown>>
     const latestByAudit = new Map<number, Record<string, unknown>>()
     for (const r of runs) {
@@ -61,7 +67,8 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Invalid collection' })
     }
     const subjects = sanitizeSubjects(body.subjects)
-    if (subjects.length === 0) return reply.code(400).send({ error: 'At least one subject is required' })
+    if (subjects.length === 0)
+      return reply.code(400).send({ error: 'At least one subject is required' })
     const name = String(body.name ?? '').trim() || `${collection} access audit`
     await db('nivaro_access_audits').insert({
       name: name.slice(0, 255),
@@ -106,7 +113,9 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
     void logActivity({
       action: 'access-audit-update',
       user: req.user?.id ?? null,
-      comment: `audit ${id}: ${Object.keys(patch).filter((k) => k !== 'updated_at').join(', ')}`
+      comment: `audit ${id}: ${Object.keys(patch)
+        .filter((k) => k !== 'updated_at')
+        .join(', ')}`
     })
     return reply.send({ data: await db('nivaro_access_audits').where({ id }).first() })
   })
@@ -129,7 +138,8 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
     const running = await db('nivaro_access_audit_runs')
       .where({ audit: Number(id), status: 'running' })
       .first('id')
-    if (running) return reply.code(409).send({ error: 'A run is already in progress for this audit' })
+    if (running)
+      return reply.code(409).send({ error: 'A run is already in progress for this audit' })
     await db('nivaro_access_audit_runs').insert({
       audit: Number(id),
       status: 'running',
@@ -185,7 +195,12 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/runs/:runId/findings', async (req, reply) => {
     const { runId } = req.params as { runId: string }
-    const { page = '1', limit = '50', user, search } = req.query as {
+    const {
+      page = '1',
+      limit = '50',
+      user,
+      search
+    } = req.query as {
       page?: string
       limit?: string
       user?: string

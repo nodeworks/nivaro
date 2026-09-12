@@ -5,7 +5,7 @@
 export function rawRows<T>(result: unknown): T[] {
   if (!result) return []
   if (!Array.isArray(result) && typeof result === 'object' && 'rows' in result) {
-    return ((result as { rows: T[] }).rows) ?? []
+    return (result as { rows: T[] }).rows ?? []
   }
   if (Array.isArray(result) && result.length > 0 && Array.isArray(result[0])) {
     return result[0] as T[]

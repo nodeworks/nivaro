@@ -116,7 +116,12 @@ describe('buildReplayPlan', () => {
         timestamp: 1500,
         data: {
           source: 0,
-          adds: [{ parentId: 2, node: { id: 20, type: 2, tagName: 'button', attributes: { id: 'later' } } }]
+          adds: [
+            {
+              parentId: 2,
+              node: { id: 20, type: 2, tagName: 'button', attributes: { id: 'later' } }
+            }
+          ]
         }
       },
       click(20, 2000)
@@ -154,13 +159,19 @@ describe('buildReplayPlan', () => {
       snapshot,
       { ...meta('https://app.example.com/queues'), timestamp: 3000 }
     ])
-    expect(plan.steps).toEqual([{ delayMs: 2000, kind: 'navigate', url: 'https://app.example.com/queues' }])
+    expect(plan.steps).toEqual([
+      { delayMs: 2000, kind: 'navigate', url: 'https://app.example.com/queues' }
+    ])
   })
 })
 
 describe('renderPlaywrightScript', () => {
   const plan = buildReplayPlan([meta(), snapshot, click(3, 2500)])
-  const script = renderPlaywrightScript(plan, { id: 'abc', user: 'Robert Lee', startedAt: '2026-08-14' })
+  const script = renderPlaywrightScript(plan, {
+    id: 'abc',
+    user: 'Robert Lee',
+    startedAt: '2026-08-14'
+  })
 
   it('targets BASE_URL, not the recorded host', () => {
     expect(script).toContain("const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3057'")
@@ -188,6 +199,8 @@ describe('renderPlaywrightScript', () => {
       { id: 'abc', user: null, startedAt: null }
     )
     expect(withInput).toContain('// TODO fill:')
-    expect(withInput).toContain('// await page.locator("input[name=\\"title\\"]").first().fill(\'\')')
+    expect(withInput).toContain(
+      '// await page.locator("input[name=\\"title\\"]").first().fill(\'\')'
+    )
   })
 })

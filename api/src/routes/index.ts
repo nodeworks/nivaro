@@ -193,7 +193,12 @@ export async function registerRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req, reply) => {
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
     const url = req.url
-    if (url.startsWith('/api/auth') || url.startsWith('/api/settings') || url.startsWith('/api/rum')) return
+    if (
+      url.startsWith('/api/auth') ||
+      url.startsWith('/api/settings') ||
+      url.startsWith('/api/rum')
+    )
+      return
     const { maintenanceState } = await import('../services/security.js')
     const maint = await maintenanceState()
     if (!maint.on) return

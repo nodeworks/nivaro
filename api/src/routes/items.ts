@@ -29,6 +29,7 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { builtinAllowed } from '../services/bulk-actions.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { ItemsQuery, User } from '../types.js'
 
@@ -215,6 +216,8 @@ export async function itemsRoutes(app: FastifyInstance) {
     const { ids } = req.body as { ids: string[] }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
+    if (!(await builtinAllowed(collection, 'delete', req)))
+      return reply.code(403).send({ error: 'Bulk delete is not available to you here' })
     let deleted = 0
     for (const id of ids) {
       try {
@@ -232,6 +235,8 @@ export async function itemsRoutes(app: FastifyInstance) {
     const { ids, data } = req.body as { ids: string[]; data: Record<string, unknown> }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
+    if (!(await builtinAllowed(collection, 'update-field', req)))
+      return reply.code(403).send({ error: 'Bulk update is not available to you here' })
     if (!data || typeof data !== 'object')
       return reply.code(400).send({ error: 'data object required' })
     let updated = 0
@@ -252,6 +257,8 @@ export async function itemsRoutes(app: FastifyInstance) {
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
     if (!transition_id) return reply.code(400).send({ error: 'transition_id required' })
+    if (!(await builtinAllowed(collection, 'transition', req)))
+      return reply.code(403).send({ error: 'Bulk transition is not available to you here' })
 
     const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
       .where({ id: transition_id })

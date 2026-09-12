@@ -679,9 +679,7 @@ describe('runImportPipeline — $line context (chained line rules)', () => {
       lookup: noSub
     })
     expect(lines[0].values.category).toBeUndefined()
-    expect(
-      issues.some((i) => i.severity === 'warn' && i.rule === 'line[1]:category')
-    ).toBe(true)
+    expect(issues.some((i) => i.severity === 'warn' && i.rule === 'line[1]:category')).toBe(true)
   })
 })
 

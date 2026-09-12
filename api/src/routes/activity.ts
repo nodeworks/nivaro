@@ -55,7 +55,12 @@ export async function activityRoutes(app: FastifyInstance) {
    *  Client-driven (the export happens in the browser), so it's coverage,
    *  not enforcement — but a row per export beats the nothing we had. */
   app.post('/export-log', async (req, reply) => {
-    const b = req.body as { collection?: string; row_count?: number; format?: string; filters?: unknown }
+    const b = req.body as {
+      collection?: string
+      row_count?: number
+      format?: string
+      filters?: unknown
+    }
     const collection = String(b.collection ?? '').slice(0, 255)
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
     await logActivity({

@@ -103,11 +103,11 @@ export async function up(knex: Knex): Promise<void> {
   // and a user's existing watermark also serves as their "joined" signal, so
   // nobody's sidebar empties on deploy.
   if (await knex.schema.hasTable('chat_last_read')) {
-    const rows = (await knex('chat_last_read').select(
-      'user_id',
-      'room',
-      'last_read_at'
-    )) as Array<{ user_id: string; room: string; last_read_at: Date }>
+    const rows = (await knex('chat_last_read').select('user_id', 'room', 'last_read_at')) as Array<{
+      user_id: string
+      room: string
+      last_read_at: Date
+    }>
     for (const r of rows) {
       if (!r.user_id || !r.room) continue
       const exists = await knex('nivaro_chat_memberships')

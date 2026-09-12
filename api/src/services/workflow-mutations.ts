@@ -242,9 +242,9 @@ export async function executeWorkflowTransition(opts: {
   await runAutoTransitions(collection, item)
 
   const prevStateObj = previousState
-    ? ((await db<WorkflowState>('nivaro_workflow_states')
-        .where({ id: previousState })
-        .first()) as WorkflowState | undefined)
+    ? ((await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()) as
+        | WorkflowState
+        | undefined)
     : null
   const fromLabel = prevStateObj?.label ?? previousState ?? 'Start'
   const toLabel = newStateObj?.label ?? 'Unknown'

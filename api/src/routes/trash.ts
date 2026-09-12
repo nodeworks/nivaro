@@ -26,82 +26,78 @@ export async function trashRoutes(app: FastifyInstance) {
       page?: string
       limit?: string
     }
-  }>(
-    '/',
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      const page = Math.max(1, Number(req.query.page) || 1)
-      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50))
+  }>('/', { preHandler: requireAuth }, async (req, reply) => {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50))
 
-      const q = db('nivaro_trash').orderBy('deleted_at', 'desc')
-      if (!req.isAdmin) q.where({ deleted_by: req.user!.id })
-      if (req.query.collection) q.where({ collection: req.query.collection })
-      const days = Number(req.query.days)
-      if (Number.isFinite(days) && days > 0) {
-        q.where('deleted_at', '>=', new Date(Date.now() - Math.min(3650, days) * 86_400_000))
-      }
-      const search = String(req.query.search ?? '').trim()
-      if (search) {
-        // The snapshot is JSON text — a cautious LIKE over it (and the item
-        // id) is the honest cheap filter; wildcards escaped so a typed % can't
-        // match everything.
-        const like = `%${search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-        q.where((qb) => {
-          qb.where('data', 'like', like).orWhere('item_id', 'like', like)
-        })
-      }
-
-      const countQ = q.clone().clearOrder().count<{ c: number }[]>('id as c')
-      const rows = (await q.offset((page - 1) * limit).limit(limit)) as TrashRow[]
-      const total = Number((await countQ)[0]?.c ?? 0)
-
-      const userIds = [...new Set(rows.map((r) => r.deleted_by).filter(Boolean))] as string[]
-      const users = userIds.length
-        ? ((await db('nivaro_users')
-            .whereIn('id', userIds)
-            .select('id', 'first_name', 'last_name')) as Array<{
-            id: string
-            first_name: string | null
-            last_name: string | null
-          }>)
-        : []
-      const nameById = new Map(
-        users.map((u) => [u.id, `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim()])
-      )
-
-      // Full dropdown option list for the viewer's scope — the page can't
-      // derive it from the current (filtered) page of rows. NOTE: never
-      // .distinct(col).pluck(col) on mssql — nested-array trap.
-      const colQ = db('nivaro_trash').distinct('collection')
-      if (!req.isAdmin) colQ.where({ deleted_by: req.user!.id })
-      const colRows = (await colQ) as Array<{ collection: string }>
-      const collections = [...new Set(colRows.map((r) => String(r.collection)))].sort()
-
-      return reply.send({
-        collections,
-        data: rows.map((r) => {
-          let data: Record<string, unknown> = {}
-          try {
-            data = JSON.parse(r.data) as Record<string, unknown>
-          } catch {
-            /* unreadable snapshot — label falls back to item_id */
-          }
-          return {
-            id: r.id,
-            collection: r.collection,
-            item_id: r.item_id,
-            label: rowLabel({ ...data, id: r.item_id }),
-            deleted_by: r.deleted_by,
-            deleted_by_name: r.deleted_by ? (nameById.get(r.deleted_by) ?? null) : null,
-            deleted_at: r.deleted_at
-          }
-        }),
-        total,
-        page,
-        limit
+    const q = db('nivaro_trash').orderBy('deleted_at', 'desc')
+    if (!req.isAdmin) q.where({ deleted_by: req.user!.id })
+    if (req.query.collection) q.where({ collection: req.query.collection })
+    const days = Number(req.query.days)
+    if (Number.isFinite(days) && days > 0) {
+      q.where('deleted_at', '>=', new Date(Date.now() - Math.min(3650, days) * 86_400_000))
+    }
+    const search = String(req.query.search ?? '').trim()
+    if (search) {
+      // The snapshot is JSON text — a cautious LIKE over it (and the item
+      // id) is the honest cheap filter; wildcards escaped so a typed % can't
+      // match everything.
+      const like = `%${search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+      q.where((qb) => {
+        qb.where('data', 'like', like).orWhere('item_id', 'like', like)
       })
     }
-  )
+
+    const countQ = q.clone().clearOrder().count<{ c: number }[]>('id as c')
+    const rows = (await q.offset((page - 1) * limit).limit(limit)) as TrashRow[]
+    const total = Number((await countQ)[0]?.c ?? 0)
+
+    const userIds = [...new Set(rows.map((r) => r.deleted_by).filter(Boolean))] as string[]
+    const users = userIds.length
+      ? ((await db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('id', 'first_name', 'last_name')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+        }>)
+      : []
+    const nameById = new Map(
+      users.map((u) => [u.id, `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim()])
+    )
+
+    // Full dropdown option list for the viewer's scope — the page can't
+    // derive it from the current (filtered) page of rows. NOTE: never
+    // .distinct(col).pluck(col) on mssql — nested-array trap.
+    const colQ = db('nivaro_trash').distinct('collection')
+    if (!req.isAdmin) colQ.where({ deleted_by: req.user!.id })
+    const colRows = (await colQ) as Array<{ collection: string }>
+    const collections = [...new Set(colRows.map((r) => String(r.collection)))].sort()
+
+    return reply.send({
+      collections,
+      data: rows.map((r) => {
+        let data: Record<string, unknown> = {}
+        try {
+          data = JSON.parse(r.data) as Record<string, unknown>
+        } catch {
+          /* unreadable snapshot — label falls back to item_id */
+        }
+        return {
+          id: r.id,
+          collection: r.collection,
+          item_id: r.item_id,
+          label: rowLabel({ ...data, id: r.item_id }),
+          deleted_by: r.deleted_by,
+          deleted_by_name: r.deleted_by ? (nameById.get(r.deleted_by) ?? null) : null,
+          deleted_at: r.deleted_at
+        }
+      }),
+      total,
+      page,
+      limit
+    })
+  })
 
   // Bulk restore (#668): up to 100 entries, each through the SAME single-row
   // restore service (permissions, id-occupied 409s, IDENTITY_INSERT all
@@ -174,9 +170,7 @@ export async function trashRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const trashId = Number(req.params.id)
-      const row = (await db('nivaro_trash').where({ id: trashId }).first()) as
-        | TrashRow
-        | undefined
+      const row = (await db('nivaro_trash').where({ id: trashId }).first()) as TrashRow | undefined
       if (!row) return reply.code(404).send({ error: 'Trash entry not found' })
       if (!req.isAdmin && row.deleted_by !== req.user!.id) {
         return reply.code(403).send({ error: 'Forbidden' })
@@ -205,9 +199,7 @@ export async function trashRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const trashId = Number(req.params.id)
-      const row = (await db('nivaro_trash').where({ id: trashId }).first()) as
-        | TrashRow
-        | undefined
+      const row = (await db('nivaro_trash').where({ id: trashId }).first()) as TrashRow | undefined
       if (!row) return reply.code(404).send({ error: 'Trash entry not found' })
       if (!req.isAdmin && row.deleted_by !== req.user!.id) {
         return reply.code(403).send({ error: 'Forbidden' })

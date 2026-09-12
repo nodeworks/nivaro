@@ -8,8 +8,8 @@ vi.mock('../../config.js', () => ({
     NODE_ENV: 'test',
     DB_DATABASE: 'testdb',
     DB_HOST: 'localhost',
-    REDIS_URL: 'redis://localhost:6379',
-  },
+    REDIS_URL: 'redis://localhost:6379'
+  }
 }))
 
 vi.mock('../../middleware/authenticate.js', () => ({
@@ -17,16 +17,16 @@ vi.mock('../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async () => {}),
   requireAdmin: vi.fn(async () => {}),
   cidrMatch: vi.fn(() => true),
-  checkApiKeyScope: vi.fn(() => true),
+  checkApiKeyScope: vi.fn(() => true)
 }))
 
 vi.mock('../../services/activity.js', () => ({
-  logActivity: vi.fn().mockResolvedValue(1),
+  logActivity: vi.fn().mockResolvedValue(1)
 }))
 
 vi.mock('../../services/external-apis.js', () => ({
   writeApiCallLog: vi.fn().mockResolvedValue(undefined),
-  callExternalApi: vi.fn().mockResolvedValue({ status: 200, data: {} }),
+  callExternalApi: vi.fn().mockResolvedValue({ status: 200, data: {} })
 }))
 
 import Fastify from 'fastify'
@@ -61,7 +61,7 @@ const sampleRow: ExternalApiRow = {
   integration_type: null,
   integration_config: null,
   created_at: new Date('2024-01-01'),
-  updated_at: new Date('2024-01-01'),
+  updated_at: new Date('2024-01-01')
 }
 
 function makeDbChain(resolvedValue: unknown) {
@@ -74,7 +74,7 @@ function makeDbChain(resolvedValue: unknown) {
     delete: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     returning: vi.fn().mockResolvedValue([{ id: 1 }]),
-    then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(resolvedValue).then(cb)),
+    then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(resolvedValue).then(cb))
   }
   return chain
 }
@@ -127,7 +127,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/external-apis', () => {
     // insert chain
     vi.mocked(db as unknown as (t: string) => unknown)
       .mockReturnValueOnce(makeDbChain([{ id: 99 }]) as unknown as ReturnType<typeof db>) // insert + returning
-      .mockReturnValueOnce(makeDbChain(sampleRow) as unknown as ReturnType<typeof db>)   // select after insert
+      .mockReturnValueOnce(makeDbChain(sampleRow) as unknown as ReturnType<typeof db>) // select after insert
 
     const app = await buildTestApp()
     const res = await app.inject({
@@ -137,8 +137,8 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/external-apis', () => {
       payload: JSON.stringify({
         name: 'New API',
         base_url: 'https://newapi.example.com',
-        auth_type: 'none',
-      }),
+        auth_type: 'none'
+      })
     })
 
     // 200 or 201 are both acceptable depending on the route implementation
@@ -155,7 +155,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/external-apis', () => {
       method: 'POST',
       url: '/api/external-apis/1/import-spec',
       headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ spec: JSON.stringify(MINIMAL_OPENAPI_SPEC) }),
+      payload: JSON.stringify({ spec: JSON.stringify(MINIMAL_OPENAPI_SPEC) })
     })
 
     // Route returns 200 with the parsed endpoints list
@@ -178,7 +178,7 @@ describe.skipIf(!RUN_INTEGRATION)('Integration: /api/external-apis', () => {
       method: 'POST',
       url: '/api/external-apis/1/import-spec',
       headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ spec: '{this is not valid json' }),
+      payload: JSON.stringify({ spec: '{this is not valid json' })
     })
 
     expect(res.statusCode).toBe(400)

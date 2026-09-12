@@ -358,8 +358,7 @@ export async function buildOooRunway(days = 21): Promise<RunwayEntry[]> {
         !(u.d_ooo === true || u.d_ooo === 1)
       return {
         user_id: String(u.id),
-        name:
-          [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? u.id),
+        name: [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? u.id),
         ooo_start: u.ooo_start ? new Date(String(u.ooo_start)).toISOString() : null,
         ooo_end: u.ooo_end ? new Date(String(u.ooo_end)).toISOString() : null,
         currently_out: u.is_out_of_office === true || u.is_out_of_office === 1,

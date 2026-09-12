@@ -6,7 +6,13 @@ import { DEFAULT_REDACT_FIELDS, executeRetentionPolicy } from '../services/reten
 
 function parseJson<T>(val: unknown): T {
   if (!val) return [] as unknown as T
-  if (typeof val === 'string') { try { return JSON.parse(val) as T } catch { return [] as unknown as T } }
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val) as T
+    } catch {
+      return [] as unknown as T
+    }
+  }
   return val as T
 }
 
@@ -43,20 +49,22 @@ export async function retentionRoutes(app: FastifyInstance) {
 
   app.post('/', async (req, reply) => {
     const b = req.body as Record<string, unknown>
-    const inserted = await db('nivaro_retention_policies').insert({
-      name: b.name,
-      inactivity_threshold_months: b.inactivity_threshold_months ?? 36,
-      action: b.action ?? 'redact',
-      redact_fields: toJson(b.redact_fields ?? DEFAULT_REDACT_FIELDS),
-      redact_value_template: b.redact_value_template ?? 'Redacted_{{id}}',
-      exclusion_emails: toJson(b.exclusion_emails ?? []),
-      exclusion_roles: toJson(b.exclusion_roles ?? []),
-      cron_schedule: b.cron_schedule ?? null,
-      is_active: b.is_active ?? true,
-      dry_run_mode: b.dry_run_mode ?? false,
-      created_by: req.user?.id ?? null
-      // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
-    }).returning('id')
+    const inserted = await db('nivaro_retention_policies')
+      .insert({
+        name: b.name,
+        inactivity_threshold_months: b.inactivity_threshold_months ?? 36,
+        action: b.action ?? 'redact',
+        redact_fields: toJson(b.redact_fields ?? DEFAULT_REDACT_FIELDS),
+        redact_value_template: b.redact_value_template ?? 'Redacted_{{id}}',
+        exclusion_emails: toJson(b.exclusion_emails ?? []),
+        exclusion_roles: toJson(b.exclusion_roles ?? []),
+        cron_schedule: b.cron_schedule ?? null,
+        is_active: b.is_active ?? true,
+        dry_run_mode: b.dry_run_mode ?? false,
+        created_by: req.user?.id ?? null
+        // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
+      })
+      .returning('id')
     const id = typeof inserted[0] === 'object' ? (inserted[0] as { id: number }).id : inserted[0]
     const row = await db('nivaro_retention_policies').where({ id }).first()
     await logActivity({
@@ -74,11 +82,22 @@ export async function retentionRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const b = req.body as Record<string, unknown>
     const u: Record<string, unknown> = {}
-    const str = (k: string) => { if (b[k] !== undefined) u[k] = b[k] }
-    const json = (k: string) => { if (b[k] !== undefined) u[k] = toJson(b[k]) }
-    str('name'); str('inactivity_threshold_months'); str('action')
-    str('redact_value_template'); str('cron_schedule'); str('is_active'); str('dry_run_mode')
-    json('redact_fields'); json('exclusion_emails'); json('exclusion_roles')
+    const str = (k: string) => {
+      if (b[k] !== undefined) u[k] = b[k]
+    }
+    const json = (k: string) => {
+      if (b[k] !== undefined) u[k] = toJson(b[k])
+    }
+    str('name')
+    str('inactivity_threshold_months')
+    str('action')
+    str('redact_value_template')
+    str('cron_schedule')
+    str('is_active')
+    str('dry_run_mode')
+    json('redact_fields')
+    json('exclusion_emails')
+    json('exclusion_roles')
     if (Object.keys(u).length) {
       await db('nivaro_retention_policies').where({ id }).update(u)
       await logActivity({
@@ -117,7 +136,11 @@ export async function retentionRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Not found' })
 
     const started = new Date()
-    const result = await executeRetentionPolicy(format(row) as Parameters<typeof executeRetentionPolicy>[0], req.user?.id, isDryRun)
+    const result = await executeRetentionPolicy(
+      format(row) as Parameters<typeof executeRetentionPolicy>[0],
+      req.user?.id,
+      isDryRun
+    )
 
     await logActivity({
       action: 'retention-run',

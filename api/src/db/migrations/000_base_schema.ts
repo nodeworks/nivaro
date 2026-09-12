@@ -7,7 +7,6 @@ async function create(knex: Knex, table: string, cb: (t: Knex.CreateTableBuilder
 }
 
 export async function up(knex: Knex): Promise<void> {
-
   // ── Group 1: No FK dependencies ──────────────────────────────────────────
 
   await create(knex, 'nivaro_workspaces', (t) => {
@@ -312,7 +311,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_workflow_states', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.uuid('template')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_templates')
+      .onDelete('CASCADE')
     t.string('key', 100).notNullable()
     t.string('label', 255).notNullable()
     t.string('color', 50)
@@ -327,7 +330,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_workflow_bindings', (t) => {
     t.increments('id').primary()
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.uuid('template')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_templates')
+      .onDelete('CASCADE')
     t.string('collection', 255).notNullable().unique()
     t.string('state_field', 255)
     t.boolean('auto_start').notNullable().defaultTo(false)
@@ -368,14 +375,18 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('position_x').notNullable().defaultTo(0)
     t.integer('position_y').notNullable().defaultTo(0)
     t.text('options')
-    t.uuid('resolve')  // self-ref, no FK constraint
-    t.uuid('reject')   // self-ref, no FK constraint
+    t.uuid('resolve') // self-ref, no FK constraint
+    t.uuid('reject') // self-ref, no FK constraint
     t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
   })
 
   await create(knex, 'nivaro_external_api_endpoints', (t) => {
     t.increments('id').primary()
-    t.integer('api_id').notNullable().references('id').inTable('nivaro_external_apis').onDelete('CASCADE')
+    t.integer('api_id')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_external_apis')
+      .onDelete('CASCADE')
     t.string('name', 255).notNullable()
     t.string('method', 20).notNullable().defaultTo('GET')
     t.string('path', 2000).notNullable().defaultTo('')
@@ -436,7 +447,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_pipeline_owner_dimensions', (t) => {
     t.increments('id').primary()
-    t.integer('binding').notNullable().references('id').inTable('nivaro_workflow_bindings').onDelete('CASCADE')
+    t.integer('binding')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_bindings')
+      .onDelete('CASCADE')
     t.string('field', 255).notNullable()
     t.string('label', 255).notNullable()
     t.integer('sort').notNullable().defaultTo(0)
@@ -446,7 +461,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_pipeline_owner_groups', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.uuid('template')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_templates')
+      .onDelete('CASCADE')
     t.uuid('state').notNullable().references('id').inTable('nivaro_workflow_states')
     t.string('name', 255)
     t.text('filters')
@@ -527,8 +546,8 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('avatar')
     t.string('static_token', 64).unique()
     t.uuid('current_workspace').references('id').inTable('nivaro_workspaces')
-    t.uuid('manager_id')   // self-ref — no FK constraint to avoid circular dep
-    t.uuid('delegate_id')  // self-ref
+    t.uuid('manager_id') // self-ref — no FK constraint to avoid circular dep
+    t.uuid('delegate_id') // self-ref
     t.datetime('delegate_expires_at')
     t.boolean('is_out_of_office').notNullable().defaultTo(false)
     t.string('totp_secret', 255)
@@ -621,7 +640,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('item', 255).notNullable()
     t.text('data').notNullable()
     t.text('delta')
-    t.integer('parent')  // self-ref, no FK to avoid circular dep
+    t.integer('parent') // self-ref, no FK to avoid circular dep
   })
 
   await create(knex, 'nivaro_workflow_instances', (t) => {
@@ -636,7 +655,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_workflow_transitions', (t) => {
     t.uuid('id').primary().defaultTo(knex.fn.uuid())
-    t.uuid('template').notNullable().references('id').inTable('nivaro_workflow_templates').onDelete('CASCADE')
+    t.uuid('template')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_templates')
+      .onDelete('CASCADE')
     t.uuid('from_state').references('id').inTable('nivaro_workflow_states')
     t.uuid('to_state').notNullable().references('id').inTable('nivaro_workflow_states')
     t.string('label', 255).notNullable()
@@ -821,7 +844,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_external_api_schemas', (t) => {
     t.increments('id').primary()
-    t.integer('external_api_id').notNullable().references('id').inTable('nivaro_external_apis').onDelete('CASCADE')
+    t.integer('external_api_id')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_external_apis')
+      .onDelete('CASCADE')
     t.string('title', 255)
     t.string('spec_version', 50)
     t.text('raw_spec')
@@ -1035,7 +1062,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_pipeline_instance_owners', (t) => {
     t.increments('id').primary()
-    t.uuid('instance').notNullable().references('id').inTable('nivaro_workflow_instances').onDelete('CASCADE')
+    t.uuid('instance')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_instances')
+      .onDelete('CASCADE')
     t.uuid('state').references('id').inTable('nivaro_workflow_states')
     t.uuid('user').notNullable().references('id').inTable('nivaro_users')
     t.uuid('added_by').references('id').inTable('nivaro_users')
@@ -1044,7 +1075,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_pipeline_owner_group_users', (t) => {
     t.increments('id').primary()
-    t.uuid('group').notNullable().references('id').inTable('nivaro_pipeline_owner_groups').onDelete('CASCADE')
+    t.uuid('group')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_pipeline_owner_groups')
+      .onDelete('CASCADE')
     t.uuid('user').notNullable().references('id').inTable('nivaro_users')
     t.unique(['group', 'user'])
   })
@@ -1083,7 +1118,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_retention_runs', (t) => {
     t.increments('id').primary()
-    t.integer('policy_id').notNullable().references('id').inTable('nivaro_retention_policies').onDelete('CASCADE')
+    t.integer('policy_id')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_retention_policies')
+      .onDelete('CASCADE')
     t.datetime('started_at').notNullable()
     t.datetime('finished_at')
     t.integer('affected_count').notNullable().defaultTo(0)
@@ -1232,7 +1271,11 @@ export async function up(knex: Knex): Promise<void> {
 
   await create(knex, 'nivaro_workflow_history', (t) => {
     t.increments('id').primary()
-    t.uuid('instance').notNullable().references('id').inTable('nivaro_workflow_instances').onDelete('CASCADE')
+    t.uuid('instance')
+      .notNullable()
+      .references('id')
+      .inTable('nivaro_workflow_instances')
+      .onDelete('CASCADE')
     t.uuid('transition').references('id').inTable('nivaro_workflow_transitions')
     t.uuid('from_state').references('id').inTable('nivaro_workflow_states')
     t.uuid('to_state').notNullable().references('id').inTable('nivaro_workflow_states')
@@ -1287,35 +1330,105 @@ export async function up(knex: Knex): Promise<void> {
 export async function down(knex: Knex): Promise<void> {
   // Drop in reverse dependency order
   const tables = [
-    'nivaro_alert_subscriptions', 'nivaro_alert_log', 'nivaro_addendum_approvals',
-    'nivaro_workspace_templates', 'nivaro_workflow_history', 'nivaro_widget_feeds',
-    'nivaro_tasks', 'nivaro_sync_jobs', 'nivaro_submissions', 'nivaro_submission_forms',
-    'nivaro_sub_row_templates', 'nivaro_sla_rules', 'nivaro_sessions',
-    'nivaro_scheduled_changes', 'nivaro_saved_views', 'nivaro_retention_runs',
-    'nivaro_retention_policies', 'nivaro_record_templates', 'nivaro_pipeline_owner_group_users',
-    'nivaro_pipeline_instance_owners', 'nivaro_picker_exclusions', 'nivaro_persisted_queries',
-    'nivaro_pdf_templates', 'nivaro_pages', 'nivaro_notifications', 'nivaro_notification_subscriptions',
-    'nivaro_item_locks', 'nivaro_issues', 'nivaro_import_jobs', 'nivaro_hierarchy_configs',
-    'nivaro_flow_versions', 'nivaro_flow_runs', 'nivaro_files', 'nivaro_field_watch_subscribers',
-    'nivaro_field_watches', 'nivaro_field_rules', 'nivaro_external_api_schemas', 'nivaro_dq_runs',
-    'nivaro_dashboard_widgets', 'nivaro_dashboards', 'nivaro_comment_mentions', 'nivaro_comments',
-    'nivaro_collection_presets', 'nivaro_attribute_definitions', 'nivaro_at_risk_rules',
-    'nivaro_approval_decisions', 'nivaro_approval_instances', 'nivaro_approval_chain_steps',
-    'nivaro_api_keys', 'nivaro_alert_definitions', 'nivaro_addendums',
-    'nivaro_workflow_transitions', 'nivaro_workflow_instances', 'nivaro_revisions',
-    'nivaro_tree_permissions', 'nivaro_policies', 'nivaro_fields', 'nivaro_usage_counters',
-    'nivaro_users', 'nivaro_collections', 'nivaro_roles', 'nivaro_approval_chains',
-    'nivaro_pipeline_owner_groups', 'nivaro_pipeline_owner_dimensions', 'nivaro_workflow_bindings',
-    'nivaro_workflow_states', 'nivaro_webhook_deliveries', 'nivaro_erp_submissions',
-    'nivaro_external_api_logs', 'nivaro_external_api_endpoints', 'nivaro_flow_operations',
-    'nivaro_layout_field_assignments', 'nivaro_field_groups', 'nivaro_approval_chains',
-    'nivaro_workflow_templates', 'nivaro_webhooks', 'nivaro_tree_configs', 'nivaro_sub_rows',
-    'nivaro_settings', 'nivaro_sequences', 'nivaro_rules', 'nivaro_relations', 'nivaro_page_views',
-    'nivaro_migrations_lock', 'nivaro_migrations', 'nivaro_flow_operations', 'nivaro_flows',
-    'nivaro_file_folders', 'nivaro_embeddings', 'nivaro_dq_rules', 'nivaro_custom_queries',
-    'nivaro_collection_layouts', 'nivaro_blackout_dates', 'nivaro_attribute_values',
-    'nivaro_api_logs', 'nivaro_ai_collection_settings', 'nivaro_activity',
-    'nivaro_external_apis', 'nivaro_workspaces',
+    'nivaro_alert_subscriptions',
+    'nivaro_alert_log',
+    'nivaro_addendum_approvals',
+    'nivaro_workspace_templates',
+    'nivaro_workflow_history',
+    'nivaro_widget_feeds',
+    'nivaro_tasks',
+    'nivaro_sync_jobs',
+    'nivaro_submissions',
+    'nivaro_submission_forms',
+    'nivaro_sub_row_templates',
+    'nivaro_sla_rules',
+    'nivaro_sessions',
+    'nivaro_scheduled_changes',
+    'nivaro_saved_views',
+    'nivaro_retention_runs',
+    'nivaro_retention_policies',
+    'nivaro_record_templates',
+    'nivaro_pipeline_owner_group_users',
+    'nivaro_pipeline_instance_owners',
+    'nivaro_picker_exclusions',
+    'nivaro_persisted_queries',
+    'nivaro_pdf_templates',
+    'nivaro_pages',
+    'nivaro_notifications',
+    'nivaro_notification_subscriptions',
+    'nivaro_item_locks',
+    'nivaro_issues',
+    'nivaro_import_jobs',
+    'nivaro_hierarchy_configs',
+    'nivaro_flow_versions',
+    'nivaro_flow_runs',
+    'nivaro_files',
+    'nivaro_field_watch_subscribers',
+    'nivaro_field_watches',
+    'nivaro_field_rules',
+    'nivaro_external_api_schemas',
+    'nivaro_dq_runs',
+    'nivaro_dashboard_widgets',
+    'nivaro_dashboards',
+    'nivaro_comment_mentions',
+    'nivaro_comments',
+    'nivaro_collection_presets',
+    'nivaro_attribute_definitions',
+    'nivaro_at_risk_rules',
+    'nivaro_approval_decisions',
+    'nivaro_approval_instances',
+    'nivaro_approval_chain_steps',
+    'nivaro_api_keys',
+    'nivaro_alert_definitions',
+    'nivaro_addendums',
+    'nivaro_workflow_transitions',
+    'nivaro_workflow_instances',
+    'nivaro_revisions',
+    'nivaro_tree_permissions',
+    'nivaro_policies',
+    'nivaro_fields',
+    'nivaro_usage_counters',
+    'nivaro_users',
+    'nivaro_collections',
+    'nivaro_roles',
+    'nivaro_approval_chains',
+    'nivaro_pipeline_owner_groups',
+    'nivaro_pipeline_owner_dimensions',
+    'nivaro_workflow_bindings',
+    'nivaro_workflow_states',
+    'nivaro_webhook_deliveries',
+    'nivaro_erp_submissions',
+    'nivaro_external_api_logs',
+    'nivaro_external_api_endpoints',
+    'nivaro_flow_operations',
+    'nivaro_layout_field_assignments',
+    'nivaro_field_groups',
+    'nivaro_approval_chains',
+    'nivaro_workflow_templates',
+    'nivaro_webhooks',
+    'nivaro_tree_configs',
+    'nivaro_sub_rows',
+    'nivaro_settings',
+    'nivaro_sequences',
+    'nivaro_rules',
+    'nivaro_relations',
+    'nivaro_page_views',
+    'nivaro_migrations_lock',
+    'nivaro_migrations',
+    'nivaro_flow_operations',
+    'nivaro_flows',
+    'nivaro_file_folders',
+    'nivaro_embeddings',
+    'nivaro_dq_rules',
+    'nivaro_custom_queries',
+    'nivaro_collection_layouts',
+    'nivaro_blackout_dates',
+    'nivaro_attribute_values',
+    'nivaro_api_logs',
+    'nivaro_ai_collection_settings',
+    'nivaro_activity',
+    'nivaro_external_apis',
+    'nivaro_workspaces'
   ]
   for (const t of tables) {
     await knex.schema.dropTableIfExists(t)

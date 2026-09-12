@@ -63,13 +63,7 @@ export async function logActivity(opts: {
 // losing audit coverage is worse than logging a duplicate.
 
 interface ThrottleRedis {
-  set(
-    key: string,
-    value: string,
-    mode: 'EX',
-    ttl: number,
-    nx: 'NX'
-  ): Promise<string | null>
+  set(key: string, value: string, mode: 'EX', ttl: number, nx: 'NX'): Promise<string | null>
 }
 
 export async function logActivityThrottled(

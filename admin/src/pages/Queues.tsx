@@ -2231,6 +2231,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                 <div className='ml-7 border-l-2 border-slate-100 pl-3 dark:border-border'>
                   <BulkActionsPicker
                     keyed
+                    surface='queue'
                     collections={[
                       ...new Set(
                         sources

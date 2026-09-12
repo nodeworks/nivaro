@@ -88,7 +88,11 @@ export function getRecordViewerSnapshot(): Array<{
   item: string
   viewers: Array<{ id: string; name: string }>
 }> {
-  const out: Array<{ collection: string; item: string; viewers: Array<{ id: string; name: string }> }> = []
+  const out: Array<{
+    collection: string
+    item: string
+    viewers: Array<{ id: string; name: string }>
+  }> = []
   for (const [room, map] of recordViewers) {
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
@@ -240,63 +244,63 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // whose cookie can't ride the cross-origin WS connection). Joins their
     // personal room so real-time notifications can be targeted to them.
 
-  /**
-   * Live connections per user. Presence is derived from these rather than from
-   * a heartbeat timestamp: the socket knows exactly when someone arrives and
-   * leaves, where a timestamp can only be compared against a window — which is
-   * why closing a tab used to leave someone "online" for a minute and a
-   * backgrounded tab (whose timers the browser throttles) dropped off while
-   * still open.
-   *
-   * A SET of socket ids, not a count, because multiple tabs are normal and one
-   * closing must not report the person gone.
-   */
-  const liveSockets = new Map<string, Set<string>>()
+    /**
+     * Live connections per user. Presence is derived from these rather than from
+     * a heartbeat timestamp: the socket knows exactly when someone arrives and
+     * leaves, where a timestamp can only be compared against a window — which is
+     * why closing a tab used to leave someone "online" for a minute and a
+     * backgrounded tab (whose timers the browser throttles) dropped off while
+     * still open.
+     *
+     * A SET of socket ids, not a count, because multiple tabs are normal and one
+     * closing must not report the person gone.
+     */
+    const liveSockets = new Map<string, Set<string>>()
 
-  /** Presence writes must never take down a socket. */
-  const writePresence = async (userId: string, patch: Record<string, unknown>) => {
-    try {
-      const updated = await db('user_presence').where({ user_id: userId }).update(patch)
-      if (updated === 0) {
-        await db('user_presence')
-          .insert({ user_id: userId, ...patch })
-          .catch(() => {
-            // UNIQUE(user_id): another tab won the insert, so update instead.
-            return db('user_presence').where({ user_id: userId }).update(patch)
-          })
+    /** Presence writes must never take down a socket. */
+    const writePresence = async (userId: string, patch: Record<string, unknown>) => {
+      try {
+        const updated = await db('user_presence').where({ user_id: userId }).update(patch)
+        if (updated === 0) {
+          await db('user_presence')
+            .insert({ user_id: userId, ...patch })
+            .catch(() => {
+              // UNIQUE(user_id): another tab won the insert, so update instead.
+              return db('user_presence').where({ user_id: userId }).update(patch)
+            })
+        }
+        // Tell every viewer rather than making them poll. This is the whole
+        // reason the list can feel instant instead of up to a minute stale.
+        io.emit('presence:changed', { user_id: userId })
+      } catch (err) {
+        app.log.debug({ err, userId }, 'presence write failed')
       }
-      // Tell every viewer rather than making them poll. This is the whole
-      // reason the list can feel instant instead of up to a minute stale.
-      io.emit('presence:changed', { user_id: userId })
-    } catch (err) {
-      app.log.debug({ err, userId }, 'presence write failed')
     }
-  }
 
-  const markOnline = async (userId: string, socketId: string) => {
-    const set = liveSockets.get(userId) ?? new Set<string>()
-    set.add(socketId)
-    liveSockets.set(userId, set)
-    const now = new Date()
-    // A connection asserts ONLINE-ness only. It must not stamp activity: the
-    // socket reconnects on its own (network blips, laptop wake), and treating
-    // each reconnect as input reset the idle clock — people flipped from
-    // "Idle · 12m" back to bare "Idle" every reconnect. The client's own
-    // beats carry is_idle/last_active, the actual input claims.
-    await writePresence(userId, {
-      is_online: true,
-      last_seen: now
-    })
-  }
+    const markOnline = async (userId: string, socketId: string) => {
+      const set = liveSockets.get(userId) ?? new Set<string>()
+      set.add(socketId)
+      liveSockets.set(userId, set)
+      const now = new Date()
+      // A connection asserts ONLINE-ness only. It must not stamp activity: the
+      // socket reconnects on its own (network blips, laptop wake), and treating
+      // each reconnect as input reset the idle clock — people flipped from
+      // "Idle · 12m" back to bare "Idle" every reconnect. The client's own
+      // beats carry is_idle/last_active, the actual input claims.
+      await writePresence(userId, {
+        is_online: true,
+        last_seen: now
+      })
+    }
 
-  const markOffline = async (userId: string, socketId: string) => {
-    const set = liveSockets.get(userId)
-    if (!set) return
-    set.delete(socketId)
-    if (set.size > 0) return // other tabs still open
-    liveSockets.delete(userId)
-    await writePresence(userId, { is_online: false, last_seen: new Date() })
-  }
+    const markOffline = async (userId: string, socketId: string) => {
+      const set = liveSockets.get(userId)
+      if (!set) return
+      set.delete(socketId)
+      if (set.size > 0) return // other tabs still open
+      liveSockets.delete(userId)
+      await writePresence(userId, { is_online: false, last_seen: new Date() })
+    }
 
     socket.on('auth', async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
@@ -502,7 +506,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!collection || !item) return
         socket
           .to(`record:${collection}:${String(item)}`)
-          .emit('record:comment-typing', { collection, item, user_name: String(user_name ?? '').slice(0, 80) })
+          .emit('record:comment-typing', {
+            collection,
+            item,
+            user_name: String(user_name ?? '').slice(0, 80)
+          })
       }
     )
     socket.on('record:join', async (payload: { collection?: string; item?: string }) => {
@@ -591,17 +599,21 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
-    socket.on('field:change', (payload: { field?: string; value?: unknown; collection?: string; item?: unknown }) => {
-      const user = authenticatedUser
-      const room = roomFor(payload)
-      if (!user || !room || typeof payload?.field !== 'string') return
-      const value = typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
-      socket.to(room).emit('field:changed', {
-        field: payload.field,
-        value,
-        user: { id: user.id, name: displayName(user) }
-      })
-    })
+    socket.on(
+      'field:change',
+      (payload: { field?: string; value?: unknown; collection?: string; item?: unknown }) => {
+        const user = authenticatedUser
+        const room = roomFor(payload)
+        if (!user || !room || typeof payload?.field !== 'string') return
+        const value =
+          typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+        socket.to(room).emit('field:changed', {
+          field: payload.field,
+          value,
+          user: { id: user.id, name: displayName(user) }
+        })
+      }
+    )
 
     socket.on('field:blur', (payload: { field?: string; collection?: string; item?: unknown }) => {
       const user = authenticatedUser

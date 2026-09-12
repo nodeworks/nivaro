@@ -59,7 +59,8 @@ async function hygieneFindings(): Promise<Finding[]> {
           code: 'queue-unopened',
           subject: `queue:${q.id}`,
           title: `Queue "${q.name}" — nobody opened it in 30 days`,
-          detail: 'No admin journey visited this queue in the last 30 days (headless-frontend visits are not tracked here — verify before deleting).',
+          detail:
+            'No admin journey visited this queue in the last 30 days (headless-frontend visits are not tracked here — verify before deleting).',
           severity: 'info',
           href: `/queues/${q.id}`
         })
@@ -134,7 +135,11 @@ async function hygieneFindings(): Promise<Finding[]> {
     if (suspendedIds.length > 0) {
       const views = (await db('nivaro_saved_views')
         .whereIn('user', suspendedIds)
-        .select('id', 'name', 'collection')) as Array<{ id: number; name: string; collection: string }>
+        .select('id', 'name', 'collection')) as Array<{
+        id: number
+        name: string
+        collection: string
+      }>
       for (const v of views) {
         out.push({
           family: 'hygiene',
@@ -147,7 +152,11 @@ async function hygieneFindings(): Promise<Finding[]> {
       }
       const templates = (await db('nivaro_record_templates')
         .whereIn('created_by', suspendedIds)
-        .select('id', 'name', 'collection')) as Array<{ id: string; name: string; collection: string }>
+        .select('id', 'name', 'collection')) as Array<{
+        id: string
+        name: string
+        collection: string
+      }>
       for (const t of templates) {
         out.push({
           family: 'hygiene',
@@ -219,7 +228,11 @@ async function hygieneFindings(): Promise<Finding[]> {
       .leftJoin('nivaro_layout_field_assignments as a', 'a.layout_id', 'l.id')
       .groupBy('l.id', 'l.name', 'l.collection')
       .havingRaw('COUNT(a.id) = 0')
-      .select('l.id', 'l.name', 'l.collection')) as Array<{ id: number; name: string; collection: string }>
+      .select('l.id', 'l.name', 'l.collection')) as Array<{
+      id: number
+      name: string
+      collection: string
+    }>
     for (const l of layouts) {
       out.push({
         family: 'hygiene',
@@ -276,7 +289,8 @@ async function lintFindings(): Promise<Finding[]> {
           code: 'relation-missing-table',
           subject: `relation:${r.id}`,
           title: `Relation #${r.id} references "${side}", which is not a real table`,
-          detail: 'Anything compiling this relation into SQL (scopes, filters) will error. Delete the relation row or create the table.',
+          detail:
+            'Anything compiling this relation into SQL (scopes, filters) will error. Delete the relation row or create the table.',
           severity: 'warning',
           href: '/data-model'
         })
@@ -294,7 +308,8 @@ async function lintFindings(): Promise<Finding[]> {
         code: 'relation-one-field-id',
         subject: `relation:${r.id}`,
         title: `Relation #${r.id} (${r.many_collection} → ${r.one_collection}) has one_field='id'`,
-        detail: "Legacy-import corruption: this strips 'id' from explicit selects and breaks pickers targeting the collection. Set one_field to the real alias or null.",
+        detail:
+          "Legacy-import corruption: this strips 'id' from explicit selects and breaks pickers targeting the collection. Set one_field to the real alias or null.",
         severity: 'warning',
         href: '/data-model'
       })
@@ -319,7 +334,8 @@ async function lintFindings(): Promise<Finding[]> {
         code: 'missing-display-template',
         subject: `collection:${col.collection}`,
         title: `${col.collection} is picked by ${count} relation(s) but has no display template`,
-        detail: 'Pickers and relation labels fall back to title/name heuristics — set a display template so references render meaningfully.',
+        detail:
+          'Pickers and relation labels fall back to title/name heuristics — set a display template so references render meaningfully.',
         severity: 'info',
         href: `/data-model/${col.collection}`
       })
@@ -345,7 +361,6 @@ async function lintFindings(): Promise<Finding[]> {
       })
     }
   }
-
 
   // Scope coverage (#177): a STRICT dimension denies everything on a
   // collection it can't route to — a new collection silently going dark is
@@ -404,7 +419,9 @@ async function lintFindings(): Promise<Finding[]> {
   try {
     const relTables = new Set(
       (
-        (await db('nivaro_relations').whereNotNull('many_collection').distinct('many_collection')) as Array<{
+        (await db('nivaro_relations')
+          .whereNotNull('many_collection')
+          .distinct('many_collection')) as Array<{
           many_collection: string
         }>
       ).map((r) => r.many_collection.toLowerCase())
@@ -447,7 +464,10 @@ async function lintFindings(): Promise<Finding[]> {
   try {
     const cols = (await db('nivaro_collections')
       .whereNot('collection', 'like', 'nivaro_%')
-      .select('collection', 'display_name')) as Array<{ collection: string; display_name: string | null }>
+      .select('collection', 'display_name')) as Array<{
+      collection: string
+      display_name: string | null
+    }>
     const seenNames = new Map<string, string>()
     for (const c of cols) {
       const dn = c.display_name?.trim()
@@ -518,7 +538,13 @@ export async function runConfigHealthSweep(): Promise<string> {
     if (existing) {
       await db('nivaro_config_health')
         .where('id', existing.id)
-        .update({ title: f.title, detail: f.detail ?? null, severity: f.severity, href: f.href ?? null, last_seen: now })
+        .update({
+          title: f.title,
+          detail: f.detail ?? null,
+          severity: f.severity,
+          href: f.href ?? null,
+          last_seen: now
+        })
     } else {
       await db('nivaro_config_health').insert({
         family: f.family,
@@ -536,7 +562,12 @@ export async function runConfigHealthSweep(): Promise<string> {
   }
   // Anything the sweep no longer produces is resolved — delete it so a
   // recurrence starts fresh (including previously dismissed rows).
-  const all = (await db('nivaro_config_health').select('id', 'family', 'code', 'subject')) as Array<{
+  const all = (await db('nivaro_config_health').select(
+    'id',
+    'family',
+    'code',
+    'subject'
+  )) as Array<{
     id: number
     family: string
     code: string
@@ -544,7 +575,9 @@ export async function runConfigHealthSweep(): Promise<string> {
   }>
   const gone = all.filter((r) => !seen.has(`${r.family}|${r.code}|${r.subject}`)).map((r) => r.id)
   for (let i = 0; i < gone.length; i += 500) {
-    await db('nivaro_config_health').whereIn('id', gone.slice(i, i + 500)).del()
+    await db('nivaro_config_health')
+      .whereIn('id', gone.slice(i, i + 500))
+      .del()
   }
   return `${findings.length} finding(s), ${gone.length} resolved`
 }
