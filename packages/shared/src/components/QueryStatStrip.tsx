@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { darkVariant } from './QueryTable'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
 import { post } from '../lib/commands'
+import { colorPair } from './QueryTable'
 
 // Stat boxes above a query table (EFP Budget Overview strip). Each stat is
 // either a client-side SUM of a field over the table's own rows (so it always
@@ -37,7 +37,8 @@ export interface QueryWidgetStat {
    *  render with a leading '+'. */
   field_subtract?: string
   /** EFP stat-card accent: colored top border + value (accent_dark in dark
-   *  mode; accent_negative when a delta goes negative). */
+   *  mode; accent_negative when a delta goes negative). Each may be a role name
+   *  — accent | positive | negative | info … — see QueryTable COLOR_ROLES. */
   accent?: string
   accent_dark?: string
   accent_negative?: string
@@ -122,13 +123,17 @@ function StatBox({
 
   // EFP stat-card accent: colored 2px top border + colored value. A delta
   // that goes negative switches to accent_negative (red by default).
-  const isNegativeDelta = stat.field_subtract && value !== null && value < 0
-  const accent = isNegativeDelta ? (stat.accent_negative ?? '#ef4444') : (stat.accent ?? null)
-  const accentDark = isNegativeDelta
-    ? stat.accent_negative
-      ? darkVariant(stat.accent_negative)
-      : '#f87171'
-    : (stat.accent_dark ?? (stat.accent ? darkVariant(stat.accent) : null))
+  // A delta tile flips to accent_negative below zero; any other tile does
+  // too when it OPTS IN with accent_negative (Remaining Budget overspent).
+  const isNegativeDelta =
+    value !== null && value < 0 && (stat.field_subtract || stat.accent_negative)
+  const accentPair = isNegativeDelta
+    ? colorPair(stat.accent_negative ?? 'negative')
+    : stat.accent
+      ? colorPair(stat.accent, stat.accent_dark)
+      : null
+  const accent = accentPair?.[0] ?? null
+  const accentDark = accentPair?.[1] ?? null
   const valueText =
     value !== null && stat.field_subtract && value > 0
       ? `+${fmtStat(value, stat.format)}`

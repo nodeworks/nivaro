@@ -14,6 +14,41 @@ export function darkVariant(color: string): string {
   return `color-mix(in srgb, ${color} 55%, white)`
 }
 
+/** Named colour roles a column / stat may use instead of a hex. `accent`,
+ *  `ink` and `muted` read the HOST's theme tokens (so efp-new's amber brand
+ *  and the admin's cyan both look native); the semantic roles carry their own
+ *  light / dark pair. A hex still works and gets `darkVariant` for dark. */
+export const COLOR_ROLES: Record<string, [light: string, dark: string]> = {
+  // Brand ink for TEXT: the raw brand (cyan on white ≈ 1.6:1) is a fill
+  // colour, not a text colour — mix toward black in light mode, raw in dark.
+  accent: ['color-mix(in srgb, rgb(var(--nvr-cyan-rgb)) 56%, black)', 'rgb(var(--nvr-cyan-rgb))'],
+  ink: ['hsl(var(--foreground))', 'hsl(var(--foreground))'],
+  muted: ['hsl(var(--muted-foreground))', 'hsl(var(--muted-foreground))'],
+  positive: ['#15803d', '#4ade80'],
+  negative: ['#dc2626', '#f87171'],
+  warning: ['#b45309', '#fbbf24'],
+  info: ['#4f46e5', '#a5b4fc']
+}
+
+/** Resolve a configured colour (role name or hex) to a [light, dark] pair. */
+export function colorPair(color: string, dark?: string): [string, string] {
+  const role = COLOR_ROLES[color.trim().toLowerCase()]
+  if (role) return [role[0], dark ? (COLOR_ROLES[dark]?.[1] ?? dark) : role[1]]
+  return [color, dark ? (COLOR_ROLES[dark]?.[1] ?? dark) : darkVariant(color)]
+}
+
+/** Empty and zero cells read muted no matter what colour the column carries —
+ *  a column of indigo dashes or green $0s is noise, not data. */
+const ZERO_TEXT = /^[-+−]?\$?0(?:\.0+)?%?$/
+const dashed = (v: string): ReactNode =>
+  v === '—' ? (
+    <span className='text-slate-300 dark:text-slate-600'>—</span>
+  ) : ZERO_TEXT.test(v) ? (
+    <span className='text-slate-500 dark:text-slate-400'>{v}</span>
+  ) : (
+    v
+  )
+
 export interface QueryTableColumn {
   /** Row key. Omit for pure formula columns. */
   field?: string
@@ -36,9 +71,14 @@ export interface QueryTableColumn {
    *  alternating groups get a faint band so wide grids stay scannable. */
   group?: string
   /** Cell text color (any CSS color) — EFP forecast/actual column tinting.
-   *  color_dark overrides in dark mode (defaults to color). */
+   *  color_dark overrides in dark mode (defaults to color). Either may be a
+   *  role name — accent | ink | muted | positive | negative | warning | info —
+   *  instead of a hex; roles follow the host theme (see COLOR_ROLES). */
   color?: string
   color_dark?: string
+  /** Colour (role or hex) used instead of `color` when the cell's value is
+   *  negative — a Remaining Budget column reads green until it goes red. */
+  color_negative?: string
   /** Second field rendered as a stacked line under the main value in the SAME
    *  cell (EFP month cells: Fcst over Act — halves the column count). Toggles
    *  hide individual lines; the column collapses when both lines hide. */
@@ -403,23 +443,20 @@ export function QueryTable({
 
   // Per-column cell color (EFP forecast indigo / actual emerald). Runtime hex
   // rides CSS vars so the dark override stays a static Tailwind class.
-  const colorStyle = (c: QueryTableColumn): Record<string, string> | undefined =>
-    c.color
-      ? ({ '--qtc': c.color, '--qtcd': c.color_dark ?? darkVariant(c.color) } as unknown as Record<
-          string,
-          string
-        >)
-      : undefined
+  const colorStyle = (c: QueryTableColumn, value?: unknown): Record<string, string> | undefined => {
+    if (!c.color) return undefined
+    const neg = c.color_negative && typeof value === 'number' && value < 0
+    const [l, d] = neg ? colorPair(c.color_negative as string) : colorPair(c.color, c.color_dark)
+    return { '--qtc': l, '--qtcd': d } as unknown as Record<string, string>
+  }
   const colorCls = (c: QueryTableColumn, fallback: string) =>
     c.color ? 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]' : fallback
 
-  const stackStyle = (c: QueryTableColumn): Record<string, string> | undefined =>
-    c.stack_color
-      ? ({
-          '--qts': c.stack_color,
-          '--qtsd': c.stack_color_dark ?? darkVariant(c.stack_color)
-        } as unknown as Record<string, string>)
-      : undefined
+  const stackStyle = (c: QueryTableColumn): Record<string, string> | undefined => {
+    if (!c.stack_color) return undefined
+    const [l, d] = colorPair(c.stack_color, c.stack_color_dark)
+    return { '--qts': l, '--qtsd': d } as unknown as Record<string, string>
+  }
 
   const cellValue = (row: Record<string, unknown>, c: QueryTableColumn): unknown =>
     c.formula ? evalRowFormula(c.formula, row) : c.field ? row[c.field] : null
@@ -548,18 +585,18 @@ export function QueryTable({
     if (c.stack) {
       return (
         <span className='inline-flex flex-col items-end leading-[15px]' style={stackStyle(c)}>
-          {showTop(c) && <span>{fmtCell(cellValue(src, c), rowFormat(src, c))}</span>}
+          {showTop(c) && <span>{dashed(fmtCell(cellValue(src, c), rowFormat(src, c)))}</span>}
           {showStack(c) && (
             <span
               className={`text-[10.5px] ${c.stack_color ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]' : 'text-slate-400'}`}
             >
-              {fmtCell(src[c.stack as string], rowFormat(src, c))}
+              {dashed(fmtCell(src[c.stack as string], rowFormat(src, c)))}
             </span>
           )}
         </span>
       )
     }
-    return fmtCell(cellValue(src, c), rowFormat(src, c))
+    return dashed(fmtCell(cellValue(src, c), rowFormat(src, c)))
   }
 
   // Column-group banding: contiguous same-group runs alternate a faint tint so
@@ -621,7 +658,7 @@ export function QueryTable({
             className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(j)} ${colorCls(c, 'text-slate-700 dark:text-slate-200')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${c.group ? 'min-w-[58px]' : ''} ${hlCls(c) || bandCls(j)} ${stickyFirstCls(j, 'bg-slate-50 group-hover/qtr:bg-slate-100 dark:bg-muted dark:group-hover/qtr:bg-muted')}`}
             style={{
               ...(d > 0 && j === 0 ? { paddingLeft: 2 + d * 16 } : {}),
-              ...(colorStyle(c) ?? {})
+              ...(colorStyle(c, Number(cellValue(row, c))) ?? {})
             }}
           >
             {j === 0 && firstColOverride !== undefined ? firstColOverride : cellBody(row, c)}
@@ -703,7 +740,10 @@ export function QueryTable({
                   <td
                     key={c.field ?? c.label ?? j}
                     className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(j)} text-[11.5px] font-semibold ${colorCls(c, 'text-slate-600 dark:text-slate-300')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky && j === 0 ? `sticky left-0 z-[1] ${STICKY_EDGE} bg-slate-100 dark:bg-muted` : ''}`}
-                    style={colorStyle(c)}
+                    style={colorStyle(
+                      c,
+                      Number(c.formula ? evalRowFormula(c.formula, sums) : sums[c.field ?? ''])
+                    )}
                   >
                     {j === 0
                       ? `${isCollapsed ? '▸' : '▾'} ${name}`
@@ -1006,7 +1046,10 @@ export function QueryTable({
                   <td
                     key={c.field ?? c.label ?? i}
                     className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(i)} ${colorCls(c, '')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky ? `sticky bottom-0 border-t border-slate-300 dark:border-border ${i === 0 ? `left-0 z-[3] ${STICKY_EDGE} bg-slate-50 dark:bg-muted` : 'z-[2] bg-white dark:bg-card'}` : ''}`}
-                    style={colorStyle(c)}
+                    style={colorStyle(
+                      c,
+                      Number(c.formula ? evalRowFormula(c.formula, totals) : totals[c.field ?? ''])
+                    )}
                   >
                     {i === 0 && !c.sum && !c.formula
                       ? 'Total'
