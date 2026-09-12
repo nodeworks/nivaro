@@ -15,6 +15,8 @@ export interface CreateLayoutOption {
   name: string
   slug: string | null
   create_label: string | null
+  /** Quick-picker steps (layout.quick_picker) — a row offers "Quick pick" when set. */
+  quick_picker?: string[] | null
   create_hidden: boolean | number
   is_active: boolean | number
   layout_type: string

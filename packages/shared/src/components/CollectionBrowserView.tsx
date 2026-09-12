@@ -13,7 +13,8 @@ import {
   Rows3,
   Search,
   Sparkles,
-  X
+  X,
+  Wand2
 } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -3700,11 +3701,14 @@ export function CollectionBrowserView({
     canCreate && !meta?.singleton ? collection : null,
     null
   )
-  const startNew = (slug: string | null, stepsForSlug: string[]) => {
-    if (stepsForSlug.length > 0) setQuickPick({ slug })
-    else if (slug) openTarget({ collection, itemId: 'new', layoutSlug: slug })
+  // Row click opens the form directly; the row's "Quick pick" affordance
+  // (shown when the layout configures steps) walks the dependency chain first.
+  const startNew = (slug: string | null) => {
+    if (slug) openTarget({ collection, itemId: 'new', layoutSlug: slug })
     else openRow('new')
   }
+  const stepsFor = (l: { quick_picker?: string[] | null } | null | undefined): string[] =>
+    Array.isArray(l?.quick_picker) ? l.quick_picker.filter((x) => typeof x === 'string') : []
   const newItemMenuRef = useRef<HTMLDivElement | null>(null)
   const newItemBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
@@ -6081,49 +6085,93 @@ export function CollectionBrowserView({
                 <ChevronDown className='h-3.5 w-3.5' />
               </button>
               {newItemMenuOpen && (
-                <div className='nvr-pop-in absolute right-0 top-9 z-[60] w-60 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
-                  <button
-                    type='button'
-                    onClick={() => {
-                      setNewItemMenuOpen(false)
-                      startNew(null, defaultQuickSteps)
-                    }}
-                    className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
-                  >
-                    {newItemLayouts.active?.create_label ??
-                      newItemLayouts.active?.name ??
-                      'Default layout'}
-                    <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
-                      default
-                    </span>
-                  </button>
-                  {newItemLayouts.options.map((l) => (
-                    <button
-                      key={l.id}
-                      type='button'
-                      onClick={() => {
-                        setNewItemMenuOpen(false)
-                        // Goes through openTarget (not onOpenItem) so the
-                        // layout slug rides the host's itemUrl mapping.
-                        openTarget({ collection, itemId: 'new', layoutSlug: l.slug })
-                      }}
-                      className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
+                <div className='nvr-pop-in absolute right-0 top-9 z-[60] w-64 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-border dark:bg-card'>
+                  {[
+                    {
+                      key: 'default',
+                      slug: null as string | null,
+                      label:
+                        newItemLayouts.active?.create_label ??
+                        newItemLayouts.active?.name ??
+                        'Default layout',
+                      isDefault: true,
+                      steps: defaultQuickSteps
+                    },
+                    ...newItemLayouts.options.map((l) => ({
+                      key: String(l.id),
+                      slug: l.slug,
+                      label: l.create_label ?? l.name,
+                      isDefault: false,
+                      steps: stepsFor(l)
+                    }))
+                  ].map((row) => (
+                    <div
+                      key={row.key}
+                      className='group/newrow flex items-center rounded hover:bg-slate-100 dark:hover:bg-muted'
                     >
-                      {l.create_label ?? l.name}
-                    </button>
+                      <button
+                        type='button'
+                        onClick={() => {
+                          setNewItemMenuOpen(false)
+                          // Goes through openTarget (not onOpenItem) so the
+                          // layout slug rides the host's itemUrl mapping.
+                          startNew(row.slug)
+                        }}
+                        className='flex min-w-0 flex-1 items-center px-2 py-1.5 text-left text-[12px] text-slate-700 dark:text-slate-200'
+                      >
+                        <span className='truncate'>{row.label}</span>
+                        {row.isDefault && (
+                          <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                            default
+                          </span>
+                        )}
+                      </button>
+                      {row.steps.length > 0 && (
+                        <button
+                          type='button'
+                          data-cbv-quick-pick={row.slug ?? 'default'}
+                          title='Quick pick — choose the related fields step by step, then open the form prefilled'
+                          onClick={() => {
+                            setNewItemMenuOpen(false)
+                            setQuickPick({ slug: row.slug })
+                          }}
+                          className='mr-1 flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-slate-400 hover:bg-nvr-cyan/10 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                        >
+                          <Wand2 className='h-3 w-3' />
+                          Quick pick
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
             </div>
           ) : (
-            <button
-              type='button'
-              ref={newItemBtnRef}
-              onClick={() => startNew(null, defaultQuickSteps)}
-              className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
-            >
-              + New item
-            </button>
+            <div className='flex items-stretch' data-cbv-newitem-split>
+              <button
+                type='button'
+                ref={newItemBtnRef}
+                onClick={() => startNew(null)}
+                className={cn(
+                  'h-8 bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
+                  defaultQuickSteps.length > 0 ? 'rounded-l-md' : 'rounded-md'
+                )}
+              >
+                + New item
+              </button>
+              {defaultQuickSteps.length > 0 && (
+                <button
+                  type='button'
+                  data-cbv-quick-pick='default'
+                  title='Quick pick — choose the related fields step by step, then open the form prefilled'
+                  aria-label='Quick pick'
+                  onClick={() => setQuickPick({ slug: null })}
+                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105'
+                >
+                  <Wand2 className='h-3.5 w-3.5' />
+                </button>
+              )}
+            </div>
           ))}
       </div>
       {quickPick && (
