@@ -86,6 +86,7 @@ import { IconPicker } from '@/components/icon-picker'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
+import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -4587,6 +4588,7 @@ function SettingsTab({
       <EditFrequencySection tableName={tableName} />
       <ChangeReasonSection tableName={tableName} />
       <CustomActionsSection tableName={tableName} />
+      <BulkActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
       <UpsertKeysSection tableName={tableName} />
       <SnapshotsSection tableName={tableName} />
@@ -6739,6 +6741,8 @@ interface BrowserConfig {
   /** Record workspace tabs in the portal: open records stack as tabs above
    *  the form, unsaved edits survive switching. Opt-in. */
   record_tabs?: boolean
+  /** Registry bulk actions (keys) the bar shows; null/absent = all. */
+  bulk_actions?: string[] | null
 }
 
 // #620 — custom collection empty state. (The slug picker that briefly lived
@@ -6892,6 +6896,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     if (next.record_tabs === true) clean.record_tabs = true
+    if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -6926,6 +6931,18 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           </p>
         </div>
         {row('Row selection', 'Checkbox column + bulk actions bar', 'checkbox_selection')}
+        {cfg.checkbox_selection !== false && (
+          <div className='ml-4 border-l-2 border-slate-100 pl-3'>
+            <p className='text-[12px] font-medium text-slate-600'>Bulk actions shown</p>
+            <div className='mt-1'>
+              <BulkActionsPicker
+                collections={[tableName]}
+                value={cfg.bulk_actions ?? null}
+                onChange={(next) => void patch({ bulk_actions: next })}
+              />
+            </div>
+          </div>
+        )}
         {row(
           'Row actions menu',
           'Per-row Actions dropdown (transitions, audit log…)',

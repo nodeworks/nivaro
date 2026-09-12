@@ -17,7 +17,10 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Eye, Inbox,
+import {
+  Bell,
+  Eye,
+  Inbox,
   AlertTriangle,
   ChevronDown,
   Filter,
@@ -56,7 +59,14 @@ import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-valu
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { RowHighlightLegend } from '../RowHighlightLegend'
-import { titleCase, cn, formatDate, formatDateTime, formatNumber, humanHours } from '../../lib/utils'
+import {
+  titleCase,
+  cn,
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  humanHours
+} from '../../lib/utils'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import {
@@ -76,6 +86,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { OwnerAvatars } from './OwnerAvatars'
+import { BulkActionButtons } from '../bulk/BulkActionButtons'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
@@ -181,6 +192,7 @@ interface QueueMeta {
     default_scope: 'mine' | 'unowned' | 'all'
     work_next: boolean
     bulk_actions: boolean
+    bulk_action_keys?: string[] | null
     row_click: 'preview' | 'layout' | 'full'
     item_layout: string | null
     sheet_width: number | string | null
@@ -250,7 +262,13 @@ function QueueAddendumPill({ summary }: { summary: QueueItemRow['addendums'] }) 
           : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
       )}
     >
-      <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 rounded-full', active ? 'bg-amber-500' : 'bg-slate-400')} />
+      <span
+        aria-hidden
+        className={cn(
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          active ? 'bg-amber-500' : 'bg-slate-400'
+        )}
+      />
       {active
         ? `${summary.active} ${summary.active === 1 ? 'addendum' : 'addendums'} ${status}`
         : `${summary.total} ${status}`}
@@ -558,9 +576,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             limit: '200'
           })
         )
-        return [...new Set(
-          (res.data ?? []).map((r) => String(r[m.display_field as string] ?? '')).filter(Boolean)
-        )]
+        return [
+          ...new Set(
+            (res.data ?? []).map((r) => String(r[m.display_field as string] ?? '')).filter(Boolean)
+          )
+        ]
       }
       for (const m of metas) {
         const dim = matchScopeDimension(myScopes, { collection: m.target_collection })
@@ -577,7 +597,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           const ids = effectiveScopeSeedIds(myScopes, dim.name)
           if (ids.length === 0) continue
           const existing = filterValues[key]
-          if (existing && (Array.isArray(existing) ? existing.length > 0 : existing !== '')) continue
+          if (existing && (Array.isArray(existing) ? existing.length > 0 : existing !== ''))
+            continue
           const vals = ids.length ? await displayValuesFor(m, ids) : []
           if (vals.length > 0) patch[key] = vals
         } catch {
@@ -768,7 +789,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         )
     void req
       .then(() => {
-        toast.success(existing ? 'Unsubscribed' : 'Subscribed — new arrivals in this view notify you')
+        toast.success(
+          existing ? 'Unsubscribed' : 'Subscribed — new arrivals in this view notify you'
+        )
         void qc.invalidateQueries({ queryKey: ['queue-view-subs', queueId] })
       })
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Failed'))
@@ -1082,7 +1105,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     const source = scope === 'all' ? trends?.data : scope === 'mine' ? mineTrends?.data : undefined
     const rows = source ?? []
     if (rows.length < 3 || !stats) return null
-    const series = rows.map((r) => (scope === 'mine' ? ((r as unknown as { owned?: number }).owned ?? r.total) : r.total))
+    const series = rows.map((r) =>
+      scope === 'mine' ? ((r as unknown as { owned?: number }).owned ?? r.total) : r.total
+    )
     const deltas = series.slice(1).map((v, i) => v - series[i])
     const pace = deltas.reduce((a, b) => a + b, 0) / deltas.length
     const current = stats.total
@@ -2806,10 +2831,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   }
                 }}
                 aria-label='Row density'
-                title={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
+                title={
+                  density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'
+                }
                 className='flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
               >
-                {density === 'compact' ? <Rows4 className='h-3.5 w-3.5' /> : <Rows2 className='h-3.5 w-3.5' />}
+                {density === 'compact' ? (
+                  <Rows4 className='h-3.5 w-3.5' />
+                ) : (
+                  <Rows2 className='h-3.5 w-3.5' />
+                )}
               </button>
             )}
             {view === 'table' && workNextEnabled && visibleRows.length > 0 && (
@@ -2822,8 +2853,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 Work Next
               </button>
             )}
-            {creatableCollections.length === 1 && (
-              newItemLayouts ? (
+            {creatableCollections.length === 1 &&
+              (newItemLayouts ? (
                 <Popover>
                   <PopoverTrigger asChild>
                     <button
@@ -2848,8 +2879,12 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                       }
                       className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                     >
-                      {newItemLayouts.active?.create_label ?? newItemLayouts.active?.name ?? 'Default layout'}
-                      <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>default</span>
+                      {newItemLayouts.active?.create_label ??
+                        newItemLayouts.active?.name ??
+                        'Default layout'}
+                      <span className='ml-auto pl-3 text-[10px] text-slate-400 dark:text-slate-500'>
+                        default
+                      </span>
                     </button>
                     {newItemLayouts.options.map((l) => (
                       <button
@@ -2886,8 +2921,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   <Plus className='h-3.5 w-3.5' />
                   New {titleCase(creatableCollections[0])}
                 </button>
-              )
-            )}
+              ))}
             {creatableCollections.length > 1 && (
               <Popover>
                 <PopoverTrigger asChild>
@@ -2945,7 +2979,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   .map((def) => (
                     <span
                       key={def.key}
-                      title={def.restricted ? 'Options limited to your restricted scope' : undefined}
+                      title={
+                        def.restricted ? 'Options limited to your restricted scope' : undefined
+                      }
                       className={`flex items-center overflow-hidden rounded-md border text-[12px] ${
                         def.restricted
                           ? 'border-amber-400 bg-amber-50/50 dark:border-amber-500/60 dark:bg-amber-500/5'
@@ -3171,7 +3207,20 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           }
           onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
           onClear={() => setSelectedIds([])}
-        />
+        >
+          <BulkActionButtons
+            targets={items
+              .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
+              .map((r) => ({ collection: r.collection, id: r.item_id }))}
+            enabledKeys={displayConfig?.bulk_action_keys ?? null}
+            tone='light'
+            disabled={bulkBusy}
+            onDone={(r) => {
+              if (r.failed === 0) setSelectedIds([])
+              void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+            }}
+          />
+        </QueueBulkBar>
       )}
 
       {drillStack?.length ? (
@@ -3191,120 +3240,120 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       ) : null}
 
       {rowCtxMenu &&
-  createPortal(
-    <div
-      style={{
-        position: 'fixed',
-        left: Math.min(rowCtxMenu.x, window.innerWidth - 200),
-        top: Math.min(rowCtxMenu.y, window.innerHeight - 260),
-        zIndex: 125
-      }}
-      className='w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
-      onMouseDown={(e) => e.stopPropagation()}
-      data-queue-row-menu
-    >
-      {[
-        { label: 'Open', run: () => openItem(rowCtxMenu.row) },
-        {
-          label: 'Open full record',
-          run: () => openItemPage(rowCtxMenu.row)
-        },
-        { label: 'Peek', run: () => setSheetItem(rowCtxMenu.row) },
-        ...(claimsEnabled
-          ? [
-              rowCtxMenu.row.claimed_by?.id === userId
-                ? { label: 'Release claim', run: () => releaseMut.mutate(rowCtxMenu.row) }
-                : { label: 'Claim', run: () => claimMut.mutate(rowCtxMenu.row) }
-            ]
-          : []),
-        {
-          label: 'Copy ID',
-          run: () => void navigator.clipboard?.writeText(rowCtxMenu.row.item_id)
-        },
-        {
-          label: 'Copy link',
-          run: () =>
-            void navigator.clipboard?.writeText(
-              `${window.location.origin}${itemNav.urlFor({
-                collection: rowCtxMenu.row.collection,
-                itemId: rowCtxMenu.row.item_id,
-                layoutSlug: displayConfig?.item_layout ?? null
-              })}`
-            )
-        },
-        // Custom actions (#125): the record's registered actions, right here.
-        ...customActionsFor(rowCtxMenu.row.collection).map((a) => ({
-          label: a.label,
-          run: () => runCustomAction(a, rowCtxMenu.row)
-        }))
-      ].map((a) => (
-        <button
-          key={a.label}
-          type='button'
-          onClick={() => {
-            a.run()
-            setRowCtxMenu(null)
-          }}
-          className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
-        >
-          {a.label}
-        </button>
-      ))}
-      {rowCtxMenu.row.collection !== 'tasks' && (
-        <div className='mt-1 border-t border-slate-100 pt-1 dark:border-border/60'>
-          <p className='px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-            Triage labels
-          </p>
-          {triageLabels.slice(0, 8).map((l) => {
-            const active = (rowCtxMenu.row.labels ?? []).includes(l)
-            return (
+        createPortal(
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.min(rowCtxMenu.x, window.innerWidth - 200),
+              top: Math.min(rowCtxMenu.y, window.innerHeight - 260),
+              zIndex: 125
+            }}
+            className='w-48 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900'
+            onMouseDown={(e) => e.stopPropagation()}
+            data-queue-row-menu
+          >
+            {[
+              { label: 'Open', run: () => openItem(rowCtxMenu.row) },
+              {
+                label: 'Open full record',
+                run: () => openItemPage(rowCtxMenu.row)
+              },
+              { label: 'Peek', run: () => setSheetItem(rowCtxMenu.row) },
+              ...(claimsEnabled
+                ? [
+                    rowCtxMenu.row.claimed_by?.id === userId
+                      ? { label: 'Release claim', run: () => releaseMut.mutate(rowCtxMenu.row) }
+                      : { label: 'Claim', run: () => claimMut.mutate(rowCtxMenu.row) }
+                  ]
+                : []),
+              {
+                label: 'Copy ID',
+                run: () => void navigator.clipboard?.writeText(rowCtxMenu.row.item_id)
+              },
+              {
+                label: 'Copy link',
+                run: () =>
+                  void navigator.clipboard?.writeText(
+                    `${window.location.origin}${itemNav.urlFor({
+                      collection: rowCtxMenu.row.collection,
+                      itemId: rowCtxMenu.row.item_id,
+                      layoutSlug: displayConfig?.item_layout ?? null
+                    })}`
+                  )
+              },
+              // Custom actions (#125): the record's registered actions, right here.
+              ...customActionsFor(rowCtxMenu.row.collection).map((a) => ({
+                label: a.label,
+                run: () => runCustomAction(a, rowCtxMenu.row)
+              }))
+            ].map((a) => (
               <button
-                key={l}
+                key={a.label}
                 type='button'
                 onClick={() => {
-                  toggleTriageLabel(rowCtxMenu.row, l)
+                  a.run()
                   setRowCtxMenu(null)
                 }}
-                className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
               >
-                <span
-                  className={
-                    active
-                      ? 'h-1.5 w-1.5 rounded-full bg-violet-500'
-                      : 'h-1.5 w-1.5 rounded-full border border-slate-300 dark:border-slate-600'
-                  }
-                />
-                {l}
+                {a.label}
               </button>
-            )
-          })}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              const input = (e.target as HTMLFormElement).elements.namedItem(
-                'newlabel'
-              ) as HTMLInputElement
-              const v = input.value.trim()
-              if (v) {
-                toggleTriageLabel(rowCtxMenu.row, v)
-                setRowCtxMenu(null)
-              }
-            }}
-            className='px-3 py-1'
-          >
-            <input
-              name='newlabel'
-              placeholder='＋ New label…'
-              maxLength={60}
-              className='h-6 w-full rounded border border-slate-200 bg-transparent px-1.5 text-[11.5px] dark:border-border'
-              onMouseDown={(e) => e.stopPropagation()}
-            />
-          </form>
-        </div>
-      )}
-    </div>,
-    document.body
-  )}
+            ))}
+            {rowCtxMenu.row.collection !== 'tasks' && (
+              <div className='mt-1 border-t border-slate-100 pt-1 dark:border-border/60'>
+                <p className='px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                  Triage labels
+                </p>
+                {triageLabels.slice(0, 8).map((l) => {
+                  const active = (rowCtxMenu.row.labels ?? []).includes(l)
+                  return (
+                    <button
+                      key={l}
+                      type='button'
+                      onClick={() => {
+                        toggleTriageLabel(rowCtxMenu.row, l)
+                        setRowCtxMenu(null)
+                      }}
+                      className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                    >
+                      <span
+                        className={
+                          active
+                            ? 'h-1.5 w-1.5 rounded-full bg-violet-500'
+                            : 'h-1.5 w-1.5 rounded-full border border-slate-300 dark:border-slate-600'
+                        }
+                      />
+                      {l}
+                    </button>
+                  )
+                })}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    const input = (e.target as HTMLFormElement).elements.namedItem(
+                      'newlabel'
+                    ) as HTMLInputElement
+                    const v = input.value.trim()
+                    if (v) {
+                      toggleTriageLabel(rowCtxMenu.row, v)
+                      setRowCtxMenu(null)
+                    }
+                  }}
+                  className='px-3 py-1'
+                >
+                  <input
+                    name='newlabel'
+                    placeholder='＋ New label…'
+                    maxLength={60}
+                    className='h-6 w-full rounded border border-slate-200 bg-transparent px-1.5 text-[11.5px] dark:border-border'
+                    onMouseDown={(e) => e.stopPropagation()}
+                  />
+                </form>
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
 
       {aggDrill &&
         createPortal(
@@ -3381,7 +3430,10 @@ function AggregateDrillPanel({
         .then((r) => r.data)
   })
   return (
-    <div className='fixed inset-0 z-[130] flex items-center justify-center bg-black/30 p-6' onClick={onClose}>
+    <div
+      className='fixed inset-0 z-[130] flex items-center justify-center bg-black/30 p-6'
+      onClick={onClose}
+    >
       <div
         className='max-h-[70vh] w-[480px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-border dark:bg-card'
         onClick={(e) => e.stopPropagation()}

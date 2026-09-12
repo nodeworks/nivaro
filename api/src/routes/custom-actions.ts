@@ -17,50 +17,12 @@ import { can } from '../services/permissions.js'
  * writes the record or acts on its behalf.
  */
 
-type GuardRule = { field: string; op: string; value?: unknown }
-
-function parseJson<T>(raw: unknown): T | null {
-  if (raw == null || raw === '') return null
-  if (typeof raw === 'object') return raw as T
-  try {
-    return JSON.parse(String(raw)) as T
-  } catch {
-    return null
-  }
-}
-
-function guardPasses(rules: GuardRule[] | null, record: Record<string, unknown>): boolean {
-  for (const r of rules ?? []) {
-    const v = record[r.field]
-    const want = r.value
-    const ok = (() => {
-      switch (r.op) {
-        case 'eq':
-          return String(v ?? '') === String(want ?? '')
-        case 'neq':
-          return String(v ?? '') !== String(want ?? '')
-        case 'null':
-          return v === null || v === undefined || v === ''
-        case 'nnull':
-          return !(v === null || v === undefined || v === '')
-        case 'in':
-          return String(want ?? '')
-            .split(',')
-            .map((x) => x.trim())
-            .includes(String(v ?? ''))
-        default:
-          return false
-      }
-    })()
-    if (!ok) return false
-  }
-  return true
-}
-
-/** {{field}} → record value; unknown tokens render empty. */
-function renderTemplate(tpl: string, record: Record<string, unknown>): string {
-  return tpl.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_m, f) => String(record[f] ?? ''))
-}
+import {
+  type GuardRule,
+  guardPasses,
+  parseJsonLoose as parseJson,
+  renderTemplate
+} from '../services/action-guards.js'
 
 function formatAction(row: Record<string, unknown>) {
   return {
@@ -102,7 +64,9 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'collection and label are required' })
     }
     if (!['flow', 'external_api', 'update_fields'].includes(actionType)) {
-      return reply.code(400).send({ error: 'action_type must be flow, external_api or update_fields' })
+      return reply
+        .code(400)
+        .send({ error: 'action_type must be flow, external_api or update_fields' })
     }
     if (!b.config || typeof b.config !== 'object') {
       return reply.code(400).send({ error: 'config is required' })
@@ -132,38 +96,48 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ data: { id } })
   })
 
-  app.patch<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_custom_actions').where('id', req.params.id).first('id')
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    const b = req.body as Record<string, unknown>
-    const patch: Record<string, unknown> = {}
-    if (typeof b.label === 'string' && b.label.trim()) patch.label = b.label.trim().slice(0, 120)
-    if (b.config !== undefined) patch.config = b.config ? JSON.stringify(b.config) : null
-    if (b.guard !== undefined) patch.guard = b.guard ? JSON.stringify(b.guard) : null
-    if (b.confirm_text !== undefined) {
-      patch.confirm_text = b.confirm_text ? String(b.confirm_text).slice(0, 500) : null
+  app.patch<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_custom_actions').where('id', req.params.id).first('id')
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const b = req.body as Record<string, unknown>
+      const patch: Record<string, unknown> = {}
+      if (typeof b.label === 'string' && b.label.trim()) patch.label = b.label.trim().slice(0, 120)
+      if (b.config !== undefined) patch.config = b.config ? JSON.stringify(b.config) : null
+      if (b.guard !== undefined) patch.guard = b.guard ? JSON.stringify(b.guard) : null
+      if (b.confirm_text !== undefined) {
+        patch.confirm_text = b.confirm_text ? String(b.confirm_text).slice(0, 500) : null
+      }
+      if (b.is_active !== undefined) patch.is_active = !!b.is_active
+      if (b.sort !== undefined) patch.sort = Number(b.sort) || 0
+      if (Object.keys(patch).length > 0) {
+        await db('nivaro_custom_actions').where('id', row.id).update(patch)
+      }
+      return { data: { id: row.id } }
     }
-    if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    if (b.sort !== undefined) patch.sort = Number(b.sort) || 0
-    if (Object.keys(patch).length > 0) {
-      await db('nivaro_custom_actions').where('id', row.id).update(patch)
-    }
-    return { data: { id: row.id } }
-  })
+  )
 
-  app.delete<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = await db('nivaro_custom_actions').where('id', req.params.id).first('id', 'label', 'collection')
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    await db('nivaro_custom_actions').where('id', row.id).del()
-    await logActivity({
-      action: 'custom-action-delete',
-      user: req.user?.id,
-      collection: String(row.collection),
-      comment: String(row.label),
-      req
-    })
-    return { data: { deleted: true } }
-  })
+  app.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_custom_actions')
+        .where('id', req.params.id)
+        .first('id', 'label', 'collection')
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      await db('nivaro_custom_actions').where('id', row.id).del()
+      await logActivity({
+        action: 'custom-action-delete',
+        user: req.user?.id,
+        collection: String(row.collection),
+        comment: String(row.label),
+        req
+      })
+      return { data: { deleted: true } }
+    }
+  )
 
   app.post<{ Params: { id: string }; Body: { item?: string } }>(
     '/:id/execute',
@@ -190,7 +164,9 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
       if (!record) return reply.code(404).send({ error: 'Record not found' })
       const guard = parseJson<GuardRule[]>(action.guard)
       if (!guardPasses(guard, record)) {
-        return reply.code(409).send({ error: 'This action is not available for the record right now' })
+        return reply
+          .code(409)
+          .send({ error: 'This action is not available for the record right now' })
       }
 
       const config = parseJson<Record<string, unknown>>(action.config) ?? {}
@@ -222,7 +198,12 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
             : undefined
           const res = await callExternalApi(Number(config.api_id), {
             path: renderTemplate(String(config.endpoint_path ?? ''), record),
-            method: (String(config.method ?? 'POST').toUpperCase() as 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'),
+            method: String(config.method ?? 'POST').toUpperCase() as
+              | 'GET'
+              | 'POST'
+              | 'PATCH'
+              | 'PUT'
+              | 'DELETE',
             body
           })
           result = { status: (res as { status?: number }).status ?? 'sent' }

@@ -110,6 +110,13 @@ const SURFACES: Surface[] = [
     link: (r) => `/report-studio/${r.report}`
   },
   {
+    table: 'nivaro_bulk_actions',
+    label: 'Bulk actions',
+    nameCol: 'label',
+    cols: ['label', 'key', 'config', 'guard'],
+    link: (r) => `/data-model/${r.collection}`
+  },
+  {
     table: 'nivaro_custom_actions',
     label: 'Custom actions',
     nameCol: 'label',

@@ -195,6 +195,9 @@ export interface QueueDisplayConfig {
   default_scope: QueueDefaultScope
   work_next: boolean
   bulk_actions: boolean
+  /** Bulk-action keys ('<collection>:<key>') the bar renders; null = every
+   *  action the viewer may run on the queue's source collections. */
+  bulk_action_keys: string[] | null
   /** 'preview' opens the triage sidebar; 'layout' opens the item's layout in a
    *  sidebar (item_layout); 'full' navigates straight to the item page on every
    *  open path (row click, Work Next, Enter). */
@@ -236,6 +239,7 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   default_scope: 'all',
   work_next: true,
   bulk_actions: true,
+  bulk_action_keys: null,
   row_click: 'preview',
   item_layout: null,
   sheet_width: null,
@@ -310,6 +314,15 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     default_scope,
     work_next: src.work_next !== false,
     bulk_actions: src.bulk_actions !== false,
+    bulk_action_keys: Array.isArray(src.bulk_action_keys)
+      ? [
+          ...new Set(
+            src.bulk_action_keys.filter(
+              (k): k is string => typeof k === 'string' && k.trim() !== ''
+            )
+          )
+        ]
+      : null,
     row_click,
     item_layout,
     sheet_width: normalizeSheetWidth(src.sheet_width),

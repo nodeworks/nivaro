@@ -157,6 +157,17 @@ export type { QueryTableColumn, QueryTableConfig } from './components/QueryTable
 export { QueryTable } from './components/QueryTable'
 export { OwnerAvatars } from './components/queue/OwnerAvatars'
 export { QueueBulkBar } from './components/queue/QueueBulkBar'
+export {
+  BulkActionButtons,
+  bulkActionEnabled,
+  mergeBulkActions,
+  useAvailableBulkActions
+} from './components/bulk/BulkActionButtons'
+export type {
+  AvailableBulkAction,
+  BulkRunResult,
+  BulkTarget
+} from './components/bulk/BulkActionButtons'
 export type { SheetItem } from './components/queue/QueueItemSheet'
 export { QueueItemSheet } from './components/queue/QueueItemSheet'
 export type { QueueItemRow, QueueOwner } from './components/queue/QueueKanbanBoard'

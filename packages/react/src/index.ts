@@ -207,6 +207,8 @@ export {
   QueryWidgetBody,
   QualityRulesView,
   QueueBulkBar,
+  BulkActionButtons,
+  useAvailableBulkActions,
   QueueItemSheet,
   QueueKanbanBoard,
   QueueWorklist,

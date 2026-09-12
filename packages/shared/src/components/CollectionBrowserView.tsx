@@ -28,6 +28,7 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { del, get, patch, post } from '../lib/commands'
+import { BulkActionButtons } from './bulk/BulkActionButtons'
 import {
   type ColumnFormatConfig,
   countFromResolved,
@@ -98,6 +99,9 @@ export interface CollectionBrowserConfig {
   default_sort?: string
   /** Export filename template (#412): {{collection}} / {{view}} / {{date}}. */
   export_filename?: string
+  /** Registry bulk actions (keys) the bar shows; null/absent = every active
+   *  action the viewer may run. Defined in Data Model → Settings → Bulk actions. */
+  bulk_actions?: string[] | null
 }
 
 interface CMSRelation {
@@ -2948,6 +2952,7 @@ function BulkBar({
   transitions,
   fields,
   relations,
+  registryKeys,
   onClear,
   onSuccess
 }: {
@@ -2956,6 +2961,8 @@ function BulkBar({
   transitions: Array<{ id: string; label: string }>
   fields: CMSField[]
   relations: CMSRelation[]
+  /** browser_config.bulk_actions — null = all */
+  registryKeys?: string[] | null
   onClear: () => void
   onSuccess: () => void
 }) {
@@ -3146,6 +3153,19 @@ function BulkBar({
               Merge…
             </button>
           )}
+          {/* Registry bulk actions (Data Model → Settings → Bulk actions):
+              On Hold / Cancel / … — access + guards enforced server-side. */}
+          <BulkActionButtons
+            targets={selectedIds.map((id) => ({ collection, id }))}
+            enabledKeys={registryKeys}
+            tone='dark'
+            disabled={busy}
+            onDone={(r) => {
+              setNote(null)
+              onSuccess()
+              if (r.failed === 0) onClear()
+            }}
+          />
           <button
             type='button'
             onClick={() => setMode('update')}
@@ -7116,6 +7136,7 @@ export function CollectionBrowserView({
           transitions={pipelineTemplate?.transitions ?? []}
           fields={meta?.fields ?? []}
           relations={meta?.relations ?? []}
+          registryKeys={bc.bulk_actions ?? null}
           onClear={() => setSelectedIds([])}
           onSuccess={() => void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })}
         />

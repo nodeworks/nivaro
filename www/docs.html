@@ -540,6 +540,7 @@
           <a class="docs-nav-item" data-section="collection-layouts" href="#s-collection-layouts">Collection Layouts</a>
           <a class="docs-nav-item" data-section="layout-steps-mode" href="#s-layout-steps-mode">Layout Steps / Wizard</a>
           <a class="docs-nav-item" data-section="layout-quick-picker" href="#s-layout-quick-picker">Quick Picker</a>
+          <a class="docs-nav-item" data-section="bulk-actions" href="#s-bulk-actions">Bulk Actions</a>
           <a class="docs-nav-item" data-section="layout-summary-panel" href="#s-layout-summary-panel">Layout Summary Panel</a>
           <a class="docs-nav-item" data-section="layout-page-slots" href="#s-layout-page-slots">Layout Page Slots</a>
           <a class="docs-nav-item" data-section="layout-conditional" href="#s-layout-conditional">Conditional Layouts by Role</a>
@@ -8304,6 +8305,52 @@ useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
 { "quick_picker": null }</code></pre>
           <div class="doc-note">Steps that are not relation fields on the collection are skipped at render time rather than shown as dead slides. Option filters (options.option_filter) and cascade filters on each field apply exactly as they do in the form, so the picker can never offer a value the form would reject.</div>
           <!-- /SYNC:layout-quick-picker -->
+        </div>
+
+        <!-- BULK ACTIONS -->
+        <div class="doc-section" id="s-bulk-actions" data-toc='[{"id":"bulk-actions","label":"Bulk Actions"}]'>
+          <!-- SYNC:bulk-actions -->
+          <h1 class="doc-h1" id="bulk-actions">Bulk Actions</h1>
+          <p class="doc-p">Bulk actions are admin-defined buttons offered over a selection — in the collection browser's selection bar and in a queue's selection pill — that apply one change to every selected record: On Hold, Remove Hold, Cancel, Uncancel and whatever else a collection needs. Each action is defined once per collection (Data Model → collection → Settings → Bulk actions) and each surface chooses which of the enabled actions it shows.</p>
+          <h3 class="doc-h3">What an action does</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Kind</th><th>Behaviour</th></tr></thead>
+            <tbody><tr><tr><td>Set fields</td><td>Writes one or more fields on every record through the normal save path — field rules, validation, hooks and history all apply. A value can be text, a number, Yes / No, empty, or "the reason" (what the person typed into the reason box).</td></tr>
+              <tr><td>Run a transition</td><td>Matched by transition LABEL per record against the collection's pipeline, so each record runs the transition valid from its own state — Uncancel's return-to-previous resolves per record. The transition's own conditions, required roles, requirements and actions are enforced exactly as a manual click; a record with no matching transition is skipped.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Guard, access, reason</h3>
+          <ul class="doc-ul">
+            <li>"Only when" conditions are evaluated per record on its current values; records that don't match are counted as skipped, never failed (On Hold skips records already on hold).</li>
+            <li>"Who can run it" — everyone with update permission on the collection, admins only, or specific roles. Enforced server-side on the run endpoint; the buttons only render for people who may run them.</li>
+            <li>"Ask for a reason" makes the reason box required; the reason is stored as the change reason on every record's history (and the transition comment for transition kinds), so the Notes thread shows why.</li>
+            <li>Confirm text appears in the popover above the Run button; "Destructive" renders the button in red.</li>
+          </ul>
+          <h3 class="doc-h3">Per-surface enablement</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Surface</th><th>Setting</th></tr></thead>
+            <tbody><tr><tr><td>Collection browser</td><td>Data Model → Settings → Collection Browser → "Bulk actions shown" (browser_config.bulk_actions — null = every action the viewer may run).</td></tr>
+              <tr><td>Queue</td><td>Queue builder → Bulk actions → checklist across the queue's source collections (display_config.bulk_action_keys, entries are collection:key — null = all).</td></tr>
+              <tr><td>Extensions</td><td>ctx.bulkActions.register({id, label, collections, access, require_reason, confirm, execute}) — appears alongside DB-defined actions on the same surfaces.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Results</h3>
+          <p class="doc-p">Every run reports done / skipped / failed with the first failures named per record (a transition whose conditions are not met, a blocked integration action, a validation error). Failed records stay selected so the run can be retried after fixing them; an activity row "bulk-action-execute" records the run and its reason.</p>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET  /api/bulk-actions/available?collection=workflows   # what the caller may run
+GET  /api/bulk-actions/catalog?collection=workflows     # every active action (editor pickers)
+GET  /api/bulk-actions/transition-labels?collection=    # labels for the transition kind
+POST /api/bulk-actions/run
+{ "collection": "workflows", "key": "on-hold", "ids": [1, 2, 3], "reason": "Vendor dispute" }
+→ { "data": { "succeeded": 2, "skipped": 1, "failed": 0, "errors": [], "skipped_items": ["3"] } }
+
+# admin
+GET/POST   /api/bulk-actions/defs?collection=
+PATCH/DELETE /api/bulk-actions/defs/:id
+{ "label": "On Hold", "key": "on-hold", "kind": "update_fields",
+  "config": { "set": { "is_on_hold": true } },
+  "guard": [{ "field": "is_on_hold", "op": "neq", "value": true }],
+  "access": { "mode": "roles", "role_ids": ["…"] },
+  "require_reason": true, "confirm_text": "…", "variant": "default" }</code></pre>
+          <!-- /SYNC:bulk-actions -->
         </div>
 
         <!-- LAYOUT SUMMARY PANEL -->

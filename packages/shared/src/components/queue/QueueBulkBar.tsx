@@ -1,5 +1,5 @@
 import { ArrowRight, X } from 'lucide-react'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -11,7 +11,8 @@ export function QueueBulkBar({
   onClaim,
   onRelease,
   onTransition,
-  onClear
+  onClear,
+  children
 }: {
   count: number
   states: Array<{ value: string; label: string }>
@@ -21,6 +22,8 @@ export function QueueBulkBar({
   onRelease: () => void
   onTransition: (state: string) => void
   onClear: () => void
+  /** Registry bulk actions (BulkActionButtons) rendered before Transition. */
+  children?: ReactNode
 }) {
   const [transitionOpen, setTransitionOpen] = useState(false)
 
@@ -51,6 +54,7 @@ export function QueueBulkBar({
           </button>
         </>
       )}
+      {children}
       <Popover open={transitionOpen} onOpenChange={setTransitionOpen}>
         <PopoverTrigger asChild>
           <button

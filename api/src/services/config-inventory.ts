@@ -56,6 +56,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_flow_operations',
   'nivaro_flow_versions',
   'nivaro_rules',
+  'nivaro_bulk_actions',
   'nivaro_webhooks',
   'nivaro_external_apis',
   'nivaro_external_api_endpoints',

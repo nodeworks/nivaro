@@ -30,6 +30,7 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
+import { BulkActionsPicker } from '@/components/bulk-actions-section'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -101,6 +102,8 @@ interface QueueDisplayConfig {
   default_scope: QueueDefaultScope
   work_next: boolean
   bulk_actions: boolean
+  /** Registry bulk actions ('collection:key') the bar shows; null = all. */
+  bulk_action_keys?: string[] | null
   row_click: QueueRowClickMode
   item_layout: string | null
   sheet_width: number | string | null
@@ -150,7 +153,13 @@ function PinCycleButton({
       type='button'
       disabled={disabled}
       onClick={onCycle}
-      title={pin === 'left' ? 'Pinned left — click for right' : pin === 'right' ? 'Pinned right — click to unpin' : 'Pin column'}
+      title={
+        pin === 'left'
+          ? 'Pinned left — click for right'
+          : pin === 'right'
+            ? 'Pinned right — click to unpin'
+            : 'Pin column'
+      }
       className={cn(
         'flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold transition-colors',
         pin
@@ -1814,7 +1823,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     <span className='w-4' />
                     <span className='flex-1 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
                       {columnAliases.label || 'Item'}
-                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>always first</span>
+                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>
+                        always first
+                      </span>
                     </span>
                     <PinCycleButton
                       pin={defaultPins.label ?? null}
@@ -1828,7 +1839,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     <span className='w-4' />
                     <span className='flex-1 truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
                       Actions
-                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>always last</span>
+                      <span className='ml-1.5 text-[10px] font-normal text-slate-400'>
+                        always last
+                      </span>
                     </span>
                     <PinCycleButton
                       pin={defaultPins.__actions__ ?? null}
@@ -2027,8 +2040,8 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                   Priority sort weights
                 </p>
                 <p className='text-[11px] text-slate-400'>
-                  Score = SLA weight + at-risk weight + hours in state (capped). Higher lands
-                  higher in the priority sort.
+                  Score = SLA weight + at-risk weight + hours in state (capped). Higher lands higher
+                  in the priority sort.
                 </p>
                 <div className='grid grid-cols-2 gap-2'>
                   {(
@@ -2160,7 +2173,12 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                         ...prev,
                         formula_columns: [
                           ...(prev.formula_columns ?? []),
-                          { key: `col_${(prev.formula_columns ?? []).length + 1}`, label: '', formula: '', format: null }
+                          {
+                            key: `col_${(prev.formula_columns ?? []).length + 1}`,
+                            label: '',
+                            formula: '',
+                            format: null
+                          }
                         ]
                       }))
                     }
@@ -2204,10 +2222,30 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     Bulk actions
                   </span>
                   <span className='block text-[11px] text-slate-500 dark:text-muted-foreground'>
-                    Row selection with bulk claim, release and transition.
+                    Row selection with bulk claim, release, transition and the collection's registry
+                    actions (On Hold, Cancel…).
                   </span>
                 </span>
               </label>
+              {displayConfig.bulk_actions && (
+                <div className='ml-7 border-l-2 border-slate-100 pl-3 dark:border-border'>
+                  <BulkActionsPicker
+                    keyed
+                    collections={[
+                      ...new Set(
+                        sources
+                          .filter((sc) => sc.type === 'collection' && sc.collection)
+                          .map((sc) => sc.collection as string)
+                      )
+                    ]}
+                    value={displayConfig.bulk_action_keys ?? null}
+                    disabled={!canEdit}
+                    onChange={(next) =>
+                      setDisplayConfig((prev) => ({ ...prev, bulk_action_keys: next }))
+                    }
+                  />
+                </div>
+              )}
 
               <div className='mt-1 border-t border-slate-100 pt-4 dark:border-border'>
                 <span className='mb-2 block text-[12px] font-medium text-slate-700 dark:text-slate-200'>
