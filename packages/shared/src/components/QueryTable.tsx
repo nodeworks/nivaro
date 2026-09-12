@@ -7,6 +7,13 @@ import { evaluateNumeric } from '../lib/expression'
 // client-side group_by aggregation (numeric columns summed per group), and a
 // totals footer. Formulas are sanitized arithmetic over {{col}} refs.
 
+/** A dark-mode reading of a light-mode accent when the config names only one
+ *  color: mixed toward white so a saturated light-theme hex (#4f46e5) does not
+ *  sink into a dark surface. Configs may still pin an explicit *_dark. */
+export function darkVariant(color: string): string {
+  return `color-mix(in srgb, ${color} 55%, white)`
+}
+
 export interface QueryTableColumn {
   /** Row key. Omit for pure formula columns. */
   field?: string
@@ -119,12 +126,32 @@ export interface QueryTableConfig {
 }
 
 const MONTH_KEYS = [
-  'jan', 'feb', 'mar', 'apr', 'may', 'jun',
-  'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec'
 ]
 const MONTH_LABELS = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
 ]
 
 /** Pivot long (key…, 'yyyy-MM', value) rows into one row per key tuple with
@@ -177,9 +204,19 @@ export function pivotQueryRows(
           sum: true
         }))
   const columns: QueryTableColumn[] = [
-    ...yearsBefore.map((y) => ({ field: `y${y}`, label: y, format: 'currency' as const, sum: true })),
+    ...yearsBefore.map((y) => ({
+      field: `y${y}`,
+      label: y,
+      format: 'currency' as const,
+      sum: true
+    })),
     ...periodCols,
-    ...yearsAfter.map((y) => ({ field: `y${y}`, label: y, format: 'currency' as const, sum: true })),
+    ...yearsAfter.map((y) => ({
+      field: `y${y}`,
+      label: y,
+      format: 'currency' as const,
+      sum: true
+    })),
     ...(pivot.total !== false
       ? [{ field: 'total', label: 'Total', format: 'currency' as const, sum: true }]
       : [])
@@ -254,8 +291,7 @@ export function QueryTable({
   const [granularity, setGranularity] = useState<'month' | 'quarter'>('month')
   // Column-visibility toggles the user turned OFF (default_on: false starts off).
   const [togglesOff, setTogglesOff] = useState<Set<string>>(
-    () =>
-      new Set((config?.toggles ?? []).filter((t) => t.default_on === false).map((t) => t.label))
+    () => new Set((config?.toggles ?? []).filter((t) => t.default_on === false).map((t) => t.label))
   )
   if (!rows || rows.length === 0) {
     return (
@@ -294,9 +330,7 @@ export function QueryTable({
         }
       }
     }
-    effective = [...groups.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, v]) => v)
+    effective = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v)
   }
 
   const allColumns: QueryTableColumn[] = pivotCols
@@ -342,7 +376,20 @@ export function QueryTable({
 
   // Group highlight (EFP current-month column): tint + top accent on the
   // matched group's header and cells.
-  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const MONTH_SHORT = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
+  ]
   const highlightGroup =
     config?.highlight_group === '$current_month'
       ? MONTH_SHORT[new Date().getMonth()]
@@ -358,7 +405,7 @@ export function QueryTable({
   // rides CSS vars so the dark override stays a static Tailwind class.
   const colorStyle = (c: QueryTableColumn): Record<string, string> | undefined =>
     c.color
-      ? ({ '--qtc': c.color, '--qtcd': c.color_dark ?? c.color } as unknown as Record<
+      ? ({ '--qtc': c.color, '--qtcd': c.color_dark ?? darkVariant(c.color) } as unknown as Record<
           string,
           string
         >)
@@ -368,7 +415,10 @@ export function QueryTable({
 
   const stackStyle = (c: QueryTableColumn): Record<string, string> | undefined =>
     c.stack_color
-      ? ({ '--qts': c.stack_color, '--qtsd': c.stack_color_dark ?? c.stack_color } as unknown as Record<string, string>)
+      ? ({
+          '--qts': c.stack_color,
+          '--qtsd': c.stack_color_dark ?? darkVariant(c.stack_color)
+        } as unknown as Record<string, string>)
       : undefined
 
   const cellValue = (row: Record<string, unknown>, c: QueryTableColumn): unknown =>
@@ -394,9 +444,8 @@ export function QueryTable({
         ? evalRowFormula(c.progress_max, row)
         : Number(row[c.progress_max])
       : null
-    const pct = max && Number.isFinite(max) && max > 0 && Number.isFinite(value)
-      ? (value / max) * 100
-      : null
+    const pct =
+      max && Number.isFinite(max) && max > 0 && Number.isFinite(value) ? (value / max) * 100 : null
     // Single-line: value, thin bar, pct — a stacked bar doubles the row height
     // and made every row ~48px (the "tall table" complaint on budget pages).
     return (
@@ -460,7 +509,9 @@ export function QueryTable({
       const minV = Math.min(...vals, 0)
       const span = Math.max(maxV - minV, 1)
       const pts = vals
-        .map((v, i) => `${(i / Math.max(vals.length - 1, 1)) * 60},${17 - ((v - minV) / span) * 15}`)
+        .map(
+          (v, i) => `${(i / Math.max(vals.length - 1, 1)) * 60},${17 - ((v - minV) / span) * 15}`
+        )
         .join(' ')
       return (
         <svg
@@ -468,7 +519,13 @@ export function QueryTable({
           className='inline-block h-[18px] w-[60px]'
           data-tip={vals.map((v) => fmt(v, c.format)).join(' · ')}
         >
-          <polyline points={pts} fill='none' stroke='#00a5cc' strokeWidth='1.5' vectorEffect='non-scaling-stroke' />
+          <polyline
+            points={pts}
+            fill='none'
+            stroke='#00a5cc'
+            strokeWidth='1.5'
+            vectorEffect='non-scaling-stroke'
+          />
         </svg>
       )
     }
@@ -547,51 +604,51 @@ export function QueryTable({
   ) => {
     const d = depth === true ? 1 : depth === false ? 0 : depth
     return (
-    <tr
-      key={key}
-      onClick={onRowClick ? () => onRowClick(row) : undefined}
-      // Depth-2 leaves (Labor/Materials under a category) get a faint wash so
-      // the nesting reads at a glance: section > sub-section > leaf.
-      className={`group/qtr border-b border-slate-100 dark:border-border/50 ${onRowClick ? 'cursor-pointer' : ''} ${
-        d >= 2
-          ? 'bg-sky-50/70 hover:bg-sky-100/60 dark:bg-sky-500/10 dark:hover:bg-sky-500/15'
-          : 'hover:bg-slate-50 dark:hover:bg-muted/40'
-      }`}
-    >
-      {columns.map((c, j) => (
-        <td
-          key={c.field ?? c.label ?? j}
-          className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(j)} ${colorCls(c, 'text-slate-700 dark:text-slate-200')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${c.group ? 'min-w-[58px]' : ''} ${hlCls(c) || bandCls(j)} ${stickyFirstCls(j, 'bg-slate-50 group-hover/qtr:bg-slate-100 dark:bg-muted dark:group-hover/qtr:bg-muted')}`}
-          style={{
-            ...(d > 0 && j === 0 ? { paddingLeft: 2 + d * 16 } : {}),
-            ...(colorStyle(c) ?? {})
-          }}
-        >
-          {j === 0 && firstColOverride !== undefined ? firstColOverride : cellBody(row, c)}
-        </td>
-      ))}
-      {rowActions && (
-        <td className='py-1 pl-2 pr-3 text-right'>
-          {/* flex-nowrap + nowrap buttons: wrapped action chips doubled every
+      <tr
+        key={key}
+        onClick={onRowClick ? () => onRowClick(row) : undefined}
+        // Depth-2 leaves (Labor/Materials under a category) get a faint wash so
+        // the nesting reads at a glance: section > sub-section > leaf.
+        className={`group/qtr border-b border-slate-100 dark:border-border/50 ${onRowClick ? 'cursor-pointer' : ''} ${
+          d >= 2
+            ? 'bg-sky-50/70 hover:bg-sky-100/60 dark:bg-sky-500/10 dark:hover:bg-sky-500/15'
+            : 'hover:bg-slate-50 dark:hover:bg-muted/40'
+        }`}
+      >
+        {columns.map((c, j) => (
+          <td
+            key={c.field ?? c.label ?? j}
+            className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(j)} ${colorCls(c, 'text-slate-700 dark:text-slate-200')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${c.group ? 'min-w-[58px]' : ''} ${hlCls(c) || bandCls(j)} ${stickyFirstCls(j, 'bg-slate-50 group-hover/qtr:bg-slate-100 dark:bg-muted dark:group-hover/qtr:bg-muted')}`}
+            style={{
+              ...(d > 0 && j === 0 ? { paddingLeft: 2 + d * 16 } : {}),
+              ...(colorStyle(c) ?? {})
+            }}
+          >
+            {j === 0 && firstColOverride !== undefined ? firstColOverride : cellBody(row, c)}
+          </td>
+        ))}
+        {rowActions && (
+          <td className='py-1 pl-2 pr-3 text-right'>
+            {/* flex-nowrap + nowrap buttons: wrapped action chips doubled every
               row's height when the actions column got squeezed. */}
-          <span className='inline-flex flex-nowrap gap-1'>
-            {rowActions.map((a) => (
-              <button
-                key={a.label}
-                type='button'
-                onClick={(e) => {
-                  e.stopPropagation()
-                  a.onClick(row)
-                }}
-                className='whitespace-nowrap rounded border border-[#00ceff66] bg-[#00ceff1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
-              >
-                {a.label}
-              </button>
-            ))}
-          </span>
-        </td>
-      )}
-    </tr>
+            <span className='inline-flex flex-nowrap gap-1'>
+              {rowActions.map((a) => (
+                <button
+                  key={a.label}
+                  type='button'
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    a.onClick(row)
+                  }}
+                  className='whitespace-nowrap rounded border border-[#00ceff66] bg-[#00ceff1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
+                >
+                  {a.label}
+                </button>
+              ))}
+            </span>
+          </td>
+        )}
+      </tr>
     )
   }
 
@@ -751,8 +808,7 @@ export function QueryTable({
                             kids.map((row, i) => {
                               const v = String(row[split.field] ?? '')
                               const leaf = v.slice(v.lastIndexOf(sep) + sep.length)
-                              const override =
-                                columns[0]?.field === split.field ? leaf : undefined
+                              const override = columns[0]?.field === split.field ? leaf : undefined
                               return renderRow(row, `${subKey}-${i}`, 2, override)
                             })}
                         </FragmentRows>
@@ -824,154 +880,167 @@ export function QueryTable({
         </div>
       )}
       <div className={sticky ? 'min-h-0 flex-1 overflow-auto' : 'overflow-x-auto'}>
-      <table className='w-full text-[12px]'>
-        <thead>
-          {hasGroups ? (
-            <>
-              <tr>
-                {(() => {
-                  // Runs of consecutive same-group columns → one spanning cell;
-                  // ungrouped columns span both header rows.
-                  const cells: ReactNode[] = []
-                  let i = 0
-                  while (i < columns.length) {
-                    const c = columns[i]
-                    if (!c.group) {
+        <table className='w-full text-[12px]'>
+          <thead>
+            {hasGroups ? (
+              <>
+                <tr>
+                  {(() => {
+                    // Runs of consecutive same-group columns → one spanning cell;
+                    // ungrouped columns span both header rows.
+                    const cells: ReactNode[] = []
+                    let i = 0
+                    while (i < columns.length) {
+                      const c = columns[i]
+                      if (!c.group) {
+                        cells.push(
+                          <th
+                            key={`u-${c.field ?? i}`}
+                            rowSpan={2}
+                            className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                          >
+                            {c.label ?? titleize(c.field ?? '')}
+                          </th>
+                        )
+                        i++
+                        continue
+                      }
+                      let span = 1
+                      while (i + span < columns.length && columns[i + span].group === c.group)
+                        span++
                       cells.push(
                         <th
-                          key={`u-${c.field ?? i}`}
-                          rowSpan={2}
-                          className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                          key={`g-${c.group}-${i}`}
+                          colSpan={span}
+                          className={`whitespace-nowrap border-b border-slate-100 py-1 pr-3 text-center text-[11px] font-semibold dark:border-border/60 ${c.group === highlightGroup ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]' : `text-slate-600 dark:text-slate-300 ${bandCls(i)}`} ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`.trim()}
                         >
-                          {c.label ?? titleize(c.field ?? '')}
+                          {c.group}
                         </th>
                       )
-                      i++
-                      continue
+                      i += span
                     }
-                    let span = 1
-                    while (i + span < columns.length && columns[i + span].group === c.group) span++
-                    cells.push(
+                    return cells
+                  })()}
+                  {rowActions && (
+                    <th
+                      rowSpan={2}
+                      aria-label='Actions'
+                      className={`border-b border-slate-200 dark:border-border ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`}
+                    />
+                  )}
+                </tr>
+                <tr>
+                  {columns.map((c, i) =>
+                    c.group ? (
                       <th
-                        key={`g-${c.group}-${i}`}
-                        colSpan={span}
-                        className={`whitespace-nowrap border-b border-slate-100 py-1 pr-3 text-center text-[11px] font-semibold dark:border-border/60 ${c.group === highlightGroup ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]' : `text-slate-600 dark:text-slate-300 ${bandCls(i)}`} ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`.trim()}
+                        key={c.field ?? c.label ?? i}
+                        // min-w keeps dash-only month columns from collapsing to
+                        // uneven slivers across the pivot grid
+                        className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
                       >
-                        {c.group}
+                        {c.label ?? titleize(c.field ?? '')}
                       </th>
-                    )
-                    i += span
-                  }
-                  return cells
-                })()}
+                    ) : null
+                  )}
+                </tr>
+              </>
+            ) : (
+              <tr className='border-b border-slate-200 dark:border-border'>
+                {columns.map((c, i) => (
+                  <th
+                    key={c.field ?? c.label ?? i}
+                    className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 ${afterRailPad(i)} text-[10.5px] font-semibold uppercase tracking-wider dark:border-border ${
+                      isHighlighted(c)
+                        ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
+                        : 'text-slate-400'
+                    } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                  >
+                    {c.label ?? titleize(c.field ?? '')}
+                    {c.stack && config?.stack_legend && (
+                      <span
+                        className='flex justify-end gap-1.5 text-[9px] font-medium normal-case tracking-normal'
+                        style={
+                          stackStyle(c)
+                            ? { ...stackStyle(c), ...(colorStyle(c) ?? {}) }
+                            : colorStyle(c)
+                        }
+                      >
+                        {showTop(c) && (
+                          <span
+                            className={
+                              c.color ? 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]' : ''
+                            }
+                          >
+                            {config.stack_legend[0]}
+                          </span>
+                        )}
+                        {showStack(c) && (
+                          <span
+                            className={
+                              c.stack_color
+                                ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]'
+                                : ''
+                            }
+                          >
+                            {config.stack_legend[1]}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </th>
+                ))}
                 {rowActions && (
                   <th
-                    rowSpan={2}
                     aria-label='Actions'
-                    className={`border-b border-slate-200 dark:border-border ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`}
+                    className={sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : undefined}
                   />
                 )}
               </tr>
-              <tr>
-                {columns.map((c, i) =>
-                  c.group ? (
-                    <th
-                      key={c.field ?? c.label ?? i}
-                      // min-w keeps dash-only month columns from collapsing to
-                      // uneven slivers across the pivot grid
-                      className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
-                    >
-                      {c.label ?? titleize(c.field ?? '')}
-                    </th>
-                  ) : null
+            )}
+          </thead>
+          <tbody>{body}</tbody>
+          {totals && (
+            <tfoot>
+              <tr className='border-t border-slate-300 font-semibold dark:border-border'>
+                {columns.map((c, i) => (
+                  <td
+                    key={c.field ?? c.label ?? i}
+                    className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(i)} ${colorCls(c, '')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky ? `sticky bottom-0 border-t border-slate-300 dark:border-border ${i === 0 ? `left-0 z-[3] ${STICKY_EDGE} bg-slate-50 dark:bg-muted` : 'z-[2] bg-white dark:bg-card'}` : ''}`}
+                    style={colorStyle(c)}
+                  >
+                    {i === 0 && !c.sum && !c.formula
+                      ? 'Total'
+                      : c.sum || c.formula
+                        ? c.formula
+                          ? fmtCell(evalRowFormula(c.formula, totals), c.format)
+                          : cellBody(totals, c)
+                        : ''}
+                  </td>
+                ))}
+                {rowActions && (
+                  <td
+                    // Pins with the rest of the totals row — an unpinned actions
+                    // cell scrolled away while its row stayed.
+                    className={`py-1.5 pr-3 text-right ${sticky ? 'sticky bottom-0 z-[2] border-t border-slate-300 bg-white dark:border-border dark:bg-card' : ''}`}
+                  >
+                    <span className='inline-flex flex-nowrap gap-1.5'>
+                      {rowActions.map((a) => (
+                        <button
+                          key={a.label}
+                          type='button'
+                          onClick={() => a.onClick(null)}
+                          className='whitespace-nowrap rounded border border-[#a13ffb66] bg-[#a13ffb1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </span>
+                  </td>
                 )}
               </tr>
-            </>
-          ) : (
-            <tr className='border-b border-slate-200 dark:border-border'>
-              {columns.map((c, i) => (
-                <th
-                  key={c.field ?? c.label ?? i}
-                  className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 ${afterRailPad(i)} text-[10.5px] font-semibold uppercase tracking-wider dark:border-border ${
-                    isHighlighted(c)
-                      ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
-                      : 'text-slate-400'
-                  } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
-                >
-                  {c.label ?? titleize(c.field ?? '')}
-                  {c.stack && config?.stack_legend && (
-                    <span
-                      className='flex justify-end gap-1.5 text-[9px] font-medium normal-case tracking-normal'
-                      style={stackStyle(c) ? { ...stackStyle(c), ...(colorStyle(c) ?? {}) } : colorStyle(c)}
-                    >
-                      {showTop(c) && (
-                        <span className={c.color ? 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]' : ''}>
-                          {config.stack_legend[0]}
-                        </span>
-                      )}
-                      {showStack(c) && (
-                        <span
-                          className={c.stack_color ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]' : ''}
-                        >
-                          {config.stack_legend[1]}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </th>
-              ))}
-              {rowActions && (
-                <th
-                  aria-label='Actions'
-                  className={sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : undefined}
-                />
-              )}
-            </tr>
+            </tfoot>
           )}
-        </thead>
-        <tbody>{body}</tbody>
-        {totals && (
-          <tfoot>
-            <tr className='border-t border-slate-300 font-semibold dark:border-border'>
-              {columns.map((c, i) => (
-                <td
-                  key={c.field ?? c.label ?? i}
-                  className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(i)} ${colorCls(c, '')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky ? `sticky bottom-0 border-t border-slate-300 dark:border-border ${i === 0 ? `left-0 z-[3] ${STICKY_EDGE} bg-slate-50 dark:bg-muted` : 'z-[2] bg-white dark:bg-card'}` : ''}`}
-                  style={colorStyle(c)}
-                >
-                  {i === 0 && !c.sum && !c.formula
-                    ? 'Total'
-                    : c.sum || c.formula
-                      ? c.formula
-                        ? fmtCell(evalRowFormula(c.formula, totals), c.format)
-                        : cellBody(totals, c)
-                      : ''}
-                </td>
-              ))}
-              {rowActions && (
-                <td
-                  // Pins with the rest of the totals row — an unpinned actions
-                  // cell scrolled away while its row stayed.
-                  className={`py-1.5 pr-3 text-right ${sticky ? 'sticky bottom-0 z-[2] border-t border-slate-300 bg-white dark:border-border dark:bg-card' : ''}`}
-                >
-                  <span className='inline-flex flex-nowrap gap-1.5'>
-                    {rowActions.map((a) => (
-                      <button
-                        key={a.label}
-                        type='button'
-                        onClick={() => a.onClick(null)}
-                        className='whitespace-nowrap rounded border border-[#a13ffb66] bg-[#a13ffb1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </span>
-                </td>
-              )}
-            </tr>
-          </tfoot>
-        )}
-      </table>
+        </table>
       </div>
     </div>
   )

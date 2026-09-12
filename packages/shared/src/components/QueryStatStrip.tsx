@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { darkVariant } from './QueryTable'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
 import { post } from '../lib/commands'
@@ -122,12 +123,12 @@ function StatBox({
   // EFP stat-card accent: colored 2px top border + colored value. A delta
   // that goes negative switches to accent_negative (red by default).
   const isNegativeDelta = stat.field_subtract && value !== null && value < 0
-  const accent = isNegativeDelta
-    ? (stat.accent_negative ?? '#ef4444')
-    : (stat.accent ?? null)
+  const accent = isNegativeDelta ? (stat.accent_negative ?? '#ef4444') : (stat.accent ?? null)
   const accentDark = isNegativeDelta
-    ? (stat.accent_negative ?? '#f87171')
-    : (stat.accent_dark ?? stat.accent ?? null)
+    ? stat.accent_negative
+      ? darkVariant(stat.accent_negative)
+      : '#f87171'
+    : (stat.accent_dark ?? (stat.accent ? darkVariant(stat.accent) : null))
   const valueText =
     value !== null && stat.field_subtract && value > 0
       ? `+${fmtStat(value, stat.format)}`

@@ -1,8 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
+import { ChevronRight, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, patch, post } from '../lib/commands'
+import { evaluateNumeric } from '../lib/expression'
+import { cn } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 
 // Generic tuple-scoped value editor. Base shape (EFP ProjectTypeBudgetForm):
@@ -78,6 +80,16 @@ export interface MatrixEditorConfig {
     match_option_field: string
     match_group_field?: string
     columns: Array<{ field: string; label?: string; format?: 'currency' | 'number' }>
+    /** Computed columns over the row: `{{__current__}}` (saved value),
+     *  `{{__new__}}` (live value incl. the edit) and any metric field —
+     *  e.g. Remaining = `{{__new__}} - {{current_spend}} - {{committed_costs}}`.
+     *  Aggregated levels sum the inputs first, then apply the formula. */
+    derived?: Array<{ label: string; formula: string; format?: 'currency' | 'number' }>
+    /** Metric rows that match no rendered cell still count: shown read-only as
+     *  an "Other …" row per group (options outside the project's list) and an
+     *  "Other …" group (groups outside the project's list), so the totals
+     *  reconcile with the project-level figures. */
+    unmatched?: { option_label?: string; group_label?: string } | false
   }
 }
 
@@ -151,11 +163,15 @@ type Cell = { ids: unknown[]; total: number }
 
 export function MatrixEditor({
   config,
-  initialScope
+  initialScope,
+  lockScope = false
 }: {
   config: MatrixEditorConfig
   /** Pre-seed scope pickers (drill-down hosts scope the matrix to a record). */
   initialScope?: Record<string, unknown>
+  /** Scope fields supplied by initialScope render as fixed context, not pickers
+   *  (a sheet already scoped to one project). */
+  lockScope?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -344,7 +360,12 @@ export function MatrixEditor({
 
   // Metrics from a custom query, matched per (option, group).
   const { data: metricRows = [] } = useQuery<Array<Record<string, unknown>>>({
-    queryKey: ['matrix-metrics', config.metrics?.query_slug, scopeKey, Object.keys(scopeRecords).length],
+    queryKey: [
+      'matrix-metrics',
+      config.metrics?.query_slug,
+      scopeKey,
+      Object.keys(scopeRecords).length
+    ],
     queryFn: () =>
       client
         .request<{ data: Array<Record<string, unknown>> }>(
@@ -363,7 +384,10 @@ export function MatrixEditor({
           })
         )
         .then((r) => r.data ?? []),
-    enabled: scopeReady && !!config.metrics && (seedScopeFields.size === 0 || Object.keys(scopeRecords).length > 0),
+    enabled:
+      scopeReady &&
+      !!config.metrics &&
+      (seedScopeFields.size === 0 || Object.keys(scopeRecords).length > 0),
     staleTime: 30_000
   })
 
@@ -371,7 +395,8 @@ export function MatrixEditor({
   const cellKeyOf = (t: Record<string, unknown>): string => {
     const g = groupCfg ? String(t[groupCfg.field] ?? '') : ''
     const bucket = config.specials?.bucket
-    if (bucket && (t[bucket.flag_field] === true || t[bucket.flag_field] === 1)) return `${g}|${BUCKET}`
+    if (bucket && (t[bucket.flag_field] === true || t[bucket.flag_field] === 1))
+      return `${g}|${BUCKET}`
     const k = t[config.key_field]
     return `${g}|${k == null ? UNCAT : String(k)}`
   }
@@ -389,7 +414,6 @@ export function MatrixEditor({
     // biome-ignore lint/correctness/useExhaustiveDependencies: cellKeyOf derives from config (stable per mount)
   }, [targets, config.value_field])
 
-
   const metricFor = (groupId: string, optionKey: string): Record<string, number> => {
     const mc = config.metrics
     const out: Record<string, number> = {}
@@ -403,10 +427,14 @@ export function MatrixEditor({
     for (const r of metricRows) {
       if (mc.match_group_field && String(r[mc.match_group_field] ?? '') !== groupId) continue
       const mv = r[mc.match_option_field]
-      const matches =
-        wantOption === null ? mv == null || mv === 0 : String(mv ?? '') === String(wantOption)
+      // A special's metric_value of null OR 0 both mean "the query's
+      // uncategorized rows" (category_id NULL, or 0 from a COALESCE).
+      const wantsEmpty = wantOption === null || wantOption === 0 || wantOption === '0'
+      const isEmpty = mv == null || mv === 0 || mv === '0' || mv === ''
+      const matches = wantsEmpty ? isEmpty : String(mv ?? '') === String(wantOption)
       if (!matches) continue
-      for (const col of mc.columns) out[col.field] = (out[col.field] ?? 0) + (Number(r[col.field]) || 0)
+      for (const col of mc.columns)
+        out[col.field] = (out[col.field] ?? 0) + (Number(r[col.field]) || 0)
     }
     return out
   }
@@ -422,8 +450,9 @@ export function MatrixEditor({
       .map((o) => {
         const full = label(o)
         const section = sec ? applyTemplate(sec.label_template, o) : ''
-        const rowLabel =
-          sec?.row_label_template ? applyTemplate(sec.row_label_template, o) || full : full
+        const rowLabel = sec?.row_label_template
+          ? applyTemplate(sec.row_label_template, o) || full
+          : full
         return { key: String(o.id), label: sec ? rowLabel : full, section }
       })
       .sort((a, b) => a.section.localeCompare(b.section) || a.label.localeCompare(b.label))
@@ -458,7 +487,8 @@ export function MatrixEditor({
       for (const g of groups) {
         const gid = String(g.id)
         for (const sec of optionSections) {
-          if (!sec.rows.some((o) => cellKeys.has(`${gid}|${o.key}`))) next.add(`s:${gid}|${sec.name}`)
+          if (!sec.rows.some((o) => cellKeys.has(`${gid}|${o.key}`)))
+            next.add(`s:${gid}|${sec.name}`)
         }
       }
     }
@@ -493,10 +523,7 @@ export function MatrixEditor({
   const capValue = config.cap
     ? Number(walkPath(scopeRecords[config.cap.scope_field] ?? {}, config.cap.field)) || 0
     : null
-  const totalCurrent = useMemo(
-    () => [...cells.values()].reduce((s, c) => s + c.total, 0),
-    [cells]
-  )
+  const totalCurrent = useMemo(() => [...cells.values()].reduce((s, c) => s + c.total, 0), [cells])
   const totalWithEdits = useMemo(() => {
     let sum = misallocatedTotal
     for (const g of groupRows) {
@@ -516,19 +543,37 @@ export function MatrixEditor({
   }, [edits, cells, groupRows, optionRows, misallocatedTotal, config.specials])
   const available = capValue !== null ? capValue - totalWithEdits : null
 
+  /** Live value of a cell: the edit when set, else the saved total. */
+  const liveValue = (cellKey: string): number => {
+    const e = edits[cellKey]
+    if (e !== undefined && e.trim() !== '' && !Number.isNaN(Number(e))) return Number(e)
+    return cells.get(cellKey)?.total ?? 0
+  }
+
+  /** Input entry: absolute ("1200"), or relative to the saved value with a
+   *  leading sign ("+500" / "-250"). Clamped so the grand total never passes
+   *  the cap. */
   function commitEdit(cellKey: string, raw: string) {
-    if (capValue === null || raw.trim() === '') {
+    const trimmed = raw.trim()
+    if (trimmed === '') {
       setEdits((p) => ({ ...p, [cellKey]: raw }))
       return
     }
-    // Clamp: this cell may not push the grand total past the cap.
-    const num = Number(raw)
-    if (Number.isNaN(num) || num < 0) return
-    const othersTotal = totalWithEdits - (edits[cellKey] !== undefined && edits[cellKey].trim() !== ''
-      ? Number(edits[cellKey]) || 0
-      : cells.get(cellKey)?.total ?? 0)
-    const max = Math.max(0, capValue - othersTotal)
-    setEdits((p) => ({ ...p, [cellKey]: String(Math.min(num, max)) }))
+    const relative = /^[+-]/.test(trimmed) && trimmed !== '-' && trimmed !== '+'
+    let num = Number(trimmed)
+    if (Number.isNaN(num)) {
+      // keep the keystrokes ("-", "+", "1.") so typing isn't fought
+      setEdits((p) => ({ ...p, [cellKey]: raw }))
+      return
+    }
+    if (relative) num = (cells.get(cellKey)?.total ?? 0) + num
+    if (num < 0) num = 0
+    if (capValue !== null) {
+      const othersTotal = totalWithEdits - liveValue(cellKey)
+      const max = Math.max(0, capValue - othersTotal)
+      num = Math.min(num, max)
+    }
+    setEdits((p) => ({ ...p, [cellKey]: relative ? String(num) : raw }))
   }
 
   async function save() {
@@ -593,277 +638,596 @@ export function MatrixEditor({
 
   const dirty = Object.values(edits).some((v) => v.trim() !== '')
   const metricCols = config.metrics?.columns ?? []
+  const derivedCols = config.metrics?.derived ?? []
   const valueLabel = config.value_label ?? config.value_field
+  const numCols = 1 + metricCols.length + derivedCols.length + 1
+
+  // ── Unmatched metric rows: kept, shown read-only, so totals reconcile ──
+  const unmatchedCfg =
+    config.metrics?.unmatched === false ? null : (config.metrics?.unmatched ?? {})
+  const unmatched = useMemo(() => {
+    const perGroup = new Map<string, Record<string, number>>()
+    const otherGroup: Record<string, number> = {}
+    let otherGroupCount = 0
+    const mc = config.metrics
+    if (!mc || !unmatchedCfg) return { perGroup, otherGroup, otherGroupCount }
+    const groupIds = new Set(groupRows.map((g) => g.id))
+    const optionKeys = new Set(optionRows.map((o) => o.key))
+    const specialValues = new Set<string>()
+    const norm = (v: unknown) => (v == null || v === 0 || v === '0' || v === '' ? '' : String(v))
+    if (config.specials?.uncategorized)
+      specialValues.add(norm(config.specials.uncategorized.metric_value))
+    if (config.specials?.bucket) specialValues.add(norm(config.specials.bucket.metric_value))
+    for (const r of metricRows) {
+      const g = mc.match_group_field ? String(r[mc.match_group_field] ?? '') : ''
+      const mv = r[mc.match_option_field]
+      const optionMatched = optionKeys.has(String(mv ?? '')) || specialValues.has(norm(mv))
+      const target =
+        !groupCfg || groupIds.has(g) ? (optionMatched ? null : (perGroup.get(g) ?? {})) : otherGroup
+      if (!target) continue
+      for (const c of mc.columns)
+        target[c.field] = (target[c.field] ?? 0) + (Number(r[c.field]) || 0)
+      if (!groupCfg || groupIds.has(g)) perGroup.set(g, target)
+      else otherGroupCount++
+    }
+    return { perGroup, otherGroup, otherGroupCount }
+  }, [metricRows, config.metrics, config.specials, groupRows, optionRows, groupCfg, unmatchedCfg])
+
+  const derive = (current: number, next: number, metrics: Record<string, number>) =>
+    derivedCols.map((d) =>
+      evaluateNumeric(
+        d.formula,
+        { ...metrics, __current__: current, __new__: next },
+        { missing: 'zero' }
+      )
+    )
+
+  const sumMetrics = (list: Array<Record<string, number>>): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const m of list)
+      for (const c of metricCols) out[c.field] = (out[c.field] ?? 0) + (m[c.field] ?? 0)
+    return out
+  }
+
+  const allKeysFor = () => [
+    ...optionRows.map((o) => o.key),
+    ...(config.specials?.uncategorized ? [UNCAT] : []),
+    ...(config.specials?.bucket ? [BUCKET] : [])
+  ]
+
+  // Grand totals across every rendered group (+ unmatched rows).
+  const grand = useMemo(() => {
+    let current = 0
+    let next = 0
+    const metricsList: Array<Record<string, number>> = []
+    for (const g of groupRows) {
+      for (const k of allKeysFor()) {
+        const ck = `${g.id}|${k}`
+        current += cells.get(ck)?.total ?? 0
+        next += liveValue(ck)
+        metricsList.push(metricFor(g.id, k))
+      }
+      const um = unmatched.perGroup.get(g.id)
+      if (um) metricsList.push(um)
+    }
+    metricsList.push(unmatched.otherGroup)
+    current += misallocatedTotal
+    next += misallocatedTotal
+    return { current, next, metrics: sumMetrics(metricsList) }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: liveValue/metricFor close over edits/cells/metricRows which are listed
+  }, [
+    groupRows,
+    optionRows,
+    cells,
+    edits,
+    metricRows,
+    misallocatedTotal,
+    unmatched,
+    config.specials
+  ])
+
+  const numCell = (
+    v: unknown,
+    format: 'currency' | 'number' | undefined,
+    opts?: { strong?: boolean; tone?: 'muted' | 'neg' }
+  ) => (
+    <td
+      className={cn(
+        'py-1.5 pr-3 text-right tabular-nums',
+        opts?.strong
+          ? 'font-semibold text-slate-800 dark:text-slate-100'
+          : 'text-slate-600 dark:text-slate-300',
+        opts?.tone === 'muted' && 'text-slate-400 dark:text-slate-500',
+        opts?.tone === 'neg' && 'text-red-600 dark:text-red-400'
+      )}
+    >
+      {fmtVal(v, format)}
+    </td>
+  )
+
+  const aggregateCells = (
+    current: number,
+    next: number,
+    metrics: Record<string, number>,
+    strong: boolean
+  ) => {
+    const derived = derive(current, next, metrics)
+    return (
+      <>
+        {numCell(current, config.value_format, { strong })}
+        {metricCols.map((c) => (
+          <td
+            key={c.field}
+            className={cn(
+              'py-1.5 pr-3 text-right tabular-nums',
+              strong
+                ? 'font-semibold text-slate-800 dark:text-slate-100'
+                : 'text-slate-600 dark:text-slate-300'
+            )}
+          >
+            {fmtVal(metrics[c.field], c.format)}
+          </td>
+        ))}
+        {derivedCols.map((d, i) => {
+          const v = derived[i]
+          return (
+            <td
+              key={d.label}
+              className={cn(
+                'py-1.5 pr-3 text-right tabular-nums',
+                strong ? 'font-semibold' : '',
+                v != null && v < 0
+                  ? 'text-red-600 dark:text-red-400'
+                  : strong
+                    ? 'text-slate-800 dark:text-slate-100'
+                    : 'text-slate-600 dark:text-slate-300'
+              )}
+            >
+              {fmtVal(v, d.format ?? config.value_format)}
+            </td>
+          )
+        })}
+        {numCell(next, config.value_format, {
+          strong,
+          tone: next !== current ? undefined : 'muted'
+        })}
+      </>
+    )
+  }
 
   const renderRow = (groupId: string, key: string, label: string, italic = false, indent = 0) => {
     const cellKey = `${groupId}|${key}`
-    const cur = cells.get(cellKey)
+    const cur = cells.get(cellKey)?.total ?? 0
     const metrics = metricFor(groupId, key)
+    const raw = edits[cellKey] ?? ''
+    const next = liveValue(cellKey)
+    const edited = raw.trim() !== '' && !Number.isNaN(Number(raw))
+    const delta = edited ? next - cur : 0
+    const derived = derive(cur, next, metrics)
     return (
-      <tr key={cellKey} className='border-b border-slate-100 dark:border-border/50'>
+      <tr
+        key={cellKey}
+        className={cn(
+          'border-b border-slate-100 dark:border-border/50',
+          edited && 'bg-nvr-cyan/[0.04]'
+        )}
+      >
         <td
-          className={`py-1 pr-3 text-slate-700 dark:text-slate-200 ${italic ? 'italic text-slate-500' : ''}`}
+          className={cn(
+            'py-1 pr-3 text-slate-700 dark:text-slate-200',
+            italic && 'italic text-slate-500'
+          )}
           style={indent ? { paddingLeft: indent * 18 } : undefined}
         >
           {label}
         </td>
-        <td className='py-1 pr-3 text-right tabular-nums text-slate-500'>
-          {fmtVal(cur?.total, config.value_format)}
-        </td>
-        {metricCols.map((c) => (
-          <td key={c.field} className='py-1 pr-3 text-right tabular-nums text-slate-500'>
-            {fmtVal(metrics[c.field], c.format)}
-          </td>
-        ))}
+        {numCell(cur, config.value_format, { tone: cur === 0 ? 'muted' : undefined })}
+        {metricCols.map((c) => numCellKeyed(c.field, metrics[c.field], c.format))}
+        {derivedCols.map((d, i) => {
+          const v = derived[i]
+          return (
+            <td
+              key={d.label}
+              className={cn(
+                'py-1.5 pr-3 text-right tabular-nums',
+                v != null && v < 0
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-slate-600 dark:text-slate-300'
+              )}
+            >
+              {fmtVal(v, d.format ?? config.value_format)}
+            </td>
+          )
+        })}
         <td className='py-1 pr-3 text-right'>
-          <input
-            type='number'
-            min={0}
-            step='any'
-            value={edits[cellKey] ?? ''}
-            placeholder={cur ? String(cur.total) : '0'}
-            onChange={(e) => commitEdit(cellKey, e.target.value)}
-            className='h-7 w-32 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
-          />
+          <span className='inline-flex items-center justify-end gap-1.5'>
+            {edited && delta !== 0 && (
+              <span
+                className={cn(
+                  'rounded-full px-1.5 py-px text-[10.5px] font-medium tabular-nums',
+                  delta > 0
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                    : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400'
+                )}
+              >
+                {delta > 0 ? '+' : '−'}
+                {fmtVal(Math.abs(delta), config.value_format)}
+              </span>
+            )}
+            <span className='relative'>
+              {config.value_format === 'currency' && (
+                <span className='pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-400'>
+                  $
+                </span>
+              )}
+              <input
+                type='text'
+                inputMode='decimal'
+                value={raw}
+                placeholder={fmtVal(
+                  cur,
+                  config.value_format === 'currency' ? 'number' : config.value_format
+                )}
+                onChange={(e) => commitEdit(cellKey, e.target.value)}
+                title='Type a new amount, or +500 / -250 to adjust the current one'
+                className={cn(
+                  'h-7 w-32 rounded-md border bg-white text-right text-[12px] tabular-nums outline-none transition-colors placeholder:text-slate-300 focus:border-nvr-cyan dark:bg-background dark:placeholder:text-slate-600',
+                  config.value_format === 'currency' ? 'pl-5 pr-2' : 'px-2',
+                  edited
+                    ? 'border-nvr-cyan bg-nvr-cyan/[0.06]'
+                    : 'border-slate-200 dark:border-border'
+                )}
+              />
+            </span>
+          </span>
         </td>
       </tr>
     )
   }
+  const numCellKeyed = (key: string, v: unknown, format: 'currency' | 'number' | undefined) => (
+    <td
+      key={key}
+      className='py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-300'
+    >
+      {fmtVal(v, format)}
+    </td>
+  )
+
+  const unmatchedRow = (groupId: string) => {
+    const um = unmatched.perGroup.get(groupId)
+    if (!um || !unmatchedCfg) return null
+    if (!metricCols.some((c) => (um[c.field] ?? 0) !== 0)) return null
+    return (
+      <tr key={`${groupId}|__other__`} className='border-b border-slate-100 dark:border-border/50'>
+        <td
+          className='py-1 pr-3 pl-[18px] italic text-slate-400'
+          title='Spend and commitments on categories outside this project’s list — nothing to allocate here, but they count toward the project total'
+        >
+          {unmatchedCfg.option_label ?? 'Other categories'}
+        </td>
+        {numCell(null, config.value_format, { tone: 'muted' })}
+        {metricCols.map((c) => numCellKeyed(c.field, um[c.field], c.format))}
+        {derivedCols.map((d) => (
+          <td key={d.label} className='py-1.5 pr-3 text-right tabular-nums text-slate-400'>
+            —
+          </td>
+        ))}
+        <td />
+      </tr>
+    )
+  }
+
+  const scopeLabel = (s: MatrixEditorConfig['scope_fields'][number]) =>
+    s.label ?? s.field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  const lockedFields = new Set(lockScope ? Object.keys(initialScope ?? {}) : [])
+  const toggle = (key: string) =>
+    setCollapsed((p) => {
+      const n = new Set(p)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
 
   return (
-    <div className='flex h-full flex-col gap-3 overflow-auto p-3'>
-      <div className='flex flex-wrap items-end gap-3'>
-        {config.scope_fields.map((s) => {
-          const resolved = resolveScopeTokens(s.filter, scope)
-          const extraFilter = resolved && !hasUnresolved(resolved) ? resolved : undefined
-          return (
-            <div key={s.field} className='w-56'>
-              <p className='mb-1 text-[11px] font-medium text-slate-500'>
-                {s.label ?? s.field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-              </p>
-              <RelationCombobox
-                collection={s.collection}
-                value={scope[s.field] ?? null}
-                onChange={(v) => {
-                  setScope((p) => ({ ...p, [s.field]: v }))
-                  setEdits({})
-                }}
-                extraFilter={extraFilter}
-                placeholder='Select…'
-              />
-            </div>
-          )
-        })}
+    <div className='flex h-full min-h-0 flex-col' data-matrix-editor>
+      {/* ── Scope + actions ── */}
+      <div className='flex shrink-0 flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
+        {config.scope_fields
+          .filter((s) => !lockedFields.has(s.field))
+          .map((s) => {
+            const resolved = resolveScopeTokens(s.filter, scope)
+            const extraFilter = resolved && !hasUnresolved(resolved) ? resolved : undefined
+            return (
+              <div key={s.field} className='w-56'>
+                <p className='mb-1 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                  {scopeLabel(s)}
+                </p>
+                <RelationCombobox
+                  collection={s.collection}
+                  value={scope[s.field] ?? null}
+                  onChange={(v) => {
+                    setScope((p) => ({ ...p, [s.field]: v }))
+                    setEdits({})
+                  }}
+                  extraFilter={extraFilter}
+                  placeholder='Select…'
+                />
+              </div>
+            )
+          })}
+        <span className='flex-1' />
+        {status && <span className='pb-2 text-[12px] text-slate-500'>{status}</span>}
+        {dirty && (
+          <button
+            type='button'
+            onClick={() => setEdits({})}
+            className='h-9 rounded-md px-3 text-[13px] font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
+          >
+            Discard
+          </button>
+        )}
         <button
           type='button'
           disabled={!scopeReady || !dirty || saving}
           onClick={() => void save()}
-          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+          data-matrix-save
+          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[13px] font-semibold text-[#172940] hover:bg-[#00b8e0] disabled:opacity-50'
         >
           {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           Save changes
         </button>
-        {status && <span className='pb-2 text-[12px] text-slate-500'>{status}</span>}
       </div>
 
+      {/* ── Cap tiles ── */}
       {capValue !== null && scopeReady && (
-        <div className='flex flex-wrap gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted'>
-          <span>
-            <span className='text-slate-500'>{config.cap?.label ?? 'Cap'}:</span>{' '}
-            <strong className='tabular-nums'>{fmtVal(capValue, 'currency')}</strong>
-          </span>
-          <span>
-            <span className='text-slate-500'>Allocated:</span>{' '}
-            <strong className='tabular-nums'>{fmtVal(totalCurrent, 'currency')}</strong>
-          </span>
-          <span>
-            <span className='text-slate-500'>Available to allocate:</span>{' '}
-            <strong className={`tabular-nums ${available !== null && available < 0 ? 'text-red-600' : ''}`}>
-              {fmtVal(available, 'currency')}
-            </strong>
-          </span>
-          {misallocatedTotal > 0 && (
-            <span className='text-red-600'>
-              Misallocated: <strong className='tabular-nums'>{fmtVal(misallocatedTotal, 'currency')}</strong>
-            </span>
-          )}
+        <div className='grid shrink-0 grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-4'>
+          {[
+            { label: config.cap?.label ?? 'Cap', value: capValue, tone: 'plain' as const },
+            {
+              label: 'Allocated',
+              value: grand.next,
+              tone: grand.next !== totalCurrent ? ('edited' as const) : ('plain' as const),
+              sub:
+                grand.next !== totalCurrent ? `was ${fmtVal(totalCurrent, 'currency')}` : undefined
+            },
+            {
+              label: 'Available to allocate',
+              value: available,
+              tone: available !== null && available < 0 ? ('neg' as const) : ('ok' as const)
+            },
+            {
+              label: 'Misallocated',
+              value: misallocatedTotal,
+              tone: misallocatedTotal > 0 ? ('neg' as const) : ('muted' as const),
+              hint: 'Allocations on categories or regions outside this project’s current lists'
+            }
+          ].map((t) => (
+            <div key={t.label} className='bg-white px-4 py-2.5 dark:bg-card' title={t.hint}>
+              <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                {t.label}
+              </p>
+              <p
+                className={cn(
+                  'mt-0.5 text-[17px] font-semibold tabular-nums tracking-[-0.01em]',
+                  t.tone === 'neg'
+                    ? 'text-red-600 dark:text-red-400'
+                    : t.tone === 'ok'
+                      ? 'text-emerald-700 dark:text-emerald-400'
+                      : t.tone === 'muted'
+                        ? 'text-slate-400'
+                        : t.tone === 'edited'
+                          ? 'text-nvr-navy dark:text-nvr-cyan'
+                          : 'text-slate-900 dark:text-white'
+                )}
+              >
+                {fmtVal(t.value, 'currency')}
+              </p>
+              {t.sub && <p className='text-[11px] text-slate-400'>{t.sub}</p>}
+            </div>
+          ))}
         </div>
       )}
 
-      {!scopeReady ? (
-        <p className='text-[12px] text-slate-400'>
-          Choose {config.scope_fields.map((s) => s.label ?? s.field).join(' and ')} to load rows.
-        </p>
-      ) : optsLoading || tgtLoading ? (
-        <div className='flex items-center gap-2 text-[12px] text-slate-400'>
-          <Loader2 className='h-4 w-4 animate-spin' /> Loading…
-        </div>
-      ) : (
-        <table className='w-full text-[12px]'>
-          <thead>
-            <tr className='border-b border-slate-200 text-left dark:border-border'>
-              <th className='py-1.5 pr-3 font-medium text-slate-500'>
-                {config.option_collection.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-              </th>
-              <th className='w-36 py-1.5 pr-3 text-right font-medium text-slate-500'>
-                Current {valueLabel}
-              </th>
-              {metricCols.map((c) => (
-                <th key={c.field} className='w-36 py-1.5 pr-3 text-right font-medium text-slate-500'>
-                  {c.label ?? c.field}
+      {/* ── Grid ── */}
+      <div className='min-h-0 flex-1 overflow-auto bg-slate-50/60 dark:bg-transparent'>
+        {!scopeReady ? (
+          <div className='flex h-full flex-col items-center justify-center gap-1 p-8 text-center'>
+            <p className='text-[13px] font-medium text-slate-600 dark:text-slate-300'>
+              Choose{' '}
+              {config.scope_fields
+                .filter((s) => !lockedFields.has(s.field))
+                .map(scopeLabel)
+                .join(' and ')}{' '}
+              to load allocations
+            </p>
+            <p className='text-[12px] text-slate-400'>
+              Amounts are grouped by{' '}
+              {groupCfg?.label_field ? groupCfg.collection.replace(/_/g, ' ') : 'section'} and saved
+              together.
+            </p>
+          </div>
+        ) : optsLoading || tgtLoading ? (
+          <div className='flex items-center gap-2 p-4 text-[12px] text-slate-400'>
+            <Loader2 className='h-4 w-4 animate-spin' /> Loading…
+          </div>
+        ) : (
+          <table className='w-full text-[12px]'>
+            <thead className='sticky top-0 z-[1] bg-slate-50 dark:bg-background'>
+              <tr className='border-b border-slate-200 text-left dark:border-border'>
+                <th className='px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                  {config.option_collection
+                    .replace(/_/g, ' ')
+                    .replace(/\b\w/g, (c) => c.toUpperCase())}
                 </th>
-              ))}
-              <th className='w-40 py-1.5 pr-3 text-right font-medium text-slate-500'>
-                New {valueLabel}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {groupRows.map((g) => {
-              const isCollapsed = collapsed.has(g.id)
-              // Current = every target row in the group (misallocated included).
-              const groupTotal = [...cells.entries()]
-                .filter(([k]) => k.startsWith(`${g.id}|`))
-                .reduce((s, [, c]) => s + c.total, 0)
-              // Metric + live-New aggregates over the group's RENDERED rows
-              // (options + specials), mirroring the section-header math.
-              const groupKeys = [
-                ...optionRows.map((o) => o.key),
-                ...(config.specials?.uncategorized ? [UNCAT] : []),
-                ...(config.specials?.bucket ? [BUCKET] : [])
-              ]
-              const groupMetrics: Record<string, number> = {}
-              for (const k of groupKeys) {
-                const m = metricFor(g.id, k)
-                for (const c of metricCols)
-                  groupMetrics[c.field] = (groupMetrics[c.field] ?? 0) + (m[c.field] ?? 0)
-              }
-              const groupNew = groupKeys.reduce((t, k) => {
-                const ck = `${g.id}|${k}`
-                const e = edits[ck]
+                <th className='w-32 py-2 pr-3 text-right text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                  {valueLabel}
+                </th>
+                {metricCols.map((c) => (
+                  <th
+                    key={c.field}
+                    className='w-32 py-2 pr-3 text-right text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'
+                  >
+                    {c.label ?? c.field}
+                  </th>
+                ))}
+                {derivedCols.map((d) => (
+                  <th
+                    key={d.label}
+                    className='w-32 py-2 pr-3 text-right text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'
+                  >
+                    {d.label}
+                  </th>
+                ))}
+                <th className='w-44 py-2 pr-3 text-right text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                  New {valueLabel}
+                </th>
+              </tr>
+            </thead>
+            <tbody className='bg-white dark:bg-transparent'>
+              {groupRows.map((g) => {
+                const isCollapsed = collapsed.has(g.id)
+                const groupCurrent = [...cells.entries()]
+                  .filter(([k]) => k.startsWith(`${g.id}|`))
+                  .reduce((s, [, c]) => s + c.total, 0)
+                const keys = allKeysFor()
+                const groupMetrics = sumMetrics([
+                  ...keys.map((k) => metricFor(g.id, k)),
+                  ...(unmatched.perGroup.get(g.id)
+                    ? [unmatched.perGroup.get(g.id) as Record<string, number>]
+                    : [])
+                ])
+                const groupNew =
+                  keys.reduce((t, k) => t + liveValue(`${g.id}|${k}`), 0) +
+                  (groupCurrent -
+                    keys.reduce((t, k) => t + (cells.get(`${g.id}|${k}`)?.total ?? 0), 0))
                 return (
-                  t +
-                  (e !== undefined && e.trim() !== '' && !Number.isNaN(Number(e))
-                    ? Number(e)
-                    : (cells.get(ck)?.total ?? 0))
-                )
-              }, 0)
-              return (
-                <FragmentRows
-                  key={g.id || '__all__'}
-                  header={
-                    groupCfg ? (
-                      <tr
-                        className='cursor-pointer border-b border-slate-200 bg-slate-100/80 dark:border-border dark:bg-muted'
-                        onClick={() =>
-                          setCollapsed((p) => {
-                            const n = new Set(p)
-                            if (n.has(g.id)) n.delete(g.id)
-                            else n.add(g.id)
-                            return n
-                          })
-                        }
-                      >
-                        <td className='px-2 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                          {isCollapsed ? '▸' : '▾'} {g.label}
-                        </td>
-                        <td className='py-1 pr-3 text-right text-[11px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'>
-                          {fmtVal(groupTotal, config.value_format)}
-                        </td>
-                        {metricCols.map((c) => (
-                          <td
-                            key={c.field}
-                            className='py-1 pr-3 text-right text-[11px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'
-                          >
-                            {fmtVal(groupMetrics[c.field], c.format)}
+                  <FragmentRows
+                    key={g.id || '__all__'}
+                    header={
+                      groupCfg ? (
+                        <tr
+                          className='cursor-pointer border-y border-slate-200 bg-slate-100/70 hover:bg-slate-100 dark:border-border dark:bg-muted/60'
+                          onClick={() => toggle(g.id)}
+                          data-matrix-group={g.id}
+                        >
+                          <td className='px-3 py-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                            <span className='inline-flex items-center gap-1.5'>
+                              <ChevronRight
+                                className={cn(
+                                  'h-3.5 w-3.5 text-slate-400 transition-transform',
+                                  !isCollapsed && 'rotate-90'
+                                )}
+                              />
+                              {g.label}
+                            </span>
                           </td>
-                        ))}
-                        <td className='py-1 pr-3 text-right text-[11px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'>
-                          {fmtVal(groupNew, config.value_format)}
-                        </td>
-                      </tr>
-                    ) : null
-                  }
-                >
-                  {!isCollapsed && (
-                    <>
-                      {config.option_section
-                        ? optionSections.map((sec) => {
-                            const secKey = `s:${g.id}|${sec.name}`
-                            const secCollapsed = collapsed.has(secKey)
-                            const secTotal = sec.rows.reduce(
-                              (t, o) => t + (cells.get(`${g.id}|${o.key}`)?.total ?? 0),
-                              0
-                            )
-                            const secNew = sec.rows.reduce((t, o) => {
-                              const ck = `${g.id}|${o.key}`
-                              const e = edits[ck]
-                              return (
-                                t +
-                                (e !== undefined && e.trim() !== '' && !Number.isNaN(Number(e))
-                                  ? Number(e)
-                                  : (cells.get(ck)?.total ?? 0))
+                          {aggregateCells(groupCurrent, groupNew, groupMetrics, true)}
+                        </tr>
+                      ) : null
+                    }
+                  >
+                    {!isCollapsed && (
+                      <>
+                        {config.option_section
+                          ? optionSections.map((sec) => {
+                              const secKey = `s:${g.id}|${sec.name}`
+                              const secCollapsed = collapsed.has(secKey)
+                              const secCurrent = sec.rows.reduce(
+                                (t, o) => t + (cells.get(`${g.id}|${o.key}`)?.total ?? 0),
+                                0
                               )
-                            }, 0)
-                            const secMetrics: Record<string, number> = {}
-                            for (const o of sec.rows) {
-                              const m = metricFor(g.id, o.key)
-                              for (const c of metricCols)
-                                secMetrics[c.field] = (secMetrics[c.field] ?? 0) + (m[c.field] ?? 0)
-                            }
-                            return (
-                              <FragmentRows
-                                key={secKey}
-                                header={
-                                  <tr
-                                    className='cursor-pointer border-b border-slate-100 bg-slate-50 dark:border-border/50 dark:bg-muted/40'
-                                    onClick={() =>
-                                      setCollapsed((p) => {
-                                        const n = new Set(p)
-                                        if (n.has(secKey)) n.delete(secKey)
-                                        else n.add(secKey)
-                                        return n
-                                      })
-                                    }
-                                  >
-                                    <td className='py-1 pr-3 pl-[18px] text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
-                                      {secCollapsed ? '▸' : '▾'} {sec.name || '—'}
-                                    </td>
-                                    <td className='py-1 pr-3 text-right tabular-nums text-slate-500'>
-                                      {fmtVal(secTotal, config.value_format)}
-                                    </td>
-                                    {metricCols.map((c) => (
-                                      <td
-                                        key={c.field}
-                                        className='py-1 pr-3 text-right tabular-nums text-slate-500'
-                                      >
-                                        {fmtVal(secMetrics[c.field], c.format)}
+                              const secNew = sec.rows.reduce(
+                                (t, o) => t + liveValue(`${g.id}|${o.key}`),
+                                0
+                              )
+                              const secMetrics = sumMetrics(
+                                sec.rows.map((o) => metricFor(g.id, o.key))
+                              )
+                              return (
+                                <FragmentRows
+                                  key={secKey}
+                                  header={
+                                    <tr
+                                      className='cursor-pointer border-b border-slate-100 bg-slate-50/80 hover:bg-slate-50 dark:border-border/50 dark:bg-muted/30'
+                                      onClick={() => toggle(secKey)}
+                                    >
+                                      <td className='py-1 pr-3 pl-[22px] text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                                        <span className='inline-flex items-center gap-1.5'>
+                                          <ChevronRight
+                                            className={cn(
+                                              'h-3 w-3 text-slate-400 transition-transform',
+                                              !secCollapsed && 'rotate-90'
+                                            )}
+                                          />
+                                          {sec.name || '—'}
+                                        </span>
                                       </td>
-                                    ))}
-                                    <td className='py-1 pr-3 text-right tabular-nums text-slate-500'>
-                                      {fmtVal(secNew, config.value_format)}
-                                    </td>
-                                  </tr>
-                                }
-                              >
-                                {!secCollapsed &&
-                                  sec.rows.map((o) => renderRow(g.id, o.key, o.label, false, 2))}
-                              </FragmentRows>
-                            )
-                          })
-                        : optionRows.map((o) => renderRow(g.id, o.key, o.label))}
-                      {config.specials?.uncategorized &&
-                        renderRow(g.id, UNCAT, config.specials.uncategorized.label ?? 'Uncategorized', true)}
-                      {config.specials?.bucket &&
-                        renderRow(g.id, BUCKET, config.specials.bucket.label ?? 'Inventory', true)}
-                    </>
+                                      {aggregateCells(secCurrent, secNew, secMetrics, false)}
+                                    </tr>
+                                  }
+                                >
+                                  {!secCollapsed &&
+                                    sec.rows.map((o) =>
+                                      renderRow(g.id, o.key, o.label, false, 2.4)
+                                    )}
+                                </FragmentRows>
+                              )
+                            })
+                          : optionRows.map((o) => renderRow(g.id, o.key, o.label, false, 1))}
+                        {config.specials?.uncategorized &&
+                          renderRow(
+                            g.id,
+                            UNCAT,
+                            config.specials.uncategorized.label ?? 'Uncategorized',
+                            true,
+                            1
+                          )}
+                        {config.specials?.bucket &&
+                          renderRow(
+                            g.id,
+                            BUCKET,
+                            config.specials.bucket.label ?? 'Inventory',
+                            true,
+                            1
+                          )}
+                        {unmatchedRow(g.id)}
+                      </>
+                    )}
+                  </FragmentRows>
+                )
+              })}
+              {unmatchedCfg && groupCfg && unmatched.otherGroupCount > 0 && (
+                <tr
+                  className='border-y border-slate-200 bg-slate-100/70 dark:border-border dark:bg-muted/60'
+                  title='Spend and commitments on regions outside this project’s list'
+                >
+                  <td className='px-3 py-1.5 text-[12px] font-semibold italic text-slate-500'>
+                    {unmatchedCfg.group_label ?? 'Other regions'}
+                  </td>
+                  {numCell(null, config.value_format, { tone: 'muted' })}
+                  {metricCols.map((c) =>
+                    numCellKeyed(c.field, unmatched.otherGroup[c.field], c.format)
                   )}
-                </FragmentRows>
-              )
-            })}
-          </tbody>
-        </table>
-      )}
+                  {derivedCols.map((d) => (
+                    <td key={d.label} className='py-1.5 pr-3 text-right text-slate-400'>
+                      —
+                    </td>
+                  ))}
+                  <td />
+                </tr>
+              )}
+            </tbody>
+            <tfoot className='sticky bottom-0 bg-white dark:bg-card'>
+              <tr className='border-t-2 border-slate-300 dark:border-border'>
+                <td className='px-3 py-2 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+                  Total
+                </td>
+                {aggregateCells(grand.current, grand.next, grand.metrics, true)}
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </div>
     </div>
   )
 }

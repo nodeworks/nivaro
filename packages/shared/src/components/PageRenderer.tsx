@@ -60,7 +60,10 @@ function LoadingRows() {
   return (
     <div className='space-y-1.5 p-3'>
       {[1, 2, 3].map((k) => (
-        <div key={k} className='h-5 w-full animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        <div
+          key={k}
+          className='h-5 w-full animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+        />
       ))}
     </div>
   )
@@ -96,7 +99,10 @@ function mdInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(<em key={key}>{part.slice(1, -1)}</em>)
     } else if (part.startsWith('`') && part.endsWith('`')) {
       nodes.push(
-        <code key={key} className='rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.9em] dark:bg-muted'>
+        <code
+          key={key}
+          className='rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.9em] dark:bg-muted'
+        >
           {part.slice(1, -1)}
         </code>
       )
@@ -132,7 +138,9 @@ function MarkdownBody({ content }: { content: string }) {
   }
   const flushList = (key: string) => {
     if (!listItems.length) return
-    const items = listItems.map((li, i) => <li key={`${key}-${i}`}>{mdInline(li, `${key}-${i}`)}</li>)
+    const items = listItems.map((li, i) => (
+      <li key={`${key}-${i}`}>{mdInline(li, `${key}-${i}`)}</li>
+    ))
     blocks.push(
       listOrdered ? (
         <ol key={key} className='list-decimal space-y-0.5 pl-5'>
@@ -156,7 +164,11 @@ function MarkdownBody({ content }: { content: string }) {
       flushPara(`${key}-fp`)
       const level = heading[1].length
       const cls =
-        level === 1 ? 'text-[17px] font-semibold' : level === 2 ? 'text-[15px] font-semibold' : 'text-[13.5px] font-semibold'
+        level === 1
+          ? 'text-[17px] font-semibold'
+          : level === 2
+            ? 'text-[15px] font-semibold'
+            : 'text-[13.5px] font-semibold'
       blocks.push(
         <div key={key} className={`${cls} text-slate-900 dark:text-slate-100`}>
           {mdInline(heading[2], `${key}-h`)}
@@ -178,7 +190,9 @@ function MarkdownBody({ content }: { content: string }) {
   })
   flushList('md-end-l')
   flushPara('md-end-p')
-  return <div className='space-y-2 p-4 text-[13px] text-slate-700 dark:text-slate-300'>{blocks}</div>
+  return (
+    <div className='space-y-2 p-4 text-[13px] text-slate-700 dark:text-slate-300'>{blocks}</div>
+  )
 }
 
 // ─── Widget data (table / kpi / recent-activity) ──────────────────────────────
@@ -203,27 +217,30 @@ function TableWidgetBody({ slug, widget }: { slug: string; widget: PageRendererW
   const cfg = (widget.config ?? {}) as { collection?: string; columns?: string[] }
   const { data, isLoading, error } = useWidgetData(slug, widget, !!cfg.collection)
   const nav = useItemNavigation()
-  if (!cfg.collection) return <div className='p-3 text-[12px] text-slate-400'>Select a collection</div>
+  if (!cfg.collection)
+    return <div className='p-3 text-[12px] text-slate-400'>Select a collection</div>
   if (isLoading) return <LoadingRows />
   if (error) return <WidgetError error={error} />
   const rows = data?.rows ?? []
   if (!rows.length) return <div className='p-3 text-[12px] text-slate-400'>No records</div>
-  const cols =
-    cfg.columns?.length
-      ? cfg.columns
-      : Object.keys(rows[0])
-          .filter((k) => {
-            const v = rows[0][k]
-            return v === null || ['string', 'number', 'boolean'].includes(typeof v)
-          })
-          .slice(0, 5)
+  const cols = cfg.columns?.length
+    ? cfg.columns
+    : Object.keys(rows[0])
+        .filter((k) => {
+          const v = rows[0][k]
+          return v === null || ['string', 'number', 'boolean'].includes(typeof v)
+        })
+        .slice(0, 5)
   return (
     <div className='h-full overflow-auto'>
       <table className='w-full text-[12px]'>
         <thead>
           <tr className='border-b border-slate-100 dark:border-border'>
             {cols.map((c) => (
-              <th key={c} className='whitespace-nowrap px-3 py-1.5 text-left font-medium text-slate-400'>
+              <th
+                key={c}
+                className='whitespace-nowrap px-3 py-1.5 text-left font-medium text-slate-400'
+              >
                 {titleCase(c)}
               </th>
             ))}
@@ -243,7 +260,10 @@ function TableWidgetBody({ slug, widget }: { slug: string; widget: PageRendererW
               }`}
             >
               {cols.map((c) => (
-                <td key={c} className='whitespace-nowrap px-3 py-1.5 text-slate-700 dark:text-slate-300'>
+                <td
+                  key={c}
+                  className='whitespace-nowrap px-3 py-1.5 text-slate-700 dark:text-slate-300'
+                >
                   {cellText(row[c])}
                 </td>
               ))}
@@ -258,7 +278,8 @@ function TableWidgetBody({ slug, widget }: { slug: string; widget: PageRendererW
 function KpiWidgetBody({ slug, widget }: { slug: string; widget: PageRendererWidget }) {
   const cfg = (widget.config ?? {}) as { collection?: string; label?: string; aggregate?: string }
   const { data, isLoading, error } = useWidgetData(slug, widget, !!cfg.collection)
-  if (!cfg.collection) return <div className='p-3 text-[12px] text-slate-400'>Select a collection</div>
+  if (!cfg.collection)
+    return <div className='p-3 text-[12px] text-slate-400'>Select a collection</div>
   if (error) return <WidgetError error={error} />
   return (
     <div className='flex h-full flex-col items-start justify-center px-4'>
@@ -302,7 +323,9 @@ function ActivityWidgetBody({ slug, widget }: { slug: string; widget: PageRender
               {a.item ? ` · ${a.item}` : ''}
             </span>
           )}
-          <span className='ml-auto shrink-0 text-[11px] text-slate-400'>{formatRelative(a.timestamp)}</span>
+          <span className='ml-auto shrink-0 text-[11px] text-slate-400'>
+            {formatRelative(a.timestamp)}
+          </span>
         </div>
       ))}
     </div>
@@ -389,7 +412,11 @@ function MatrixWidgetBody({ widget }: { widget: PageRendererWidget }) {
           {cfg.button_label ?? cfg.title ?? 'Manage'}
         </button>
         {open && (
-          <MatrixSheet config={cfg as MatrixEditorConfig} width={cfg.sheet_width} onClose={() => setOpen(false)} />
+          <MatrixSheet
+            config={cfg as MatrixEditorConfig}
+            width={cfg.sheet_width}
+            onClose={() => setOpen(false)}
+          />
         )}
       </div>
     )
@@ -430,7 +457,12 @@ function defaultFilterSelection(
 type QueryRowClick = {
   picker?: { collection: string; filter?: Record<string, unknown>; title?: string }
   drill?: { collection?: string; layout_id?: number; width?: number | string }
-  matrix?: { config: MatrixEditorConfig; scope_field: string; width?: number | string; title?: string }
+  matrix?: {
+    config: MatrixEditorConfig
+    scope_field: string
+    width?: number | string
+    title?: string
+  }
   /** Open a nested query sheet for the clicked row. */
   sheet?: QuerySheetDef
 }
@@ -445,7 +477,20 @@ export interface QuerySheetDef {
   title?: string
   width?: number | string
   config?: QueryWidgetConfig
-  tabs?: Array<{ label: string; config: QueryWidgetConfig }>
+  /** A tab is a nested query view OR a MatrixEditor (`matrix`): its scope is
+   *  seeded from the clicked row — `scope: {project: '$row.id'}` — and those
+   *  fields render as fixed context, not pickers. */
+  tabs?: Array<{
+    label: string
+    config?: QueryWidgetConfig
+    matrix?: { config: MatrixEditorConfig; scope: Record<string, string> }
+  }>
+}
+
+type ResolvedSheetTab = {
+  label: string
+  config?: QueryWidgetConfig
+  matrix?: { config: MatrixEditorConfig; initialScope: Record<string, unknown> }
 }
 
 export interface QueryWidgetConfig {
@@ -490,7 +535,9 @@ function resolveSheetValue(
     const p = v.slice('$filters.'.length)
     const def = filterDefs?.find((f) => f.param === p)
     const sel = filterSel[p] ?? []
-    return sel.length ? sel.map((r) => String(r[def?.value_field ?? 'id'] ?? '')).join(',') : undefined
+    return sel.length
+      ? sel.map((r) => String(r[def?.value_field ?? 'id'] ?? '')).join(',')
+      : undefined
   }
   return v
 }
@@ -518,7 +565,7 @@ function QuerySheet({
   row,
   onClose
 }: {
-  def: QuerySheetDef & { resolvedTabs: Array<{ label: string; config: QueryWidgetConfig }> }
+  def: QuerySheetDef & { resolvedTabs: ResolvedSheetTab[] }
   row: Record<string, unknown> | null
   onClose: () => void
 }) {
@@ -569,7 +616,14 @@ function QuerySheet({
           </button>
         </div>
         <div className='min-h-0 flex-1 overflow-auto'>
-          {active ? (
+          {active?.matrix ? (
+            <MatrixEditor
+              key={tab}
+              config={active.matrix.config}
+              initialScope={active.matrix.initialScope}
+              lockScope
+            />
+          ) : active?.config ? (
             <QueryWidgetView key={tab} config={active.config} />
           ) : (
             <p className='p-4 text-[12px] text-slate-400'>Sheet not configured</p>
@@ -605,7 +659,9 @@ function resolveRowTokens(
     if (typeof v === 'string' && v.startsWith('$filters.')) return filterToken(v)
     if (Array.isArray(v)) return v.map(walk)
     if (v && typeof v === 'object')
-      return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x)]))
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x)])
+      )
     return v
   }
   const hasUndef = (v: unknown): boolean => {
@@ -671,7 +727,11 @@ function QueryFilterSelect({
     ? options.filter((o) => allowedIds.some((id) => String(id) === String(o.id)))
     : options
   const visible = scoped.filter((o) =>
-    search ? String(o[labelField] ?? '').toLowerCase().includes(search.toLowerCase()) : true
+    search
+      ? String(o[labelField] ?? '')
+          .toLowerCase()
+          .includes(search.toLowerCase())
+      : true
   )
   const badge = allowedIds?.length
     ? {
@@ -741,16 +801,24 @@ function QueryFilterSelect({
                   key={v}
                   type='button'
                   onClick={() =>
-                    onChange(on ? selected.filter((s) => String(s[valueField] ?? '') !== v) : [...selected, o])
+                    onChange(
+                      on
+                        ? selected.filter((s) => String(s[valueField] ?? '') !== v)
+                        : [...selected, o]
+                    )
                   }
                   className='flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                 >
-                  <span className={`w-3.5 shrink-0 text-[#00ceff] ${on ? '' : 'invisible'}`}>✓</span>
+                  <span className={`w-3.5 shrink-0 text-[#00ceff] ${on ? '' : 'invisible'}`}>
+                    ✓
+                  </span>
                   <span className='truncate'>{String(o[labelField] ?? v)}</span>
                 </button>
               )
             })}
-            {visible.length === 0 && <p className='px-2 py-1.5 text-[12px] text-slate-400'>No options</p>}
+            {visible.length === 0 && (
+              <p className='px-2 py-1.5 text-[12px] text-slate-400'>No options</p>
+            )}
           </div>
         </div>
       )}
@@ -772,7 +840,9 @@ export function RecordGridWidgetBody({ widget }: { widget: PageRendererWidget })
   }
   const [open, setOpen] = useState(false)
   if (!cfg.collection) {
-    return <div className='p-3 text-[12px] text-slate-400'>Configure the record grid (collection)</div>
+    return (
+      <div className='p-3 text-[12px] text-slate-400'>Configure the record grid (collection)</div>
+    )
   }
   if (cfg.display === 'drawer') {
     return (
@@ -785,7 +855,10 @@ export function RecordGridWidgetBody({ widget }: { widget: PageRendererWidget })
           {cfg.button_label ?? cfg.title ?? 'Manage'}
         </button>
         {open && (
-          <div className='fixed inset-0 z-50 flex justify-end bg-black/30' onClick={() => setOpen(false)}>
+          <div
+            className='fixed inset-0 z-50 flex justify-end bg-black/30'
+            onClick={() => setOpen(false)}
+          >
             <div
               className='flex h-full flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-background'
               style={{
@@ -841,39 +914,42 @@ function QueryDrawerButton({
       >
         {cfg.button_label ?? cfg.label ?? 'View'}
       </button>
-        {open && (
-          <div className='fixed inset-0 z-50 flex justify-end bg-black/30' onClick={() => setOpen(false)}>
-            <div
-              className='flex h-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
-              style={{
-                width:
-                  typeof cfg.sheet_width === 'number'
-                    ? `${cfg.sheet_width}px`
-                    : (cfg.sheet_width ?? '90%'),
-                maxWidth: '96%'
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className='flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-                <p className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
-                  {cfg.button_label ?? cfg.label ?? 'View'}
-                </p>
-                <button
-                  type='button'
-                  onClick={() => setOpen(false)}
-                  className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
-                >
-                  Close
-                </button>
-              </div>
-              <div className='min-h-0 flex-1 overflow-auto'>
-                <QueryWidgetInner config={inner} />
-              </div>
+      {open && (
+        <div
+          className='fixed inset-0 z-50 flex justify-end bg-black/30'
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className='flex h-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-border dark:bg-background'
+            style={{
+              width:
+                typeof cfg.sheet_width === 'number'
+                  ? `${cfg.sheet_width}px`
+                  : (cfg.sheet_width ?? '90%'),
+              maxWidth: '96%'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className='flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
+              <p className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
+                {cfg.button_label ?? cfg.label ?? 'View'}
+              </p>
+              <button
+                type='button'
+                onClick={() => setOpen(false)}
+                className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+              >
+                Close
+              </button>
+            </div>
+            <div className='min-h-0 flex-1 overflow-auto'>
+              <QueryWidgetInner config={inner} />
             </div>
           </div>
-        )}
-      </div>
-    )
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** The full query-widget surface (filters, stats, table, row actions, drill
@@ -892,7 +968,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const [pickerRow, setPickerRow] = useState<Record<string, unknown> | null>(null)
   const [matrixScopeId, setMatrixScopeId] = useState<unknown>(null)
   const [sheetState, setSheetState] = useState<{
-    def: QuerySheetDef & { resolvedTabs: Array<{ label: string; config: QueryWidgetConfig }> }
+    def: QuerySheetDef & { resolvedTabs: ResolvedSheetTab[] }
     row: Record<string, unknown> | null
   } | null>(null)
   const [filterSel, setFilterSel] = useState<Record<string, Array<Record<string, unknown>>>>(() =>
@@ -971,7 +1047,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     const p: Record<string, unknown> = { ...(cfg.params ?? {}) }
     for (const f of cfg.filters ?? []) {
       const sel = filterSel[f.param] ?? []
-      if (sel.length > 0) p[f.param] = sel.map((r) => String(r[f.value_field ?? 'id'] ?? '')).join(',')
+      if (sel.length > 0)
+        p[f.param] = sel.map((r) => String(r[f.value_field ?? 'id'] ?? '')).join(',')
     }
     return p
   }, [cfg.params, cfg.filters, filterSel])
@@ -1007,7 +1084,14 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       params[k] = r
     }
     const confirmText = a.confirm?.replace(/\{(\w+)\}/g, (_, k: string) => String(params[k] ?? ''))
-    const run: ActionRunState = { action: a, params, phase: confirmText ? 'confirm' : 'running', confirmText: confirmText ?? null, startedAt: Date.now(), elapsedMs: 0 }
+    const run: ActionRunState = {
+      action: a,
+      params,
+      phase: confirmText ? 'confirm' : 'running',
+      confirmText: confirmText ?? null,
+      startedAt: Date.now(),
+      elapsedMs: 0
+    }
     setActionRun(run)
     if (!confirmText) void executeAction(run)
   }
@@ -1030,7 +1114,9 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
             }
           : cur
       )
-      setActionStatus(`${run.action.success_message ?? `${run.action.label} completed`} · ${fmtElapsed(Date.now() - startedAt)}`)
+      setActionStatus(
+        `${run.action.success_message ?? `${run.action.label} completed`} · ${fmtElapsed(Date.now() - startedAt)}`
+      )
       // A run typically mutates what the widget shows — refresh it.
       void qcRef.invalidateQueries({ queryKey: ['page-renderer-query', cfg.query_slug] })
     } catch (err) {
@@ -1100,10 +1186,26 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const rc = cfg.row_click
   const openSheet = (def: QuerySheetDef, row: Record<string, unknown> | null) => {
     const rawTabs = def.tabs ?? (def.config ? [{ label: 'View', config: def.config }] : [])
-    const resolvedTabs = rawTabs.map((t) => ({
-      label: t.label,
-      config: resolveSheetConfig(t.config, row, data ?? [], effectiveParams, filterSel, cfg.filters)
-    }))
+    const resolvedTabs: ResolvedSheetTab[] = rawTabs.map((t) => {
+      if (t.matrix) {
+        const initialScope: Record<string, unknown> = {}
+        for (const [field, src] of Object.entries(t.matrix.scope)) {
+          initialScope[field] = src.startsWith('$row.') ? row?.[src.slice('$row.'.length)] : src
+        }
+        return { label: t.label, matrix: { config: t.matrix.config, initialScope } }
+      }
+      return {
+        label: t.label,
+        config: resolveSheetConfig(
+          t.config ?? {},
+          row,
+          data ?? [],
+          effectiveParams,
+          filterSel,
+          cfg.filters
+        )
+      }
+    })
     setSheetState({ def: { ...def, resolvedTabs }, row })
   }
   const handleRow = rc
@@ -1146,8 +1248,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
           // IS the current year (EFP guard) — otherwise strip it.
           cfg.table?.highlight_group && cfg.table.highlight_year_param
             ? Number(
-                  String(effectiveParams[cfg.table.highlight_year_param] ?? '').split(',')[0]
-                ) === new Date().getFullYear()
+                String(effectiveParams[cfg.table.highlight_year_param] ?? '').split(',')[0]
+              ) === new Date().getFullYear()
               ? cfg.table
               : { ...cfg.table, highlight_group: undefined }
             : cfg.table
@@ -1244,7 +1346,10 @@ interface ActionRunState {
   error?: string
 }
 
-const fmtElapsed = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
+const fmtElapsed = (ms: number) =>
+  ms < 60_000
+    ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`
+    : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
 
 function ActionRunDialog({
   run,
@@ -1288,7 +1393,9 @@ function ActionRunDialog({
 
         {run.phase === 'confirm' && (
           <>
-            <p className='mt-2 text-[12.5px] text-slate-600 dark:text-slate-300'>{run.confirmText}</p>
+            <p className='mt-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+              {run.confirmText}
+            </p>
             <div className='mt-3 flex gap-2'>
               <button
                 type='button'
@@ -1322,14 +1429,16 @@ function ActionRunDialog({
             </p>
             {run.resultRows != null && run.resultRows > 0 && run.resultSample && (
               <dl className='mt-2 max-h-40 space-y-0.5 overflow-y-auto rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11.5px] dark:bg-muted'>
-                {Object.entries(run.resultSample).slice(0, 8).map(([k, v]) => (
-                  <div key={k} className='flex gap-2'>
-                    <dt className='text-slate-500 dark:text-slate-400'>{titleCase(k)}</dt>
-                    <dd className='ml-auto font-medium tabular-nums text-slate-800 dark:text-slate-100'>
-                      {String(v ?? '—')}
-                    </dd>
-                  </div>
-                ))}
+                {Object.entries(run.resultSample)
+                  .slice(0, 8)
+                  .map(([k, v]) => (
+                    <div key={k} className='flex gap-2'>
+                      <dt className='text-slate-500 dark:text-slate-400'>{titleCase(k)}</dt>
+                      <dd className='ml-auto font-medium tabular-nums text-slate-800 dark:text-slate-100'>
+                        {String(v ?? '—')}
+                      </dd>
+                    </div>
+                  ))}
                 {run.resultRows > 1 && (
                   <p className='pt-0.5 text-slate-400'>…{run.resultRows} result rows</p>
                 )}
@@ -1383,7 +1492,9 @@ function WidgetBody({ slug, widget }: { slug: string; widget: PageRendererWidget
     case 'kpi':
       return <KpiWidgetBody slug={slug} widget={widget} />
     case 'markdown':
-      return <MarkdownBody content={String((widget.config as { content?: string })?.content ?? '')} />
+      return (
+        <MarkdownBody content={String((widget.config as { content?: string })?.content ?? '')} />
+      )
     case 'iframe':
       return <IframeWidgetBody widget={widget} />
     case 'query':
@@ -1419,9 +1530,14 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
   // behaves exactly as it did.
   const drill = useOverlayState<DrilldownTarget[]>('drill.page')
   const drillStack = drill.value
-  const { data: page, isLoading, error } = useQuery<PageRendererPage>({
+  const {
+    data: page,
+    isLoading,
+    error
+  } = useQuery<PageRendererPage>({
     queryKey: ['page-renderer', slug],
-    queryFn: () => client.request<{ data: PageRendererPage }>(get(`/pages/${slug}`)).then((r) => r.data),
+    queryFn: () =>
+      client.request<{ data: PageRendererPage }>(get(`/pages/${slug}`)).then((r) => r.data),
     enabled: !!slug,
     retry: false
   })
@@ -1435,9 +1551,13 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
   }
   if (error || !page) {
     return (
-      <div className={`flex flex-col items-center justify-center p-10 text-center ${className ?? ''}`}>
+      <div
+        className={`flex flex-col items-center justify-center p-10 text-center ${className ?? ''}`}
+      >
         <p className='text-sm font-medium text-slate-600 dark:text-slate-300'>Page not found</p>
-        <p className='mt-1 text-xs text-slate-400'>This page does not exist or you do not have access to it.</p>
+        <p className='mt-1 text-xs text-slate-400'>
+          This page does not exist or you do not have access to it.
+        </p>
       </div>
     )
   }
@@ -1471,72 +1591,74 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
       )}
       <div className={`min-h-0 flex-1 overflow-y-auto ${fillWidget ? 'flex flex-col' : ''}`}>
         {widgets.length === 0 ? (
-          <p className='p-6 text-center text-[13px] text-slate-400'>This page has no widgets yet.</p>
+          <p className='p-6 text-center text-[13px] text-slate-400'>
+            This page has no widgets yet.
+          </p>
         ) : (
           <>
-          {toolbarRows.map((row) => (
-            <div key={row.y} className='mb-3 flex shrink-0 flex-wrap items-center gap-2'>
-              {row.items.map((w) => (
-                <WidgetBody key={w.id} slug={page.slug} widget={w} />
-              ))}
-            </div>
-          ))}
-          <div
-            // Same sizing rules as the admin PageView: a full_height widget
-            // needs a DEFINITE grid height so its final 1fr band resolves to
-            // leftover space instead of growing to content.
-            className={fillWidget ? 'grid min-h-0 flex-1 gap-4' : 'grid gap-4'}
-            style={{
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              // repeat(0, …) is INVALID CSS (count must be ≥1) and drops the
-              // whole declaration — a fill widget in the first row band emits
-              // just the stretching track.
-              ...(fillWidget
-                ? {
-                    gridTemplateRows: `${yShift(fillWidget.y) > 0 ? `repeat(${yShift(fillWidget.y)}, ${ROW_HEIGHT}px) ` : ''}minmax(${ROW_HEIGHT * 3}px, 1fr)`
-                  }
-                : {}),
-              gridAutoRows: `${ROW_HEIGHT}px`
-            }}
-          >
-            {gridWidgets.map((w) => {
-              const chromeless =
-                (w.type === 'matrix' || w.type === 'query' || w.type === 'record-grid') &&
-                (w.config as { display?: string })?.display === 'drawer'
-              const fills = w === fillWidget
-              return (
-                <div
-                  key={w.id}
-                  className={
-                    chromeless
-                      ? 'flex min-h-0 flex-col'
-                      : 'flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-border dark:bg-card'
-                  }
-                  style={{
-                    gridColumn: `${Math.min(w.x, columns - 1) + 1} / span ${Math.min(w.w, columns)}`,
-                    gridRow: fills
-                      ? `${yShift(w.y) + 1} / -1`
-                      : `${yShift(w.y) + 1} / span ${Math.max(w.h, 1)}`
-                  }}
-                >
-                  {!chromeless &&
-                    w.type !== 'kpi' &&
-                    w.type !== 'markdown' &&
-                    (w.config as { hide_label?: boolean })?.hide_label !== true && (
-                      <div className='shrink-0 border-b border-slate-100 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:border-border'>
-                        {String((w.config as { label?: string })?.label ?? '') ||
-                          (typeof (w.config as { collection?: string })?.collection === 'string'
-                            ? titleCase(String((w.config as { collection?: string }).collection))
-                            : titleCase(w.type))}
-                      </div>
-                    )}
-                  <div className='min-h-0 flex-1'>
-                    <WidgetBody slug={page.slug} widget={w} />
+            {toolbarRows.map((row) => (
+              <div key={row.y} className='mb-3 flex shrink-0 flex-wrap items-center gap-2'>
+                {row.items.map((w) => (
+                  <WidgetBody key={w.id} slug={page.slug} widget={w} />
+                ))}
+              </div>
+            ))}
+            <div
+              // Same sizing rules as the admin PageView: a full_height widget
+              // needs a DEFINITE grid height so its final 1fr band resolves to
+              // leftover space instead of growing to content.
+              className={fillWidget ? 'grid min-h-0 flex-1 gap-4' : 'grid gap-4'}
+              style={{
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                // repeat(0, …) is INVALID CSS (count must be ≥1) and drops the
+                // whole declaration — a fill widget in the first row band emits
+                // just the stretching track.
+                ...(fillWidget
+                  ? {
+                      gridTemplateRows: `${yShift(fillWidget.y) > 0 ? `repeat(${yShift(fillWidget.y)}, ${ROW_HEIGHT}px) ` : ''}minmax(${ROW_HEIGHT * 3}px, 1fr)`
+                    }
+                  : {}),
+                gridAutoRows: `${ROW_HEIGHT}px`
+              }}
+            >
+              {gridWidgets.map((w) => {
+                const chromeless =
+                  (w.type === 'matrix' || w.type === 'query' || w.type === 'record-grid') &&
+                  (w.config as { display?: string })?.display === 'drawer'
+                const fills = w === fillWidget
+                return (
+                  <div
+                    key={w.id}
+                    className={
+                      chromeless
+                        ? 'flex min-h-0 flex-col'
+                        : 'flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-border dark:bg-card'
+                    }
+                    style={{
+                      gridColumn: `${Math.min(w.x, columns - 1) + 1} / span ${Math.min(w.w, columns)}`,
+                      gridRow: fills
+                        ? `${yShift(w.y) + 1} / -1`
+                        : `${yShift(w.y) + 1} / span ${Math.max(w.h, 1)}`
+                    }}
+                  >
+                    {!chromeless &&
+                      w.type !== 'kpi' &&
+                      w.type !== 'markdown' &&
+                      (w.config as { hide_label?: boolean })?.hide_label !== true && (
+                        <div className='shrink-0 border-b border-slate-100 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:border-border'>
+                          {String((w.config as { label?: string })?.label ?? '') ||
+                            (typeof (w.config as { collection?: string })?.collection === 'string'
+                              ? titleCase(String((w.config as { collection?: string }).collection))
+                              : titleCase(w.type))}
+                        </div>
+                      )}
+                    <div className='min-h-0 flex-1'>
+                      <WidgetBody slug={page.slug} widget={w} />
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
           </>
         )}
       </div>
