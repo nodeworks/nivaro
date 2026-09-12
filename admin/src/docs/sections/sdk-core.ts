@@ -692,7 +692,7 @@ import '@nivaro/react/styles.css'`
     { type: 'h3', text: 'Page renderer' },
     {
       type: 'p',
-      text: '`<PageRenderer slug="…" />` renders a page-builder page (widget grid) in your own app — the same surface as the admin\'s `/p/:slug` viewer: table, KPI, markdown, iframe, recent-activity, query tables (param filters, progress columns, row-click picker/drill/matrix sheets), and matrix editors (inline or drawer-button). Widget data resolves through the client identity, so permissions apply server-side. Requires `NivaroProvider` + a TanStack Query `QueryClientProvider`; supply `NavigationContext` to control where record links go, and an outer `DrilldownContext` if you host your own record sheet (PageRenderer hosts one otherwise).'
+      text: '`<PageRenderer slug="…" />` renders a page-builder page (widget grid) in your own app — the same surface as the admin\'s `/p/:slug` viewer: table, KPI, markdown, iframe, recent-activity, query tables (param filters, progress columns, row-click picker/drill/matrix sheets), matrix editors (inline or drawer-button), and record grids (`record-grid` — flat rows, or `browse: true` for header key pickers with roll-up totals until every key is chosen). Widget data resolves through the client identity, so permissions apply server-side. Requires `NivaroProvider` + a TanStack Query `QueryClientProvider`; supply `NavigationContext` to control where record links go, and an outer `DrilldownContext` if you host your own record sheet (PageRenderer hosts one otherwise).'
     },
     {
       type: 'pre',
