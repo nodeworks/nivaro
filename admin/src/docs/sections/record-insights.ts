@@ -21,7 +21,7 @@ export const recordInsightsDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Owner rows carry an "Owner — notified on transitions" pill; watchers show "Chose to watch N fields" with the field list on hover; subscribers show one pill per subscription, such as "Subscribed to this record", "On \\"Approved\\" state changes", or "Area subscription (division, region)", each with its delivery cadence (instant, daily, or weekly).',
+        'Owner rows carry an "Owner — notified on transitions" pill; watchers show "Chose to watch N fields" with the field list on hover; subscribers show one pill per subscription, such as "This record · all changes" (the bell\'s All-changes mode; a state-only watch reads "This record · state changes"), "On \\"Approved\\" state changes", or "Area subscription (division, region)", each with its delivery cadence (instant, daily, or weekly).',
         'Subscriptions with dimension filters are evaluated against this record — a person subscribed only to Zone 2 does not appear on a Zone 3 record.',
         'Suspended and redacted users are excluded entirely, even when they are owners — they cannot receive anything, so listing them would mislead.'
       ]

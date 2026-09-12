@@ -193,7 +193,11 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
           filters = []
         }
         if (filters.some((f) => f?.field === 'id') || sub.filter_field === 'id') {
-          return 'Subscribed to this record'
+          // The record bell writes one row per mode: a state-changes row
+          // (workflow_transition) and, for "All changes", an every-edit row.
+          return sub.event_type === 'workflow_transition'
+            ? 'This record · state changes'
+            : 'This record · all changes'
         }
         if (sub.event_type === 'workflow_transition' && sub.filter_value) {
           return `On "${stateLabels.get(sub.filter_value) ?? sub.filter_value}" state changes`
@@ -218,6 +222,20 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
             reason
           })
         }
+      }
+      // "All changes" on the bell is two rows (state changes + every edit);
+      // one pill says it all — drop the state-only twin when both exist at
+      // the same cadence.
+      for (const p of people.values()) {
+        const hasAll = new Set(
+          p.subscriptions
+            .filter((s) => s.reason === 'This record · all changes')
+            .map((s) => s.cadence)
+        )
+        if (hasAll.size)
+          p.subscriptions = p.subscriptions.filter(
+            (s) => !(s.reason === 'This record · state changes' && hasAll.has(s.cadence))
+          )
       }
       const list = [...people.values()].sort(
         (a, b) => Number(b.owner) - Number(a.owner) || a.name.localeCompare(b.name)
