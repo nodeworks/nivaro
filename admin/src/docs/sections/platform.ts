@@ -764,6 +764,54 @@ export const layoutStepsMode: DocSection = {
   ]
 }
 
+export const layoutQuickPicker: DocSection = {
+  id: 'layout-quick-picker',
+  label: 'Quick Picker',
+  content: [
+    { type: 'h1', id: 'layout-quick-picker', text: 'Quick Picker — guided related-field entry' },
+    {
+      type: 'p',
+      text: 'A layout can name an ordered list of relation fields (M2O or M2M) that form its dependency chain — Funding Year → Zone → Region → Project Type → Project → Sub Type. The quick picker walks that chain one step at a time in a compact popover: each slide shows only the options still valid given the earlier picks (the same cascade filters the form\'s pickers use), a sole remaining option is picked automatically, short lists render as chips and long ones as a searchable list. Back / Next move between slides and the track above shows every step with its chosen value; click any step to revisit it.'
+    },
+    { type: 'h3', text: 'Where it appears' },
+    {
+      type: 'table',
+      head: ['Surface', 'Behaviour'],
+      rows: [
+        [
+          'Collection browser "+ New item"',
+          'When the target layout configures steps, the popover opens beside the button first. "Create <record>" opens the new-record form with the picks prefilled (?prefill= carries scalars and M2M links).'
+        ],
+        [
+          'Record form header — "Quick pick"',
+          'Opens the same popover bound to the live draft: every pick is a normal edit (cascade clears, field rules and validation all apply), Done just closes. Available on new and existing records.'
+        ],
+        [
+          'Headless hosts (@nivaro/react)',
+          'QuickPickerDialog (anchorEl → popover, otherwise a dialog) + encodePrefill / decodePrefill for the handoff; useQuickPickerSteps reads a layout\'s steps.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Configuring the steps' },
+    {
+      type: 'p',
+      text: 'Data Model → collection → Layout tab → layout settings → "Quick picker steps". "Seed from cascades" proposes the chain from the layout\'s cascade_filters graph (fields that cascade from each other, parents first, leaves nothing depends on pruned away); add, reorder or remove steps by hand. Stored as nivaro_collection_layouts.quick_picker (JSON array of field keys, max 20). No steps = no button.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/collection-layouts/:id
+{ "quick_picker": ["funding_years", "divisions", "regions", "project_type", "project", "project_sub_types"] }
+
+// clear
+{ "quick_picker": null }`
+    },
+    {
+      type: 'note',
+      text: 'Steps that are not relation fields on the collection are skipped at render time rather than shown as dead slides. Option filters (options.option_filter) and cascade filters on each field apply exactly as they do in the form, so the picker can never offer a value the form would reject.'
+    }
+  ]
+}
+
 export const layoutSummaryPanel: DocSection = {
   id: 'layout-summary-panel',
   label: 'Layout Summary Panel',

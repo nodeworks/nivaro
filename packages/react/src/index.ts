@@ -49,6 +49,15 @@ export {
   useOnlineUsers
 } from '@nivaro/shared'
 export { CustomStatusEditor, activeCustomStatus, formatStatusExpiry } from '@nivaro/shared'
+export {
+  QuickPicker,
+  QuickPickerDialog,
+  useQuickPickerSteps,
+  seedQuickPickerSteps,
+  encodePrefill,
+  decodePrefill
+} from '@nivaro/shared'
+export type { QuickPickerProps, QuickPickerDialogProps } from '@nivaro/shared'
 export type { CustomStatus } from '@nivaro/shared'
 export type { RealtimeAdapter, CollectionUpdateEvent, LeaderSocketHandle } from '@nivaro/shared'
 // ─── Parity sweep 2026-08-19 — shared surfaces headless hosts need ──────────

@@ -42,6 +42,24 @@ function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
 }
 
 // Safely parse the default_values JSON text column into a plain object (or null).
+/** JSON string[] of relation fields the quick picker walks; anything else = none. */
+function parseQuickPicker(raw: unknown): string[] | null {
+  if (raw == null) return null
+  let v: unknown = raw
+  if (typeof v === 'string') {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      return null
+    }
+  }
+  if (!Array.isArray(v)) return null
+  const steps = v.filter(
+    (s): s is string => typeof s === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
+  )
+  return steps.length ? [...new Set(steps)] : null
+}
+
 function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
   if (raw == null) return null
   if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
@@ -318,6 +336,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.conditions = parseConditions(layout.conditions)
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
     layout.default_values = parseDefaultValues(layout.default_values)
+    layout.quick_picker = parseQuickPicker(layout.quick_picker)
 
     let [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -514,7 +533,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'hide_integrity_banner',
         'hide_sla_banner',
         'dossier_enabled',
-        'dossier_label'
+        'dossier_label',
+        'quick_picker'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
@@ -527,6 +547,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       row.conditions = parseConditions(row.conditions)
       row.record_conditions = parseRecordConditions(row.record_conditions)
       row.default_values = parseDefaultValues(row.default_values)
+      row.quick_picker = parseQuickPicker(row.quick_picker)
     }
     return reply.send({ data: rows })
   })
@@ -582,6 +603,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     row.conditions = parseConditions(row.conditions)
     row.record_conditions = parseRecordConditions(row.record_conditions)
     row.default_values = parseDefaultValues(row.default_values)
+    row.quick_picker = parseQuickPicker(row.quick_picker)
     return reply.send({ data: row })
   })
 
@@ -624,6 +646,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       hide_sla_banner: boolean
       dossier_enabled: boolean
       dossier_label: string | null
+      quick_picker: string[] | null
     }>
 
     if (body.record_conditions !== undefined && body.record_conditions !== null) {
@@ -701,6 +724,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.dossier_label !== undefined)
       patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
     if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
+    if (body.quick_picker !== undefined) {
+      if (body.quick_picker !== null && !Array.isArray(body.quick_picker))
+        return reply
+          .code(400)
+          .send({ error: 'quick_picker must be an array of field names or null' })
+      const steps = parseQuickPicker(body.quick_picker)
+      if (body.quick_picker !== null && body.quick_picker.length > 0 && !steps)
+        return reply.code(400).send({ error: 'quick_picker entries must be field names' })
+      if (steps && steps.length > 20)
+        return reply.code(400).send({ error: 'quick_picker allows at most 20 steps' })
+      patch.quick_picker = steps ? JSON.stringify(steps) : null
+    }
 
     if (Object.keys(patch).length === 0)
       return reply.code(400).send({ error: 'No fields to update' })
@@ -710,6 +745,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     updated.conditions = parseConditions(updated.conditions)
     updated.record_conditions = parseRecordConditions(updated.record_conditions)
     updated.default_values = parseDefaultValues(updated.default_values)
+    updated.quick_picker = parseQuickPicker(updated.quick_picker)
 
     await logActivity({
       action: 'update',

@@ -2,7 +2,8 @@ import {
   CollectionBrowserView,
   ItemEditAuthContext,
   NavigationContext,
-  NivaroProvider
+  NivaroProvider,
+  defaultItemUrl
 } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
@@ -28,7 +29,7 @@ export function CollectionBrowserV2Page() {
         <NavigationContext.Provider
           value={{
             navigate: (path) => navigate(path),
-            itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
+            itemUrl: defaultItemUrl
           }}
         >
           <ItemEditAuthContext.Provider
@@ -49,7 +50,10 @@ export function CollectionBrowserV2Page() {
                         pathLabels: ['ID'],
                         fieldType: 'integer',
                         op: '_in',
-                        value: (searchParams.get('ids') ?? '').split(',').filter(Boolean).slice(0, 500)
+                        value: (searchParams.get('ids') ?? '')
+                          .split(',')
+                          .filter(Boolean)
+                          .slice(0, 500)
                       }
                     ]
                   : undefined

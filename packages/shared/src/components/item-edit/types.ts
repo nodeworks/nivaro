@@ -106,6 +106,8 @@ export interface LayoutMeta {
   addendum_layout_id?: number | null
   addendum_default_view?: boolean | number
   default_values?: Record<string, unknown> | null
+  /** Quick picker: relation fields walked one step at a time on create. */
+  quick_picker?: string[] | null
 }
 
 export interface ActiveLayoutData {

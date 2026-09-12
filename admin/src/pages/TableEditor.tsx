@@ -71,6 +71,7 @@ import {
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { seedQuickPickerSteps } from '@nivaro/shared'
 import { toast } from 'sonner'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import {
@@ -8933,6 +8934,187 @@ function LayoutPicker({
 
 type CascadeRuleCfg = { parent_field: string; child_field: string; on_unavailable?: unknown }
 
+/** Layout setting: the ordered relation fields the quick picker walks when a
+ *  record is created. Empty = no quick picker. "Seed" fills it from the
+ *  cascade graph (parents before children); admins reorder / drop / add. */
+function QuickPickerStepsEditor({
+  steps,
+  fields,
+  relations,
+  collection,
+  onChange
+}: {
+  steps: string[]
+  fields: Array<{
+    field: string
+    label?: string | null
+    dependency_config?: unknown
+    hidden?: boolean
+  }>
+  relations: Array<{
+    many_collection: string | null
+    many_field: string | null
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }>
+  collection: string
+  onChange: (steps: string[]) => void
+}) {
+  const [addOpen, setAddOpen] = useState(false)
+  const labelOf = (f: string) => fields.find((x) => x.field === f)?.label || titleCase(f)
+  const eligible = fields
+    .filter(
+      (f) =>
+        !steps.includes(f.field) &&
+        relations.some(
+          (r) =>
+            (r.many_collection === collection && r.many_field === f.field && !r.junction_field) ||
+            (r.one_collection === collection && r.one_field === f.field)
+        )
+    )
+    .sort((a, b) => labelOf(a.field).localeCompare(labelOf(b.field)))
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= steps.length) return
+    const next = [...steps]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange(next)
+  }
+  const seed = () =>
+    onChange(
+      seedQuickPickerSteps(
+        fields,
+        relations.map((r) => ({
+          many_collection: r.many_collection ?? '',
+          many_field: r.many_field,
+          one_collection: r.one_collection,
+          one_field: r.one_field,
+          junction_field: r.junction_field
+        })),
+        collection
+      )
+    )
+  return (
+    <div className='space-y-1.5 border-t border-slate-100 pt-2 dark:border-border'>
+      <div className='flex items-center justify-between'>
+        <span
+          className='text-[11px] text-slate-500 dark:text-slate-400'
+          title='When someone creates a record with this layout, walk these fields one at a time (each step narrowed by the ones before it) before the form — and show the same walk as a strip at the top of the form.'
+        >
+          Quick picker steps
+        </span>
+        <div className='flex items-center gap-2'>
+          <button
+            type='button'
+            onClick={seed}
+            className='text-[10px] text-nvr-cyan hover:underline'
+            title='Fill from the cascade rules: parents before children'
+          >
+            Seed from cascade rules
+          </button>
+          {steps.length > 0 && (
+            <button
+              type='button'
+              onClick={() => onChange([])}
+              className='text-[10px] text-slate-400 hover:text-red-500'
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+      {steps.length === 0 ? (
+        <p className='text-[10px] text-slate-400'>Off — no quick picker for this layout.</p>
+      ) : (
+        <ol className='space-y-0.5'>
+          {steps.map((f, i) => (
+            <li
+              key={f}
+              className='flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-card'
+            >
+              <span className='w-4 text-center text-[10px] tabular-nums text-slate-400'>
+                {i + 1}
+              </span>
+              <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
+                {labelOf(f)}
+                <span className='ml-1 font-mono text-[10px] text-slate-400'>{f}</span>
+              </span>
+              <button
+                type='button'
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                className='h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-muted'
+                aria-label='Move up'
+              >
+                ↑
+              </button>
+              <button
+                type='button'
+                onClick={() => move(i, 1)}
+                disabled={i === steps.length - 1}
+                className='h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-muted'
+                aria-label='Move down'
+              >
+                ↓
+              </button>
+              <button
+                type='button'
+                onClick={() => onChange(steps.filter((s) => s !== f))}
+                className='h-5 w-5 rounded text-slate-300 hover:bg-red-50 hover:text-red-500'
+                aria-label={`Remove ${labelOf(f)}`}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+      <Popover open={addOpen} onOpenChange={setAddOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='h-6 rounded border border-dashed border-slate-300 px-2 text-[10.5px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
+          >
+            + Add step
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-56 p-0' align='start'>
+          <Command>
+            <CommandInput placeholder='Relation field…' className='h-8 text-[12px]' />
+            <CommandList>
+              <CommandGroup>
+                {eligible.length === 0 ? (
+                  <div className='px-3 py-2 text-[11px] text-slate-400'>
+                    No more relation fields
+                  </div>
+                ) : (
+                  eligible.map((f) => (
+                    <CommandItem
+                      key={f.field}
+                      value={`${labelOf(f.field)} ${f.field}`}
+                      onSelect={() => {
+                        onChange([...steps, f.field])
+                        setAddOpen(false)
+                      }}
+                      className='text-[12px]'
+                    >
+                      {labelOf(f.field)}
+                      <span className='ml-auto font-mono text-[10px] text-slate-400'>
+                        {f.field}
+                      </span>
+                    </CommandItem>
+                  ))
+                )}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
 function CascadeRuleRow({
   rule,
   parentFields,
@@ -16042,6 +16224,8 @@ interface CollectionLayout {
   allow_clone?: boolean | number
   allow_schedule?: boolean | number
   allow_disable_pickers?: boolean | number
+  /** Quick picker: relation fields walked one step at a time on create. */
+  quick_picker?: string[] | null
   conditions?: { role_ids?: string[] } | null
   layout_type?: 'grouped' | 'table' | 'file' | 'addendum' | 'detail'
   addendum_layout_id?: number | null
@@ -16573,6 +16757,7 @@ function LayoutsTab({
           | 'allow_clone'
           | 'allow_schedule'
           | 'allow_disable_pickers'
+          | 'quick_picker'
           | 'layout_type'
           | 'row_order_field'
           | 'pdf_theme'
@@ -17778,6 +17963,18 @@ function LayoutsTab({
                           className='h-3.5 w-3.5 rounded accent-nvr-cyan'
                         />
                       </label>
+                      <QuickPickerStepsEditor
+                        steps={selected.quick_picker ?? []}
+                        fields={layoutFieldMeta}
+                        relations={layoutRelations}
+                        collection={tableName}
+                        onChange={(steps) =>
+                          patchLayoutMut.mutate({
+                            id: selected.id,
+                            quick_picker: steps.length ? steps : null
+                          })
+                        }
+                      />
                       <label className='flex cursor-pointer items-center justify-between'>
                         <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                           Hide comments

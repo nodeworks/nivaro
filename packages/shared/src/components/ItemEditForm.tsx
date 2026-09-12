@@ -14,6 +14,7 @@ import {
   Loader2,
   Save,
   Trash2,
+  Wand2,
   Wrench,
   X
 } from 'lucide-react'
@@ -40,6 +41,7 @@ import {
   useNivaroClient
 } from '../context'
 import { del, get, patch, post } from '../lib/commands'
+import { QuickPicker } from './item-edit/QuickPicker'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { extSlotKey } from '../lib/layout-slots'
@@ -164,6 +166,7 @@ import {
   DialogHeader,
   DialogTitle
 } from './ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
@@ -2032,16 +2035,26 @@ export function ItemEditForm({
     )
       return
     appliedInitialValuesRef.current = true
+    // `__links` inside initialValues (the ?prefill= shape the quick-picker
+    // dialog hands over) is the same contract as initialLinks.
+    const { __links: prefillLinks, ...plainInitial } = (initialValues ?? {}) as Record<
+      string,
+      unknown
+    > & { __links?: Record<string, unknown[]> }
     if (initialValues) {
-      setDraft((d) => ({ ...initialValues, ...d }))
-      draftRef.current = { ...initialValues, ...draftRef.current }
+      setDraft((d) => ({ ...plainInitial, ...d }))
+      draftRef.current = { ...plainInitial, ...draftRef.current }
     }
-    if (initialLinks) {
+    const mergedLinks: Record<string, unknown[]> | undefined =
+      initialLinks || (prefillLinks && typeof prefillLinks === 'object')
+        ? { ...(prefillLinks ?? {}), ...(initialLinks ?? {}) }
+        : undefined
+    if (mergedLinks) {
       // Staged like any user-made selection, so the fields render populated and
       // the normal save path writes the junction rows.
       setM2mLinks((prev) => {
         const next = new Map(prev)
-        for (const [key, ids] of Object.entries(initialLinks)) {
+        for (const [key, ids] of Object.entries(mergedLinks)) {
           if (!next.has(key) && ids.length) next.set(key, [...ids])
         }
         return next
@@ -2289,6 +2302,56 @@ export function ItemEditForm({
     }
     return out
   }, [fieldConfig])
+
+  // ── Quick picker (layout.quick_picker) ────────────────────────────────────
+  // Writes for an M2M step go through the same staging the pickers use:
+  // a desired id that has a committed junction row staged for unlink is
+  // un-unlinked, a new id is staged as a link, a dropped id unlinks its
+  // junction row (or unstages its pending link). Nothing else changes.
+  const quickPickerSteps = useMemo(() => {
+    const raw = activeLayoutData?.layout?.quick_picker
+    return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string') : []
+  }, [activeLayoutData])
+  // Opened from the header's "Quick pick" button only — never always-on
+  // (Rob: less intrusive). Done / the button again hides it.
+  const [quickPickOpen, setQuickPickOpen] = useState(false)
+  const setQuickPickerM2M = useCallback(
+    (field: string, ids: string[]) => {
+      const info = resolveM2MAlias(relations, collection, field)
+      if (!info) return
+      const key = info.stagingKey
+      const committed = (qc.getQueryData<Record<string, unknown>[]>([
+        'm2m-items',
+        info.manyCollection,
+        info.manyField,
+        itemId
+      ]) ?? []) as Array<Record<string, unknown>>
+      const unlinked = m2mStagingCtx.getStagedUnlinks(key)
+      const stagedLinks = (m2mStagingCtx.getStagedLinks(key) ?? []).map(String)
+      const want = new Set(ids.map(String))
+      const rowByRelated = new Map(committed.map((r) => [String(r[info.junctionField]), r]))
+      // Current effective set: committed minus unlinked, plus staged links.
+      const effective = new Set<string>([
+        ...committed.filter((r) => !unlinked.has(r.id)).map((r) => String(r[info.junctionField])),
+        ...stagedLinks
+      ])
+      for (const id of want) {
+        if (effective.has(id)) continue
+        const row = rowByRelated.get(id)
+        if (row && unlinked.has(row.id)) m2mStagingCtx.unstageUnlink(key, row.id)
+        else m2mStagingCtx.stageLink(key, id)
+      }
+      for (const id of effective) {
+        if (want.has(id)) continue
+        const row = rowByRelated.get(id)
+        if (row && !unlinked.has(row.id)) m2mStagingCtx.stageUnlink(key, row.id)
+        else if (stagedLinks.includes(id)) m2mStagingCtx.unstageLink(key, id)
+      }
+      userTouchedRef.current.add(field)
+      setIsDirty(true)
+    },
+    [relations, collection, itemId, qc, m2mStagingCtx]
+  )
 
   const parentDraftWithAliases = useMemo(() => {
     const merged: Record<string, unknown> = { ...draft }
@@ -7620,6 +7683,55 @@ export function ItemEditForm({
                                           )}
                                         </button>
                                       )}
+                                      {quickPickerSteps.length > 0 && !isReadOnly && (
+                                        <Popover
+                                          open={quickPickOpen}
+                                          onOpenChange={setQuickPickOpen}
+                                        >
+                                          <PopoverTrigger asChild>
+                                            <button
+                                              type='button'
+                                              title='Quick pick — walk the related fields in order'
+                                              data-quick-pick-toggle
+                                              className={cn(
+                                                'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors',
+                                                quickPickOpen
+                                                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                                  : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                                              )}
+                                            >
+                                              <Wand2 className='h-3.5 w-3.5' />
+                                              Quick pick
+                                            </button>
+                                          </PopoverTrigger>
+                                          {/* Slides through the layout's relation steps beside the
+                                              button, bound to the live draft — every pick is a
+                                              normal edit; Done just closes. */}
+                                          <PopoverContent
+                                            align='end'
+                                            sideOffset={6}
+                                            className='w-[440px] max-w-[calc(100vw-24px)] p-3'
+                                            data-quick-picker-modal
+                                          >
+                                            <QuickPicker
+                                              collection={collection}
+                                              itemId={itemId}
+                                              steps={quickPickerSteps}
+                                              fieldConfig={fieldConfig ?? []}
+                                              relations={relations}
+                                              draft={draft}
+                                              getM2M={getM2MEffectiveIds}
+                                              onChange={handleFieldChange}
+                                              onM2MChange={setQuickPickerM2M}
+                                              fieldLabels={parentFieldLabels}
+                                              fieldOptionFilters={parentFieldOptionFilters}
+                                              onFinish={() => setQuickPickOpen(false)}
+                                              finishLabel='Done'
+                                              finishRequiresComplete={false}
+                                            />
+                                          </PopoverContent>
+                                        </Popover>
+                                      )}
                                       {!isNew && itemId && (
                                         <RecordSubscribeButton
                                           collection={collection}
@@ -8798,6 +8910,7 @@ export function ItemEditForm({
                                       unsaved edits are untouched.
                                     </div>
                                   )}
+
                                   {!isNew && itemId && (
                                     <div className='nvr-expand-in'>
                                       <RecordRecapStrip

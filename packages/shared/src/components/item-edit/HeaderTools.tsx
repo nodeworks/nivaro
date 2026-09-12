@@ -52,7 +52,13 @@ export function HeaderTools({ children }: { children: ReactNode }) {
     if (!open) return
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement
-      if (t.closest('[data-nvr-header-tools-panel]') || t.closest('[data-nvr-header-tools-btn]'))
+      // Portaled popovers opened FROM a tool (Quick pick) render outside the
+      // panel — a click inside them must not read as "outside".
+      if (
+        t.closest('[data-nvr-header-tools-panel]') ||
+        t.closest('[data-nvr-header-tools-btn]') ||
+        t.closest('[data-radix-popper-content-wrapper]')
+      )
         return
       setOpen(false)
     }
@@ -109,10 +115,7 @@ export function HeaderTools({ children }: { children: ReactNode }) {
                 : {
                     position: 'absolute',
                     top: rect.bottom - container.getBoundingClientRect().top + 6,
-                    right: Math.max(
-                      8,
-                      container.getBoundingClientRect().right - rect.right
-                    ),
+                    right: Math.max(8, container.getBoundingClientRect().right - rect.right),
                     zIndex: 110
                   }
             }

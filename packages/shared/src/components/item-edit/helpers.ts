@@ -73,6 +73,182 @@ export function getCascadeFilters(
   return Array.isArray(parsed?.cascade_filters) ? parsed.cascade_filters : []
 }
 
+// ─── Cascade filter builder ────────────────────────────────────────────────────
+// ONE compiler for "which options may this picker offer given its parents":
+// FieldRow (every form picker) and the quick picker both call it, so a step
+// in the quick picker can never offer a record the field's own picker would
+// refuse. Value resolution stays with the caller (scalars from the draft,
+// M2M parents from staging ± committed junction rows); this only turns
+// resolved parent values into the items filter.
+
+export interface CascadeFilterInput {
+  rules: CascadeRule[]
+  /** Resolved parent value: scalar, an id array for M2M parents, or null. */
+  parentValue: (parentField: string) => unknown
+  /** The parent's OWN option_filter (already token-resolved), inherited when
+   *  the parent is empty — or undefined. */
+  parentOptionFilter?: (parentField: string) => Record<string, unknown> | undefined
+  /** Parents to ignore entirely (a value this field's own pick derived). */
+  skipParent?: (parentField: string) => boolean
+}
+
+export interface CascadeFilterResult {
+  filter: Record<string, unknown> | undefined
+  /** Parents that narrowed the filter, in rule order. */
+  satisfiedParents: string[]
+  /** Parents with no value, in rule order. */
+  unsatisfiedParents: string[]
+  /** Required parents (show_all_if_no_parent false) with no value. */
+  missingRequiredParents: string[]
+}
+
+export function buildCascadeFilter(input: CascadeFilterInput): CascadeFilterResult {
+  let filter: Record<string, unknown> | undefined
+  const satisfiedParents: string[] = []
+  const unsatisfiedParents: string[] = []
+  const missingRequiredParents: string[] = []
+  const place = (rule: CascadeRule, clause: Record<string, unknown>) => {
+    if (!filter) filter = {}
+    if (rule.filter_is_m2m) {
+      filter[rule.filter_column] = { _some: clause }
+    } else if (rule.filter_column.includes('.')) {
+      // Dotted path: fold right into nested relation filter; wrap the first
+      // hop in _some when it traverses a to-many alias (filter_via_many).
+      const segs = rule.filter_column.split('.')
+      let nested: Record<string, unknown> = clause
+      for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+      filter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
+    } else {
+      filter[rule.filter_column] = clause
+    }
+  }
+  for (const rule of input.rules) {
+    if (input.skipParent?.(rule.parent_field)) continue
+    const parentVal = input.parentValue(rule.parent_field)
+    const present =
+      parentVal != null && parentVal !== '' && !(Array.isArray(parentVal) && parentVal.length === 0)
+    if (present) {
+      // value_map: parent value → derived filter value(s); arrays become _in
+      let filterVal: unknown = parentVal
+      if (rule.value_map && typeof rule.value_map === 'object') {
+        const vm = rule.value_map
+        const mapOne = (v: unknown) => vm[String(v)] ?? rule.value_map_default ?? v
+        filterVal = Array.isArray(parentVal)
+          ? [
+              ...new Set(
+                (parentVal as unknown[]).flatMap((v) => {
+                  const m = mapOne(v)
+                  return Array.isArray(m) ? m : [m]
+                })
+              )
+            ]
+          : mapOne(parentVal)
+      }
+      const clause = Array.isArray(filterVal) ? { _in: filterVal } : { _eq: filterVal }
+      place(rule, rule.filter_is_m2m ? { id: clause } : clause)
+      satisfiedParents.push(String(rule.parent_field))
+    } else {
+      unsatisfiedParents.push(String(rule.parent_field))
+      if (rule.show_all_if_no_parent === false)
+        missingRequiredParents.push(String(rule.parent_field))
+      // Parent unset but the parent's OWN picker curates its options
+      // (option_filter): inherit that filter through the cascade relation, so
+      // this picker never offers records the parent could not hold.
+      // value_map rules are value arithmetic, not relational — skipped.
+      const inherited = rule.value_map ? undefined : input.parentOptionFilter?.(rule.parent_field)
+      if (inherited) place(rule, inherited)
+    }
+  }
+  return { filter, satisfiedParents, unsatisfiedParents, missingRequiredParents }
+}
+
+// ─── Quick picker step seeding ─────────────────────────────────────────────────
+// Default walk order for a layout's quick picker, derived from the cascade
+// graph: parents before children, required parents (show_all_if_no_parent
+// false) strictly before the fields that need them, ties broken toward the
+// field with fewer rules. Cycles (every EFP rule is also an upstream link)
+// resolve the same way — the graph is a preference, not a DAG. Workflows:
+// funding_years → divisions → regions → project_type → project → project_sub_types.
+
+export function seedQuickPickerSteps(
+  fieldConfig: Array<{ field: string; dependency_config?: unknown; hidden?: boolean }>,
+  relations: Array<{
+    many_collection: string
+    many_field: string | null
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }>,
+  collection: string
+): string[] {
+  const isRelation = (f: string) =>
+    relations.some(
+      (r) =>
+        (r.many_collection === collection && r.many_field === f && !r.junction_field) ||
+        (r.one_collection === collection && r.one_field === f)
+    )
+  const rulesOf = new Map<string, CascadeRule[]>()
+  for (const fc of fieldConfig) {
+    if (fc.hidden) continue
+    const rules = getCascadeFilters(fc.dependency_config as Record<string, unknown> | string | null)
+    if (rules.length && isRelation(fc.field)) rulesOf.set(fc.field, rules)
+  }
+  // Every parent of a cascaded field joins the walk too (funding_years, divisions).
+  const members = new Set<string>(rulesOf.keys())
+  for (const rules of rulesOf.values())
+    for (const r of rules) if (isRelation(r.parent_field)) members.add(r.parent_field)
+  // A step earns its place by NARROWING a later one: drop members nothing
+  // cascades from (billing / shipping location, default sub type), then
+  // members whose only children were those leaves (CAR project type). If that
+  // empties the set, the graph has no spine — keep everyone.
+  const childrenOf = (f: string, pool: Set<string>) =>
+    [...pool].filter((c) => c !== f && (rulesOf.get(c) ?? []).some((r) => r.parent_field === f))
+  const leaves = new Set([...members].filter((f) => childrenOf(f, members).length === 0))
+  const afterLeaves = new Set([...members].filter((f) => !leaves.has(f)))
+  const pruned = new Set(
+    [...afterLeaves].filter((f) => childrenOf(f, afterLeaves).length > 0 || rulesOf.has(f))
+  )
+  const kept = [...afterLeaves].filter((f) => {
+    if (!pruned.has(f)) return false
+    // a parent whose children were ALL leaves narrows nothing that remains
+    const kids = childrenOf(f, members)
+    return kids.length === 0 || kids.some((k) => afterLeaves.has(k))
+  })
+  if (kept.length > 0) {
+    members.clear()
+    for (const f of kept) members.add(f)
+  }
+  const picked: string[] = []
+  const remaining = new Set(members)
+  while (remaining.size) {
+    let best: string | null = null
+    let bestScore = Number.POSITIVE_INFINITY
+    for (const f of [...remaining].sort()) {
+      const rules = (rulesOf.get(f) ?? []).filter((r) => members.has(r.parent_field))
+      const requiredUnpicked = rules.filter(
+        (r) => r.show_all_if_no_parent === false && !picked.includes(r.parent_field)
+      ).length
+      if (requiredUnpicked > 0) continue
+      const unpickedParents = new Set(
+        rules.map((r) => r.parent_field).filter((p) => !picked.includes(p) && p !== f)
+      ).size
+      const score = unpickedParents * 100 + rules.length
+      if (score < bestScore) {
+        bestScore = score
+        best = f
+      }
+    }
+    // Only cyclic required parents left — take the one with the fewest rules.
+    if (best == null)
+      best = [...remaining].sort(
+        (a, b) => (rulesOf.get(a)?.length ?? 0) - (rulesOf.get(b)?.length ?? 0)
+      )[0]
+    picked.push(best)
+    remaining.delete(best)
+  }
+  return picked
+}
+
 // ─── CascadeEffectController ───────────────────────────────────────────────────
 
 export function CascadeEffectController({

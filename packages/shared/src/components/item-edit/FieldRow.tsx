@@ -23,6 +23,7 @@ import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import {
+  buildCascadeFilter,
   CascadeEffectController,
   getCascadeFilters,
   getColSpanClass,
@@ -800,122 +801,66 @@ export function FieldRow({
   const cascadeRelatedCollection =
     m2mFarEndRel?.one_collection ?? m2oRelForField?.one_collection ?? undefined
 
-  // Cascade filter computation
-  let cascadeFilter: Record<string, unknown> | undefined
+  // Cascade filter computation — compiled by the SAME builder the quick
+  // picker uses (helpers.buildCascadeFilter); this component only resolves
+  // parent values (scalars off the draft, M2M parents from staging ±
+  // committed junction rows) and labels.
   // Layout-effective parent labels — 'division' reads as 'Zone' when the
   // layout renames it; only trustworthy when the context describes THIS
   // collection (grid cells carry the parent record's labels instead).
   const parentFieldLabel = (f: string): string =>
     (parentDraftCtx?.collection === collection ? parentDraftCtx?.fieldLabels?.[f] : undefined) ??
     titleCase(String(f))
-  const cascadeParentLabels: string[] = []
-  const cascadeParentFieldKeys: string[] = []
-  let unsatisfiedParentLabel: string | null = null
-  let requiredParentLabel: string | null = null
-  // Required parents (show_all_if_no_parent false) that hold NO value right
-  // now — a child that cannot be picked without them cannot keep a value
-  // once the user empties one (Project cleared → Sub Type must go too).
-  const missingRequiredParents: string[] = []
-  for (const rule of cascadeRules) {
+  const cascadeCompiled = buildCascadeFilter({
+    rules: cascadeRules,
     // A parent whose value THIS field's own pick derived must not narrow this
     // field's options — otherwise picking a region locks the region picker
     // into the zone the pick itself filled, and cross-zone changes read as
     // "No results".
-    if (m2mStaging?.getDerivedOrigin?.(rule.parent_field) === field.field) continue
-    const parentVal =
-      draft[rule.parent_field] ??
-      (() => {
-        const r = relations.find(
-          (r) => r.one_collection === collection && r.one_field === rule.parent_field
+    skipParent: (p) => m2mStaging?.getDerivedOrigin?.(p) === field.field,
+    parentValue: (p) => {
+      if (draft[p] != null) return draft[p]
+      const r = relations.find((r) => r.one_collection === collection && r.one_field === p)
+      if (!r) return null
+      let parentM2mRel = r
+      if (!parentM2mRel.junction_field) {
+        const companion = relations.find(
+          (c) => c.many_collection === r.many_collection && c.id !== r.id
         )
-        if (!r) return null
-        let parentM2mRel = r
-        if (!parentM2mRel.junction_field) {
-          const companion = relations.find(
-            (c) => c.many_collection === r.many_collection && c.id !== r.id
-          )
-          if (companion?.many_field) parentM2mRel = { ...r, junction_field: companion.many_field }
-          else return null
-        }
-        const key =
-          parentM2mRel.one_field ?? `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
-        // EVERY linked value counts — two linked regions filter options to
-        // records reachable from either, not silently just the first.
-        const staged = m2mStaging?.getStagedLinks(key) ?? []
-        const committed = m2mParentCommitted[rule.parent_field] ?? []
-        const all = [...new Set([...staged, ...committed].map((v) => String(v)))]
-        if (all.length === 0) return null
-        return all.length === 1 ? all[0] : all
-      })()
-    if (parentVal != null && parentVal !== '') {
-      if (!cascadeFilter) cascadeFilter = {}
-      // value_map: parent value → derived filter value(s); arrays become _in
-      let filterVal: unknown = parentVal
-      if (rule.value_map && typeof rule.value_map === 'object') {
-        const vm = rule.value_map
-        const mapOne = (v: unknown) => vm[String(v)] ?? rule.value_map_default ?? v
-        filterVal = Array.isArray(parentVal)
-          ? [
-              ...new Set(
-                parentVal.flatMap((v) => {
-                  const m = mapOne(v)
-                  return Array.isArray(m) ? m : [m]
-                })
-              )
-            ]
-          : mapOne(parentVal)
+        if (companion?.many_field) parentM2mRel = { ...r, junction_field: companion.many_field }
+        else return null
       }
-      const clause = Array.isArray(filterVal) ? { _in: filterVal } : { _eq: filterVal }
-      if (rule.filter_is_m2m) {
-        cascadeFilter[rule.filter_column] = { _some: { id: clause } }
-      } else if (rule.filter_column.includes('.')) {
-        // Dotted path: fold right into nested relation filter; wrap the first
-        // hop in _some when it traverses a to-many alias (filter_via_many).
-        const segs = rule.filter_column.split('.')
-        let nested: Record<string, unknown> = clause
-        for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
-        cascadeFilter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
-      } else {
-        cascadeFilter[rule.filter_column] = clause
-      }
-      cascadeParentLabels.push(parentFieldLabel(String(rule.parent_field)))
-      cascadeParentFieldKeys.push(String(rule.parent_field))
-    } else {
-      if (!unsatisfiedParentLabel)
-        unsatisfiedParentLabel = parentFieldLabel(String(rule.parent_field))
-      if (rule.show_all_if_no_parent === false) {
-        missingRequiredParents.push(String(rule.parent_field))
-        if (!requiredParentLabel) requiredParentLabel = parentFieldLabel(String(rule.parent_field))
-      }
-      // Parent unset but the parent's OWN picker curates its options
-      // (option_filter): inherit that filter through the cascade relation, so
-      // this picker never offers records the parent could not hold. E.g. Unit
-      // Form: project_type filtered to unit-tracking types → with no type
-      // picked yet, projects narrow to those whose type is unit-tracking.
-      // value_map rules are value arithmetic, not relational — skipped.
-      const parentFilterRaw =
+      const key =
+        parentM2mRel.one_field ?? `${parentM2mRel.many_collection}.${parentM2mRel.junction_field}`
+      // EVERY linked value counts — two linked regions filter options to
+      // records reachable from either, not silently just the first.
+      const staged = m2mStaging?.getStagedLinks(key) ?? []
+      const committed = m2mParentCommitted[p] ?? []
+      const all = [...new Set([...staged, ...committed].map((v) => String(v)))]
+      if (all.length === 0) return null
+      return all.length === 1 ? all[0] : all
+    },
+    parentOptionFilter: (p) => {
+      const raw =
         parentDraftCtx?.collection === collection
-          ? parentDraftCtx.fieldOptionFilters?.[rule.parent_field]
+          ? parentDraftCtx.fieldOptionFilters?.[p]
           : undefined
-      const parentFilter =
-        parentFilterRaw && !rule.value_map
-          ? resolveOptionFilterTokens(parentFilterRaw, draft, itemId)
-          : undefined
-      if (parentFilter) {
-        if (!cascadeFilter) cascadeFilter = {}
-        if (rule.filter_is_m2m) {
-          cascadeFilter[rule.filter_column] = { _some: parentFilter }
-        } else if (rule.filter_column.includes('.')) {
-          const segs = rule.filter_column.split('.')
-          let nested: Record<string, unknown> = parentFilter
-          for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
-          cascadeFilter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
-        } else {
-          cascadeFilter[rule.filter_column] = parentFilter
-        }
-      }
+      return raw ? resolveOptionFilterTokens(raw, draft, itemId) : undefined
     }
-  }
+  })
+  const cascadeFilter = cascadeCompiled.filter
+  const cascadeParentLabels = cascadeCompiled.satisfiedParents.map(parentFieldLabel)
+  const cascadeParentFieldKeys = cascadeCompiled.satisfiedParents
+  const unsatisfiedParentLabel: string | null = cascadeCompiled.unsatisfiedParents.length
+    ? parentFieldLabel(cascadeCompiled.unsatisfiedParents[0])
+    : null
+  // Required parents (show_all_if_no_parent false) that hold NO value right
+  // now — a child that cannot be picked without them cannot keep a value
+  // once the user empties one (Project cleared → Sub Type must go too).
+  const missingRequiredParents = cascadeCompiled.missingRequiredParents
+  const requiredParentLabel: string | null = missingRequiredParents.length
+    ? parentFieldLabel(missingRequiredParents[0])
+    : null
 
   function flashParentFields() {
     for (const key of cascadeParentFieldKeys) {

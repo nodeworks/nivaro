@@ -43,6 +43,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
+import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { cn } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
 import { HScrollProxy } from './HScrollProxy'
@@ -130,6 +131,7 @@ function labelFieldFor(meta: CollectionMeta | undefined): string {
   return 'id'
 }
 interface CollectionMeta {
+  singular?: string | null
   /** #620 — per-collection custom empty state (nivaro_collections.empty_state). */
   empty_state?: {
     title?: string | null
@@ -3655,7 +3657,20 @@ export function CollectionBrowserView({
   // classic admin browser) — plain button when none exist.
   const newItemLayouts = useNewItemLayouts(canCreate && !meta?.singleton ? collection : null)
   const [newItemMenuOpen, setNewItemMenuOpen] = useState(false)
+  // Quick picker (layout.quick_picker): "+ New item" walks the dependency
+  // tree in a dialog first, then opens the form prefilled.
+  const [quickPick, setQuickPick] = useState<{ slug: string | null } | null>(null)
+  const { steps: defaultQuickSteps } = useQuickPickerSteps(
+    canCreate && !meta?.singleton ? collection : null,
+    null
+  )
+  const startNew = (slug: string | null, stepsForSlug: string[]) => {
+    if (stepsForSlug.length > 0) setQuickPick({ slug })
+    else if (slug) openTarget({ collection, itemId: 'new', layoutSlug: slug })
+    else openRow('new')
+  }
   const newItemMenuRef = useRef<HTMLDivElement | null>(null)
+  const newItemBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     if (!newItemMenuOpen) return
     const onDown = (e: MouseEvent) => {
@@ -6035,7 +6050,7 @@ export function CollectionBrowserView({
                     type='button'
                     onClick={() => {
                       setNewItemMenuOpen(false)
-                      openRow('new')
+                      startNew(null, defaultQuickSteps)
                     }}
                     className='flex w-full items-center rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                   >
@@ -6067,13 +6082,30 @@ export function CollectionBrowserView({
           ) : (
             <button
               type='button'
-              onClick={() => openRow('new')}
+              ref={newItemBtnRef}
+              onClick={() => startNew(null, defaultQuickSteps)}
               className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
             >
               + New item
             </button>
           ))}
       </div>
+      {quickPick && (
+        <QuickPickerDialog
+          collection={collection}
+          layoutSlug={quickPick.slug}
+          open
+          onOpenChange={(o) => {
+            if (!o) setQuickPick(null)
+          }}
+          noun={meta?.singular ?? 'record'}
+          anchorEl={newItemMenuRef.current ?? newItemBtnRef.current}
+          onDone={(prefill) => {
+            setQuickPick(null)
+            openTarget({ collection, itemId: 'new', layoutSlug: quickPick.slug, prefill })
+          }}
+        />
+      )}
 
       {/* Deep-link context (dashboard tiles etc.) — visible + dismissable so a
           contextual landing never reads as "the list is mysteriously short". */}

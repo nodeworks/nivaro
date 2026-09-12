@@ -1,4 +1,4 @@
-import { MyWorkView, NavigationContext, NivaroProvider } from '@nivaro/shared'
+import { MyWorkView, NavigationContext, NivaroProvider, defaultItemUrl } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 import { Inbox } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -27,7 +27,7 @@ export function MyWorkPage() {
           <NavigationContext.Provider
             value={{
               navigate: (path) => navigate(path),
-              itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
+              itemUrl: defaultItemUrl
             }}
           >
             <MyWorkView

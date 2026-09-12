@@ -106,6 +106,37 @@ export type ItemLinkTarget = {
   itemId: string
   /** Grouped-layout slug to pin (queue item_layout etc.); null/absent = default. */
   layoutSlug?: string | null
+  /** New-record seed (itemId 'new'): scalar values plus `__links` (m2m ids
+   *  keyed by staging key). Rides the URL as `?prefill=<base64 JSON>`, the
+   *  shape both hosts already consume. */
+  prefill?: Record<string, unknown> | null
+}
+
+/** `?prefill=` payload encoder — base64 of the JSON, URL-encoded. */
+export function encodePrefill(values: Record<string, unknown>): string {
+  const json = JSON.stringify(values)
+  const bytes = new TextEncoder().encode(json)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return encodeURIComponent(btoa(bin))
+}
+
+/** Decoder for `?prefill=` (base64 → JSON), tolerant of '+' arriving as ' '. */
+export function decodePrefill(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null
+  try {
+    const bin = atob(raw.replace(/ /g, '+'))
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    try {
+      const parsed = JSON.parse(atob(raw.replace(/ /g, '+'))) as Record<string, unknown>
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }
 }
 
 export type NavigationContextValue = {
@@ -145,7 +176,10 @@ export function useNavigation(): NavigationContextValue {
 /** The admin's route shape — the default when the host supplies no itemUrl. */
 export function defaultItemUrl(t: ItemLinkTarget): string {
   const base = `/collections/${t.collection}/${t.itemId}`
-  return t.layoutSlug ? `${base}?layout=${encodeURIComponent(t.layoutSlug)}` : base
+  const params: string[] = []
+  if (t.layoutSlug) params.push(`layout=${encodeURIComponent(t.layoutSlug)}`)
+  if (t.prefill && Object.keys(t.prefill).length) params.push(`prefill=${encodePrefill(t.prefill)}`)
+  return params.length ? `${base}?${params.join('&')}` : base
 }
 
 /** Resolved item-link helpers honoring the host's itemUrl/openItem overrides. */

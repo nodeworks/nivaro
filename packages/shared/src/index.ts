@@ -24,6 +24,11 @@ export type {
   CollectionBrowserViewProps
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
+export { QuickPicker, useQuickPickerStepDefs } from './components/item-edit/QuickPicker'
+export type { QuickPickerProps } from './components/item-edit/QuickPicker'
+export { QuickPickerDialog, useQuickPickerSteps } from './components/item-edit/QuickPickerDialog'
+export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerDialog'
+export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export * from './components/ConformanceView'
 export { CronBuilder, describeCron } from './components/CronBuilder'
 export {
@@ -121,7 +126,11 @@ export {
   ProfileView,
   TimezoneCard
 } from './components/ProfileView'
-export { CustomStatusEditor, activeCustomStatus, formatStatusExpiry } from './components/CustomStatusEditor'
+export {
+  CustomStatusEditor,
+  activeCustomStatus,
+  formatStatusExpiry
+} from './components/CustomStatusEditor'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export * from './components/panels'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'

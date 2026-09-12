@@ -1,4 +1,10 @@
-import { ConformanceView, NavigationContext, NivaroProvider, QualityRulesView } from '@nivaro/shared'
+import {
+  ConformanceView,
+  NavigationContext,
+  NivaroProvider,
+  QualityRulesView,
+  defaultItemUrl
+} from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 import { useNavigate, useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
@@ -57,7 +63,7 @@ export default function DataIntegrity() {
         <NavigationContext.Provider
           value={{
             navigate: (path) => navigate(path),
-            itemUrl: (t) => `/collections/${t.collection}/${t.itemId}`
+            itemUrl: defaultItemUrl
           }}
         >
           {tab === 'conformance' ? <ConformanceView /> : <QualityRulesView />}
