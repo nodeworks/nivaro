@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
@@ -27,7 +28,16 @@ export interface ReviewListColumnSpec {
   color?: string
 }
 
+export interface ReviewListEnrichRow {
+  chips?: Array<{ label: string; tone?: 'ok' | 'warn' | 'danger' | 'neutral'; title?: string }>
+  can_act?: boolean
+}
+
 export interface ReviewListConfig {
+  /** Sibling mode — see the server config: rows share the host's value. */
+  sibling_field?: string | null
+  /** POST {ids} → {rows: {[id]: ReviewListEnrichRow}} — verdict chips + per-row act permission. */
+  enrich_endpoint?: string | null
   host_collection: string
   collection: string
   path: Array<{ kind: 'm2o' | 'm2m'; field: string }>
@@ -224,19 +234,44 @@ export function ReviewListWidget({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [actingGroup, setActingGroup] = useState<string | null>(null)
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({})
-  const [noteAsk, setNoteAsk] = useState<{ group: ReviewGroup; option: ReviewListStatusOption } | null>(null)
+  const [noteAsk, setNoteAsk] = useState<{
+    group: ReviewGroup
+    option: ReviewListStatusOption
+  } | null>(null)
   const [noteText, setNoteText] = useState('')
 
   const groups = useMemo(
     () => (data ? buildGroups(data, config.aggregate_sum) : []),
     [data, config.aggregate_sum]
   )
+  // Row enrichment (verdict chips, per-row act permission) from an extension
+  // endpoint — the widget stays domain-blind; the endpoint owns the rules.
+  const rowIds = useMemo(() => (data?.rows ?? []).map((r) => String(r.id)), [data])
+  const { data: enrich } = useQuery<Record<string, ReviewListEnrichRow>>({
+    queryKey: ['review-list-enrich', config.enrich_endpoint ?? '', rowIds.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data?: { rows?: Record<string, ReviewListEnrichRow> } }>(
+          post(config.enrich_endpoint as string, { ids: rowIds })
+        )
+        .then((r) => r?.data?.rows ?? {})
+        .catch(() => ({})),
+    enabled: !!config.enrich_endpoint && rowIds.length > 0,
+    staleTime: 30_000
+  })
+  const enrichFor = (id: string | number): ReviewListEnrichRow | undefined => enrich?.[String(id)]
+  const hasChips = !!enrich && Object.values(enrich).some((e) => (e.chips?.length ?? 0) > 0)
+  // Sibling mode hosts ONE group (this record's siblings) — open it by default.
+  const singleGroup = groups.length === 1
 
   if (loading) {
     return (
       <div className='space-y-2'>
         {[0, 1].map((i) => (
-          <div key={i} className='animate-pulse h-12 rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div
+            key={i}
+            className='animate-pulse h-12 rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+          />
         ))}
       </div>
     )
@@ -349,7 +384,10 @@ export function ReviewListWidget({
           </p>
         )}
         {groups.map((group) => {
-          const isOpen = expanded.has(group.key)
+          const isOpen = singleGroup ? !expanded.has(group.key) : expanded.has(group.key)
+          // Every row must be decidable by the caller for the buttons to show;
+          // unknown (no enrich endpoint) = allowed, the endpoint still enforces.
+          const canAct = group.rows.every((r) => enrichFor(r.id)?.can_act !== false)
           const badge = group.mixedStatus
             ? { label: 'Mixed', color: null }
             : statusDisplay(group.uniformStatus, config.status)
@@ -413,28 +451,37 @@ export function ReviewListWidget({
                   )}
                 </button>
                 <span className='flex flex-wrap items-center gap-1.5'>
-                  {config.status.options.map((option) => {
-                    const isCurrent =
-                      !group.mixedStatus && String(group.uniformStatus) === option.value
-                    const hex = STATUS_COLOR_HEX[option.color] ?? STATUS_COLOR_HEX.slate
-                    const acting = actingGroup === group.key
-                    return (
-                      <button
-                        key={option.value}
-                        type='button'
-                        disabled={acting || isCurrent}
-                        onClick={() => handleAction(group, option)}
-                        className='rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
-                        style={{
-                          backgroundColor: isCurrent ? `${hex}22` : 'transparent',
-                          borderColor: `${hex}55`,
-                          color: hex
-                        }}
-                      >
-                        {acting ? '…' : option.label}
-                      </button>
-                    )
-                  })}
+                  {!canAct && (
+                    <span
+                      className='text-[11px] text-slate-400'
+                      title='Only the workflow contact chain (or the PO requestor for invalid holds) can decide this'
+                    >
+                      View only
+                    </span>
+                  )}
+                  {canAct &&
+                    config.status.options.map((option) => {
+                      const isCurrent =
+                        !group.mixedStatus && String(group.uniformStatus) === option.value
+                      const hex = STATUS_COLOR_HEX[option.color] ?? STATUS_COLOR_HEX.slate
+                      const acting = actingGroup === group.key
+                      return (
+                        <button
+                          key={option.value}
+                          type='button'
+                          disabled={acting || isCurrent}
+                          onClick={() => handleAction(group, option)}
+                          className='rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+                          style={{
+                            backgroundColor: isCurrent ? `${hex}22` : 'transparent',
+                            borderColor: `${hex}55`,
+                            color: hex
+                          }}
+                        >
+                          {acting ? '…' : option.label}
+                        </button>
+                      )
+                    })}
                 </span>
               </div>
               {groupErrors[group.key] && (
@@ -453,6 +500,7 @@ export function ReviewListWidget({
                             {c.label}
                           </th>
                         ))}
+                        {hasChips && <th className='px-2.5 py-1.5 font-medium'>Match</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -477,6 +525,29 @@ export function ReviewListWidget({
                               )}
                             </td>
                           ))}
+                          {hasChips && (
+                            <td className='px-2.5 py-1.5'>
+                              <span className='flex flex-wrap gap-1'>
+                                {(enrichFor(row.id)?.chips ?? []).map((chip) => (
+                                  <span
+                                    key={chip.label}
+                                    title={chip.title}
+                                    className={
+                                      chip.tone === 'ok'
+                                        ? 'rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                        : chip.tone === 'danger'
+                                          ? 'rounded-full bg-red-50 px-2 py-0.5 text-[10.5px] font-medium text-red-700 dark:bg-red-500/10 dark:text-red-400'
+                                          : chip.tone === 'warn'
+                                            ? 'rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+                                            : 'rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                    }
+                                  >
+                                    {chip.label}
+                                  </span>
+                                ))}
+                              </span>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

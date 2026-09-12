@@ -457,6 +457,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       layout = candidates.find((l) => roleAllows(l, roleId, isAdmin))
     }
     if (!layout) return reply.send({ data: null })
+    layout.header_fields = parseQuickPicker(layout.header_fields)
+    layout.hide_empty = !!layout.hide_empty
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -534,7 +536,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'hide_sla_banner',
         'dossier_enabled',
         'dossier_label',
-        'quick_picker'
+        'quick_picker',
+        'sheet_width',
+        'header_fields',
+        'hide_empty'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
 
@@ -548,6 +553,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       row.record_conditions = parseRecordConditions(row.record_conditions)
       row.default_values = parseDefaultValues(row.default_values)
       row.quick_picker = parseQuickPicker(row.quick_picker)
+      row.header_fields = parseQuickPicker(row.header_fields)
+      row.hide_empty = !!row.hide_empty
     }
     return reply.send({ data: rows })
   })
@@ -604,6 +611,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     row.record_conditions = parseRecordConditions(row.record_conditions)
     row.default_values = parseDefaultValues(row.default_values)
     row.quick_picker = parseQuickPicker(row.quick_picker)
+    row.header_fields = parseQuickPicker(row.header_fields)
+    row.hide_empty = !!row.hide_empty
     return reply.send({ data: row })
   })
 
@@ -647,6 +656,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       dossier_enabled: boolean
       dossier_label: string | null
       quick_picker: string[] | null
+      sheet_width: number | null
+      header_fields: string[] | null
+      hide_empty: boolean
     }>
 
     if (body.record_conditions !== undefined && body.record_conditions !== null) {
@@ -736,6 +748,29 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'quick_picker allows at most 20 steps' })
       patch.quick_picker = steps ? JSON.stringify(steps) : null
     }
+    // Read-view presentation (migration 302): sheet width, header band, hide empty.
+    if (body.sheet_width !== undefined) {
+      if (body.sheet_width === null) patch.sheet_width = null
+      else {
+        const w = Number(body.sheet_width)
+        if (!Number.isFinite(w) || w < 320 || w > 2000)
+          return reply.code(400).send({ error: 'sheet_width must be 320–2000 px or null' })
+        patch.sheet_width = Math.round(w)
+      }
+    }
+    if (body.header_fields !== undefined) {
+      if (body.header_fields !== null && !Array.isArray(body.header_fields))
+        return reply
+          .code(400)
+          .send({ error: 'header_fields must be an array of field names or null' })
+      const hf = parseQuickPicker(body.header_fields)
+      if (body.header_fields !== null && body.header_fields.length > 0 && !hf)
+        return reply.code(400).send({ error: 'header_fields entries must be field names' })
+      if (hf && hf.length > 8)
+        return reply.code(400).send({ error: 'header_fields allows at most 8 fields' })
+      patch.header_fields = hf ? JSON.stringify(hf) : null
+    }
+    if (body.hide_empty !== undefined) patch.hide_empty = body.hide_empty === true
 
     if (Object.keys(patch).length === 0)
       return reply.code(400).send({ error: 'No fields to update' })
@@ -746,6 +781,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     updated.record_conditions = parseRecordConditions(updated.record_conditions)
     updated.default_values = parseDefaultValues(updated.default_values)
     updated.quick_picker = parseQuickPicker(updated.quick_picker)
+    updated.header_fields = parseQuickPicker(updated.header_fields)
+    updated.hide_empty = !!updated.hide_empty
 
     await logActivity({
       action: 'update',

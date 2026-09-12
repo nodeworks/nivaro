@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
+import { useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
-import { useNivaroClient } from '../context'
-import { useDrilldown } from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
 import { UserChip } from './item-edit/GroupSection'
@@ -32,7 +31,15 @@ interface LayoutAssignment {
   default_expanded?: boolean | number | null
 }
 export interface ReadViewLayout {
-  layout: { id: number; name: string }
+  layout: {
+    id: number
+    name: string
+    /** Identity band rendered above the cards (first entry = the title). */
+    header_fields?: string[] | null
+    /** Collapse empty values instead of rendering "—" walls. */
+    hide_empty?: boolean | number | null
+    sheet_width?: number | null
+  }
   groups: LayoutGroup[]
   assignments: LayoutAssignment[]
 }
@@ -77,7 +84,13 @@ const fmtNumber = (v: unknown) => {
 
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
-function BoolPill({ value, trueTone = 'positive' }: { value: unknown; trueTone?: 'positive' | 'danger' }) {
+function BoolPill({
+  value,
+  trueTone = 'positive'
+}: {
+  value: unknown
+  trueTone?: 'positive' | 'danger'
+}) {
   const yes = value === true || value === 1 || value === '1' || value === 'true'
   // trueTone 'danger': for flags where "Yes" is the bad outcome (on hold,
   // past due) — a green Yes there reads as reassurance.
@@ -127,12 +140,14 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   let label = ''
   const template = meta?.display_template
   if (template) {
-    label = template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, path: string) => {
-      const v = path
-        .split('.')
-        .reduce<unknown>((acc, seg) => (acc as Record<string, unknown> | null)?.[seg], row)
-      return v == null ? '' : String(v)
-    }).trim()
+    label = template
+      .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, path: string) => {
+        const v = path
+          .split('.')
+          .reduce<unknown>((acc, seg) => (acc as Record<string, unknown> | null)?.[seg], row)
+        return v == null ? '' : String(v)
+      })
+      .trim()
   }
   if (!label) {
     for (const k of ['name', 'title', 'label', 'number', 'subject', 'email']) {
@@ -198,8 +213,20 @@ function ChildTable({
                 !f.field.startsWith('__') &&
                 !f.field.includes('.') &&
                 f.field !== fkField &&
-                ((layoutId ? (f as { layout_assigned?: boolean }).layout_assigned : true) ?? true) &&
-                ['string', 'text', 'integer', 'decimal', 'float', 'boolean', 'date', 'datetime', 'timestamp', 'uuid'].includes(f.type ?? '')
+                ((layoutId ? (f as { layout_assigned?: boolean }).layout_assigned : true) ??
+                  true) &&
+                [
+                  'string',
+                  'text',
+                  'integer',
+                  'decimal',
+                  'float',
+                  'boolean',
+                  'date',
+                  'datetime',
+                  'timestamp',
+                  'uuid'
+                ].includes(f.type ?? '')
             )
             .slice(0, 8)
         ),
@@ -233,7 +260,11 @@ function ChildTable({
     return JSON.stringify(conds)
   }, [debFilters, fkField, parentId])
   const PAGE = 25
-  const { data: rowsRes, isLoading, isFetching } = useQuery({
+  const {
+    data: rowsRes,
+    isLoading,
+    isFetching
+  } = useQuery({
     queryKey: ['rrv-rows', collection, fkField, parentId, sort, page, conditions],
     queryFn: () =>
       client.request<{ data: Array<Record<string, unknown>>; total?: number }>(
@@ -268,7 +299,10 @@ function ChildTable({
     return (
       <div className='space-y-1.5 py-2'>
         {[0, 1, 2].map((i) => (
-          <div key={i} className='h-6 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div
+            key={i}
+            className='h-6 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+          />
         ))}
       </div>
     )
@@ -292,7 +326,8 @@ function ChildTable({
     const s = String(v)
     return s.length > 48 ? `${s.slice(0, 48)}…` : s
   }
-  const numeric = (f: FieldMeta) => ['decimal', 'float', 'integer'].includes(f.type ?? '') && !m2oOf(f.field)
+  const numeric = (f: FieldMeta) =>
+    ['decimal', 'float', 'integer'].includes(f.type ?? '') && !m2oOf(f.field)
   const sortable = (f: FieldMeta) => !m2oOf(f.field)
   const filterKind = (f: FieldMeta): 'text' | 'num' | 'bool' | null => {
     if (m2oOf(f.field)) return null
@@ -304,7 +339,9 @@ function ChildTable({
   const anyFilterable = cols.some((f) => filterKind(f) != null)
   return (
     <div>
-      <div className={`overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700 ${isFetching && !isLoading ? 'opacity-70' : ''}`}>
+      <div
+        className={`overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700 ${isFetching && !isLoading ? 'opacity-70' : ''}`}
+      >
         <table className='w-full' style={{ fontVariantNumeric: 'tabular-nums' }}>
           <thead>
             <tr className='border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800'>
@@ -393,7 +430,9 @@ function ChildTable({
             {rows.map((row) => (
               <tr
                 key={String(row.id)}
-                onClick={drill ? () => drill.open({ collection, itemId: String(row.id) }) : undefined}
+                onClick={
+                  drill ? () => drill.open({ collection, itemId: String(row.id) }) : undefined
+                }
                 className={`border-b border-slate-100 last:border-0 dark:border-slate-800 ${
                   drill ? 'cursor-pointer hover:bg-[#00ceff0a] dark:hover:bg-[#00ceff14]' : ''
                 }`}
@@ -415,7 +454,8 @@ function ChildTable({
         <div className='mt-1.5 flex items-center justify-between'>
           <p className='text-[11px] tabular-nums text-slate-400'>
             {((page - 1) * PAGE + 1).toLocaleString('en-US')}–
-            {Math.min(page * PAGE, total).toLocaleString('en-US')} of {total.toLocaleString('en-US')}
+            {Math.min(page * PAGE, total).toLocaleString('en-US')} of{' '}
+            {total.toLocaleString('en-US')}
           </p>
           <span className='flex items-center gap-0.5'>
             <button
@@ -474,14 +514,12 @@ export function RecordReadView({
     staleTime: 30_000,
     retry: false
   })
-  const fieldByName = useMemo(
-    () => new Map((meta?.fields ?? []).map((f) => [f.field, f])),
-    [meta]
-  )
+  const fieldByName = useMemo(() => new Map((meta?.fields ?? []).map((f) => [f.field, f])), [meta])
   const relations = meta?.relations ?? []
   const m2oTarget = (field: string) =>
-    relations.find((r) => r.many_collection === collection && r.many_field === field && r.one_collection)
-      ?.one_collection ?? null
+    relations.find(
+      (r) => r.many_collection === collection && r.many_field === field && r.one_collection
+    )?.one_collection ?? null
   const aliasChild = (field: string) =>
     relations.find((r) => r.one_collection === collection && r.one_field === field) ?? null
 
@@ -550,7 +588,9 @@ export function RecordReadView({
       return (
         <BoolPill
           value={v}
-          trueTone={((ov.options ?? {}) as { trueTone?: 'positive' | 'danger' }).trueTone ?? 'positive'}
+          trueTone={
+            ((ov.options ?? {}) as { trueTone?: 'positive' | 'danger' }).trueTone ?? 'positive'
+          }
         />
       )
     const ovOpts = (ov.options ?? {}) as { format?: string }
@@ -585,9 +625,23 @@ export function RecordReadView({
   // at compact columns, so facts cluster instead of scattering across the
   // whole sheet. An assignment override {"options":{"emphasis":true}} renders
   // its value display-sized — the one or two numbers a reader came for.
+  const hideEmpty = !!layoutData.layout.hide_empty
+  const headerFieldKeys = Array.isArray(layoutData.layout.header_fields)
+    ? layoutData.layout.header_fields.filter((f): f is string => typeof f === 'string')
+    : []
+  const headerSet = new Set(headerFieldKeys)
+  const isEmptyValue = (a: LayoutAssignment) => {
+    if (!record) return false
+    const v = record[a.field]
+    return v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
+  }
+  const assignmentFor = (field: string) => visible.find((a) => a.field === field)
+  const labelFor = (a: LayoutAssignment) => a.label_override ?? titleCase(a.field)
+
   const renderSection = (g: LayoutGroup) => {
     const items = visible
-      .filter((a) => a.group_key === g.key)
+      .filter((a) => a.group_key === g.key && !headerSet.has(a.field))
+      .filter((a) => !(hideEmpty && !isGrid(a) && isEmptyValue(a)))
       .sort((a, b) => a.sort - b.sort)
     const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
     if (items.length === 0 && groupWidgets.length === 0) return null
@@ -630,7 +684,11 @@ export function RecordReadView({
                           : 'truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'
                       }`}
                     >
-                      {record ? renderValue(a) : <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />}
+                      {record ? (
+                        renderValue(a)
+                      ) : (
+                        <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                      )}
                     </dd>
                   </div>
                 )
@@ -648,9 +706,50 @@ export function RecordReadView({
     )
   }
 
+  // Header band: the layout's identity fields above the cards — first one as
+  // the title, the rest as compact label/value pairs. Empty ones drop out.
+  const headerAssignments = headerFieldKeys
+    .map((f) => assignmentFor(f))
+    .filter((a): a is LayoutAssignment => !!a && !isGrid(a))
+    .filter((a) => !isEmptyValue(a))
+  const [titleAssignment, ...headerRest] = headerAssignments
+
   return (
     <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-5 py-4 dark:bg-transparent'>
-      <div className='grid items-start gap-4 lg:grid-cols-2'>{sectionGroups.map(renderSection)}</div>
+      {headerAssignments.length > 0 && (
+        <div
+          data-read-header
+          className='mb-4 rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-700/60 dark:bg-slate-900/40'
+        >
+          {titleAssignment && (
+            <div className='min-w-0'>
+              <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                {labelFor(titleAssignment)}
+              </p>
+              <p className='truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white'>
+                {record ? renderValue(titleAssignment) : '…'}
+              </p>
+            </div>
+          )}
+          {headerRest.length > 0 && (
+            <dl className='mt-3 flex flex-wrap gap-x-8 gap-y-2'>
+              {headerRest.map((a) => (
+                <div key={a.field} className='min-w-0'>
+                  <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                    {labelFor(a)}
+                  </dt>
+                  <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                    {record ? renderValue(a) : '…'}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+      )}
+      <div className='grid items-start gap-4 lg:grid-cols-2'>
+        {sectionGroups.map(renderSection)}
+      </div>
       {tabGroups.length > 0 && (
         <div className='mt-5'>
           <div className='flex gap-1 border-b border-slate-200 dark:border-slate-700'>

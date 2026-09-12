@@ -540,6 +540,7 @@
           <a class="docs-nav-item" data-section="collection-layouts" href="#s-collection-layouts">Collection Layouts</a>
           <a class="docs-nav-item" data-section="layout-steps-mode" href="#s-layout-steps-mode">Layout Steps / Wizard</a>
           <a class="docs-nav-item" data-section="layout-quick-picker" href="#s-layout-quick-picker">Quick Picker</a>
+          <a class="docs-nav-item" data-section="detail-sheets" href="#s-detail-sheets">Detail Sheets &amp; Review Widgets</a>
           <a class="docs-nav-item" data-section="bulk-actions" href="#s-bulk-actions">Bulk Actions</a>
           <a class="docs-nav-item" data-section="layout-summary-panel" href="#s-layout-summary-panel">Layout Summary Panel</a>
           <a class="docs-nav-item" data-section="layout-page-slots" href="#s-layout-page-slots">Layout Page Slots</a>
@@ -8305,6 +8306,44 @@ useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
 { "quick_picker": null }</code></pre>
           <div class="doc-note">Steps that are not relation fields on the collection are skipped at render time rather than shown as dead slides. Option filters (options.option_filter) and cascade filters on each field apply exactly as they do in the form, so the picker can never offer a value the form would reject.</div>
           <!-- /SYNC:layout-quick-picker -->
+        </div>
+
+        <!-- DETAIL SHEETS -->
+        <div class="doc-section" id="s-detail-sheets" data-toc='[{"id":"detail-sheets","label":"Detail Sheets &amp; Review Widgets"}]'>
+          <!-- SYNC:detail-sheets -->
+          <h1 class="doc-h1" id="detail-sheets">Detail Sheets &amp; Review Widgets</h1>
+          <p class="doc-p">A layout of type "detail" drives the drill-down sheet that opens when a related record is clicked (a PO from a workflow, an invoice from a PO). With display_mode "read" it renders as a read-only presentation instead of a form: a header band, section cards as definition grids, tab groups as child tables — and any widget slots the layout carries, which is how a read-only sheet gets actions.</p>
+          <h3 class="doc-h3">Presentation settings (Data Model → Layout → settings, detail layouts)</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Setting</th><th>Effect</th></tr></thead>
+            <tbody><tr><tr><td>Sheet width</td><td>Pixel width the drill sheet opens at (320–2000; default 640). A per-field drill config still wins.</td></tr>
+              <tr><td>Header band fields</td><td>Identity fields lifted out of the cards into a band above them — the first is the title (large), the rest compact label/value pairs. Empty ones drop out.</td></tr>
+              <tr><td>Hide empty values</td><td>Fields with no value are omitted from the cards instead of rendering as "—".</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Review-list widget</h3>
+          <p class="doc-p">The review_list widget type lists child rows grouped by a key with a status decision per group (Approve / Reject / In review…), optional stamp fields and an action endpoint that owns the write. Two ways to find the rows: a relation path from the host record (workflow → purchase orders → invoices), or SIBLING mode — rows of the host's own collection sharing a field value (every line of this invoice, hosted on one line). An optional enrich endpoint (POST {ids}) returns per-row chips (a 3-way-match verdict) and whether the caller may decide each row; groups with an undecidable row show "View only" instead of buttons.</p>
+          <pre class="doc-pre"><code>{
+  "host_collection": "invoices", "collection": "invoices",
+  "path": [], "sibling_field": "invoice_id",
+  "group_by": "invoice_id", "aggregate_sum": "amount", "aggregate_sum_format": "currency",
+  "line_columns": ["line_item_number", {"field": "amount", "format": "currency"},
+    {"label": "Received", "format": "number",
+     "lookup": {"collection": "line_items", "field": "quantity_received",
+                "match": [{"local": "purchase_order", "remote": "purchase_order"},
+                          {"local": "line_item_number", "remote": "line_number"}]}}],
+  "status": {"field": "efp_review_status",
+    "options": [{"value": "approved", "label": "Approve", "color": "green"},
+                {"value": "rejected", "label": "Reject", "color": "red", "require_note": true}],
+    "empty_label": "Unreviewed", "stamp_user_field": "approved_by", "stamp_date_field": "approved_on",
+    "action_endpoint": "/efp/invoice-approvals/decide"},
+  "enrich_endpoint": "/efp/invoice-approvals/enrich"
+}
+
+// enrich endpoint contract
+POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
+→ { "data": { "rows": { "1": { "chips": [{ "label": "PO match", "tone": "ok", "title": "…" }], "can_act": true } } } }</code></pre>
+          <div class="doc-note">A group with exactly one entry (sibling mode) opens expanded. Without an action endpoint the widget PATCHes each row directly with the note as the change reason.</div>
+          <!-- /SYNC:detail-sheets -->
         </div>
 
         <!-- BULK ACTIONS -->

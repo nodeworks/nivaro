@@ -125,7 +125,15 @@ export function RecordDrilldownSheet({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
-        style={{ width: customView?.width ?? current.width ?? width ?? 640, maxWidth: '96vw' }}
+        style={{
+          width:
+            customView?.width ??
+            current.width ??
+            (detailLayout?.layout as { sheet_width?: number | null } | undefined)?.sheet_width ??
+            width ??
+            640,
+          maxWidth: '96vw'
+        }}
         // Escape means the same as Back: step down one level. Letting Radix
         // close the sheet outright would discard every level at once, which is
         // never what someone three drills deep intended. The X button and the

@@ -83,6 +83,20 @@ export interface PathWalkConfig {
 }
 
 export interface ReviewListConfig extends PathWalkConfig {
+  /**
+   * SIBLING MODE: rows are the target collection's rows sharing the host
+   * record's value in this field (invoices grouped by invoice_id, hosted on
+   * one invoice line). Requires collection === host_collection and an empty
+   * path — the host IS one of the rows.
+   */
+  sibling_field?: string | null
+  /**
+   * Optional row-enrichment endpoint (POST {ids}) → {rows: {[id]: {chips?:
+   * [{label, tone, title}], can_act?: boolean}}}. Lets an extension attach
+   * verdict chips (3-way match) and hide the status buttons for rows the
+   * caller may not decide, without the widget knowing the domain.
+   */
+  enrich_endpoint?: string | null
   static_filter?: Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }>
   group_by: string
   aggregate_sum?: string | null
@@ -256,12 +270,24 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
   if (!isPlainIdentifier(c.host_collection)) return 'host_collection must be a valid identifier'
   if (!isPlainIdentifier(c.collection)) return 'collection must be a valid identifier'
 
-  if (!Array.isArray(c.path) || c.path.length === 0 || c.path.length > MAX_PATH_HOPS) {
+  const sibling = c.sibling_field
+  if (sibling !== undefined && sibling !== null) {
+    if (!isPlainIdentifier(sibling)) return 'sibling_field must be a valid identifier'
+    if (c.collection !== c.host_collection)
+      return 'sibling_field requires collection === host_collection'
+    if (Array.isArray(c.path) && c.path.length > 0)
+      return 'sibling_field and a relation path are mutually exclusive'
+  } else if (!Array.isArray(c.path) || c.path.length === 0 || c.path.length > MAX_PATH_HOPS) {
     return `path must be a non-empty array of at most ${MAX_PATH_HOPS} hops`
   }
+  if (c.enrich_endpoint !== undefined && c.enrich_endpoint !== null) {
+    if (typeof c.enrich_endpoint !== 'string' || !/^\/[A-Za-z0-9_\-./]+$/.test(c.enrich_endpoint))
+      return 'enrich_endpoint must be an API path like /efp/invoice-approvals/enrich'
+  }
   const path: Array<{ kind: 'm2o' | 'm2m'; field: string }> = []
-  for (let i = 0; i < c.path.length; i++) {
-    const hop = c.path[i]
+  const rawPath: unknown[] = Array.isArray(c.path) ? (c.path as unknown[]) : []
+  for (let i = 0; i < rawPath.length; i++) {
+    const hop = rawPath[i]
     if (!hop || typeof hop !== 'object' || Array.isArray(hop)) return `path[${i}] must be an object`
     const h = hop as Record<string, unknown>
     if (h.kind !== 'm2o' && h.kind !== 'm2m') return `path[${i}].kind must be 'm2o' or 'm2m'`
@@ -786,14 +812,30 @@ export async function resolveReviewListRows(
   const configError = validateReviewListConfig(config, relations)
   if (configError) badConfig(`review_list: ${configError}`)
 
-  const { idSet, truncated: walkTruncated } = await walkReversePath(
-    database,
-    config,
-    relations,
-    recordId,
-    logger
-  )
-  let truncated = walkTruncated
+  let idSet: Array<string | number> = []
+  let truncated = false
+  if (config.sibling_field) {
+    // Sibling mode: every row sharing the host's value in sibling_field.
+    const host = (await database(config.collection)
+      .where('id', recordId)
+      .first('id', config.sibling_field)) as Record<string, unknown> | undefined
+    const key = host?.[config.sibling_field]
+    if (host && key !== null && key !== undefined && key !== '') {
+      idSet = (
+        (await database(config.collection)
+          .where(config.sibling_field, key as Knex.Value)
+          .limit(CAP)
+          .select('id')) as Array<{ id: string | number }>
+      ).map((r) => r.id)
+      if (idSet.length === CAP) truncated = true
+    } else if (host) {
+      idSet = [host.id as string | number]
+    }
+  } else {
+    const walk = await walkReversePath(database, config, relations, recordId, logger)
+    idSet = walk.idSet
+    truncated = walk.truncated
+  }
 
   const groupMetaSpecs = normalizeColumnSpecs(config.group_meta)
   const lineColumnSpecs = normalizeColumnSpecs(config.line_columns)

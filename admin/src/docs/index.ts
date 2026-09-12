@@ -28,6 +28,7 @@ export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/queues.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/detail-sheets.js'
 export * from './sections/record-insights.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
@@ -293,6 +294,7 @@ import {
   reportingAdditions
 } from './sections/platform-additions.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { detailSheets } from './sections/detail-sheets.js'
 import { queuesGuide } from './sections/queues.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import {
@@ -794,6 +796,7 @@ export const navSections: NavGroup[] = [
       collectionLayouts,
       layoutStepsMode,
       layoutQuickPicker,
+      detailSheets,
       layoutSummaryPanel,
       layoutPageSlots,
       layoutConditional,

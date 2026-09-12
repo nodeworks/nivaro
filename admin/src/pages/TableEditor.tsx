@@ -69,10 +69,11 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
+import { seedQuickPickerSteps } from '@nivaro/shared'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { seedQuickPickerSteps } from '@nivaro/shared'
 import { toast } from 'sonner'
+import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import {
   CollectionFieldPicker,
@@ -86,7 +87,6 @@ import { IconPicker } from '@/components/icon-picker'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
-import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -8954,6 +8954,75 @@ type CascadeRuleCfg = { parent_field: string; child_field: string; on_unavailabl
 /** Layout setting: the ordered relation fields the quick picker walks when a
  *  record is created. Empty = no quick picker. "Seed" fills it from the
  *  cascade graph (parents before children); admins reorder / drop / add. */
+/** Read-mode detail sheets: width, header band fields, hide empty values. */
+function ReadPresentationEditor({
+  layout,
+  fields,
+  onPatch
+}: {
+  layout: { sheet_width?: number | null; header_fields?: string[] | null; hide_empty?: boolean }
+  fields: Array<{ field: string; label?: string | null }>
+  onPatch: (p: {
+    sheet_width?: number | null
+    header_fields?: string[] | null
+    hide_empty?: boolean
+  }) => void
+}) {
+  const [width, setWidth] = useState(layout.sheet_width ? String(layout.sheet_width) : '')
+  const [headerText, setHeaderText] = useState((layout.header_fields ?? []).join(', '))
+  useEffect(() => {
+    setWidth(layout.sheet_width ? String(layout.sheet_width) : '')
+    setHeaderText((layout.header_fields ?? []).join(', '))
+  }, [layout.sheet_width, layout.header_fields])
+  const known = new Set(fields.map((f) => f.field))
+  return (
+    <div className='space-y-2 border-t border-slate-100 pt-2 dark:border-border'>
+      <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Read view</p>
+      <label className='flex items-center justify-between gap-2'>
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Sheet width (px)</span>
+        <Input
+          type='number'
+          value={width}
+          onChange={(e) => setWidth(e.target.value)}
+          onBlur={() => {
+            const n = Number(width)
+            onPatch({ sheet_width: n >= 320 && n <= 2000 ? Math.round(n) : null })
+          }}
+          placeholder='640'
+          className='h-7 w-24 text-[11.5px]'
+        />
+      </label>
+      <label className='block'>
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+          Header band fields (first = title)
+        </span>
+        <Input
+          value={headerText}
+          onChange={(e) => setHeaderText(e.target.value)}
+          onBlur={() => {
+            const keys = headerText
+              .split(',')
+              .map((x) => x.trim())
+              .filter((x) => x && known.has(x))
+            onPatch({ header_fields: keys.length ? keys : null })
+          }}
+          placeholder='number, vendor, purchase_order, due_date'
+          className='mt-1 h-7 font-mono text-[11px]'
+        />
+      </label>
+      <label className='flex cursor-pointer items-center justify-between'>
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide empty values</span>
+        <input
+          type='checkbox'
+          checked={!!layout.hide_empty}
+          onChange={(e) => onPatch({ hide_empty: e.target.checked })}
+          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+        />
+      </label>
+    </div>
+  )
+}
+
 function QuickPickerStepsEditor({
   steps,
   fields,
@@ -16243,6 +16312,9 @@ interface CollectionLayout {
   allow_disable_pickers?: boolean | number
   /** Quick picker: relation fields walked one step at a time on create. */
   quick_picker?: string[] | null
+  sheet_width?: number | null
+  header_fields?: string[] | null
+  hide_empty?: boolean
   conditions?: { role_ids?: string[] } | null
   layout_type?: 'grouped' | 'table' | 'file' | 'addendum' | 'detail'
   addendum_layout_id?: number | null
@@ -16775,6 +16847,9 @@ function LayoutsTab({
           | 'allow_schedule'
           | 'allow_disable_pickers'
           | 'quick_picker'
+          | 'sheet_width'
+          | 'header_fields'
+          | 'hide_empty'
           | 'layout_type'
           | 'row_order_field'
           | 'pdf_theme'
@@ -17992,6 +18067,13 @@ function LayoutsTab({
                           })
                         }
                       />
+                      {selected.layout_type === 'detail' && (
+                        <ReadPresentationEditor
+                          layout={selected}
+                          fields={layoutFieldMeta}
+                          onPatch={(p) => patchLayoutMut.mutate({ id: selected.id, ...p })}
+                        />
+                      )}
                       <label className='flex cursor-pointer items-center justify-between'>
                         <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                           Hide comments
