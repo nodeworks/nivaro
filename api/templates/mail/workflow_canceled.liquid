@@ -1,0 +1,14 @@
+{% layout 'base' %}
+{% block content %}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#b91c1c;">Canceled</p>
+<h1 style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:21px;font-weight:700;line-height:1.3;color:#172940;">{{ friendly_id }} was canceled</h1>
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">{% if actor_name %}{{ actor_name }} canceled it{% else %}It was canceled{% endif %}{% if from_state %} while it was in <strong>{{ from_state.label }}</strong>{% endif %}. Nothing further will happen on this record unless it is uncanceled.</p>
+{%- if comment_is_human -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  <tr><td style="padding:12px 16px;background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#7f1d1d;">&ldquo;{{ comment }}&rdquo;</td></tr>
+</table>
+{%- endif -%}
+{% render 'partials/button', url: record_url, label: 'Open record' %}
+{% render 'partials/record-card', card: record_card %}
+{% render 'partials/approval-chain', chain: approval_chain %}
+{% endblock %}

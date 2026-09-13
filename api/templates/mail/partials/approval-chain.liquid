@@ -1,0 +1,28 @@
+{%- comment -%}
+Vertical chain of states: done (who/when) · current (owners) · upcoming.
+Usage: {% render 'partials/approval-chain', chain: approval_chain %}
+{%- endcomment -%}
+{%- if chain and chain.size > 0 -%}
+<p style="margin:0 0 8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#7a90a6;">Approval path</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  {%- for s in chain -%}
+  <tr>
+    <td width="22" style="padding:5px 8px 5px 2px;vertical-align:top;">
+      {%- if s.status == 'done' -%}
+      <span style="display:inline-block;width:16px;height:16px;border-radius:8px;background-color:#16a34a;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:700;line-height:16px;text-align:center;">&#10003;</span>
+      {%- elsif s.status == 'current' -%}
+      <span style="display:inline-block;width:16px;height:16px;border-radius:8px;background-color:#172940;border:2px solid #00ceff;box-sizing:border-box;"></span>
+      {%- else -%}
+      <span style="display:inline-block;width:16px;height:16px;border-radius:8px;border:2px solid #cbd5e1;box-sizing:border-box;"></span>
+      {%- endif -%}
+    </td>
+    <td style="padding:5px 0;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.35;color:{% if s.status == 'upcoming' %}#94a3b8{% else %}#1e293b{% endif %};{% if s.status == 'current' %}font-weight:700;{% endif %}">
+      {{ s.label }}
+      {%- if s.status == 'done' and s.by %} <span style="font-weight:400;color:#64748b;">&middot; {{ s.by }}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
+      {%- if s.status == 'current' and s.owners.size > 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {{ s.owners | join: ', ' }}</span>{% endif -%}
+      {%- if s.status == 'upcoming' and s.owners.size > 0 %} <span style="color:#94a3b8;">&middot; next: {{ s.owners | join: ', ' }}</span>{% endif -%}
+    </td>
+  </tr>
+  {%- endfor -%}
+</table>
+{%- endif -%}

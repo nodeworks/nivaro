@@ -186,3 +186,71 @@ export const instanceOverridesDocs: DocSection = {
     }
   ]
 }
+
+export const mailHarnessDocs: DocSection = {
+  id: 'mail-harness',
+  label: 'Mail Templates & Test Harness',
+  content: [
+    { type: 'h1', id: 'mail-harness', text: 'Mail Templates & Test Harness' },
+    {
+      type: 'p',
+      text: 'Every email the instance sends is registered as a mail TYPE (Mail Templates → "Send a real one"): what it is, which Liquid template renders it, and how to build it from a real sample — a workflow transition, a changed record, a user, a recent inbox row. Pick a type, pick a sample, and you see the exact email production would send, its subject, and the people it would go to with the reason each is on the list. Send it to yourself, to any address, or (admin, logged, confirmed) to the real recipients. Mail test mode still applies to every send.'
+    },
+    { type: 'h2', id: 'mail-harness-types', text: 'Registered types' },
+    {
+      type: 'table',
+      head: ['Type', 'Template', 'Sample'],
+      rows: [
+        [
+          'Workflow state change',
+          'workflow_transition',
+          'a workflow-history row — rendered THROUGH the delivering flow ("Workflows — notify owners" / "IR Approval — notify owners"), so subject and recipients are the flow\'s'
+        ],
+        ['Workflow canceled', 'workflow_canceled', 'a history row into a canceled state'],
+        [
+          'Record you watch changed',
+          'record_watch',
+          'a recent activity row (record card + labelled old → new table)'
+        ],
+        ['Collection subscription', 'subscription', 'a recent activity row'],
+        [
+          'Daily action summary',
+          '(built in code)',
+          'a user — the digest is built for them without flushing their deferred rows'
+        ],
+        [
+          'Alert / Anomaly / SLA / Mention / Report / System / Workflow (generic)',
+          'notification',
+          'a recent inbox row of that category'
+        ],
+        [
+          'Extension types (e.g. EFP invoices on hold)',
+          'invoice_on_hold',
+          'registered by the extension through ctx.mail.registerType'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'mail-harness-blocks', text: 'What the detailed templates carry' },
+    {
+      type: 'ul',
+      items: [
+        "Record card — the record's title (display template), a link, and the fields the collection's ACTIVE grouped layout pins in its item-header strip. The card follows the layout, not a per-collection field list in code.",
+        'Approval path — every state in order: done (who, when), current (waiting on whom), upcoming (next owners). Cancel/reject branches only show once the record lands there.',
+        'What changed — labelled old → new pairs since the record entered the state it just left (transition mails) or in this write (watch mails); FK ids resolve to display labels.',
+        "The person's comment, only when a human wrote it — machine stamps (state merges, legacy syncs, imports) are never quoted back."
+      ]
+    },
+    {
+      type: 'note',
+      text: "Flows keep owning WHEN an email goes out and to whom; a mail op's `template` option names the Liquid file that renders the body, with the full trigger payload (record_card, approval_chain, brief, actor_name…) as its context. Templates live in api/templates/mail (core) or <extension>/templates/mail; partials under partials/ are shared building blocks ({% render 'partials/record-card', card: record_card %}). The Templates tab edits any of them as a database override."
+    },
+    { type: 'h2', id: 'mail-harness-api', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/mail-types                      # every registered type
+GET  /api/mail-types/:key/samples?q=      # real samples to pick from
+POST /api/mail-types/:key/preview         # { sample_id } → { subject, html, recipients[] }
+POST /api/mail-types/:key/send            # { sample_id, mode: 'self' | 'address' | 'recipients', to? }`
+    }
+  ]
+}

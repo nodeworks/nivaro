@@ -5,10 +5,12 @@ import type { DocSection } from './types.js'
 export * from './sections/admin-ux.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
+export * from './sections/bulk-actions.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
+export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -27,8 +29,6 @@ export * from './sections/overview.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/queues.js'
-export * from './sections/bulk-actions.js'
-export * from './sections/detail-sheets.js'
 export * from './sections/record-insights.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
@@ -59,6 +59,7 @@ import {
   ssoDocs
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
+import { bulkActionsGuide } from './sections/bulk-actions.js'
 import {
   collabApprovals,
   collabChat,
@@ -74,6 +75,7 @@ import { commandCenterDocs } from './sections/command-center.js'
 import {
   contentOpsAddendums,
   contentOpsCascadeFilters,
+  contentOpsChangeReasons,
   contentOpsCloneItem,
   contentOpsCollectionPresets,
   contentOpsComputedDefaults,
@@ -98,7 +100,6 @@ import {
   contentOpsSubRows,
   contentOpsTranslations,
   contentOpsValidationRules,
-  contentOpsChangeReasons,
   contentOpsVirtualCollections,
   pickerExclusionsGuide,
   pickerFilterGuide,
@@ -117,6 +118,7 @@ import {
   timeTravelDocs,
   trashDocs
 } from './sections/data-safety.js'
+import { detailSheets } from './sections/detail-sheets.js'
 import {
   devexCdcStream,
   devexCodegen,
@@ -219,8 +221,8 @@ import {
   alertsApiDoc,
   analyticsApiDoc,
   atRiskFlagging,
-  dataIntegrityGuide,
   dataImportGuide,
+  dataIntegrityGuide,
   fieldWatchesApiDoc,
   fieldWatchesGuide,
   importsApiDoc,
@@ -242,6 +244,7 @@ import {
 import {
   dbHealthDocs,
   instanceOverridesDocs,
+  mailHarnessDocs,
   opsConsoleDocs
 } from './sections/ops-observability.js'
 import {
@@ -274,8 +277,8 @@ import {
   layoutAiFeatures,
   layoutConditional,
   layoutPageSlots,
-  layoutStepsMode,
   layoutQuickPicker,
+  layoutStepsMode,
   layoutSummaryPanel,
   publicApiDocs,
   roleUiPermissions,
@@ -293,8 +296,6 @@ import {
   recordToolkit,
   reportingAdditions
 } from './sections/platform-additions.js'
-import { bulkActionsGuide } from './sections/bulk-actions.js'
-import { detailSheets } from './sections/detail-sheets.js'
 import { queuesGuide } from './sections/queues.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import {
@@ -771,6 +772,7 @@ export const navSections: NavGroup[] = [
       dbHealthDocs,
       opsConsoleDocs,
       instanceOverridesDocs,
+      mailHarnessDocs,
       obsDataQuality,
       obsIssueLog,
       opsErrorTracking,

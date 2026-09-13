@@ -1,0 +1,13 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+Collection subscription (every create/update/delete on a collection you
+follow). Same context as record_watch plus subscription_label.
+{%- endcomment -%}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#0284a8;">{{ subscription_label | default: 'Subscription' }}</p>
+<h1 style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:21px;font-weight:700;line-height:1.3;color:#172940;">{{ record_card.collection_label | default: collection }} {{ event }}d: {{ record_card.title | default: item }}</h1>
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">{{ actor_name | default: 'Someone' }} {{ event }}d this record{% if changes and changes.size > 0 %} &mdash; {{ changes.size }} field(s) changed{% endif %}.</p>
+{% render 'partials/button', url: record_url, label: 'Open record' %}
+{% render 'partials/changed-fields', changes: changes, title: 'What changed' %}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

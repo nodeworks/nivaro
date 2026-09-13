@@ -1,0 +1,36 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+Workflow / IR transition. Context = the `workflow-transition` trigger payload
+(services/workflow-transitions.ts buildTransitionEventPayload): record_card,
+approval_chain, brief, transition_label, from_state, to_state, comment,
+actor_name, owners, record_url, friendly_id.
+{%- endcomment -%}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#0284a8;">{{ transition_label }}</p>
+<h1 style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:21px;font-weight:700;line-height:1.3;color:#172940;">{{ friendly_id }} is now {{ to_state.label }}</h1>
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">
+  {%- if actor_name %}{{ actor_name }} moved it{% else %}Moved{% endif %}{% if from_state %} from <strong>{{ from_state.label }}</strong>{% endif %} to <strong>{{ to_state.label }}</strong>{% if days_in_previous_state and days_in_previous_state >= 2 %} after {{ days_in_previous_state | round }} days there{% elsif hours_in_previous_state %} after {{ hours_in_previous_state }}h there{% endif %}.
+  {%- if owners and owners.size > 0 %} It is now waiting on {% for o in owners %}{{ o.first_name }} {{ o.last_name }}{% unless forloop.last %}, {% endunless %}{% endfor %}.{% endif -%}
+</p>
+{%- if comment_is_human -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  <tr><td style="padding:12px 16px;background-color:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#78350f;">&ldquo;{{ comment }}&rdquo;{% if actor_name %} <span style="color:#a16207;">&mdash; {{ actor_name }}</span>{% endif %}</td></tr>
+</table>
+{%- endif -%}
+{% render 'partials/button', url: record_url, label: 'Open record' %}
+{% render 'partials/record-card', card: record_card %}
+{% render 'partials/approval-chain', chain: approval_chain %}
+{%- if brief and brief.field_changes and brief.field_changes.size > 0 -%}
+{% assign changes_title = 'Changed while in ' | append: from_state.label %}
+{% render 'partials/changed-fields', changes: brief.field_changes, title: changes_title %}
+{%- if brief.changed_total > brief.field_changes.size -%}
+<p style="margin:-14px 0 22px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#94a3b8;">+ {{ brief.changed_total | minus: brief.field_changes.size }} more field(s) changed &middot; open the record for the full history.</p>
+{%- endif -%}
+{%- endif -%}
+{%- if brief and brief.comments > 0 or brief.addendums.count > 0 -%}
+<p style="margin:0 0 22px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;color:#64748b;">
+  {%- if brief.comments > 0 %}{{ brief.comments }} note(s) added.{% endif -%}
+  {%- if brief.addendums.count > 0 %} {{ brief.addendums.count }} addendum(s){% if brief.addendums.cost_impact != 0 %}, cost impact {{ brief.addendums.cost_impact | round: 2 }}{% endif %}.{% endif -%}
+</p>
+{%- endif -%}
+{% endblock %}

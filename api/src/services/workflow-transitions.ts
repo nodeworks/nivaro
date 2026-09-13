@@ -1,8 +1,11 @@
+import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
-import { adminBaseUrl } from '../admin-base.js'
 import { logActivity } from './activity.js'
+import { buildApprovalBrief } from './approval-brief.js'
+import { buildApprovalChain } from './approval-chain.js'
 import { ensureAutoWatch } from './auto-watch.js'
+import { buildRecordCard } from './mail-record-card.js'
 import { resolveStateOwners } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -397,6 +400,9 @@ export async function evaluateSkipCriteria(
  * and templates: subject record (an addendum's parent), friendly id,
  * record_url, resolved owners of the new state.
  */
+const MACHINE_COMMENT =
+  /^(state-merge|legacy-|reforecast|linx-state-sync|instance-migration|natural-key upsert|import:)/i
+
 async function buildTransitionEventPayload(args: {
   instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
   newStateObj: Pick<WorkflowState, 'id' | 'key' | 'label'> | null
@@ -429,7 +435,33 @@ async function buildTransitionEventPayload(args: {
     `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
     (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
   const recordUrl = `${adminBaseUrl() ?? ''}${recordPath}`
+  // Detail for the emails (mail-record-card / approval-chain / approval-brief):
+  // the subject record's header-strip card, the chain with who acted / who is
+  // up, and what changed since the record entered the state it just left.
+  // Best-effort — a transition never fails because an email block could not
+  // be assembled.
+  const [recordCard, approvalChain, brief, actor] = await Promise.all([
+    buildRecordCard(subject.collection, subject.itemId).catch(() => null),
+    buildApprovalChain(instance.id).catch(() => []),
+    buildApprovalBrief(subject.collection, String(subject.itemId)).catch(() => null),
+    args.userId
+      ? (db('nivaro_users')
+          .where({ id: args.userId })
+          .first('first_name', 'last_name', 'email')
+          .catch(() => undefined) as Promise<
+          { first_name: string | null; last_name: string | null; email: string } | undefined
+        >)
+      : Promise.resolve(undefined)
+  ])
+  const actorName = actor
+    ? [actor.first_name, actor.last_name].filter(Boolean).join(' ') || actor.email
+    : null
   return {
+    record_card: recordCard,
+    approval_chain: approvalChain,
+    brief,
+    actor_name: actorName,
+    actor_email: actor?.email ?? null,
     collection: instance.collection,
     item: instance.item,
     subject_collection: subject.collection,
@@ -444,6 +476,12 @@ async function buildTransitionEventPayload(args: {
     transition_label: args.transitionLabel,
     source: args.source,
     comment: args.comment,
+    // Machine stamps (state-merge, legacy sync, instance migration…) are
+    // provenance, not something to quote back to a person.
+    comment_is_human: !!args.comment && !MACHINE_COMMENT.test(args.comment),
+    days_in_previous_state: enteredPrevAt
+      ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 86_400_000) * 10) / 10
+      : null,
     user_id: args.userId,
     from_state: prevStateObj ? { key: prevStateObj.key, label: prevStateObj.label } : null,
     to_state: newStateObj ? { key: newStateObj.key, label: newStateObj.label } : null,
@@ -457,6 +495,96 @@ async function buildTransitionEventPayload(args: {
       ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10
       : null
   }
+}
+
+/**
+ * Rebuild the `workflow-transition` payload for a PAST transition (a
+ * nivaro_workflow_history row) — what the mail-type harness renders so an
+ * admin previews / re-sends the exact email production sent, from real data,
+ * without moving the record. Owners + brief resolve as of NOW (the payload
+ * builder has no time machine); everything else is the history row's.
+ */
+export async function buildTransitionPayloadFromHistory(
+  historyId: number
+): Promise<Record<string, unknown> | null> {
+  const h = (await db('nivaro_workflow_history').where({ id: historyId }).first()) as
+    | {
+        id: number
+        instance: string
+        transition: string | null
+        from_state: string | null
+        to_state: string
+        user: string | null
+        comment: string | null
+        timestamp: Date
+      }
+    | undefined
+  if (!h) return null
+  const instance = (await db<WorkflowInstance>('nivaro_workflow_instances')
+    .where({ id: h.instance })
+    .first()) as WorkflowInstance | undefined
+  if (!instance) return null
+  const [toState, fromState, transition] = await Promise.all([
+    db<WorkflowState>('nivaro_workflow_states').where({ id: h.to_state }).first(),
+    h.from_state
+      ? db<WorkflowState>('nivaro_workflow_states').where({ id: h.from_state }).first()
+      : Promise.resolve(undefined),
+    h.transition
+      ? db<WorkflowTransition>('nivaro_workflow_transitions').where({ id: h.transition }).first()
+      : Promise.resolve(undefined)
+  ])
+  const prevEntry = h.from_state
+    ? ((await db('nivaro_workflow_history')
+        .where({ instance: h.instance, to_state: h.from_state })
+        .where('timestamp', '<', h.timestamp)
+        .orderBy('timestamp', 'desc')
+        .first('timestamp')) as { timestamp: Date } | undefined)
+    : undefined
+  const payload = await buildTransitionEventPayload({
+    instance,
+    newStateObj: toState ?? null,
+    prevStateObj: fromState ?? null,
+    transitionId: h.transition,
+    transitionLabel: transition?.label ?? (h.from_state ? 'Moved' : 'Started'),
+    source: 'harness',
+    comment: h.comment,
+    userId: h.user,
+    enteredPrevAt: prevEntry ? new Date(prevEntry.timestamp) : null
+  })
+  // The flows read creator / contacts off the subject record via item-read;
+  // hand the harness the same columns so recipients + templates resolve.
+  try {
+    const subjectCollection = String(payload.subject_collection)
+    const subjectItem = String(payload.subject_item)
+    const rec = (await db(subjectCollection).where({ id: subjectItem }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (rec) {
+      const users = new Map<string, string>()
+      for (const k of ['creator', 'user_created', 'additional_contact', 'internal_contact']) {
+        const v = rec[k]
+        if (typeof v === 'string' && v.length > 20) users.set(k, v)
+      }
+      const rows = users.size
+        ? ((await db('nivaro_users')
+            .whereIn('id', [...users.values()])
+            .select('id', 'email', 'first_name', 'last_name')) as Array<{
+            id: string
+            email: string
+            first_name: string | null
+            last_name: string | null
+          }>)
+        : []
+      const byId = new Map(rows.map((u) => [u.id, u]))
+      const record: Record<string, unknown> = { ...rec }
+      for (const [k, id] of users) record[k] = byId.get(id) ?? rec[k]
+      payload.record = record
+      payload.transitioned_at = new Date(h.timestamp).toISOString()
+    }
+  } catch {
+    /* record enrichment is best-effort */
+  }
+  return payload
 }
 
 /**

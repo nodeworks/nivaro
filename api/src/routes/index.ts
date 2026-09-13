@@ -49,6 +49,7 @@ import { findReplaceRoutes } from './find-replace.js'
 import { customActionRoutes } from './custom-actions.js'
 import { offboardingRoutes } from './offboarding.js'
 import { mailTemplateRoutes } from './mail-templates.js'
+import { mailTypeRoutes } from './mail-types.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { setupRoutes } from './setup.js'
 import { configSearchRoutes } from './config-search.js'
@@ -279,6 +280,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(customActionRoutes, { prefix: '/custom-actions' })
   await app.register(offboardingRoutes, { prefix: '/offboarding' })
   await app.register(mailTemplateRoutes, { prefix: '/mail-templates' })
+  await app.register(mailTypeRoutes, { prefix: '/mail-types' })
   await app.register(opsCalendarRoutes, { prefix: '/ops-calendar' })
   await app.register(setupRoutes, { prefix: '/setup' })
   await app.register(configSearchRoutes, { prefix: '/config-search' })

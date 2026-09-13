@@ -17,7 +17,6 @@ import {
 import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import {
   type ExtensionEventHandler,
@@ -26,6 +25,9 @@ import {
 } from '../services/extension-events.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
 import { registerMailTemplateRoot } from '../services/mail.js'
+import { renderMailTemplate } from '../services/mail.js'
+import { registerMailType, renderViaFlow } from '../services/mail-types.js'
+import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -38,8 +40,8 @@ import {
   notificationChannelRegistry
 } from './notification-channels.js'
 import {
-  notificationSourceRegistry,
-  type NotificationSourceProvider
+  type NotificationSourceProvider,
+  notificationSourceRegistry
 } from './notification-sources.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
@@ -189,6 +191,18 @@ export interface ExtensionContext {
   readiness: {
     /** Register a scored check on the go-live readiness scorecard. */
     registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
+  }
+  mail: {
+    /** Register an email type so it appears in the admin mail harness
+     *  (preview / send with real data). */
+    registerType(def: import('../services/mail-types.js').MailTypeDef): void
+    /** Dry-run an active flow with a payload and return what its mail op would send. */
+    renderViaFlow(
+      flowName: string,
+      payload: Record<string, unknown>
+    ): Promise<{ to: string; subject: string; html: string } | null>
+    /** Render a named Liquid mail template (core or extension root). */
+    renderTemplate(name: string, data: Record<string, unknown>): Promise<string>
   }
   flows: {
     /**
@@ -468,6 +482,7 @@ async function loadExtension(
     | 'chatBot'
     | 'digest'
     | 'readiness'
+    | 'mail'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -677,6 +692,14 @@ async function loadExtension(
           registerReadinessCheck(check)
         }
       },
+      mail: {
+        registerType: (def) => {
+          note('mail')
+          registerMailType(def)
+        },
+        renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
+        renderTemplate: (name, data) => renderMailTemplate(name, data)
+      },
       flows: {
         registerOperation: (op) => {
           note('flows')
@@ -801,6 +824,7 @@ export async function loadExtensions(
     | 'chatBot'
     | 'digest'
     | 'readiness'
+    | 'mail'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -937,6 +961,7 @@ export async function loadCloudExtensions(
     | 'validators'
     | 'digest'
     | 'readiness'
+    | 'mail'
   >
 ) {
   let entries: string[]
@@ -995,6 +1020,11 @@ export async function loadCloudExtensions(
         },
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
+        },
+        mail: {
+          registerType: (def) => registerMailType(def),
+          renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
+          renderTemplate: (name, data) => renderMailTemplate(name, data)
         },
         notifyUser: (userId, opts) => notifyUser(ctx.app, userId, opts).catch(() => undefined),
         logActivity: (entry) =>
@@ -1164,6 +1194,7 @@ export async function scanNewExtensions(
     | 'validators'
     | 'digest'
     | 'readiness'
+    | 'mail'
   >
 ): Promise<string[]> {
   let entries: string[]

@@ -70,6 +70,18 @@ export async function renderMailTemplate(
   return engine.renderFile(template, data ?? {})
 }
 
+/** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap
+ *  sendRawMail applies — for callers that need the finished document without
+ *  sending it (the mail-type harness preview). */
+export async function wrapMailFragment(html: string, title?: string | null): Promise<string> {
+  if (/<html[\s>]/i.test(html)) return html
+  try {
+    return await engine.renderFile('message', { html, title: title ?? null })
+  } catch {
+    return html
+  }
+}
+
 /** Render an UNSAVED draft body (editor preview) through the engine — layout
  *  tags resolve against the file roots exactly like a stored override. */
 export async function previewMailBody(

@@ -1,13 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { emitNotification } from '../plugins/socketio.js'
+import { getRelations } from '../services/collections.js'
+import { sendMail } from '../services/mail.js'
 import {
   renderChangesToken,
   renderNotificationTemplate
 } from '../services/notification-templates.js'
-import { emitNotification } from '../plugins/socketio.js'
-import { getRelations } from '../services/collections.js'
-import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
 
 /** A subscription that names ONE record (the per-record bell): filter_field
@@ -96,7 +96,9 @@ async function fireSubscriptionNotifications(
   /** Set when this fires on behalf of a CHILD-row write (a workflow line):
    *  only record-scoped watches of the parent are told, and the wording
    *  names the child. */
-  viaChild?: { collection: string; item: string; event: 'create' | 'update' | 'delete' }
+  viaChild?: { collection: string; item: string; event: 'create' | 'update' | 'delete' },
+  /** The row BEFORE an update — powers the old → new table in the email. */
+  previous?: Record<string, unknown> | null
 ) {
   try {
     // Find all active subscriptions matching this collection+event
@@ -228,6 +230,37 @@ async function fireSubscriptionNotifications(
       // subscription's own cadence beats the category's daily default.
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
       if (frequency === 'instant' && wantEmail && sub.email) {
+        // Detailed body: the record's header-strip card + a labelled old →
+        // new table (mail-types.ts builders, shared with the admin harness).
+        let emailCtx: Record<string, unknown> = {}
+        try {
+          const { buildRecordCard } = await import('../services/mail-record-card.js')
+          const { labelledChanges } = await import('../services/mail-types.js')
+          const card = item ? await buildRecordCard(collection, item).catch(() => null) : null
+          let delta: Record<string, unknown> | null = null
+          if (eventType === 'update' && data && previous) {
+            delta = {}
+            for (const [k, v] of Object.entries(data)) {
+              if (JSON.stringify(previous[k] ?? null) !== JSON.stringify(v ?? null)) delta[k] = v
+            }
+          }
+          emailCtx = {
+            collection,
+            item,
+            event: viaChild ? viaChild.event : eventType,
+            actor_name: actorName,
+            record_card: card,
+            record_url: card?.url ?? `${config.ADMIN_URL}/collections/${collection}/${item}`,
+            friendly_id: friendly ?? card?.title ?? String(item),
+            changes: delta ? await labelledChanges(collection, delta, previous) : [],
+            via_child: viaChild
+              ? { ...viaChild, collection_label: viaChild.collection.replace(/_/g, ' ') }
+              : null,
+            subscription_label: sub.label || `${collectionLabel} subscription`
+          }
+        } catch {
+          emailCtx = {}
+        }
         await sendMail({
           collection,
           item,
@@ -235,10 +268,11 @@ async function fireSubscriptionNotifications(
           subject,
           category: 'watch',
           cadence: 'sender',
-          template: 'notification',
+          template: recordScoped ? 'record_watch' : 'subscription',
           data: {
             first_name: sub.first_name,
             message,
+            ...emailCtx,
             ...(item
               ? {
                   action_url: `${config.ADMIN_URL}/collections/${collection}/${item}`,
@@ -522,7 +556,15 @@ export function registerNotificationSubscriptionHooks() {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
     const row = ctx.result as Record<string, unknown> | null
-    await fireSubscriptionNotifications(ctx.collection, 'update', item, row, ctx.user?.id)
+    await fireSubscriptionNotifications(
+      ctx.collection,
+      'update',
+      item,
+      row,
+      ctx.user?.id,
+      undefined,
+      (ctx.previousData as Record<string, unknown> | null) ?? null
+    )
     await rollUpToParents(ctx.collection, 'update', item, row, ctx.user?.id)
   })
 

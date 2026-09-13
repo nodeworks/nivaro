@@ -1,0 +1,16 @@
+{%- comment -%}
+Old → new table. Usage: {% render 'partials/changed-fields', changes: brief.field_changes, title: 'Changed since it entered Manager Approval' %}
+{%- endcomment -%}
+{%- if changes and changes.size > 0 -%}
+<p style="margin:0 0 8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#7a90a6;">{{ title | default: 'What changed' }}</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;border:1px solid #dde3ea;border-radius:8px;border-collapse:separate;overflow:hidden;">
+  {%- for c in changes -%}
+  <tr>
+    <td width="32%" style="padding:9px 14px;border-bottom:1px solid #eef2f6;background-color:#fafbfc;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;color:#334155;">{{ c.label }}</td>
+    <td style="padding:9px 14px;border-bottom:1px solid #eef2f6;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#1e293b;">
+      {%- if c.old != '' and c.old != nil -%}<span style="color:#94a3b8;text-decoration:line-through;">{{ c.old }}</span> &rarr; {% endif -%}<strong>{{ c.new }}</strong>
+    </td>
+  </tr>
+  {%- endfor -%}
+</table>
+{%- endif -%}

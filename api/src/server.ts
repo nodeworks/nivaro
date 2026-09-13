@@ -394,6 +394,9 @@ export async function buildServer() {
   // These query the static DB at startup — skipped in cloud mode.
   if (!process.env.CLOUD_META_DB_URL) {
     setApp(app)
+    // Core email types must exist before extensions add theirs.
+    const { registerCoreMailTypes } = await import('./services/mail-types.js')
+    registerCoreMailTypes()
     await loadExtensions({
       app,
       database: db,

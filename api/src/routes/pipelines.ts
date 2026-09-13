@@ -1,31 +1,26 @@
 import { randomUUID } from 'node:crypto'
-import { selectInChunks } from '../services/db-batch.js'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import {
-  restoreTemplateVersion,
-  snapshotTemplateVersion,
-  diffSnapshots,
-  readCurrentSnapshot,
-  type TemplateSnapshot
-} from '../services/workflow-template-versions.js'
+import { activeAddendumInstances } from '../services/addendum-summary.js'
+import { buildApprovalBrief } from '../services/approval-brief.js'
+import { getCollection } from '../services/collections.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import {
   bustOwnerGroupCache,
   resolveStateOwners,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
-import { activeAddendumInstances } from '../services/addendum-summary.js'
-import { getCollection } from '../services/collections.js'
 import { ADDENDUM_COLLECTION, fetchPipelineRecord } from '../services/pipeline-subject.js'
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
 import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
 } from '../services/transition-requirements.js'
+import { TransitionBlockedError } from '../services/workflow-actions.js'
 import {
   type ConditionRule,
   evalConditionRule,
@@ -33,7 +28,13 @@ import {
   fetchRecordForConditions,
   parseConditionRules
 } from '../services/workflow-conditions.js'
-import { TransitionBlockedError } from '../services/workflow-actions.js'
+import {
+  diffSnapshots,
+  readCurrentSnapshot,
+  restoreTemplateVersion,
+  snapshotTemplateVersion,
+  type TemplateSnapshot
+} from '../services/workflow-template-versions.js'
 import {
   applyTransition,
   evaluateSkipCriteriaDetailed,
@@ -1566,115 +1567,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      const instance = (await db('nivaro_workflow_instances')
-        .where({ collection, item: String(item) })
-        .orderBy('started_at', 'desc')
-        .first()) as { id: string; current_state: string | null; started_at: Date } | undefined
-      if (!instance) return reply.send({ data: null })
-
-      // When the record entered its CURRENT state: the latest history row
-      // whose to_state is the current state; a never-transitioned instance
-      // falls back to its start.
-      let enteredAt = new Date(instance.started_at)
-      if (instance.current_state) {
-        const entry = (await db('nivaro_workflow_history')
-          .where({ instance: instance.id, to_state: instance.current_state })
-          .orderBy('timestamp', 'desc')
-          .first('timestamp')) as { timestamp: Date } | undefined
-        if (entry) enteredAt = new Date(entry.timestamp)
-      }
-
-      const [inWindow, preWindow, commentCount, addendums] = await Promise.all([
-        db('nivaro_revisions as r')
-          .join('nivaro_activity as a', 'r.activity', 'a.id')
-          .where('a.collection', collection)
-          .where('a.item', String(item))
-          .where('a.action', 'update')
-          .where('a.timestamp', '>', enteredAt)
-          .orderBy('a.timestamp', 'asc')
-          .select('r.delta', 'a.timestamp', 'a.user') as Promise<
-          Array<{ delta: string | null; timestamp: Date; user: string | null }>
-        >,
-        db('nivaro_revisions as r')
-          .join('nivaro_activity as a', 'r.activity', 'a.id')
-          .where('a.collection', collection)
-          .where('a.item', String(item))
-          .where('a.timestamp', '<=', enteredAt)
-          .orderBy('a.timestamp', 'desc')
-          .first('r.data') as Promise<{ data: string | null } | undefined>,
-        db('nivaro_comments')
-          .where({ collection, item: String(item) })
-          .where('created_at', '>', enteredAt)
-          .count('* as c')
-          .first()
-          .catch(() => ({ c: 0 })) as Promise<{ c: number | string } | undefined>,
-        db('nivaro_addendums')
-          .where({ parent_collection: collection, parent_id: String(item) })
-          .where('created_at', '>', enteredAt)
-          .select('status', 'cost_impact')
-          .catch(() => []) as Promise<Array<{ status: string; cost_impact: number | null }>>
-      ])
-
-      // Merge deltas oldest→newest: first-write-wins for the OLD side would
-      // need the pre-window snapshot anyway; last-write-wins for NEW is what
-      // the approver will actually see on the record.
-      let oldRow: Record<string, unknown> = {}
-      try {
-        oldRow = preWindow?.data ? (JSON.parse(preWindow.data) as Record<string, unknown>) : {}
-      } catch {
-        oldRow = {}
-      }
-      const changed = new Map<string, unknown>()
-      const editors = new Set<string>()
-      for (const rev of inWindow) {
-        try {
-          const delta = rev.delta ? (JSON.parse(rev.delta) as Record<string, unknown>) : {}
-          for (const [k, v] of Object.entries(delta)) changed.set(k, v)
-          if (rev.user) editors.add(rev.user)
-        } catch {
-          /* one bad delta must not sink the brief */
-        }
-      }
-
-      const IGNORED = new Set(['date_updated', 'user_updated', 'changed', 'last_state_change'])
-      const fieldChanges = [...changed.entries()]
-        .filter(([k]) => !IGNORED.has(k))
-        .slice(0, 15)
-        .map(([field, next]) => ({
-          field,
-          old: field in oldRow ? (oldRow[field] ?? null) : undefined,
-          new: next ?? null
-        }))
-
-      let editorNames: string[] = []
-      if (editors.size > 0) {
-        const rows = (await db('nivaro_users')
-          .whereIn('id', [...editors])
-          .select('first_name', 'last_name', 'email')) as Array<{
-          first_name: string | null
-          last_name: string | null
-          email: string
-        }>
-        editorNames = rows.map(
-          (u) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-        )
-      }
-
-      return reply.send({
-        data: {
-          entered_at: enteredAt.toISOString(),
-          days_in_state: Math.floor((Date.now() - enteredAt.getTime()) / 86_400_000),
-          revisions: inWindow.length,
-          field_changes: fieldChanges,
-          changed_total: [...changed.keys()].filter((k) => !IGNORED.has(k)).length,
-          comments: Number(commentCount?.c ?? 0),
-          addendums: {
-            count: addendums.length,
-            cost_impact: addendums.reduce((sum, a) => sum + (Number(a.cost_impact) || 0), 0)
-          },
-          edited_by: editorNames
-        }
-      })
+      const brief = await buildApprovalBrief(collection, String(item))
+      return reply.send({ data: brief })
     }
   )
 
@@ -2659,12 +2553,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       ])
       if (!source || !target) return reply.code(404).send({ error: 'Group not found' })
       if (String(source.state).toUpperCase() !== String(target.state).toUpperCase()) {
-        return reply
-          .code(400)
-          .send({
-            error:
-              'Groups belong to different states — merge only covers duplicates within one state'
-          })
+        return reply.code(400).send({
+          error: 'Groups belong to different states — merge only covers duplicates within one state'
+        })
       }
       await snapshotTemplateVersion(
         String(source.template),

@@ -265,6 +265,8 @@ export async function runDailyActionDigest(
      *  digest must still carry them. */
     onlyUserId?: string
     preserveDeferred?: boolean
+    /** Harness preview: hand the rendered mail back instead of sending it. */
+    capture?: (mail: { to: string; subject: string; html: string }) => void
   }
 ): Promise<{ sent: number }> {
   // Opt-in users + anyone holding deferred rows (covers a pref flipped back).
@@ -455,16 +457,27 @@ export async function runDailyActionDigest(
           .join('')}</ul>`
       : sections.map(sectionHtml).join('')
     try {
-      await sendRawMail({
-        to: email,
-        subject: 'Your daily action summary',
-        title: 'Daily action summary',
-        html: `
+      const digestHtml = `
           <p style="margin:0 0 4px 0;font-size:13px;color:#334155;">
             Everything waiting on you, in one place. You're receiving this instead of
             individual notification emails — switch back any time from your profile.
           </p>
-          ${bodyHtml}`,
+          ${bodyHtml}`
+      if (opts?.capture) {
+        const { wrapMailFragment } = await import('./mail.js')
+        opts.capture({
+          to: email,
+          subject: 'Your daily action summary',
+          html: await wrapMailFragment(digestHtml, 'Daily action summary')
+        })
+        sent++
+        continue
+      }
+      await sendRawMail({
+        to: email,
+        subject: 'Your daily action summary',
+        title: 'Daily action summary',
+        html: digestHtml,
         skipDigest: true
       })
       sent++
