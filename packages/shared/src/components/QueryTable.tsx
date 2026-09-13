@@ -24,10 +24,13 @@ export const COLOR_ROLES: Record<string, [light: string, dark: string]> = {
   accent: ['color-mix(in srgb, rgb(var(--nvr-cyan-rgb)) 56%, black)', 'rgb(var(--nvr-cyan-rgb))'],
   ink: ['hsl(var(--foreground))', 'hsl(var(--foreground))'],
   muted: ['hsl(var(--muted-foreground))', 'hsl(var(--muted-foreground))'],
-  positive: ['#15803d', '#4ade80'],
-  negative: ['#dc2626', '#f87171'],
-  warning: ['#b45309', '#fbbf24'],
-  info: ['#4f46e5', '#a5b4fc']
+  // Semantic hues ride CSS vars (--nvr-role-<name>[-dark]) so a host theme
+  // can re-point them; the fallbacks are deliberately DESATURATED in dark —
+  // neon green / lavender on charcoal read as foreign (Rob, 2026-09-13).
+  positive: ['var(--nvr-role-positive, #15803d)', 'var(--nvr-role-positive-dark, #9fbf8a)'],
+  negative: ['var(--nvr-role-negative, #dc2626)', 'var(--nvr-role-negative-dark, #e08383)'],
+  warning: ['var(--nvr-role-warning, #b45309)', 'var(--nvr-role-warning-dark, #d4936a)'],
+  info: ['var(--nvr-role-info, #4f46e5)', 'var(--nvr-role-info-dark, #8fa6c9)']
 }
 
 /** Resolve a configured colour (role name or hex) to a [light, dark] pair. */
@@ -162,6 +165,11 @@ export interface QueryTableConfig {
     /** Render a Months/Quarters toggle above the table (EFP quarterly view).
      *  Quarter columns sum their three months — same drill/total math. */
     quarter_toggle?: boolean
+    /** Colour role/hex for the generated period + year columns, an optional
+     *  below-zero flip, and a separate colour for the Total column. */
+    color?: string
+    color_negative?: string
+    total_color?: string
   }
 }
 
@@ -243,22 +251,35 @@ export function pivotQueryRows(
           format: 'currency' as const,
           sum: true
         }))
+  const tint = pivot.color ? { color: pivot.color, color_negative: pivot.color_negative } : {}
   const columns: QueryTableColumn[] = [
     ...yearsBefore.map((y) => ({
       field: `y${y}`,
       label: y,
       format: 'currency' as const,
-      sum: true
+      sum: true,
+      ...tint
     })),
-    ...periodCols,
+    ...periodCols.map((c) => ({ ...c, ...tint })),
     ...yearsAfter.map((y) => ({
       field: `y${y}`,
       label: y,
       format: 'currency' as const,
-      sum: true
+      sum: true,
+      ...tint
     })),
     ...(pivot.total !== false
-      ? [{ field: 'total', label: 'Total', format: 'currency' as const, sum: true }]
+      ? [
+          {
+            field: 'total',
+            label: 'Total',
+            format: 'currency' as const,
+            sum: true,
+            ...(pivot.total_color
+              ? { color: pivot.total_color, color_negative: pivot.color_negative }
+              : tint)
+          }
+        ]
       : [])
   ]
   return { rows: [...byKey.values()], columns }
@@ -497,7 +518,7 @@ export function QueryTable({
         <span>{fmt(cellValue(row, c), c.format)}</span>
         <div className='h-1 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
           <div
-            className={`h-full rounded-full ${pct !== null && pct > 100 ? 'bg-red-500' : 'bg-[#00ceff]'}`}
+            className={`h-full rounded-full ${pct !== null && pct > 100 ? 'bg-red-500' : 'bg-nvr-cyan'}`}
             style={{ width: `${pct === null ? 0 : Math.min(pct, 100)}%` }}
           />
         </div>

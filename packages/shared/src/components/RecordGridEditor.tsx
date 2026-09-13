@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn } from '../lib/utils'
@@ -12,6 +12,7 @@ import {
 import { applyDisplayTemplate } from './item-edit/helpers'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { JsonMapEditor, type JsonMapEditorConfig } from './JsonMapEditor'
+import { colorPair } from './QueryTable'
 
 // Generic editable flat grid over /items — config-driven upsert editor for
 // month-columnar collections (EFP Manage Production Numbers / Manage Project
@@ -824,12 +825,20 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
       ? editRows.reduce((s, r) => s + (Number(cellValue(r, field)) || 0), 0)
       : rollups.reduce((s, g) => s + (g.sums[field] ?? 0), 0)
   const quarterEdge = (i: number) => firstSet && i < 12 && i % 3 === 0 && i > 0
+  // Q2 and Q4 carry a faint band so the eye can count quarters across 12
+  // near-identical number columns; the Total column reads in the brand ink.
+  const quarterBand = (i: number) =>
+    firstSet && i < 12 && Math.floor(i / 3) % 2 === 1 ? 'bg-slate-50/70 dark:bg-muted/30' : ''
+  const [accentL, accentD] = colorPair('accent')
+  const accentStyle = { '--qtc': accentL, '--qtcd': accentD } as unknown as CSSProperties
+  const ACCENT_TEXT = 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]'
   const headerCell = (label: string, i: number, extra = '') => (
     <th
       key={label + i}
       className={cn(
         'whitespace-nowrap px-2 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wide text-slate-400',
         quarterEdge(i) && 'border-l border-slate-200 dark:border-border',
+        quarterBand(i),
         extra
       )}
     >
@@ -977,7 +986,8 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                           key={c.field}
                           className={cn(
                             'px-1 py-0.5 text-right',
-                            quarterEdge(i) && 'border-l border-slate-100 dark:border-border/50'
+                            quarterEdge(i) && 'border-l border-slate-100 dark:border-border/50',
+                            quarterBand(i)
                           )}
                         >
                           <NumberCell
@@ -988,7 +998,10 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                         </td>
                       ))}
                       {firstSet && (
-                        <td className='border-l border-slate-200 px-2 py-1 text-right font-semibold tabular-nums text-slate-800 dark:border-border dark:text-slate-100'>
+                        <td
+                          className={`border-l border-slate-200 px-2 py-1 text-right font-semibold tabular-nums dark:border-border ${ACCENT_TEXT}`}
+                          style={accentStyle}
+                        >
                           {fmtNum(rowTotal(row))}
                         </td>
                       )}
@@ -1056,6 +1069,7 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                             className={cn(
                               'whitespace-nowrap px-1.5 py-1.5 text-right tabular-nums',
                               quarterEdge(i) && 'border-l border-slate-100 dark:border-border/50',
+                              quarterBand(i),
                               (g.sums[c.field] ?? 0) === 0
                                 ? 'text-slate-300 dark:text-slate-600'
                                 : 'text-slate-700 dark:text-slate-200'
@@ -1065,7 +1079,10 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                           </td>
                         ))}
                         {firstSet && (
-                          <td className='border-l border-slate-200 px-2 py-1.5 text-right font-semibold tabular-nums text-slate-800 dark:border-border dark:text-slate-100'>
+                          <td
+                            className={`border-l border-slate-200 px-2 py-1.5 text-right font-semibold tabular-nums dark:border-border ${ACCENT_TEXT}`}
+                            style={accentStyle}
+                          >
                             {fmtNum(
                               MONTHS.reduce(
                                 (s, m) => s + (g.sums[`${m}${firstSet.suffix}`] ?? 0),
@@ -1098,14 +1115,18 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                     key={c.field}
                     className={cn(
                       'px-2 py-2 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-100',
-                      quarterEdge(i) && 'border-l border-slate-200 dark:border-border'
+                      quarterEdge(i) && 'border-l border-slate-200 dark:border-border',
+                      quarterBand(i)
                     )}
                   >
                     {fmtNum(grandTotal(c.field))}
                   </td>
                 ))}
                 {firstSet && (
-                  <td className='border-l border-slate-200 px-2 py-2 text-right font-semibold tabular-nums text-slate-800 dark:border-border dark:text-slate-100'>
+                  <td
+                    className={`border-l border-slate-200 px-2 py-2 text-right font-semibold tabular-nums dark:border-border ${ACCENT_TEXT}`}
+                    style={accentStyle}
+                  >
                     {fmtNum(MONTHS.reduce((s, m) => s + grandTotal(`${m}${firstSet.suffix}`), 0))}
                   </td>
                 )}

@@ -6,6 +6,7 @@ import { get, patch, post } from '../lib/commands'
 import { evaluateNumeric } from '../lib/expression'
 import { cn } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
+import { colorPair } from './QueryTable'
 
 // Generic tuple-scoped value editor. Base shape (EFP ProjectTypeBudgetForm):
 // scope pickers → one row per OPTION with current value + input → upsert.
@@ -26,6 +27,8 @@ export interface MatrixEditorConfig {
   option_filter?: Record<string, unknown>
   key_field: string
   value_field: string
+  /** Colour role for the saved-value column (default 'info'). */
+  value_color?: string
   value_label?: string
   value_format?: 'currency' | 'number'
   /** Scope pickers. `filter` narrows a picker's options; '$scope.<field>'
@@ -79,12 +82,27 @@ export interface MatrixEditorConfig {
     params?: Record<string, unknown>
     match_option_field: string
     match_group_field?: string
-    columns: Array<{ field: string; label?: string; format?: 'currency' | 'number' }>
+    /** `color` = a QueryTable colour role (accent | ink | muted | positive |
+     *  negative | warning | info) or hex for the column's figures. */
+    columns: Array<{
+      field: string
+      label?: string
+      format?: 'currency' | 'number'
+      color?: string
+    }>
     /** Computed columns over the row: `{{__current__}}` (saved value),
      *  `{{__new__}}` (live value incl. the edit) and any metric field —
      *  e.g. Remaining = `{{__new__}} - {{current_spend}} - {{committed_costs}}`.
      *  Aggregated levels sum the inputs first, then apply the formula. */
-    derived?: Array<{ label: string; formula: string; format?: 'currency' | 'number' }>
+    derived?: Array<{
+      label: string
+      formula: string
+      format?: 'currency' | 'number'
+      /** Colour role; `color_negative` takes over below zero (default
+       *  positive / negative — a Remaining figure). */
+      color?: string
+      color_negative?: string
+    }>
     /** Metric rows that match no rendered cell still count: shown read-only as
      *  an "Other …" row per group (options outside the project's list) and an
      *  "Other …" group (groups outside the project's list), so the totals
@@ -642,6 +660,18 @@ export function MatrixEditor({
   const valueLabel = config.value_label ?? config.value_field
   const numCols = 1 + metricCols.length + derivedCols.length + 1
 
+  // Colour roles ride CSS vars per cell (QueryTable's --qtc/--qtcd pair), so
+  // the host theme decides the actual hue in light AND dark.
+  const ROLE_CLS = 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]'
+  const roleStyle = (role: string | undefined, value?: unknown, negRole?: string) => {
+    const neg = negRole && typeof value === 'number' && value < 0
+    const r = neg ? negRole : role
+    if (!r) return undefined
+    const [l, d] = colorPair(r)
+    return { '--qtc': l, '--qtcd': d } as unknown as React.CSSProperties
+  }
+  const valueRole = config.value_color ?? 'info'
+
   // ── Unmatched metric rows: kept, shown read-only, so totals reconcile ──
   const unmatchedCfg =
     config.metrics?.unmatched === false ? null : (config.metrics?.unmatched ?? {})
@@ -729,21 +759,28 @@ export function MatrixEditor({
   const numCell = (
     v: unknown,
     format: 'currency' | 'number' | undefined,
-    opts?: { strong?: boolean; tone?: 'muted' | 'neg' }
-  ) => (
-    <td
-      className={cn(
-        'py-1.5 pr-3 text-right tabular-nums',
-        opts?.strong
-          ? 'font-semibold text-slate-800 dark:text-slate-100'
-          : 'text-slate-600 dark:text-slate-300',
-        opts?.tone === 'muted' && 'text-slate-400 dark:text-slate-500',
-        opts?.tone === 'neg' && 'text-red-600 dark:text-red-400'
-      )}
-    >
-      {fmtVal(v, format)}
-    </td>
-  )
+    opts?: { strong?: boolean; tone?: 'muted' | 'neg'; role?: string; negRole?: string }
+  ) => {
+    const style = opts?.tone ? undefined : roleStyle(opts?.role, v, opts?.negRole)
+    return (
+      <td
+        className={cn(
+          'py-1.5 pr-3 text-right tabular-nums',
+          opts?.strong ? 'font-semibold' : '',
+          style
+            ? ROLE_CLS
+            : opts?.strong
+              ? 'text-slate-800 dark:text-slate-100'
+              : 'text-slate-600 dark:text-slate-300',
+          opts?.tone === 'muted' && 'text-slate-400 dark:text-slate-500',
+          opts?.tone === 'neg' && 'text-red-600 dark:text-red-400'
+        )}
+        style={style}
+      >
+        {fmtVal(v, format)}
+      </td>
+    )
+  }
 
   const aggregateCells = (
     current: number,
@@ -754,16 +791,16 @@ export function MatrixEditor({
     const derived = derive(current, next, metrics)
     return (
       <>
-        {numCell(current, config.value_format, { strong })}
+        {numCell(current, config.value_format, { strong, role: valueRole })}
         {metricCols.map((c) => (
           <td
             key={c.field}
             className={cn(
               'py-1.5 pr-3 text-right tabular-nums',
-              strong
-                ? 'font-semibold text-slate-800 dark:text-slate-100'
-                : 'text-slate-600 dark:text-slate-300'
+              strong && 'font-semibold',
+              ROLE_CLS
             )}
+            style={roleStyle(c.color ?? 'ink')}
           >
             {fmtVal(metrics[c.field], c.format)}
           </td>
@@ -775,13 +812,10 @@ export function MatrixEditor({
               key={d.label}
               className={cn(
                 'py-1.5 pr-3 text-right tabular-nums',
-                strong ? 'font-semibold' : '',
-                v != null && v < 0
-                  ? 'text-red-600 dark:text-red-400'
-                  : strong
-                    ? 'text-slate-800 dark:text-slate-100'
-                    : 'text-slate-600 dark:text-slate-300'
+                strong && 'font-semibold',
+                ROLE_CLS
               )}
+              style={roleStyle(d.color ?? 'positive', v, d.color_negative ?? 'negative')}
             >
               {fmtVal(v, d.format ?? config.value_format)}
             </td>
@@ -821,19 +855,15 @@ export function MatrixEditor({
         >
           {label}
         </td>
-        {numCell(cur, config.value_format, { tone: cur === 0 ? 'muted' : undefined })}
-        {metricCols.map((c) => numCellKeyed(c.field, metrics[c.field], c.format))}
+        {numCell(cur, config.value_format, cur === 0 ? { tone: 'muted' } : { role: valueRole })}
+        {metricCols.map((c) => numCellKeyed(c.field, metrics[c.field], c.format, c.color ?? 'ink'))}
         {derivedCols.map((d, i) => {
           const v = derived[i]
           return (
             <td
               key={d.label}
-              className={cn(
-                'py-1.5 pr-3 text-right tabular-nums',
-                v != null && v < 0
-                  ? 'text-red-600 dark:text-red-400'
-                  : 'text-slate-600 dark:text-slate-300'
-              )}
+              className={cn('py-1.5 pr-3 text-right tabular-nums', ROLE_CLS)}
+              style={roleStyle(d.color ?? 'positive', v, d.color_negative ?? 'negative')}
             >
               {fmtVal(v, d.format ?? config.value_format)}
             </td>
@@ -845,10 +875,10 @@ export function MatrixEditor({
               <span
                 className={cn(
                   'rounded-full px-1.5 py-px text-[10.5px] font-medium tabular-nums',
-                  delta > 0
-                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
-                    : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400'
+                  ROLE_CLS,
+                  'bg-[color-mix(in_srgb,var(--qtc)_12%,transparent)] dark:bg-[color-mix(in_srgb,var(--qtcd)_14%,transparent)]'
                 )}
+                style={roleStyle(delta > 0 ? 'positive' : 'negative')}
               >
                 {delta > 0 ? '+' : '−'}
                 {fmtVal(Math.abs(delta), config.value_format)}
@@ -884,10 +914,19 @@ export function MatrixEditor({
       </tr>
     )
   }
-  const numCellKeyed = (key: string, v: unknown, format: 'currency' | 'number' | undefined) => (
+  const numCellKeyed = (
+    key: string,
+    v: unknown,
+    format: 'currency' | 'number' | undefined,
+    role?: string
+  ) => (
     <td
       key={key}
-      className='py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-300'
+      className={cn(
+        'py-1.5 pr-3 text-right tabular-nums',
+        role ? ROLE_CLS : 'text-slate-600 dark:text-slate-300'
+      )}
+      style={roleStyle(role)}
     >
       {fmtVal(v, format)}
     </td>
@@ -982,11 +1021,17 @@ export function MatrixEditor({
       {capValue !== null && scopeReady && (
         <div className='grid shrink-0 grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-4'>
           {[
-            { label: config.cap?.label ?? 'Cap', value: capValue, tone: 'plain' as const },
+            {
+              label: config.cap?.label ?? 'Cap',
+              value: capValue,
+              tone: 'plain' as const,
+              role: 'accent'
+            },
             {
               label: 'Allocated',
               value: grand.next,
               tone: grand.next !== totalCurrent ? ('edited' as const) : ('plain' as const),
+              role: valueRole,
               sub:
                 grand.next !== totalCurrent ? `was ${fmtVal(totalCurrent, 'currency')}` : undefined
             },
@@ -1009,15 +1054,16 @@ export function MatrixEditor({
               <p
                 className={cn(
                   'mt-0.5 text-[17px] font-semibold tabular-nums tracking-[-0.01em]',
+                  t.tone === 'muted' ? 'text-slate-400' : ROLE_CLS
+                )}
+                style={roleStyle(
                   t.tone === 'neg'
-                    ? 'text-red-600 dark:text-red-400'
+                    ? 'negative'
                     : t.tone === 'ok'
-                      ? 'text-emerald-700 dark:text-emerald-400'
-                      : t.tone === 'muted'
-                        ? 'text-slate-400'
-                        : t.tone === 'edited'
-                          ? 'text-nvr-navy dark:text-nvr-cyan'
-                          : 'text-slate-900 dark:text-white'
+                      ? 'positive'
+                      : t.tone === 'edited'
+                        ? 'accent'
+                        : (t.role ?? 'ink')
                 )}
               >
                 {fmtVal(t.value, 'currency')}
