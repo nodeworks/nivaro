@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-13T20:30:43.525Z",
+  "generated_at": "2026-09-13T21:57:31.699Z",
   "releases": [
+    {
+      "version": "0.1.269",
+      "tag": "v0.1.269",
+      "date": "2026-09-13T17:57:23-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "email links land in the app the recipient uses",
+              "hash": "d5d085ab"
+            },
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "dedicated templates for every notification type",
+              "hash": "e18dcb2d"
+            },
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "mail-type registry, real-data test harness, detailed templates",
+              "hash": "71f983fe"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "mount the email-links preference card on Profile",
+              "hash": "1122a007"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mail",
+              "text": "name who triggered a transition; chain as-of a replayed move",
+              "hash": "deca74df"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.268",
       "tag": "v0.1.268",
-      "date": "2026-09-13T16:30:32-04:00",
+      "date": "2026-09-13T16:30:43-04:00",
       "sections": [
         {
           "label": "Added",
