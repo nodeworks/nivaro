@@ -351,7 +351,7 @@ export async function buildRecordChangeContext(
     event: a.action === 'create' ? 'create' : a.action === 'delete' ? 'delete' : 'update',
     actor_name: userName(a) || null,
     record_card: card,
-    record_url: card?.url ?? `${adminBaseUrl() ?? ''}/collections/${a.collection}/${a.item}`,
+    record_url: card?.url ?? (await (await import('./app-links.js')).recordLink(a.collection, a.item)),
     friendly_id: card?.title ?? String(a.item),
     changes,
     changed_at: new Date(a.timestamp).toISOString()
@@ -1078,7 +1078,7 @@ export function registerCoreMailTypes(): void {
         page: 1,
         limit: 5
       } as never)
-      const b = buildQueueEntryMail({
+      const b = await buildQueueEntryMail({
         queueId: queue.id,
         queueName: queue.name,
         items: items.map((i) => ({ label: i.label, collection: i.collection, item_id: i.item_id }))
@@ -1211,15 +1211,16 @@ export function registerCoreMailTypes(): void {
             }
           | undefined
         if (!n) throw new Error('Notification not found')
-        const base = adminBaseUrl() ?? ''
+        const { recordLink } = await import('./app-links.js')
+        const { cardFor } = await import('./mail-builders.js')
         const html = await renderMailTemplate('notification', {
           first_name: n.first_name,
+          subject: n.subject,
+          category: g.category,
           message: n.message ?? '',
-          ...(n.collection && n.item
-            ? {
-                action_url: `${base}/collections/${n.collection}/${n.item}`,
-                action_label: 'View item'
-              }
+          record_card: await cardFor(n.collection, n.item),
+          ...(n.collection && n.item && !n.collection.startsWith('__')
+            ? { action_url: await recordLink(n.collection, n.item), action_label: 'View item' }
             : {})
         })
         return {

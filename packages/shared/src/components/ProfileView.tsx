@@ -35,7 +35,7 @@ import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
 import { cn, setDisplayTimezone } from '../lib/utils'
-import { CustomStatusEditor, activeCustomStatus } from './CustomStatusEditor'
+import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { NotificationSourcesCard } from './NotificationSourcesCard'
 import { SimpleSelectXs } from './ui/SimpleSelect'
@@ -749,6 +749,61 @@ export function NotificationRulesCard() {
 
 /** Timezone preference (#31): applied to every datetime the shared
  *  formatters render. Defaults to the browser's zone. */
+/** Which app email links open in: automatic (role rule), the portal, or the admin. */
+export function LinkAppCard() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: prefs } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
+  })
+  const current =
+    prefs?.link_app === 'portal' || prefs?.link_app === 'admin' ? prefs.link_app : 'auto'
+  const save = useMutation({
+    mutationFn: (link_app: 'auto' | 'portal' | 'admin') =>
+      client.request(patch('/users/me/preferences', { link_app })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+  })
+  const OPTIONS: Array<{ v: 'auto' | 'portal' | 'admin'; label: string; hint: string }> = [
+    { v: 'auto', label: 'Automatic', hint: 'Admins open the admin, everyone else the portal' },
+    { v: 'portal', label: 'Portal', hint: 'Always the front-end app' },
+    { v: 'admin', label: 'Admin', hint: 'Always the admin console' }
+  ]
+  return (
+    <div
+      className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'
+      data-link-app-card
+    >
+      <p className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>
+        Email links open in
+      </p>
+      <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Where "Open record" and other links in notification emails take you.
+      </p>
+      <div className='mt-3 inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+        {OPTIONS.map((o) => (
+          <button
+            key={o.v}
+            type='button'
+            title={o.hint}
+            onClick={() => save.mutate(o.v)}
+            className={
+              current === o.v
+                ? 'rounded bg-slate-900 px-3 py-1 text-[12.5px] font-medium text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                : 'rounded px-3 py-1 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+            }
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function TimezoneCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -1962,6 +2017,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
             <ScopeDefaultsCard />
             <ProfileFieldsCard />
             <TimezoneCard />
+            <LinkAppCard />
             <NotificationRulesCard />
             <DisplayPrefsCard />
             <RemindersCard />

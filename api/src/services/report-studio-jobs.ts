@@ -191,7 +191,7 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
         }
         if (alert.delivery_email && creator.email) {
           const { buildReportAlertMail } = await import('./mail-builders.js')
-          const built = buildReportAlertMail({
+          const built = await buildReportAlertMail({
             alertName: alert.name,
             widgetTitle: widget.title,
             conditions: conditions.map((c) => ({

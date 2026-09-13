@@ -50,6 +50,7 @@ import { customActionRoutes } from './custom-actions.js'
 import { offboardingRoutes } from './offboarding.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
+import { bustPortalLinkCache } from '../services/app-links.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { setupRoutes } from './setup.js'
 import { configSearchRoutes } from './config-search.js'
@@ -228,6 +229,7 @@ export async function registerRoutes(app: FastifyInstance) {
     if (req.method === 'GET' || reply.statusCode >= 400) return
     if (META_ROUTES.test(req.url)) {
       clearMetadataCache()
+      bustPortalLinkCache()
       clearRowRuleCache()
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an

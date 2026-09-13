@@ -160,6 +160,8 @@ export type CMSRelation = {
 }
 
 export type CMSSettings = {
+  portal_url?: string | null
+  portal_routes?: string | null
   field_watch_enabled?: boolean
   lock_idle_release_minutes?: number | null
   brand_logo?: string | null

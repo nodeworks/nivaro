@@ -97,7 +97,7 @@ export async function runQueueEntryNotifyPass(app: FastifyInstance): Promise<voi
       const { notifyUser } = await import('./notification-channels.js')
       const { buildQueueEntryMail } = await import('./mail-builders.js')
       const newItems = items.filter((i) => newOnes.includes(`${i.collection}:${i.item_id}`))
-      const built = buildQueueEntryMail({
+      const built = await buildQueueEntryMail({
         queueId: String(sub.queue_id),
         queueName: queue.name ?? 'Queue',
         label: sub.label,

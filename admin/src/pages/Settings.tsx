@@ -1405,6 +1405,8 @@ export function SettingsPage() {
   const [brandLoginMessage, setBrandLoginMessage] = useState('')
   // Login help/support links (#347) — [{label, url}] JSON on settings.
   const [loginLinks, setLoginLinks] = useState<Array<{ label: string; url: string }>>([])
+  const [portalUrl, setPortalUrl] = useState('')
+  const [portalRoutes, setPortalRoutes] = useState('')
   // Theme studio (#662)
   const [themeRadius, setThemeRadius] = useState<string>('')
   const [themeFont, setThemeFont] = useState<string>('')
@@ -1471,6 +1473,8 @@ export function SettingsPage() {
     setProjectColor(settings.project_color ?? '#00ceff')
     setBrandLogo((settings as { brand_logo?: string | null }).brand_logo ?? null)
     setBrandLoginTitle((settings as { brand_login_title?: string | null }).brand_login_title ?? '')
+    setPortalUrl((settings as { portal_url?: string | null }).portal_url ?? '')
+    setPortalRoutes((settings as { portal_routes?: string | null }).portal_routes ?? '')
     setBrandLoginMessage(
       (settings as { brand_login_message?: string | null }).brand_login_message ?? ''
     )
@@ -1572,7 +1576,9 @@ export function SettingsPage() {
       brand_logo: brandLogo,
       brand_login_title: brandLoginTitle.trim() || null,
       brand_login_message: brandLoginMessage.trim() || null,
-      login_links: JSON.stringify(loginLinks.filter((l) => l.label.trim() && l.url.trim()))
+      login_links: JSON.stringify(loginLinks.filter((l) => l.label.trim() && l.url.trim())),
+      portal_url: portalUrl.trim() || null,
+      portal_routes: portalRoutes.trim() || null
     })
   }
 
@@ -1811,6 +1817,37 @@ export function SettingsPage() {
                       rows={2}
                       className='resize-none text-[13px]'
                     />
+                  </Field>
+                  <Field
+                    label='Frontend app (portal)'
+                    hint='Where notification emails send non-admin users. Leave blank to link the admin everywhere. Extensions may register a default; this wins when set.'
+                  >
+                    <div className='flex flex-col gap-2'>
+                      <Input
+                        type='url'
+                        placeholder='https://portal.example.com'
+                        value={portalUrl}
+                        onChange={(e) => setPortalUrl(e.target.value)}
+                        className='h-8 text-[13px]'
+                        data-portal-url
+                      />
+                      <Textarea
+                        value={portalRoutes}
+                        onChange={(e) => setPortalRoutes(e.target.value)}
+                        placeholder={
+                          '{ "record": "/records/{collection}/{id}", "queue": "/queues/{id}", "report": "/reports/{id}", "alerts": "/alerts" }'
+                        }
+                        rows={3}
+                        spellCheck={false}
+                        className='resize-y font-mono text-[11.5px]'
+                        data-portal-routes
+                      />
+                      <p className='text-[11px] text-slate-400'>
+                        Route templates per destination (record, queue, report, alerts, chat, tasks,
+                        approvals, my_work, home). A destination without a route falls back to the
+                        admin.
+                      </p>
+                    </div>
                   </Field>
                   <Field label='Project URL'>
                     <Input

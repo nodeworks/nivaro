@@ -236,7 +236,11 @@ async function fireSubscriptionNotifications(
         try {
           const { buildRecordCard } = await import('../services/mail-record-card.js')
           const { labelledChanges } = await import('../services/mail-types.js')
-          const card = item ? await buildRecordCard(collection, item).catch(() => null) : null
+          const card = item
+            ? await buildRecordCard(collection, item, { recipientUserId: sub.user }).catch(
+                () => null
+              )
+            : null
           let delta: Record<string, unknown> | null = null
           if (eventType === 'update' && data && previous) {
             delta = {}
@@ -275,7 +279,9 @@ async function fireSubscriptionNotifications(
             ...emailCtx,
             ...(item
               ? {
-                  action_url: `${config.ADMIN_URL}/collections/${collection}/${item}`,
+                  action_url:
+                    (emailCtx.record_url as string | undefined) ??
+                    `${config.ADMIN_URL}/collections/${collection}/${item}`,
                   action_label: 'View item'
                 }
               : {})

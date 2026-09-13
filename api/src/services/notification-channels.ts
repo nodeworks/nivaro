@@ -365,9 +365,20 @@ export async function notifyUser(
         // Generic notices get the record's header-strip card too (business
         // collections only) — the same block the dedicated templates use.
         const { cardFor } = await import('./mail-builders.js')
+        const { resolveLinksFor, recordLink } = await import('./app-links.js')
         const card = opts.template_data?.record_card
           ? null
-          : await cardFor(opts.collection, opts.item ?? null).catch(() => null)
+          : await cardFor(opts.collection, opts.item ?? null, userId).catch(() => null)
+        // Links land in the app THIS recipient uses (portal vs admin).
+        const templateData = opts.template_data
+          ? await resolveLinksFor(opts.template_data, userId).catch(() => opts.template_data)
+          : undefined
+        const actionUrl =
+          opts.collection && opts.item && !String(opts.collection).startsWith('__')
+            ? await recordLink(opts.collection, opts.item, { recipientUserId: userId }).catch(
+                () => `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`
+              )
+            : null
         await sendMail({
           to: user.email,
           subject: opts.subject,
@@ -382,13 +393,8 @@ export async function notifyUser(
             message: opts.message,
             category: opts.category ?? classifyNotification(opts.subject),
             ...(card ? { record_card: card } : {}),
-            ...(opts.collection && opts.item && !String(opts.collection).startsWith('__')
-              ? {
-                  action_url: `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`,
-                  action_label: 'View item'
-                }
-              : {}),
-            ...(opts.template_data ?? {})
+            ...(actionUrl ? { action_url: actionUrl, action_label: 'View item' } : {}),
+            ...(templateData ?? {})
           }
         })
       }

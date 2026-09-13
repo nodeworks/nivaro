@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getMailType, listMailTypes, sendRenderedMail } from '../services/mail-types.js'
@@ -47,7 +48,23 @@ export async function mailTypeRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'sample_id is required' })
     try {
       const r = await t.render(String(body.sample_id ?? ''), { recipientUserId: req.user?.id })
-      return { data: r }
+      // Which app each recipient's links would open in (app-links.ts).
+      const { appForUser } = await import('../services/app-links.js')
+      const emails = r.recipients.map((x) => x.email.toLowerCase())
+      const users = emails.length
+        ? ((await db('nivaro_users').whereIn('email', emails).select('id', 'email')) as Array<{
+            id: string
+            email: string
+          }>)
+        : []
+      const byEmail = new Map(users.map((u) => [u.email.toLowerCase(), u.id]))
+      const recipients = await Promise.all(
+        r.recipients.map(async (x) => ({
+          ...x,
+          app: await appForUser(byEmail.get(x.email.toLowerCase()) ?? null)
+        }))
+      )
+      return { data: { ...r, recipients } }
     } catch (err) {
       return reply.code(422).send({ error: err instanceof Error ? err.message : 'Render failed' })
     }

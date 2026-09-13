@@ -1,4 +1,4 @@
-import { adminBaseUrl } from '../admin-base.js'
+import { recordLink } from './app-links.js'
 import { db } from '../db/index.js'
 import { getLabels, resolvePathValues } from './queues.js'
 
@@ -104,11 +104,11 @@ async function headerAssignments(
 
 export async function buildRecordCard(
   collection: string,
-  item: string | number
+  item: string | number,
+  opts: { recipientUserId?: string | null; app?: 'portal' | 'admin' } = {}
 ): Promise<RecordCard> {
   const itemId = String(item)
-  const base = adminBaseUrl() ?? ''
-  const url = `${base}/collections/${collection}/${encodeURIComponent(itemId)}`
+  const url = await recordLink(collection, itemId, opts)
   const meta = (await db('nivaro_collections')
     .where({ collection })
     .first('singular', 'display_name')

@@ -320,6 +320,16 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.email_digest = body.email_digest
     }
+    if ('link_app' in body) {
+      // Which app email links open in — null/'auto' = role rule (app-links.ts).
+      const v = body.link_app == null || body.link_app === 'auto' ? null : String(body.link_app)
+      if (v !== null && !['portal', 'admin'].includes(v)) {
+        return reply.code(400).send({ error: "link_app must be 'portal', 'admin' or 'auto'" })
+      }
+      patch.link_app = v
+      const { bustAppCache } = await import('../services/app-links.js')
+      bustAppCache(req.user!.id)
+    }
     if ('digest_hour' in body) {
       // Which hour (America/New_York) the daily digest lands (#75).
       const h = Number(body.digest_hour)

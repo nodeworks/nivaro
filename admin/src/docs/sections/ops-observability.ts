@@ -244,6 +244,11 @@ export const mailHarnessDocs: DocSection = {
       type: 'note',
       text: "Flows keep owning WHEN an email goes out and to whom; a mail op's `template` option names the Liquid file that renders the body, with the full trigger payload (record_card, approval_chain, brief, actor_name…) as its context. Templates live in api/templates/mail (core) or <extension>/templates/mail; partials under partials/ are shared building blocks ({% render 'partials/record-card', card: record_card %}). The Templates tab edits any of them as a database override."
     },
+    { type: 'h2', id: 'mail-harness-links', text: 'Where links land' },
+    {
+      type: 'p',
+      text: 'Links in emails resolve per recipient. Settings → Project → "Frontend app (portal)" names the headless app and its routes (record, queue, report, alerts, chat, tasks, approvals, my_work, home; a `record:<collection>` key gives one collection its own page). A recipient\'s profile choice ("Email links open in": Automatic / Portal / Admin) wins; otherwise admins get the admin console and everyone else the portal. A destination the portal has no route for falls back to the admin. Emails sent to a list in one go (the workflow transition flows) link the portal when one is configured. Extensions can register the portal through ctx.links.register; the Settings value wins when both exist. The harness shows the app each recipient would land in.'
+    },
     { type: 'h2', id: 'mail-harness-api', text: 'API' },
     {
       type: 'pre',

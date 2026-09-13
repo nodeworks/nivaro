@@ -436,7 +436,12 @@ async function buildTransitionEventPayload(args: {
   const recordPath =
     `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
     (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
-  const recordUrl = `${adminBaseUrl() ?? ''}${recordPath}`
+  // Shared sends (a flow mailing owners + creator in one go) link the PORTAL
+  // when one is configured, else the admin (app-links.ts, Rob 2026-09-13).
+  const { recordLink } = await import('./app-links.js')
+  const recordUrl = await recordLink(subject.collection, subject.itemId, {
+    query: addendumInfo ? `addendum=${encodeURIComponent(addendumInfo.id)}` : undefined
+  }).catch(() => `${adminBaseUrl() ?? ''}${recordPath}`)
   // Detail for the emails (mail-record-card / approval-chain / approval-brief):
   // the subject record's header-strip card, the chain with who acted / who is
   // up, and what changed since the record entered the state it just left.

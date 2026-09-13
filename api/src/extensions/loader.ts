@@ -26,6 +26,7 @@ import {
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
 import { registerMailTemplateRoot } from '../services/mail.js'
 import { renderMailTemplate } from '../services/mail.js'
+import { registerPortalLinks } from '../services/app-links.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -191,6 +192,11 @@ export interface ExtensionContext {
   readiness: {
     /** Register a scored check on the go-live readiness scorecard. */
     registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
+  }
+  links: {
+    /** Register the headless frontend's base URL + route map so email links
+     *  land there for non-admin recipients (Settings → Frontend app wins). */
+    register(reg: import('../services/app-links.js').LinkRegistration): void
   }
   mail: {
     /** Register an email type so it appears in the admin mail harness
@@ -483,6 +489,7 @@ async function loadExtension(
     | 'digest'
     | 'readiness'
     | 'mail'
+    | 'links'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -692,6 +699,12 @@ async function loadExtension(
           registerReadinessCheck(check)
         }
       },
+      links: {
+        register: (reg) => {
+          note('links')
+          registerPortalLinks(reg)
+        }
+      },
       mail: {
         registerType: (def) => {
           note('mail')
@@ -825,6 +838,7 @@ export async function loadExtensions(
     | 'digest'
     | 'readiness'
     | 'mail'
+    | 'links'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -962,6 +976,7 @@ export async function loadCloudExtensions(
     | 'digest'
     | 'readiness'
     | 'mail'
+    | 'links'
   >
 ) {
   let entries: string[]
@@ -1020,6 +1035,9 @@ export async function loadCloudExtensions(
         },
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
+        },
+        links: {
+          register: (reg) => registerPortalLinks(reg)
         },
         mail: {
           registerType: (def) => registerMailType(def),
@@ -1195,6 +1213,7 @@ export async function scanNewExtensions(
     | 'digest'
     | 'readiness'
     | 'mail'
+    | 'links'
   >
 ): Promise<string[]> {
   let entries: string[]

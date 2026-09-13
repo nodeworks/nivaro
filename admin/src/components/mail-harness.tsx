@@ -38,7 +38,7 @@ interface Sample {
 interface Rendered {
   subject: string
   html: string
-  recipients: Array<{ email: string; reason: string }>
+  recipients: Array<{ email: string; reason: string; app?: 'portal' | 'admin' }>
 }
 
 const SAMPLE_LABEL: Record<string, string> = {
@@ -311,7 +311,14 @@ export function MailHarness() {
                         <span className='block truncate font-mono text-slate-800 dark:text-foreground'>
                           {r.email}
                         </span>
-                        <span className='block text-[11px] text-slate-400'>{r.reason}</span>
+                        <span className='block text-[11px] text-slate-400'>
+                          {r.reason}
+                          {r.app && (
+                            <span className='ml-1.5 rounded bg-slate-100 px-1 py-px text-[9.5px] font-semibold uppercase text-slate-500 dark:bg-muted dark:text-slate-400'>
+                              {r.app}
+                            </span>
+                          )}
+                        </span>
                       </li>
                     ))}
                   </ul>

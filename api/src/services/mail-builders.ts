@@ -1,5 +1,5 @@
-import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { type LinkSpec, linkTo, recordLink } from './app-links.js'
 import { buildRecordCard, type RecordCard } from './mail-record-card.js'
 
 /**
@@ -29,7 +29,6 @@ const dayLabel = (d: Date | string | null | undefined): string | null => {
     timeZone: 'UTC'
   })
 }
-const base = () => config.ADMIN_URL.replace(/\/$/, '')
 const isBusiness = (c?: string | null) =>
   !!c && !c.startsWith('nivaro_') && !c.startsWith('directus_') && !c.startsWith('__')
 const nameOf = (
@@ -38,10 +37,11 @@ const nameOf = (
 
 export async function cardFor(
   collection?: string | null,
-  item?: string | number | null
+  item?: string | number | null,
+  recipientUserId?: string | null
 ): Promise<RecordCard | null> {
   if (!isBusiness(collection) || item == null || item === '') return null
-  return buildRecordCard(collection as string, item).catch(() => null)
+  return buildRecordCard(collection as string, item, { recipientUserId }).catch(() => null)
 }
 
 async function user(id?: string | null) {
@@ -83,8 +83,12 @@ export async function buildTaskAssignedMail(taskId: number | string): Promise<Bu
       due_label: dayLabel(t.due_date),
       assigned_by: nameOf(by),
       record_card: card,
-      record_url: card?.url ?? `${base()}/collections/${t.collection}/${t.item}`,
-      tasks_url: `${base()}/tasks`
+      record_url: await recordLink(t.collection, t.item),
+      tasks_url: await linkTo('tasks'),
+      _links: {
+        record_url: { kind: 'record', collection: t.collection, id: t.item },
+        tasks_url: { kind: 'tasks' }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -108,12 +112,16 @@ export async function buildTasksDelegatedMail(
     subject: `${tasks.length} task${tasks.length === 1 ? '' : 's'} delegated to you`,
     data: {
       from_name: nameOf(from) ?? 'a colleague',
-      tasks: tasks.map((t) => ({
-        title: t.title,
-        due_date: t.due_date ? new Date(t.due_date).toISOString() : null,
-        url: `${base()}/collections/${t.collection}/${t.item}`
-      })),
-      tasks_url: `${base()}/tasks`
+      tasks: await Promise.all(
+        tasks.map(async (t) => ({
+          title: t.title,
+          due_date: t.due_date ? new Date(t.due_date).toISOString() : null,
+          due_label: dayLabel(t.due_date),
+          url: await recordLink(t.collection, t.item)
+        }))
+      ),
+      tasks_url: await linkTo('tasks'),
+      _links: { tasks_url: { kind: 'tasks' } } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -182,8 +190,12 @@ export async function buildApprovalMail(
       actor_name: nameOf(actor),
       requested_by: nameOf(starter),
       record_card: card,
-      record_url: card?.url ?? `${base()}/collections/${inst.collection}/${inst.item}`,
-      approvals_url: `${base()}/approvals`
+      record_url: await recordLink(inst.collection, inst.item),
+      approvals_url: await linkTo('approvals'),
+      _links: {
+        record_url: { kind: 'record', collection: inst.collection, id: inst.item },
+        approvals_url: { kind: 'approvals' }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -221,7 +233,10 @@ export async function buildSlaEscalationMail(args: {
       days_past: days,
       friendly_id: args.friendly,
       record_card: card,
-      record_url: card?.url ?? `${base()}/collections/${args.collection}/${args.item}`
+      record_url: await recordLink(args.collection, args.item),
+      _links: {
+        record_url: { kind: 'record', collection: args.collection, id: args.item }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -253,19 +268,24 @@ export async function buildRecordAlertMail(
       threshold_value: def.threshold == null ? '' : String(def.threshold),
       detail: detail ?? null,
       record_card: card,
-      record_url: card?.url ?? `${base()}/collections/${def.collection}/${item}`,
-      manage_url: `${base()}/alerts`
+      record_url: await recordLink(def.collection, item),
+      manage_url: await linkTo('alerts'),
+      _links: {
+        record_url: { kind: 'record', collection: def.collection, id: item },
+        manage_url: { kind: 'alerts' }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }
 
-export function buildReportAlertMail(args: {
+export async function buildReportAlertMail(args: {
   alertName: string
   widgetTitle: string
   conditions: Array<{ field: string; op: string; value: unknown; now: unknown }>
   reportId: string
   reportName?: string | null
-}): BuiltMail {
+}): Promise<BuiltMail> {
+  const reportUrl = await linkTo('report', { id: args.reportId })
   return {
     template: 'alert',
     subject: `Report alert: ${args.alertName}`,
@@ -278,8 +298,12 @@ export function buildReportAlertMail(args: {
         label: `${c.field} ${c.op} ${c.value}`,
         now: String(c.now ?? 0)
       })),
-      report_url: `${base()}/report-studio/${args.reportId}`,
-      manage_url: `${base()}/report-studio/${args.reportId}`
+      report_url: reportUrl,
+      manage_url: reportUrl,
+      _links: {
+        report_url: { kind: 'report', id: args.reportId },
+        manage_url: { kind: 'report', id: args.reportId }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -312,7 +336,7 @@ export async function buildAccessRequestMail(args: {
       note: args.note ?? null,
       reasons: (args.reasons ?? []).map((r) => r.message).filter(Boolean),
       record_card: card,
-      manage_url: `${base()}/access-requests`
+      manage_url: await linkTo('access_requests', {}, { app: 'admin' })
     }
   }
 }
@@ -344,11 +368,12 @@ export async function buildAccessDecisionMail(args: {
       applied: args.applied ?? [],
       days: args.days ?? null,
       record_card: card,
-      record_url:
-        card?.url ??
-        (args.item
-          ? `${base()}/collections/${args.collection}/${args.item}`
-          : `${base()}/collections/${args.collection}`)
+      record_url: args.item ? await recordLink(args.collection, args.item) : await linkTo('home'),
+      _links: args.item
+        ? ({
+            record_url: { kind: 'record', collection: args.collection, id: args.item }
+          } satisfies Record<string, LinkSpec>)
+        : {}
     }
   }
 }
@@ -389,20 +414,21 @@ export async function buildMentionMail(args: {
       room_label: label,
       channel_wide: !!args.channelWide,
       excerpt,
-      chat_url: `${base()}/chat?room=${encodeURIComponent(args.room)}`
+      chat_url: await linkTo('chat', { room: args.room }),
+      _links: { chat_url: { kind: 'chat', room: args.room } } satisfies Record<string, LinkSpec>
     }
   }
 }
 
 // ── queue entry ──────────────────────────────────────────────────────────────
 
-export function buildQueueEntryMail(args: {
+export async function buildQueueEntryMail(args: {
   queueId: string
   queueName: string
   label?: string | null
   items: Array<{ label: string; collection: string; item_id: string | number }>
   countOnly?: number
-}): BuiltMail {
+}): Promise<BuiltMail> {
   const n = args.countOnly ?? args.items.length
   return {
     template: 'queue_entry',
@@ -410,11 +436,14 @@ export function buildQueueEntryMail(args: {
     data: {
       queue_name: args.label ?? args.queueName,
       count: n,
-      items: args.items.slice(0, 15).map((i) => ({
-        label: i.label,
-        url: `${base()}/collections/${i.collection}/${i.item_id}`
-      })),
-      queue_url: `${base()}/queues/${args.queueId}`
+      items: await Promise.all(
+        args.items.slice(0, 15).map(async (i) => ({
+          label: i.label,
+          url: await recordLink(i.collection, i.item_id)
+        }))
+      ),
+      queue_url: await linkTo('queue', { id: args.queueId }),
+      _links: { queue_url: { kind: 'queue', id: args.queueId } } satisfies Record<string, LinkSpec>
     }
   }
 }
@@ -440,7 +469,10 @@ export async function buildLineSlaMail(f: {
       field_label: f.label,
       days: f.days,
       record_card: card,
-      record_url: card?.url ?? `${base()}/collections/${f.parentCollection}/${f.parentId}`
+      record_url: await recordLink(f.parentCollection, f.parentId),
+      _links: {
+        record_url: { kind: 'record', collection: f.parentCollection, id: f.parentId }
+      } satisfies Record<string, LinkSpec>
     }
   }
 }

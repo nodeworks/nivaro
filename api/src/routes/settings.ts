@@ -82,6 +82,9 @@ const allowedSettingsKeys = [
   'brand_logo',
   'brand_login_title',
   'brand_login_message',
+  // Where email links land for non-admins (services/app-links.ts)
+  'portal_url',
+  'portal_routes',
   'welcome_message',
   'login_links',
   'formula_constants',
