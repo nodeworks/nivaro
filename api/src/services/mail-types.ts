@@ -1,7 +1,7 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
-import { buildRecordCard } from './mail-record-card.js'
 import { renderMailTemplate, sendMail, sendRawMail } from './mail.js'
+import { buildRecordCard } from './mail-record-card.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { getLabels } from './queues.js'
 
@@ -114,7 +114,7 @@ export async function historySamples(
     .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
     .leftJoin('nivaro_users as u', 'u.id', 'h.user')
     .orderBy('h.timestamp', 'desc')
-    .limit(30)
+    .limit(q.trim() ? 400 : 30)
     .select(
       'h.id',
       'h.timestamp',
@@ -153,7 +153,12 @@ export async function historySamples(
       label: `${labels[`${r.collection}:${r.item}`] || r.item} — ${r.transition ?? 'moved'} → ${r.state}`,
       hint: `${userName(r) || 'system'} · ${new Date(r.timestamp).toLocaleString('en-US')}`
     }))
-    .filter((o) => !needle || o.label.toLowerCase().includes(needle))
+    .filter(
+      (o) =>
+        !needle ||
+        o.label.toLowerCase().includes(needle) ||
+        (o.hint ?? '').toLowerCase().includes(needle)
+    )
 }
 
 export async function userSamples(q: string): Promise<MailSampleOption[]> {
@@ -593,11 +598,11 @@ export function registerCoreMailTypes(): void {
   }> = [
     {
       key: 'notification_workflow',
-      label: 'Workflow notification (generic)',
+      label: 'Other workflow notices (generic template)',
       group: 'Workflow',
       category: 'workflow',
       description:
-        'Owner-added, task-assigned, approval-chain, queue-entry and other workflow notices that still use the plain notification template.'
+        'NOT the state-change email — every other workflow-category inbox notice (owner added, task assigned, approval chain, queue entry, PO received…) that still goes out on the plain notification template. Each gets its own template in a later pass.'
     },
     {
       key: 'notification_alerts',

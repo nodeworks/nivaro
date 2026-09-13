@@ -413,6 +413,8 @@ async function buildTransitionEventPayload(args: {
   comment: string | null
   userId: string | null
   enteredPrevAt: Date | null
+  /** Harness replay: the moment the move happened (chain + stamp as of then). */
+  asOf?: Date | null
 }): Promise<Record<string, unknown>> {
   const { instance, newStateObj, prevStateObj, enteredPrevAt } = args
   const owners = newStateObj
@@ -442,7 +444,10 @@ async function buildTransitionEventPayload(args: {
   // be assembled.
   const [recordCard, approvalChain, brief, actor] = await Promise.all([
     buildRecordCard(subject.collection, subject.itemId).catch(() => null),
-    buildApprovalChain(instance.id).catch(() => []),
+    buildApprovalChain(instance.id, {
+      asOfStateId: newStateObj?.id ?? null,
+      asOfTime: args.asOf ?? null
+    }).catch(() => []),
     buildApprovalBrief(subject.collection, String(subject.itemId)).catch(() => null),
     args.userId
       ? (db('nivaro_users')
@@ -476,6 +481,7 @@ async function buildTransitionEventPayload(args: {
     transition_label: args.transitionLabel,
     source: args.source,
     comment: args.comment,
+    transitioned_at: (args.asOf ?? new Date()).toISOString(),
     // Machine stamps (state-merge, legacy sync, instance migration…) are
     // provenance, not something to quote back to a person.
     comment_is_human: !!args.comment && !MACHINE_COMMENT.test(args.comment),
@@ -549,7 +555,8 @@ export async function buildTransitionPayloadFromHistory(
     source: 'harness',
     comment: h.comment,
     userId: h.user,
-    enteredPrevAt: prevEntry ? new Date(prevEntry.timestamp) : null
+    enteredPrevAt: prevEntry ? new Date(prevEntry.timestamp) : null,
+    asOf: new Date(h.timestamp)
   })
   // The flows read creator / contacts off the subject record via item-read;
   // hand the harness the same columns so recipients + templates resolve.
@@ -579,7 +586,6 @@ export async function buildTransitionPayloadFromHistory(
       const record: Record<string, unknown> = { ...rec }
       for (const [k, id] of users) record[k] = byId.get(id) ?? rec[k]
       payload.record = record
-      payload.transitioned_at = new Date(h.timestamp).toISOString()
     }
   } catch {
     /* record enrichment is best-effort */
