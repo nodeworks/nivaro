@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-13T21:57:31.699Z",
+  "generated_at": "2026-09-13T22:16:15.683Z",
   "releases": [
+    {
+      "version": "0.1.270",
+      "tag": "v0.1.270",
+      "date": "2026-09-13T18:16:06-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "mail",
+              "text": "approval path in emails uses the real path-aware chain",
+              "hash": "8ea3a858"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.269",
       "tag": "v0.1.269",
-      "date": "2026-09-13T17:57:23-04:00",
+      "date": "2026-09-13T17:57:31-04:00",
       "sections": [
         {
           "label": "Added",
