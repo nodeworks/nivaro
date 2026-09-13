@@ -2,6 +2,7 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   DisplayPrefsCard,
   NivaroProvider,
+  LinkAppCard,
   NotificationRulesCard,
   NotificationSourcesCard,
   TimezoneCard,
@@ -648,7 +649,8 @@ export function ProfilePage() {
                   (Rob, 2026-08-24). Same provider the sources card uses. */}
               <TimezoneCard />
               <DisplayPrefsCard />
-              <NotificationRulesCard />
+              <LinkAppCard />
+            <NotificationRulesCard />
               <NotificationSourcesCard />
             </NivaroProvider>
             <BrowserPushCard />
