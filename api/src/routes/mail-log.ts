@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
+import { aggregateMailStats, type MailLogRow, UNTEMPLATED } from '../services/mail-stats.js'
 
 /**
  * Outbound mail log (#71): every send attempt with its outcome — "did the
@@ -14,9 +15,32 @@ import { sendRawMail } from '../services/mail.js'
 export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
-  app.get<{ Querystring: { search?: string; status?: string; page?: string } }>(
-    '/',
-    async (req) => {
+  // Delivery board (#9): the window rolled up per day / template / recipient.
+  // Rows come back narrow (no body) and are aggregated in JS — recipients are
+  // comma lists that need splitting anyway. Capped at 50k rows per window.
+  app.get<{ Querystring: { days?: string } }>('/stats', async (req) => {
+    const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 30
+    const since = new Date(Date.now() - days * 86_400_000)
+    const rows = (await db('nivaro_mail_log')
+      .where('created_at', '>=', since)
+      .orderBy('id', 'desc')
+      .limit(50_000)
+      .select('to', 'status', 'template', 'error', 'created_at')) as MailLogRow[]
+    const { listMailTypes } = await import('../services/mail-types.js')
+    const types = listMailTypes()
+    // A template shared by several types ('notification') gets no label —
+    // naming the first would misattribute every other type's sends.
+    const labelFor = (template: string) => {
+      const matches = types.filter((t) => t.template === template)
+      return matches.length === 1 ? matches[0].label : null
+    }
+    return { data: aggregateMailStats(rows, { days, labelFor }) }
+  })
+
+  app.get<{
+    Querystring: { search?: string; status?: string; page?: string; template?: string }
+  }>('/', async (req) => {
+    {
       const page = Math.max(1, Number(req.query.page) || 1)
       const limit = 50
       let q = db('nivaro_mail_log').orderBy('id', 'desc')
@@ -27,6 +51,14 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       ) {
         q = q.where({ status: req.query.status })
         countQ = countQ.where({ status: req.query.status })
+      }
+      if (req.query.template) {
+        // The board's "(untemplated)" bucket = NULL template rows.
+        const tpl = req.query.template === UNTEMPLATED ? null : req.query.template.slice(0, 120)
+        const w = (qb: typeof q) =>
+          tpl === null ? qb.whereNull('template') : qb.where({ template: tpl })
+        q = w(q)
+        countQ = w(countQ)
       }
       if (req.query.search) {
         const like = `%${req.query.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
@@ -48,7 +80,7 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
         page
       }
     }
-  )
+  })
 
   app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const row = await db('nivaro_mail_log').where('id', req.params.id).first()

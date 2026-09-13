@@ -77,6 +77,7 @@ export async function buildTaskAssignedMail(taskId: number | string): Promise<Bu
     template: 'task_assigned',
     subject: `Task assigned: ${t.title}`,
     data: {
+      why: nameOf(by) ? `${nameOf(by)} assigned this task to you` : 'this task was assigned to you',
       task_title: t.title,
       task_description: t.description,
       due_date: t.due_date ? new Date(t.due_date).toISOString() : null,
@@ -111,6 +112,7 @@ export async function buildTasksDelegatedMail(
     template: 'tasks_delegated',
     subject: `${tasks.length} task${tasks.length === 1 ? '' : 's'} delegated to you`,
     data: {
+      why: `you are ${nameOf(from) ?? 'a colleague'}'s delegate while they are out of office`,
       from_name: nameOf(from) ?? 'a colleague',
       tasks: await Promise.all(
         tasks.map(async (t) => ({
@@ -172,6 +174,10 @@ export async function buildApprovalMail(
     template: 'approval',
     subject,
     data: {
+      why:
+        kind === 'requested'
+          ? `you are the approver for "${stepLabel}" of ${inst.chain_name}`
+          : `you started the ${inst.chain_name} approval on this record`,
       kind,
       chain_name: inst.chain_name,
       step_label: stepLabel,
@@ -211,6 +217,8 @@ export async function buildSlaEscalationMail(args: {
   friendly: string
   collection: string
   item: string
+  /** The ladder tier's target — 'owner' | 'manager' | 'user:<id>'. */
+  notify?: string | null
 }): Promise<BuiltMail> {
   const [card, state] = await Promise.all([
     cardFor(args.collection, args.item),
@@ -226,6 +234,12 @@ export async function buildSlaEscalationMail(args: {
     template: 'sla_escalation',
     subject: `SLA escalation (tier ${args.tier + 1}): ${args.ruleName}`,
     data: {
+      why:
+        args.notify === 'manager'
+          ? `you manage an owner of this record and the SLA rule "${args.ruleName}" escalates to managers at tier ${args.tier + 1}`
+          : args.notify?.startsWith('user:')
+            ? `the SLA rule "${args.ruleName}" escalates to you at tier ${args.tier + 1}`
+            : `you own this record in ${state?.label ?? args.stateKey.replace(/_/g, ' ')} and its SLA is past due`,
       rule_name: args.ruleName,
       tier: args.tier + 1,
       state_label: state?.label ?? args.stateKey.replace(/_/g, ' '),
@@ -260,6 +274,7 @@ export async function buildRecordAlertMail(
     template: 'alert',
     subject: `Alert: ${def.name}`,
     data: {
+      why: `you subscribed to the alert "${def.name}"`,
       kind: 'record',
       rule_name: def.name,
       metric_name: fieldRow?.label || def.field.replace(/_/g, ' '),
@@ -290,6 +305,7 @@ export async function buildReportAlertMail(args: {
     template: 'alert',
     subject: `Report alert: ${args.alertName}`,
     data: {
+      why: `you set up the alert "${args.alertName}"${args.reportName ? ` on the report "${args.reportName}"` : ''}`,
       kind: 'report',
       rule_name: args.alertName,
       widget_title: args.widgetTitle,
@@ -330,6 +346,7 @@ export async function buildAccessRequestMail(args: {
     template: 'access_request',
     subject: `${args.requesterName} requested access to ${args.item ? `${args.collection}/${args.friendly ?? args.item}` : args.collection}`,
     data: {
+      why: 'you are an administrator — access requests go to every admin',
       requester_name: args.requesterName,
       requester_email: requester?.email ?? null,
       target_label: target,
@@ -363,6 +380,7 @@ export async function buildAccessDecisionMail(args: {
     template: 'access_decision',
     subject,
     data: {
+      why: `you asked for access to ${target}`,
       decision: args.decision,
       target_label: target,
       applied: args.applied ?? [],
@@ -409,6 +427,9 @@ export async function buildMentionMail(args: {
       ? `@channel in ${args.room.slice(3)}`
       : `${senderName} mentioned you in chat`,
     data: {
+      why: args.channelWide
+        ? `${senderName} messaged everyone in ${label}`
+        : `${senderName} mentioned you in ${label}`,
       sender_name: senderName,
       sender_email: sender?.email ?? null,
       room_label: label,
@@ -434,6 +455,7 @@ export async function buildQueueEntryMail(args: {
     template: 'queue_entry',
     subject: `${args.queueName}: ${n} new item${n === 1 ? '' : 's'}`,
     data: {
+      why: `you subscribed to the queue "${args.label ?? args.queueName}"`,
       queue_name: args.label ?? args.queueName,
       count: n,
       items: await Promise.all(
@@ -464,6 +486,7 @@ export async function buildLineSlaMail(f: {
     template: 'line_sla',
     subject: f.subject,
     data: {
+      why: `you currently own ${f.friendlyId} and its lines are missing ${f.label}`,
       friendly_id: f.friendlyId,
       count: f.count,
       field_label: f.label,

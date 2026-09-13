@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, RotateCw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { MailDeliveryBoard } from '@/components/mail-delivery-board'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +38,9 @@ const STATUS_HINT: Record<string, string> = {
 
 export default function MailLog() {
   const qc = useQueryClient()
+  const [view, setView] = useState<'delivery' | 'log'>('delivery')
+  const [days, setDays] = useState<7 | 14 | 30>(30)
+  const [template, setTemplate] = useState<string>('')
   const [status, setStatus] = useState<string>('')
   const [input, setInput] = useState('')
   const [search, setSearch] = useState('')
@@ -52,11 +56,19 @@ export default function MailLog() {
   }, [input])
 
   const { data } = useQuery<{ data: MailRow[]; total: number }>({
-    queryKey: ['mail-log', status, search, page],
+    queryKey: ['mail-log', status, search, template, page],
     queryFn: () =>
       api
-        .get('/mail-log', { params: { status: status || undefined, search: search || undefined, page } })
-        .then((r) => r.data)
+        .get('/mail-log', {
+          params: {
+            status: status || undefined,
+            search: search || undefined,
+            template: template || undefined,
+            page
+          }
+        })
+        .then((r) => r.data),
+    enabled: view === 'log'
   })
   const rows = data?.data ?? []
   const total = data?.total ?? 0
@@ -90,122 +102,203 @@ export default function MailLog() {
               Mail Log
             </h1>
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Every outbound email attempt and its outcome — sent, failed, dropped by test mode,
-              or deferred into a digest. Kept 30 days.
+              Every outbound email attempt and its outcome — sent, failed, dropped by test mode, or
+              deferred into a digest. Kept 30 days.
             </p>
           </div>
-        </div>
-        <div className='mt-3 flex items-center gap-2'>
-          <div className='flex gap-1'>
-            {['', 'sent', 'failed', 'dropped', 'deferred'].map((s) => (
+          <div className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {(
+              [
+                ['delivery', 'Delivery'],
+                ['log', 'Log']
+              ] as const
+            ).map(([k, label]) => (
               <button
-                key={s || 'all'}
+                key={k}
                 type='button'
-                onClick={() => {
-                  setStatus(s)
-                  setPage(1)
-                }}
+                onClick={() => setView(k)}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-[12.5px] font-medium capitalize',
-                  status === s
+                  'rounded px-3 py-1 text-[12.5px] font-medium',
+                  view === k
                     ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                     : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-muted/50'
                 )}
               >
-                {s || 'All'}
+                {label}
               </button>
             ))}
           </div>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder='Search recipient or subject…'
-            className='ml-auto h-8 w-[280px] rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
-          />
         </div>
-      </header>
-
-      <div className='flex-1 overflow-y-auto p-6'>
-        <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-          <table className='w-full text-[12px] tabular-nums'>
-            <thead>
-              <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border/60'>
-                <th className='px-3 py-2 font-semibold'>When</th>
-                <th className='px-3 py-2 font-semibold'>To</th>
-                <th className='px-3 py-2 font-semibold'>Subject</th>
-                <th className='px-3 py-2 font-semibold'>Template</th>
-                <th className='px-3 py-2 font-semibold'>Status</th>
-              </tr>
-            </thead>
-            <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={5} className='px-3 py-8 text-center text-[13px] text-slate-400'>
-                    No mail matches — sends land here the moment they happen.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r) => (
-                <tr
-                  key={r.id}
-                  onClick={() => setOpenId(r.id)}
-                  className='cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/40'
+        {view === 'delivery' ? (
+          <div className='mt-3 flex items-center gap-1'>
+            {([7, 14, 30] as const).map((d) => (
+              <button
+                key={d}
+                type='button'
+                onClick={() => setDays(d)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-[12.5px] font-medium',
+                  days === d
+                    ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                    : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-muted/50'
+                )}
+              >
+                Last {d} days
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className='mt-3 flex items-center gap-2'>
+            <div className='flex gap-1'>
+              {['', 'sent', 'failed', 'dropped', 'deferred'].map((s) => (
+                <button
+                  key={s || 'all'}
+                  type='button'
+                  onClick={() => {
+                    setStatus(s)
+                    setPage(1)
+                  }}
+                  className={cn(
+                    'rounded-md px-3 py-1.5 text-[12.5px] font-medium capitalize',
+                    status === s
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-muted/50'
+                  )}
                 >
-                  <td className='whitespace-nowrap px-3 py-2 text-slate-500'>
-                    {new Date(r.created_at).toLocaleString()}
-                  </td>
-                  <td className='max-w-[240px] truncate px-3 py-2 font-medium text-slate-700 dark:text-foreground'>
-                    {r.to}
-                  </td>
-                  <td className='max-w-[340px] truncate px-3 py-2 text-slate-600 dark:text-muted-foreground'>
-                    {r.subject || '(no subject)'}
-                  </td>
-                  <td className='px-3 py-2 font-mono text-[11px] text-slate-400'>
-                    {r.template || '—'}
-                  </td>
-                  <td className='px-3 py-2'>
-                    <span
-                      title={STATUS_HINT[r.status]}
-                      className={cn(
-                        'rounded-full px-2 py-0.5 text-[10.5px] font-semibold capitalize',
-                        STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-600'
-                      )}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
+                  {s || 'All'}
+                </button>
               ))}
-            </tbody>
-          </table>
-        </div>
-        {pages > 1 && (
-          <div className='mt-3 flex items-center gap-2 text-[12px] text-slate-500'>
-            <button
-              type='button'
-              disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
-              className='rounded-md border border-slate-200 px-2 py-1 disabled:opacity-40 dark:border-border'
-            >
-              Prev
-            </button>
-            <span>
-              Page {page} of {pages} · {total.toLocaleString()} rows
-            </span>
-            <button
-              type='button'
-              disabled={page >= pages}
-              onClick={() => setPage((p) => p + 1)}
-              className='rounded-md border border-slate-200 px-2 py-1 disabled:opacity-40 dark:border-border'
-            >
-              Next
-            </button>
+            </div>
+            {template && (
+              <button
+                type='button'
+                onClick={() => {
+                  setTemplate('')
+                  setPage(1)
+                }}
+                className='flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 font-mono text-[11px] text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted/50'
+                title='Clear the template filter'
+              >
+                {template}
+                <X className='h-3 w-3' />
+              </button>
+            )}
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder='Search recipient or subject…'
+              className='ml-auto h-8 w-[280px] rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
+            />
           </div>
         )}
-      </div>
+      </header>
+
+      {view === 'delivery' && (
+        <div className='flex-1 overflow-y-auto p-6'>
+          <MailDeliveryBoard
+            days={days}
+            onOpenTemplate={(t) => {
+              setTemplate(t)
+              setStatus('')
+              setPage(1)
+              setView('log')
+            }}
+            onOpenStatus={(st) => {
+              setStatus(st)
+              setTemplate('')
+              setPage(1)
+              setView('log')
+            }}
+          />
+        </div>
+      )}
+
+      {view === 'log' && (
+        <div className='flex-1 overflow-y-auto p-6'>
+          <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <table className='w-full text-[12px] tabular-nums'>
+              <thead>
+                <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border/60'>
+                  <th className='px-3 py-2 font-semibold'>When</th>
+                  <th className='px-3 py-2 font-semibold'>To</th>
+                  <th className='px-3 py-2 font-semibold'>Subject</th>
+                  <th className='px-3 py-2 font-semibold'>Template</th>
+                  <th className='px-3 py-2 font-semibold'>Status</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className='px-3 py-8 text-center text-[13px] text-slate-400'>
+                      No mail matches — sends land here the moment they happen.
+                    </td>
+                  </tr>
+                )}
+                {rows.map((r) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => setOpenId(r.id)}
+                    className='cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/40'
+                  >
+                    <td className='whitespace-nowrap px-3 py-2 text-slate-500'>
+                      {new Date(r.created_at).toLocaleString()}
+                    </td>
+                    <td className='max-w-[240px] truncate px-3 py-2 font-medium text-slate-700 dark:text-foreground'>
+                      {r.to}
+                    </td>
+                    <td className='max-w-[340px] truncate px-3 py-2 text-slate-600 dark:text-muted-foreground'>
+                      {r.subject || '(no subject)'}
+                    </td>
+                    <td className='px-3 py-2 font-mono text-[11px] text-slate-400'>
+                      {r.template || '—'}
+                    </td>
+                    <td className='px-3 py-2'>
+                      <span
+                        title={STATUS_HINT[r.status]}
+                        className={cn(
+                          'rounded-full px-2 py-0.5 text-[10.5px] font-semibold capitalize',
+                          STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-600'
+                        )}
+                      >
+                        {r.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {pages > 1 && (
+            <div className='mt-3 flex items-center gap-2 text-[12px] text-slate-500'>
+              <button
+                type='button'
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+                className='rounded-md border border-slate-200 px-2 py-1 disabled:opacity-40 dark:border-border'
+              >
+                Prev
+              </button>
+              <span>
+                Page {page} of {pages} · {total.toLocaleString()} rows
+              </span>
+              <button
+                type='button'
+                disabled={page >= pages}
+                onClick={() => setPage((p) => p + 1)}
+                className='rounded-md border border-slate-200 px-2 py-1 disabled:opacity-40 dark:border-border'
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {openId != null && (
-        <div className='fixed inset-0 z-[60] flex justify-end bg-black/30' onClick={() => setOpenId(null)}>
+        <div
+          className='fixed inset-0 z-[60] flex justify-end bg-black/30'
+          onClick={() => setOpenId(null)}
+        >
           <div
             className='flex h-full w-[560px] flex-col overflow-hidden bg-white shadow-xl dark:bg-card'
             onClick={(e) => e.stopPropagation()}

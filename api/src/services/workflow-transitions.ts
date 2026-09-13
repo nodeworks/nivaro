@@ -501,6 +501,18 @@ async function buildTransitionEventPayload(args: {
       .map((o) => o.email)
       .filter(Boolean)
       .join(','),
+    // Per-address "why me" for a mail op that sends one email per
+    // recipient (`split`): owners of the new state; the creator / contacts
+    // get theirs added by buildTransitionPayloadFromHistory / the flow's
+    // item-read step via recipientReasonsFor(). Lower-cased keys.
+    recipient_reasons: Object.fromEntries(
+      owners
+        .filter((o) => o.email)
+        .map((o) => [
+          o.email.toLowerCase(),
+          `you own ${newStateObj?.label ? `"${newStateObj.label}"` : 'this state'} for this record`
+        ])
+    ),
     entered_previous_state_at: enteredPrevAt ? enteredPrevAt.toISOString() : null,
     hours_in_previous_state: enteredPrevAt
       ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10

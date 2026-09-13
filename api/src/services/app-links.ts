@@ -27,6 +27,7 @@ export type LinkKind =
   | 'notifications'
   | 'my_work'
   | 'home'
+  | 'profile'
 
 export type LinkParams = Record<string, string | number | null | undefined>
 
@@ -49,7 +50,8 @@ const ADMIN_ROUTES: Record<LinkKind, string> = {
   access_requests: '/access-requests',
   notifications: '/notifications',
   my_work: '/my-work',
-  home: '/'
+  home: '/',
+  profile: '/profile'
 }
 
 let registered: LinkRegistration | null = null
@@ -142,6 +144,32 @@ export async function appForUser(userId?: string | null): Promise<'portal' | 'ad
 export function bustAppCache(userId?: string): void {
   if (userId) appCache.delete(String(userId).toUpperCase())
   else appCache.clear()
+  emailCache.clear()
+}
+
+const emailCache = new Map<string, { at: number; id: string | null }>()
+/** The user behind an address — a mail sent BY EMAIL (flow ops, raw sends)
+ *  still resolves its links and footer for the person, when there is one.
+ *  Only a single, exact, active address matches; anything else is null. */
+export async function userIdForEmail(email: string | null | undefined): Promise<string | null> {
+  const key = String(email ?? '')
+    .trim()
+    .toLowerCase()
+  if (!key.includes('@')) return null
+  const hit = emailCache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.id
+  let id: string | null = null
+  try {
+    const row = (await db('nivaro_users')
+      .whereRaw('LOWER(email) = ?', [key])
+      .where((q) => q.whereNull('status').orWhereNot('status', 'suspended'))
+      .first('id')) as { id: string } | undefined
+    id = row?.id ?? null
+  } catch {
+    id = null
+  }
+  emailCache.set(key, { at: Date.now(), id })
+  return id
 }
 
 /** Build a link for a destination. `app` forces one side; otherwise the

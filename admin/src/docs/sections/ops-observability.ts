@@ -244,6 +244,24 @@ export const mailHarnessDocs: DocSection = {
       type: 'note',
       text: "Flows keep owning WHEN an email goes out and to whom; a mail op's `template` option names the Liquid file that renders the body, with the full trigger payload (record_card, approval_chain, brief, actor_name…) as its context. Templates live in api/templates/mail (core) or <extension>/templates/mail; partials under partials/ are shared building blocks ({% render 'partials/record-card', card: record_card %}). The Templates tab edits any of them as a database override."
     },
+    { type: 'h2', id: 'mail-harness-why', text: 'The "why me" footer' },
+    {
+      type: 'p',
+      text: 'Every email ends with "You\'re getting this because …" and a link to the recipient\'s notification rules (in the app they use). The reason is per recipient: builders name it (assigned a task, approver for a step, watching a record, subscribed to a queue, delegate while someone is out), workflow transition mails read it off the trigger payload (owner of the new state, creator, additional contact), and anything without a stated reason falls back to the honest default — "your notification rules for <category> send you email".'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Flow mail ops: 'One email per recipient' (option `split`) sends each address its own copy — the footer and every link resolve for that person; 'Why-me line' (option `why`, templated) pins a shared reason for ops that mail one person per run.",
+        "Programmatic senders pass `why` to notifyUser / sendMail / sendRawMail, or put `why` in the template's data.",
+        "The rules link is the profile page — portal route key `profile` (Settings → Project → Frontend app), admin fallback /profile."
+      ]
+    },
+    { type: 'h2', id: 'mail-delivery-board', text: 'Delivery board' },
+    {
+      type: 'p',
+      text: 'Mail Log → Delivery rolls the outbound log up over the last 7 / 14 / 30 days: sent / failed / dropped / deferred with the success rate (sent ÷ attempted), a per-day stacked chart, a per-template table (labelled with the mail type when one template maps to exactly one type; a row opens the log filtered to it), the busiest recipients, "Not reaching" (addresses whose LATEST attempt failed), and failure reasons grouped by the stable head of the SMTP error (addresses, ids and session tokens collapsed). Raw sends log a template name too (flow ops as flow:<op key>, the digest as daily_digest); rows older than that land in "Untemplated sends".'
+    },
     { type: 'h2', id: 'mail-harness-links', text: 'Where links land' },
     {
       type: 'p',

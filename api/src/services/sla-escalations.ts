@@ -177,7 +177,8 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
               hoursPast,
               friendly,
               collection: linkCollection,
-              item: linkItem
+              item: linkItem,
+              notify: ladder[tier].notify
             })
             for (const uid of recipients) {
               await notifyUser(app, uid, {

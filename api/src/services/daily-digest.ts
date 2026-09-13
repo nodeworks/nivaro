@@ -30,6 +30,8 @@ import { fetchQueueItems } from './queues.js'
  * hours were the collision Rob asked about.
  */
 
+const DIGEST_WHY = 'you asked for a daily summary instead of individual emails'
+
 export interface DigestLine {
   text: string
   sub?: string | null
@@ -468,7 +470,9 @@ export async function runDailyActionDigest(
         opts.capture({
           to: email,
           subject: 'Your daily action summary',
-          html: await wrapMailFragment(digestHtml, 'Daily action summary')
+          html: await wrapMailFragment(digestHtml, 'Daily action summary', {
+            why: DIGEST_WHY
+          })
         })
         sent++
         continue
@@ -478,6 +482,8 @@ export async function runDailyActionDigest(
         subject: 'Your daily action summary',
         title: 'Daily action summary',
         html: digestHtml,
+        template: 'daily_digest',
+        why: DIGEST_WHY,
         skipDigest: true
       })
       sent++

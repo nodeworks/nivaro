@@ -74,7 +74,7 @@
         <tr>
           <td id="card-ftr" class="ftr-pad" style="background-color:#f4f7fa;border-top:1px solid #dde3ea;padding:18px 36px;" bgcolor="#f4f7fa">
             <p class="ftr-text" style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;line-height:20px;">
-              Sent by <strong style="color:#334155;">{% block brandname %}Nivaro{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}
+              Sent by <strong style="color:#334155;">{% block brandname %}Nivaro{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
             </p>
           </td>
         </tr>

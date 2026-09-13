@@ -94,7 +94,7 @@ export async function mailTypeRoutes(app: FastifyInstance): Promise<void> {
         .filter((s) => s.includes('@'))
     else to = rendered.recipients.map((r) => r.email)
     if (to.length === 0) return reply.code(400).send({ error: 'No recipient resolved' })
-    await sendRenderedMail(rendered, to)
+    await sendRenderedMail(rendered, to, { template: t.template ?? undefined })
     await logActivity({
       action: 'mail-type-send',
       user: req.user?.id ?? null,

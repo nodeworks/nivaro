@@ -273,6 +273,9 @@ async function fireSubscriptionNotifications(
           category: 'watch',
           cadence: 'sender',
           template: recordScoped ? 'record_watch' : 'subscription',
+          why: recordScoped
+            ? 'you watch this record'
+            : `you subscribed to "${sub.label || `${collectionLabel} subscription`}"`,
           data: {
             first_name: sub.first_name,
             message,
@@ -507,6 +510,11 @@ export async function fireWorkflowStateSubscriptions(opts: {
           category: 'workflow',
           cadence: 'sender',
           template: 'notification',
+          why: recordScoped
+            ? 'you watch this record'
+            : `you subscribed to ${opts.collection.replace(/_/g, ' ')} state changes${
+                sub.filter_value ? ` into ${opts.stateLabel}` : ''
+              }`,
           data: {
             first_name: sub.first_name,
             message,

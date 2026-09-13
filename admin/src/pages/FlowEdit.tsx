@@ -62,6 +62,7 @@ const NOTIFY_CATEGORY_OPTIONS = [
   { value: 'system', label: 'System & digests' },
   { value: 'other', label: 'Everything else' }
 ]
+
 import { Textarea } from '@/components/ui/textarea'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -1191,6 +1192,32 @@ function EditOperationDialog({
                       Which row of each recipient's Profile → Notification rules governs this send.
                       Subjects with no recognisable keyword land in "Everything else" unless set
                       here.
+                    </p>
+                  </div>
+                  <div className='flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 dark:border-border'>
+                    <div>
+                      <p className='text-[12.5px] font-medium'>One email per recipient</p>
+                      <p className='text-[11px] text-slate-400'>
+                        Splits the To list: each person gets their own copy, with links that open in
+                        the app they use and a "you're getting this because…" footer that names
+                        their reason (owner of the state, creator, contact).
+                      </p>
+                    </div>
+                    <Switch
+                      checked={optsState.split === true}
+                      onCheckedChange={(v) => setOpt('split', v)}
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Why-me line (optional)</Label>
+                    <Input
+                      value={(optsState.why as string) ?? ''}
+                      onChange={(e) => setOpt('why', e.target.value)}
+                      placeholder='you own {{to_state.label}} for this record'
+                    />
+                    <p className='text-[11px] text-slate-400'>
+                      Finishes "You're getting this because …" in the footer. Templates allowed.
+                      Leave blank on a split send to use the trigger's per-recipient reasons.
                     </p>
                   </div>
                 </>

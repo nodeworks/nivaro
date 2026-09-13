@@ -5,7 +5,7 @@ import { assertSafeUrl } from '../lib/ssrf.js'
 import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
-import { NOTIFY_CATEGORIES, notifyUser } from './notification-channels.js'
+import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
 
 interface FlowOperation {
   id: string
@@ -194,58 +194,197 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
   }
 }
 
+/** Split a mail op's `to` into addresses (comma / semicolon / whitespace). */
+const splitAddresses = (to: string) => [
+  ...new Set(
+    to
+      .split(/[,;\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.includes('@'))
+  )
+]
+
+/**
+ * Why THIS address is on a flow mail: the trigger payload's
+ * `recipient_reasons` (owners, by the transition payload) first, then the
+ * record's own people (creator / contacts, expanded by the flow's item-read
+ * step). Null when nothing explains it — the footer then stays silent
+ * rather than inventing a reason.
+ */
+function reasonForRecipient(email: string, data: Record<string, unknown>): string | null {
+  const key = email.trim().toLowerCase()
+  const reasons = data.recipient_reasons as Record<string, string> | undefined
+  if (reasons && typeof reasons[key] === 'string') return reasons[key]
+  const rec = data.record as Record<string, unknown> | undefined
+  // item-read stores dotted fields FLAT ('creator.email'); a harness payload
+  // carries the nested object. Read either shape.
+  const emailAt = (field: string): string | null => {
+    const v = rec?.[field]
+    if (v && typeof v === 'object' && typeof (v as { email?: unknown }).email === 'string')
+      return String((v as { email: string }).email).toLowerCase()
+    const flat = rec?.[`${field}.email`]
+    return typeof flat === 'string' && flat.includes('@') ? flat.toLowerCase() : null
+  }
+  if (emailAt('creator') === key || emailAt('user_created') === key)
+    return 'you created this record'
+  if (emailAt('additional_contact') === key) return 'you are the additional contact on this record'
+  if (emailAt('internal_contact') === key) return 'you are the internal contact on this record'
+  return null
+}
+
 async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const to = resolveTemplate((opts.to as string) ?? '', data)
   const subject = resolveTemplate((opts.subject as string) ?? op.name, data)
-  // Optional named mail template (core or extension-registered): rendered with
-  // the FULL flow data as its context, replacing the plain-text body. A plain
-  // body still gets the branded chrome via sendRawMail's auto-wrap.
   const templateName = typeof opts.template === 'string' ? opts.template.trim() : ''
-  let body = resolveTemplate((opts.body as string) ?? '', data)
-  if (templateName) {
-    try {
-      body = await renderMailTemplate(templateName, data as Record<string, unknown>)
-    } catch (err) {
-      ctx.log.warn(
-        { err, flowId: ctx.flowId, key: op.key, template: templateName },
-        'Mail template failed to render, falling back to body'
-      )
-    }
-  }
   const from = opts.from ? resolveTemplate(opts.from as string, data) : undefined
+  // `split` sends ONE email per address: the body renders per recipient, so
+  // the why-me footer and every link resolve for that person (portal vs
+  // admin) instead of the shared, no-recipient defaults.
+  const split = opts.split === true
+  // `why` is a template ("you own {{to_state.label}}"); without it a split
+  // send reads the payload's per-recipient reasons.
+  const whyTemplate = typeof opts.why === 'string' ? opts.why.trim() : ''
 
   if (!to) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Mail operation missing recipient, skipping')
     return { status: 'reject' as const, output: { ...data, $error: 'missing recipient' } }
   }
 
+  const dataRec = data as Record<string, unknown>
+  // Optional `category` op option pins the recipient's notification-rules
+  // row (reports / workflow / alerts …) instead of sniffing the subject.
+  const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
+  // Optional named mail template (core or extension-registered): rendered with
+  // the FULL flow data as its context, replacing the plain-text body. A plain
+  // body still gets the branded chrome via sendRawMail's auto-wrap.
+  const renderBody = async (context: Record<string, unknown>) => {
+    let body = resolveTemplate((opts.body as string) ?? '', context as FlowData)
+    if (templateName) {
+      try {
+        body = await renderMailTemplate(templateName, context)
+      } catch (err) {
+        ctx.log.warn(
+          { err, flowId: ctx.flowId, key: op.key, template: templateName },
+          'Mail template failed to render, falling back to body'
+        )
+      }
+    }
+    return body
+  }
+  // Per-recipient context: why + rules link + the record link in THEIR app.
+  const contextFor = async (email: string): Promise<Record<string, unknown>> => {
+    // No stated reason → the honest default: the recipient's rules for the
+    // op's category let it through (the same fallback notifyUser uses).
+    const why =
+      (whyTemplate
+        ? resolveTemplate(whyTemplate, { ...data, recipient_email: email } as FlowData)
+        : reasonForRecipient(email, dataRec)) ||
+      (category
+        ? `your notification rules for "${NOTIFY_CATEGORY_LABELS[category]}" send you email`
+        : null)
+    const { whyContext } = await import('./mail.js')
+    const ctxWhy = await whyContext(email, why)
+    const out: Record<string, unknown> = { ...dataRec, recipient_email: email, ...ctxWhy }
+    try {
+      const { userIdForEmail, recordLink } = await import('./app-links.js')
+      const userId = await userIdForEmail(email)
+      const col = (dataRec.subject_collection ?? dataRec.collection) as string | undefined
+      const item = (dataRec.subject_item ?? dataRec.item) as string | number | undefined
+      if (userId && col && item != null && typeof dataRec.record_url === 'string') {
+        const current = String(dataRec.record_url)
+        const q = current.includes('?') ? current.slice(current.indexOf('?') + 1) : undefined
+        out.record_url = await recordLink(col, item, { recipientUserId: userId, query: q })
+      }
+    } catch {
+      /* shared link stays */
+    }
+    return out
+  }
+  const sharedWhy = whyTemplate ? resolveTemplate(whyTemplate, data) : null
+  const recordContext = {
+    collection: typeof dataRec.collection === 'string' ? dataRec.collection : undefined,
+    item:
+      dataRec.item != null
+        ? String(dataRec.item)
+        : Array.isArray(dataRec.keys) && dataRec.keys[0] != null
+          ? String(dataRec.keys[0])
+          : undefined
+  }
+  const logTemplate = templateName || `flow:${op.key}`
+
   if (ctx.dryRun) {
+    // Preview for ONE recipient in split mode — the harness names the person
+    // it is rendering for; otherwise the first address stands in.
+    const addresses = splitAddresses(to)
+    const previewFor =
+      typeof dataRec.__preview_recipient === 'string' &&
+      addresses.includes(String(dataRec.__preview_recipient).toLowerCase())
+        ? String(dataRec.__preview_recipient).toLowerCase()
+        : addresses[0]
+    const context =
+      split && previewFor
+        ? await contextFor(previewFor)
+        : sharedWhy
+          ? { ...dataRec, ...(await (await import('./mail.js')).whyContext(to, sharedWhy)) }
+          : dataRec
+    const body = await renderBody(context)
     return {
       status: 'resolve' as const,
-      output: { ...data, [`$preview_${op.key}`]: { op: 'mail', to, from, subject, body } }
+      output: {
+        ...data,
+        [`$preview_${op.key}`]: {
+          op: 'mail',
+          to,
+          from,
+          subject,
+          body,
+          split,
+          why: (context as { why?: string }).why ?? null
+        }
+      }
     }
   }
 
   try {
-    // Record context (present on event / workflow-transition flow payloads)
-    // rides into the mail log so the record's Mail tab sees flow sends.
-    const dataRec = data as Record<string, unknown>
-    // Optional `category` op option pins the recipient's notification-rules
-    // row (reports / workflow / alerts …) instead of sniffing the subject.
-    const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
+    if (split) {
+      const addresses = splitAddresses(to)
+      let sent = 0
+      const failures: string[] = []
+      for (const email of addresses) {
+        const context = await contextFor(email)
+        const body = await renderBody(context)
+        try {
+          await sendRawMail({
+            to: email,
+            subject,
+            html: body,
+            why: (context as { why?: string }).why ?? null,
+            template: logTemplate,
+            ...(category ? { category } : {}),
+            ...recordContext
+          })
+          sent++
+        } catch (err) {
+          failures.push(`${email}: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      ctx.log.info({ flowId: ctx.flowId, key: op.key, sent, failures }, 'Mail sent (split)')
+      if (sent === 0 && failures.length > 0) throw new Error(failures.join('; '))
+      return { status: 'resolve' as const, output: data }
+    }
+    const context = sharedWhy
+      ? { ...dataRec, ...(await (await import('./mail.js')).whyContext(to, sharedWhy)) }
+      : dataRec
+    const body = await renderBody(context)
     await sendRawMail({
       to,
       subject,
       html: body,
+      why: sharedWhy,
+      template: logTemplate,
       ...(category ? { category } : {}),
-      collection: typeof dataRec.collection === 'string' ? dataRec.collection : undefined,
-      item:
-        dataRec.item != null
-          ? String(dataRec.item)
-          : Array.isArray(dataRec.keys) && dataRec.keys[0] != null
-            ? String(dataRec.keys[0])
-            : undefined
+      ...recordContext
     })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, to }, 'Mail sent')
     return { status: 'resolve' as const, output: data }

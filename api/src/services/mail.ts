@@ -73,12 +73,41 @@ export async function renderMailTemplate(
 /** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap
  *  sendRawMail applies — for callers that need the finished document without
  *  sending it (the mail-type harness preview). */
-export async function wrapMailFragment(html: string, title?: string | null): Promise<string> {
+export async function wrapMailFragment(
+  html: string,
+  title?: string | null,
+  extra?: Record<string, unknown>
+): Promise<string> {
   if (/<html[\s>]/i.test(html)) return html
   try {
-    return await engine.renderFile('message', { html, title: title ?? null })
+    return await engine.renderFile('message', { ...(extra ?? {}), html, title: title ?? null })
   } catch {
     return html
+  }
+}
+
+/**
+ * The "why me" footer context: `why` + a link to the recipient's
+ * notification rules in the app THEY use (portal vs admin). A single
+ * recipient resolves by address; a list resolves with no recipient (portal
+ * when configured). Best-effort — a lookup failure just drops the link.
+ */
+export async function whyContext(
+  to: string | string[],
+  why?: string | null
+): Promise<{ why?: string; rules_url?: string }> {
+  const text = String(why ?? '').trim()
+  if (!text) return {}
+  try {
+    const { linkTo, userIdForEmail } = await import('./app-links.js')
+    const list = (Array.isArray(to) ? to : String(to).split(/[,;]/))
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const userId = list.length === 1 ? await userIdForEmail(list[0]) : null
+    const rules_url = await linkTo('profile', {}, { recipientUserId: userId })
+    return { why: text, rules_url }
+  } catch {
+    return { why: text }
   }
 }
 
@@ -451,6 +480,11 @@ export interface MailOptions {
    *  set to Instantly): the category's Daily-summary default is skipped; No
    *  email and quiet hours still apply. */
   cadence?: 'sender'
+  /** Why THIS recipient is getting the mail, as the tail of "You're getting
+   *  this because …" — rendered in the footer with a link to their
+   *  notification rules. Per recipient by construction: pass it on
+   *  single-recipient sends; a list send gets one shared line. */
+  why?: string | null
 }
 
 /** Outbound mail log (#71): every send ATTEMPT gets a row — sent, failed
@@ -512,9 +546,13 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     console.warn('[mail] SMTP not configured, skipping email to', opts.to)
     return
   }
+  // The why-me footer rides the template context (the base layout renders
+  // it); an explicit `why` in data wins over the option.
+  const whyCtx = await whyContext(opts.to, (opts.data?.why as string | undefined) ?? opts.why)
+  const renderData = { ...(opts.data ?? {}), ...whyCtx }
   let html: string
   try {
-    html = await engine.renderFile(opts.template, opts.data ?? {})
+    html = await engine.renderFile(opts.template, renderData)
   } catch (err) {
     // A stale/missing template name must never produce a failed or unstyled
     // send — fall back to the generic branded 'message' chrome carrying
@@ -529,6 +567,7 @@ export async function sendMail(opts: MailOptions): Promise<void> {
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
     )
     html = await engine.renderFile('message', {
+      ...whyCtx,
       title: opts.subject,
       html: safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : ''
     })
@@ -611,6 +650,11 @@ export async function sendRawMail(opts: {
   /** Record context (#261) — logged, powers the record communications view. */
   collection?: string | null
   item?: string | number | null
+  /** See MailOptions.why. */
+  why?: string | null
+  /** Logged as the mail-log `template` so raw sends (flow ops, digests)
+   *  group on the delivery board instead of landing as "(untemplated)". */
+  template?: string | null
 }): Promise<void> {
   // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -631,7 +675,8 @@ export async function sendRawMail(opts: {
   let html = opts.html
   if (opts.wrap !== false && !/<html[\s>]/i.test(html)) {
     try {
-      html = await engine.renderFile('message', { html, title: opts.title ?? null })
+      const whyCtx = await whyContext(opts.to, opts.why)
+      html = await engine.renderFile('message', { ...whyCtx, html, title: opts.title ?? null })
     } catch {
       // Template missing/broken — the unwrapped fragment still sends.
     }
@@ -651,21 +696,34 @@ export async function sendRawMail(opts: {
     opts.category,
     opts.cadence === 'sender'
   )
+  const logTemplate = opts.template ?? null
   if (afterDigest.length < active2.length) {
     logMail(
       active2.filter((a) => !afterDigest.includes(a)),
       opts.subject,
-      'deferred'
+      'deferred',
+      { template: logTemplate }
     )
   }
   if (afterDigest.length === 0) return
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
-    logMail(afterDigest, opts.subject, 'dropped')
+    logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
     return
   }
-  const { title: _title, wrap: _wrap, skipDigest: _sd, ...mailOpts } = opts
+  const {
+    title: _title,
+    wrap: _wrap,
+    skipDigest: _sd,
+    why: _why,
+    template: _template,
+    category: _category,
+    cadence: _cadence,
+    collection: _collection,
+    item: _item,
+    ...mailOpts
+  } = opts
   try {
     await buildTransporter(smtp).sendMail({
       from: smtp.from,
@@ -675,12 +733,14 @@ export async function sendRawMail(opts: {
       subject: withEnvLabel(smtp, routed.subject)
     })
     logMail(routed.to, opts.subject, 'sent', {
+      template: logTemplate,
       body: html,
       collection: opts.collection,
       item: opts.item
     })
   } catch (err) {
     logMail(routed.to, opts.subject, 'failed', {
+      template: logTemplate,
       error: err,
       body: html,
       collection: opts.collection,

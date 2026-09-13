@@ -110,6 +110,10 @@ export interface NotifyUserOptions {
    *  `template_data` is merged into its context. Built by mail-builders.ts. */
   template?: string
   template_data?: Record<string, unknown>
+  /** Footer "You're getting this because …" (see MailOptions.why). Falls
+   *  back to `template_data.why`, then to the honest default: the
+   *  recipient's notification rules for the category are on. */
+  why?: string | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
 }
@@ -148,6 +152,19 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'system',
   'other'
 ]
+
+/** Human labels for the matrix rows — the why-me footer's fallback names one. */
+export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
+  mentions: 'Mentions',
+  workflow: 'Workflow',
+  sla: 'SLA',
+  watch: 'Record watches',
+  alerts: 'Alerts',
+  anomaly: 'Anomaly detection',
+  reports: 'Reports',
+  system: 'System',
+  other: 'Everything else'
+}
 
 export function classifyNotification(subject: string): NotifyCategory {
   const s = subject.toLowerCase()
@@ -379,10 +396,16 @@ export async function notifyUser(
                 () => `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`
               )
             : null
+        const category = opts.category ?? classifyNotification(opts.subject)
+        const why =
+          opts.why ??
+          (typeof templateData?.why === 'string' ? (templateData.why as string) : null) ??
+          `your notification rules for "${NOTIFY_CATEGORY_LABELS[category]}" send you email`
         await sendMail({
           to: user.email,
           subject: opts.subject,
           template: opts.template ?? 'notification',
+          why,
           // Record context rides into the mail log so the record's Mail tab
           // sees every notification email about it.
           collection: opts.collection ?? undefined,
@@ -391,7 +414,7 @@ export async function notifyUser(
             first_name: user.first_name,
             subject: opts.subject,
             message: opts.message,
-            category: opts.category ?? classifyNotification(opts.subject),
+            category,
             ...(card ? { record_card: card } : {}),
             ...(actionUrl ? { action_url: actionUrl, action_label: 'View item' } : {}),
             ...(templateData ?? {})

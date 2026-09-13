@@ -1,4 +1,3 @@
-import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { renderMailTemplate, sendMail, sendRawMail } from './mail.js'
 import { buildRecordCard } from './mail-record-card.js'
@@ -351,7 +350,8 @@ export async function buildRecordChangeContext(
     event: a.action === 'create' ? 'create' : a.action === 'delete' ? 'delete' : 'update',
     actor_name: userName(a) || null,
     record_card: card,
-    record_url: card?.url ?? (await (await import('./app-links.js')).recordLink(a.collection, a.item)),
+    record_url:
+      card?.url ?? (await (await import('./app-links.js')).recordLink(a.collection, a.item)),
     friendly_id: card?.title ?? String(a.item),
     changes,
     changed_at: new Date(a.timestamp).toISOString()
@@ -415,6 +415,48 @@ export async function renderViaFlow(
   return null
 }
 
+async function emailFor(userId?: string | null): Promise<string | null> {
+  if (!userId) return null
+  const u = (await db('nivaro_users')
+    .where({ id: userId })
+    .first('email')
+    .catch(() => null)) as { email: string | null } | null
+  return u?.email ? u.email.toLowerCase() : null
+}
+
+/** The why-me line for a direct (non-flow) preview: the previewing person's
+ *  own reason when they are on the list, else the first recipient's. */
+function whyFor(
+  recipients: MailRendered['recipients'],
+  previewEmail: string | null
+): string | null {
+  const mine = previewEmail ? recipients.find((r) => r.email === previewEmail) : undefined
+  const r = (mine ?? recipients[0])?.reason
+  if (!r) return 'your notification rules for "Workflow" send you email'
+  return r === 'creator'
+    ? 'you created this record'
+    : r === 'additional contact'
+      ? 'you are the additional contact on this record'
+      : r.startsWith('owner of ')
+        ? `you own "${r.slice('owner of '.length)}" for this record`
+        : r.startsWith('you ')
+          ? r
+          : `you are ${r}`
+}
+
+/** Preview-side twin of what sendMail does at send time: the why-me footer
+ *  context (why + rules link) for the person the harness renders for. */
+async function withWhy(
+  data: Record<string, unknown>,
+  recipientUserId?: string | null,
+  fallbackWhy?: string | null
+): Promise<Record<string, unknown>> {
+  const { whyContext } = await import('./mail.js')
+  const email = (await emailFor(recipientUserId)) ?? ''
+  const why = (typeof data.why === 'string' ? data.why : null) ?? fallbackWhy ?? null
+  return { ...data, ...(await whyContext(email, why)) }
+}
+
 const splitTo = (to: string) =>
   to
     .split(/[,;\s]+/)
@@ -434,10 +476,13 @@ export function registerCoreMailTypes(): void {
     category: 'workflow',
     sample: { kind: 'history' },
     samples: (q) => historySamples(q),
-    render: async (id) => {
+    render: async (id, { recipientUserId }) => {
       const { buildTransitionPayloadFromHistory } = await import('./workflow-transitions.js')
       const payload = await buildTransitionPayloadFromHistory(Number(id))
       if (!payload) throw new Error('History entry not found')
+      // A split mail op previews for THIS person (why-me footer, their links).
+      const previewEmail = await emailFor(recipientUserId)
+      if (previewEmail) payload.__preview_recipient = previewEmail
       const flowName =
         payload.subject_collection === 'inventory_request'
           ? 'IR Approval — notify owners'
@@ -453,8 +498,12 @@ export function registerCoreMailTypes(): void {
       }
       const to = payload.to_state as { label: string } | null
       const subject = `${payload.transition_label} — ${payload.friendly_id} is now ${to?.label ?? ''}`
-      const html = await renderMailTemplate('workflow_transition', payload)
-      return { subject, html, recipients: transitionRecipients(payload), category: 'workflow' }
+      const recipients = transitionRecipients(payload)
+      const html = await renderMailTemplate(
+        'workflow_transition',
+        await withWhy(payload, recipientUserId, whyFor(recipients, previewEmail))
+      )
+      return { subject, html, recipients, category: 'workflow' }
     }
   })
   registerMailType({
@@ -467,10 +516,12 @@ export function registerCoreMailTypes(): void {
     category: 'workflow',
     sample: { kind: 'history', history_filter: 'canceled' },
     samples: (q) => historySamples(q, { filter: 'canceled' }),
-    render: async (id) => {
+    render: async (id, { recipientUserId }) => {
       const { buildTransitionPayloadFromHistory } = await import('./workflow-transitions.js')
       const payload = await buildTransitionPayloadFromHistory(Number(id))
       if (!payload) throw new Error('History entry not found')
+      const previewEmail = await emailFor(recipientUserId)
+      if (previewEmail) payload.__preview_recipient = previewEmail
       const viaFlow = await renderViaFlow('Workflows — cancellation notice', payload)
       if (viaFlow) {
         return {
@@ -484,13 +535,12 @@ export function registerCoreMailTypes(): void {
         }
       }
       const subject = `Workflow ${payload.friendly_id} was canceled`
-      const html = await renderMailTemplate('workflow_canceled', payload)
-      return {
-        subject,
-        html,
-        recipients: transitionRecipients(payload, true),
-        category: 'workflow'
-      }
+      const recipients = transitionRecipients(payload, true)
+      const html = await renderMailTemplate(
+        'workflow_canceled',
+        await withWhy(payload, recipientUserId, whyFor(recipients, previewEmail))
+      )
+      return { subject, html, recipients, category: 'workflow' }
     }
   })
   registerMailType({
@@ -507,10 +557,14 @@ export function registerCoreMailTypes(): void {
       const ctx = await buildRecordChangeContext(Number(id))
       if (!ctx) throw new Error('Activity entry not found')
       const subject = `Watching ${ctx.friendly_id}: ${ctx.event}d${ctx.actor_name ? ` by ${ctx.actor_name}` : ''}`
-      const html = await renderMailTemplate('record_watch', {
-        ...ctx,
-        first_name: await firstName(recipientUserId)
-      })
+      const html = await renderMailTemplate(
+        'record_watch',
+        await withWhy(
+          { ...ctx, first_name: await firstName(recipientUserId) },
+          recipientUserId,
+          'you watch this record'
+        )
+      )
       return {
         subject,
         html,
@@ -533,11 +587,19 @@ export function registerCoreMailTypes(): void {
       const ctx = await buildRecordChangeContext(Number(id))
       if (!ctx) throw new Error('Activity entry not found')
       const subject = `${String(ctx.collection).replace(/_/g, ' ')} ${ctx.event}: ${ctx.friendly_id}${ctx.actor_name ? ` by ${ctx.actor_name}` : ''}`
-      const html = await renderMailTemplate('subscription', {
-        ...ctx,
-        subscription_label: `${String(ctx.collection).replace(/_/g, ' ')} subscription`,
-        first_name: await firstName(recipientUserId)
-      })
+      const subscriptionLabel = `${String(ctx.collection).replace(/_/g, ' ')} subscription`
+      const html = await renderMailTemplate(
+        'subscription',
+        await withWhy(
+          {
+            ...ctx,
+            subscription_label: subscriptionLabel,
+            first_name: await firstName(recipientUserId)
+          },
+          recipientUserId,
+          `you subscribed to "${subscriptionLabel}"`
+        )
+      )
       return {
         subject,
         html,
@@ -596,10 +658,14 @@ export function registerCoreMailTypes(): void {
   }) => built
   const renderBuilt = async (
     b: { template: string; subject: string; data: Record<string, unknown> },
-    first_name: string | null
+    first_name: string | null,
+    recipientUserId?: string | null
   ) => ({
     subject: b.subject,
-    html: await renderMailTemplate(b.template, { ...b.data, first_name, subject: b.subject })
+    html: await renderMailTemplate(
+      b.template,
+      await withWhy({ ...b.data, first_name, subject: b.subject }, recipientUserId)
+    )
   })
   const emailOf = async (userId: string | null | undefined, reason: string) => {
     if (!userId) return []
@@ -647,7 +713,7 @@ export function registerCoreMailTypes(): void {
         | { assignee: string }
         | undefined
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients: await emailOf(t?.assignee, 'assignee'),
         category: 'workflow'
       }
@@ -699,7 +765,7 @@ export function registerCoreMailTypes(): void {
       const b = await buildApprovalMail(id, kind)
       if (!b) throw new Error('Approval instance not found')
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients: await emailOf(
           inst.started_by,
           kind === 'requested' ? 'approver (sample: requester)' : 'requester'
@@ -790,7 +856,7 @@ export function registerCoreMailTypes(): void {
         recipients = []
       }
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients,
         category: 'sla'
       }
@@ -869,7 +935,7 @@ export function registerCoreMailTypes(): void {
         .where('s.notify_email', 1)
         .select('u.email')) as Array<{ email: string }>
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients: subs.map((s) => ({ email: s.email, reason: 'alert subscriber' })),
         category: 'alerts'
       }
@@ -962,7 +1028,7 @@ export function registerCoreMailTypes(): void {
         .limit(10)
         .select('u.email')) as Array<{ email: string }>
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients: admins.map((a) => ({ email: a.email, reason: 'administrator' })),
         category: 'system'
       }
@@ -1042,7 +1108,7 @@ export function registerCoreMailTypes(): void {
         if (u?.email) recipients.push({ email: u.email, reason: 'mentioned' })
       }
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients,
         category: 'mentions'
       }
@@ -1089,7 +1155,7 @@ export function registerCoreMailTypes(): void {
         .where('s.is_active', 1)
         .select('u.email')) as Array<{ email: string }>
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients: subs.map((s) => ({ email: s.email, reason: 'queue subscriber' })),
         category: 'workflow'
       }
@@ -1117,7 +1183,7 @@ export function registerCoreMailTypes(): void {
       const recipients: MailRendered['recipients'] = []
       for (const uid of f.ownerIds ?? []) recipients.push(...(await emailOf(uid, 'record owner')))
       return {
-        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
         recipients,
         category: 'sla'
       }
@@ -1196,7 +1262,7 @@ export function registerCoreMailTypes(): void {
       category: g.category,
       sample: { kind: 'notification', notification_category: g.category },
       samples: (q) => notificationSamples(q, g.category),
-      render: async (id) => {
+      render: async (id, { recipientUserId }) => {
         const n = (await db('nivaro_notifications as n')
           .leftJoin('nivaro_users as u', 'u.id', 'n.recipient')
           .where('n.id', Number(id))
@@ -1213,16 +1279,24 @@ export function registerCoreMailTypes(): void {
         if (!n) throw new Error('Notification not found')
         const { recordLink } = await import('./app-links.js')
         const { cardFor } = await import('./mail-builders.js')
-        const html = await renderMailTemplate('notification', {
-          first_name: n.first_name,
-          subject: n.subject,
-          category: g.category,
-          message: n.message ?? '',
-          record_card: await cardFor(n.collection, n.item),
-          ...(n.collection && n.item && !n.collection.startsWith('__')
-            ? { action_url: await recordLink(n.collection, n.item), action_label: 'View item' }
-            : {})
-        })
+        const { NOTIFY_CATEGORY_LABELS } = await import('./notification-channels.js')
+        const html = await renderMailTemplate(
+          'notification',
+          await withWhy(
+            {
+              first_name: n.first_name,
+              subject: n.subject,
+              category: g.category,
+              message: n.message ?? '',
+              record_card: await cardFor(n.collection, n.item),
+              ...(n.collection && n.item && !n.collection.startsWith('__')
+                ? { action_url: await recordLink(n.collection, n.item), action_label: 'View item' }
+                : {})
+            },
+            recipientUserId,
+            `your notification rules for "${NOTIFY_CATEGORY_LABELS[g.category]}" send you email`
+          )
+        )
         return {
           subject: n.subject,
           html,
@@ -1303,6 +1377,7 @@ function transitionRecipients(
     seen.add(e)
     out.push({ email: e, reason })
   }
+  const reasons = (payload.recipient_reasons ?? {}) as Record<string, string>
   if (!creatorOnly)
     for (const o of (payload.owners as Array<{
       email?: string
@@ -1311,7 +1386,8 @@ function transitionRecipients(
     }>) ?? [])
       push(
         o.email,
-        `owner of ${(payload.to_state as { label?: string } | null)?.label ?? 'the new state'}`
+        reasons[String(o.email ?? '').toLowerCase()] ??
+          `owner of ${(payload.to_state as { label?: string } | null)?.label ?? 'the new state'}`
       )
   const rec = payload.record as Record<string, unknown> | undefined
   const creator = (rec?.creator ?? rec?.user_created) as { email?: string } | undefined
@@ -1360,7 +1436,7 @@ async function collectionSubscriberRecipients(
 export async function sendRenderedMail(
   rendered: MailRendered,
   to: string[],
-  opts: { collection?: string; item?: string } = {}
+  opts: { collection?: string; item?: string; template?: string } = {}
 ): Promise<void> {
   for (const addr of to) {
     await sendRawMail({
@@ -1369,6 +1445,8 @@ export async function sendRenderedMail(
       html: rendered.html,
       wrap: false,
       skipDigest: true,
+      // Logged under the type's template so harness sends group on the board.
+      ...(opts.template ? { template: opts.template } : {}),
       ...(rendered.category ? { category: rendered.category } : {}),
       ...(opts.collection ? { collection: opts.collection } : {}),
       ...(opts.item ? { item: opts.item } : {})
