@@ -1,0 +1,13 @@
+{% layout 'base' %}
+{% block content %}
+{% render 'partials/eyebrow', text: 'Access request' %}
+{% assign _text13898 = requester_name | append: ' asked for access to ' | append: target_label %}{% render 'partials/heading', text: _text13898 %}
+{%- if requester_email -%}<p style="margin:0 0 14px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;color:#64748b;">{{ requester_email }}</p>{%- endif -%}
+{% render 'partials/quote', text: note, by: requester_name %}
+{%- if reasons and reasons.size > 0 -%}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#7a90a6;">Why they are blocked</p>
+<ul style="margin:0 0 20px;padding-left:18px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:#334155;">{% for r in reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+{%- endif -%}
+{% render 'partials/button', url: manage_url, label: 'Grant or deny' %}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

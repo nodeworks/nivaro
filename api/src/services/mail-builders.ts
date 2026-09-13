@@ -1,0 +1,446 @@
+import { config } from '../config.js'
+import { db } from '../db/index.js'
+import { buildRecordCard, type RecordCard } from './mail-record-card.js'
+
+/**
+ * Builders for the emails that used to ride the plain `notification`
+ * template: each returns { template, subject, data } so the SENDER (notifyUser
+ * with template / template_data) and the admin mail harness render the same
+ * thing from the same rows. Every builder is best-effort on the extras — a
+ * missing record card never blocks the mail.
+ */
+
+export interface BuiltMail {
+  template: string
+  subject: string
+  data: Record<string, unknown>
+}
+
+/** Date-only columns come back as UTC midnight; format them as the calendar
+ *  day they name, never shifted by the process timezone. */
+const dayLabel = (d: Date | string | null | undefined): string | null => {
+  if (!d) return null
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return null
+  return dt.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC'
+  })
+}
+const base = () => config.ADMIN_URL.replace(/\/$/, '')
+const isBusiness = (c?: string | null) =>
+  !!c && !c.startsWith('nivaro_') && !c.startsWith('directus_') && !c.startsWith('__')
+const nameOf = (
+  u?: { first_name?: string | null; last_name?: string | null; email?: string | null } | null
+) => (u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null : null)
+
+export async function cardFor(
+  collection?: string | null,
+  item?: string | number | null
+): Promise<RecordCard | null> {
+  if (!isBusiness(collection) || item == null || item === '') return null
+  return buildRecordCard(collection as string, item).catch(() => null)
+}
+
+async function user(id?: string | null) {
+  if (!id) return null
+  return (await db('nivaro_users')
+    .where({ id })
+    .first('first_name', 'last_name', 'email')
+    .catch(() => null)) as {
+    first_name: string | null
+    last_name: string | null
+    email: string
+  } | null
+}
+
+// ── tasks ────────────────────────────────────────────────────────────────────
+
+export async function buildTaskAssignedMail(taskId: number | string): Promise<BuiltMail | null> {
+  const t = (await db('nivaro_tasks').where({ id: taskId }).first()) as
+    | {
+        id: number
+        title: string
+        description: string | null
+        due_date: Date | null
+        collection: string
+        item: string
+        created_by: string | null
+        assignee: string
+      }
+    | undefined
+  if (!t) return null
+  const [card, by] = await Promise.all([cardFor(t.collection, t.item), user(t.created_by)])
+  return {
+    template: 'task_assigned',
+    subject: `Task assigned: ${t.title}`,
+    data: {
+      task_title: t.title,
+      task_description: t.description,
+      due_date: t.due_date ? new Date(t.due_date).toISOString() : null,
+      due_label: dayLabel(t.due_date),
+      assigned_by: nameOf(by),
+      record_card: card,
+      record_url: card?.url ?? `${base()}/collections/${t.collection}/${t.item}`,
+      tasks_url: `${base()}/tasks`
+    }
+  }
+}
+
+export async function buildTasksDelegatedMail(
+  fromUserId: string,
+  taskIds: Array<number | string>
+): Promise<BuiltMail> {
+  const from = await user(fromUserId)
+  const tasks = (await db('nivaro_tasks')
+    .whereIn('id', taskIds)
+    .select('id', 'title', 'due_date', 'collection', 'item')) as Array<{
+    id: number
+    title: string
+    due_date: Date | null
+    collection: string
+    item: string
+  }>
+  return {
+    template: 'tasks_delegated',
+    subject: `${tasks.length} task${tasks.length === 1 ? '' : 's'} delegated to you`,
+    data: {
+      from_name: nameOf(from) ?? 'a colleague',
+      tasks: tasks.map((t) => ({
+        title: t.title,
+        due_date: t.due_date ? new Date(t.due_date).toISOString() : null,
+        url: `${base()}/collections/${t.collection}/${t.item}`
+      })),
+      tasks_url: `${base()}/tasks`
+    }
+  }
+}
+
+// ── approvals ────────────────────────────────────────────────────────────────
+
+export async function buildApprovalMail(
+  instanceId: number | string,
+  kind: 'requested' | 'rejected' | 'completed',
+  opts: { stepLabel?: string | null; comment?: string | null; actorId?: string | null } = {}
+): Promise<BuiltMail | null> {
+  const inst = (await db('nivaro_approval_instances as i')
+    .join('nivaro_approval_chains as c', 'c.id', 'i.chain')
+    .where('i.id', instanceId)
+    .first('i.*', 'c.name as chain_name')) as
+    | {
+        id: number
+        collection: string
+        item: string
+        current_step: number
+        status: string
+        started_by: string
+        chain_name: string
+        chain: number
+      }
+    | undefined
+  if (!inst) return null
+  const [card, actor, starter, steps] = await Promise.all([
+    cardFor(inst.collection, inst.item),
+    user(opts.actorId),
+    user(inst.started_by),
+    db('nivaro_approval_chain_steps')
+      .where({ chain: inst.chain })
+      .orderBy('step_order')
+      .select('step_order', 'label') as Promise<Array<{ step_order: number; label: string | null }>>
+  ])
+  const stepLabel =
+    opts.stepLabel ??
+    steps.find((s) => s.step_order === inst.current_step)?.label ??
+    `Step ${inst.current_step + 1}`
+  const subject =
+    kind === 'requested'
+      ? `Approval requested: ${inst.chain_name}`
+      : kind === 'rejected'
+        ? `Approval rejected: ${inst.chain_name}`
+        : `Approval completed: ${inst.chain_name}`
+  return {
+    template: 'approval',
+    subject,
+    data: {
+      kind,
+      chain_name: inst.chain_name,
+      step_label: stepLabel,
+      steps: steps.map((s) => ({
+        label: s.label ?? `Step ${s.step_order + 1}`,
+        status:
+          s.step_order < inst.current_step
+            ? 'done'
+            : s.step_order === inst.current_step
+              ? kind === 'completed'
+                ? 'done'
+                : 'current'
+              : 'upcoming'
+      })),
+      comment: opts.comment ?? null,
+      actor_name: nameOf(actor),
+      requested_by: nameOf(starter),
+      record_card: card,
+      record_url: card?.url ?? `${base()}/collections/${inst.collection}/${inst.item}`,
+      approvals_url: `${base()}/approvals`
+    }
+  }
+}
+
+// ── SLA escalation ───────────────────────────────────────────────────────────
+
+export async function buildSlaEscalationMail(args: {
+  ruleName: string
+  stateKey: string
+  templateId?: string | null
+  tier: number
+  hoursPast: number
+  friendly: string
+  collection: string
+  item: string
+}): Promise<BuiltMail> {
+  const [card, state] = await Promise.all([
+    cardFor(args.collection, args.item),
+    args.templateId
+      ? (db('nivaro_workflow_states')
+          .where({ template: args.templateId, key: args.stateKey })
+          .first('label')
+          .catch(() => null) as Promise<{ label: string } | null>)
+      : Promise.resolve(null)
+  ])
+  const days = Math.round((args.hoursPast / 24) * 10) / 10
+  return {
+    template: 'sla_escalation',
+    subject: `SLA escalation (tier ${args.tier + 1}): ${args.ruleName}`,
+    data: {
+      rule_name: args.ruleName,
+      tier: args.tier + 1,
+      state_label: state?.label ?? args.stateKey.replace(/_/g, ' '),
+      hours_past: Math.round(args.hoursPast),
+      days_past: days,
+      friendly_id: args.friendly,
+      record_card: card,
+      record_url: card?.url ?? `${base()}/collections/${args.collection}/${args.item}`
+    }
+  }
+}
+
+// ── alerts (per-record definition / metric rule / report alert) ──────────────
+
+export async function buildRecordAlertMail(
+  def: { name: string; collection: string; field: string; operator: string; threshold: unknown },
+  item: string,
+  fieldValue: string,
+  detail?: string
+): Promise<BuiltMail> {
+  const [card, fieldRow] = await Promise.all([
+    cardFor(def.collection, item),
+    db('nivaro_fields')
+      .where({ collection: def.collection, field: def.field })
+      .first('label')
+      .catch(() => null) as Promise<{ label: string | null } | null>
+  ])
+  return {
+    template: 'alert',
+    subject: `Alert: ${def.name}`,
+    data: {
+      kind: 'record',
+      rule_name: def.name,
+      metric_name: fieldRow?.label || def.field.replace(/_/g, ' '),
+      metric_value: fieldValue,
+      operator: def.operator,
+      threshold_value: def.threshold == null ? '' : String(def.threshold),
+      detail: detail ?? null,
+      record_card: card,
+      record_url: card?.url ?? `${base()}/collections/${def.collection}/${item}`,
+      manage_url: `${base()}/alerts`
+    }
+  }
+}
+
+export function buildReportAlertMail(args: {
+  alertName: string
+  widgetTitle: string
+  conditions: Array<{ field: string; op: string; value: unknown; now: unknown }>
+  reportId: string
+  reportName?: string | null
+}): BuiltMail {
+  return {
+    template: 'alert',
+    subject: `Report alert: ${args.alertName}`,
+    data: {
+      kind: 'report',
+      rule_name: args.alertName,
+      widget_title: args.widgetTitle,
+      report_name: args.reportName ?? null,
+      conditions: args.conditions.map((c) => ({
+        label: `${c.field} ${c.op} ${c.value}`,
+        now: String(c.now ?? 0)
+      })),
+      report_url: `${base()}/report-studio/${args.reportId}`,
+      manage_url: `${base()}/report-studio/${args.reportId}`
+    }
+  }
+}
+
+// ── access requests ──────────────────────────────────────────────────────────
+
+export async function buildAccessRequestMail(args: {
+  requesterId?: string | null
+  requesterName: string
+  collection: string
+  item?: string | null
+  friendly?: string | null
+  note?: string | null
+  reasons?: Array<{ message?: string }> | null
+}): Promise<BuiltMail> {
+  const [card, requester] = await Promise.all([
+    cardFor(args.collection, args.item ?? null),
+    user(args.requesterId)
+  ])
+  const target = args.item
+    ? `${args.collection.replace(/_/g, ' ')} ${args.friendly ?? args.item}`
+    : args.collection.replace(/_/g, ' ')
+  return {
+    template: 'access_request',
+    subject: `${args.requesterName} requested access to ${args.item ? `${args.collection}/${args.friendly ?? args.item}` : args.collection}`,
+    data: {
+      requester_name: args.requesterName,
+      requester_email: requester?.email ?? null,
+      target_label: target,
+      note: args.note ?? null,
+      reasons: (args.reasons ?? []).map((r) => r.message).filter(Boolean),
+      record_card: card,
+      manage_url: `${base()}/access-requests`
+    }
+  }
+}
+
+export async function buildAccessDecisionMail(args: {
+  decision: 'granted' | 'declined' | 'expired'
+  collection: string
+  item?: string | null
+  friendly?: string | null
+  applied?: string[]
+  days?: number
+}): Promise<BuiltMail> {
+  const card = await cardFor(args.collection, args.item ?? null)
+  const target = args.item
+    ? `${args.collection.replace(/_/g, ' ')} ${args.friendly ?? args.item}`
+    : args.collection.replace(/_/g, ' ')
+  const subject =
+    args.decision === 'granted'
+      ? `Access granted: ${target}`
+      : args.decision === 'declined'
+        ? `Access request declined: ${target}`
+        : `Access request expired: ${target}`
+  return {
+    template: 'access_decision',
+    subject,
+    data: {
+      decision: args.decision,
+      target_label: target,
+      applied: args.applied ?? [],
+      days: args.days ?? null,
+      record_card: card,
+      record_url:
+        card?.url ??
+        (args.item
+          ? `${base()}/collections/${args.collection}/${args.item}`
+          : `${base()}/collections/${args.collection}`)
+    }
+  }
+}
+
+// ── chat mentions ────────────────────────────────────────────────────────────
+
+export async function roomLabel(room: string): Promise<string> {
+  if (room === 'global') return 'General'
+  if (room.startsWith('dm:')) return 'a direct message'
+  if (room.startsWith('ch:')) {
+    const ch = (await db('nivaro_chat_channels')
+      .where({ key: room.slice(3) })
+      .first('name')
+      .catch(() => null)) as { name: string } | null
+    return ch?.name ? `#${ch.name}` : `#${room.slice(3)}`
+  }
+  return room
+}
+
+export async function buildMentionMail(args: {
+  senderId?: string | null
+  senderName?: string | null
+  room: string
+  message: string
+  channelWide?: boolean
+}): Promise<BuiltMail> {
+  const [label, sender] = await Promise.all([roomLabel(args.room), user(args.senderId)])
+  const senderName = args.senderName ?? nameOf(sender) ?? 'Someone'
+  const excerpt = args.message.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 600)
+  return {
+    template: 'mention',
+    subject: args.channelWide
+      ? `@channel in ${args.room.slice(3)}`
+      : `${senderName} mentioned you in chat`,
+    data: {
+      sender_name: senderName,
+      sender_email: sender?.email ?? null,
+      room_label: label,
+      channel_wide: !!args.channelWide,
+      excerpt,
+      chat_url: `${base()}/chat?room=${encodeURIComponent(args.room)}`
+    }
+  }
+}
+
+// ── queue entry ──────────────────────────────────────────────────────────────
+
+export function buildQueueEntryMail(args: {
+  queueId: string
+  queueName: string
+  label?: string | null
+  items: Array<{ label: string; collection: string; item_id: string | number }>
+  countOnly?: number
+}): BuiltMail {
+  const n = args.countOnly ?? args.items.length
+  return {
+    template: 'queue_entry',
+    subject: `${args.queueName}: ${n} new item${n === 1 ? '' : 's'}`,
+    data: {
+      queue_name: args.label ?? args.queueName,
+      count: n,
+      items: args.items.slice(0, 15).map((i) => ({
+        label: i.label,
+        url: `${base()}/collections/${i.collection}/${i.item_id}`
+      })),
+      queue_url: `${base()}/queues/${args.queueId}`
+    }
+  }
+}
+
+// ── line SLA ─────────────────────────────────────────────────────────────────
+
+export async function buildLineSlaMail(f: {
+  parentCollection: string
+  parentId: string
+  friendlyId: string
+  count: number
+  label: string
+  days: number
+  subject: string
+}): Promise<BuiltMail> {
+  const card = await cardFor(f.parentCollection, f.parentId)
+  return {
+    template: 'line_sla',
+    subject: f.subject,
+    data: {
+      friendly_id: f.friendlyId,
+      count: f.count,
+      field_label: f.label,
+      days: f.days,
+      record_card: card,
+      record_url: card?.url ?? `${base()}/collections/${f.parentCollection}/${f.parentId}`
+    }
+  }
+}

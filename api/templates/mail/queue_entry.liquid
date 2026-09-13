@@ -1,0 +1,14 @@
+{% layout 'base' %}
+{% block content %}
+{% render 'partials/eyebrow', text: 'Queue activity' %}
+{% assign _text99636 = count | append: ' new item(s) in ' | append: queue_name %}{% render 'partials/heading', text: _text99636 %}
+{%- if items and items.size > 0 -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;border:1px solid #dde3ea;border-radius:8px;border-collapse:separate;overflow:hidden;">
+  {%- for i in items -%}
+  <tr><td style="padding:9px 14px;border-bottom:1px solid #eef2f6;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#1e293b;"><a href="{{ i.url }}" style="color:#1e293b;text-decoration:none;font-weight:600;">{{ i.label }}</a></td></tr>
+  {%- endfor -%}
+  {%- if count > items.size -%}<tr><td style="padding:8px 14px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#94a3b8;">+ {{ count | minus: items.size }} more in the queue.</td></tr>{%- endif -%}
+</table>
+{%- endif -%}
+{% render 'partials/button', url: queue_url, label: 'Open the queue' %}
+{% endblock %}

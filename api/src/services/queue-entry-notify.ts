@@ -95,6 +95,19 @@ export async function runQueueEntryNotifyPass(app: FastifyInstance): Promise<voi
 
       const first = items.find((i) => newOnes.includes(`${i.collection}:${i.item_id}`))
       const { notifyUser } = await import('./notification-channels.js')
+      const { buildQueueEntryMail } = await import('./mail-builders.js')
+      const newItems = items.filter((i) => newOnes.includes(`${i.collection}:${i.item_id}`))
+      const built = buildQueueEntryMail({
+        queueId: String(sub.queue_id),
+        queueName: queue.name ?? 'Queue',
+        label: sub.label,
+        items: newItems.map((i) => ({
+          label: i.label,
+          collection: i.collection,
+          item_id: i.item_id
+        })),
+        countOnly: newItems.length ? undefined : newOnes.length
+      })
       await notifyUser(app, sub.user, {
         subject: `${queue.name ?? 'Queue'}: ${newOnes.length} new item${newOnes.length === 1 ? '' : 's'}`,
         category: 'workflow',
@@ -104,7 +117,9 @@ export async function runQueueEntryNotifyPass(app: FastifyInstance): Promise<voi
             : `${newOnes.length} items entered ${sub.label ?? queue.name ?? 'the queue'} in the last few minutes.`,
         ...(first && newOnes.length === 1
           ? { collection: first.collection, item: String(first.item_id) }
-          : {})
+          : {}),
+        template: built.template,
+        template_data: built.data
       })
     } catch {
       // One broken subscription must not stop the rest.

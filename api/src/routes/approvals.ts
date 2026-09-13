@@ -86,6 +86,10 @@ async function notifyStepApprovers(
 ): Promise<void> {
   const approvers = await resolveStepApprovers(step)
   const stepLabel = step.label ?? `Step ${step.step_order + 1}`
+  const { buildApprovalMail } = await import('../services/mail-builders.js')
+  const built = await buildApprovalMail(instance.id, 'requested', { stepLabel, actorId }).catch(
+    () => null
+  )
   for (const userId of approvers) {
     await notifyUser(app, userId, {
       subject: `Approval requested: ${chain.name}`,
@@ -93,7 +97,8 @@ async function notifyStepApprovers(
       collection: instance.collection,
       item: instance.item,
       sender: actorId,
-      channels: { inapp: true, email: true }
+      channels: { inapp: true, email: true },
+      ...(built ? { template: built.template, template_data: built.data } : {})
     })
   }
 
@@ -174,13 +179,19 @@ export async function applyApprovalDecision(opts: {
 
   if (decision === 'rejected') {
     await db('nivaro_approval_instances').where({ id: instance.id }).update({ status: 'rejected' })
+    const { buildApprovalMail } = await import('../services/mail-builders.js')
+    const built = await buildApprovalMail(instance.id, 'rejected', {
+      comment,
+      actorId: user.id
+    }).catch(() => null)
     await notifyUser(app, instance.started_by, {
       subject: `Approval rejected: ${chain.name}`,
       message: `Your approval request for ${itemRef} was rejected${comment ? `: ${comment}` : '.'}`,
       collection: instance.collection,
       item: instance.item,
       sender: user.id,
-      channels: { inapp: true, email: true }
+      channels: { inapp: true, email: true },
+      ...(built ? { template: built.template, template_data: built.data } : {})
     })
     const updated = (await db('nivaro_approval_instances')
       .where({ id: instance.id })
@@ -194,13 +205,18 @@ export async function applyApprovalDecision(opts: {
 
   if (!nextStep) {
     await db('nivaro_approval_instances').where({ id: instance.id }).update({ status: 'approved' })
+    const { buildApprovalMail } = await import('../services/mail-builders.js')
+    const builtDone = await buildApprovalMail(instance.id, 'completed', { actorId: user.id }).catch(
+      () => null
+    )
     await notifyUser(app, instance.started_by, {
       subject: `Approval completed: ${chain.name}`,
       message: `Your approval request for ${itemRef} was fully approved.`,
       collection: instance.collection,
       item: instance.item,
       sender: user.id,
-      channels: { inapp: true, email: true }
+      channels: { inapp: true, email: true },
+      ...(builtDone ? { template: builtDone.template, template_data: builtDone.data } : {})
     })
   } else {
     await db('nivaro_approval_instances')

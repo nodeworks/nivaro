@@ -265,13 +265,24 @@ export async function chatRoutes(app: FastifyInstance) {
             .where({ room })
             .select('user')) as Array<{ user: string }>
           const { notifyUser } = await import('../services/notification-channels.js')
+          const { buildMentionMail } = await import('../services/mail-builders.js')
+          const builtChannel = await buildMentionMail({
+            senderId: req.user?.id ?? null,
+            senderName,
+            room,
+            message,
+            channelWide: true
+          }).catch(() => null)
           for (const m of members.slice(0, 300)) {
             if (String(m.user).toUpperCase() === senderId) continue
             await notifyUser(app, m.user, {
               subject: `@channel in ${room.slice(3)}`,
               category: 'mentions',
               message: `${senderName ?? 'Someone'}: ${message.slice(0, 300)}`,
-              sender: req.user?.id ?? null
+              sender: req.user?.id ?? null,
+              ...(builtChannel
+                ? { template: builtChannel.template, template_data: builtChannel.data }
+                : {})
             }).catch(() => {})
           }
         } catch {
@@ -306,6 +317,13 @@ export async function chatRoutes(app: FastifyInstance) {
       if (!targetUser) continue
       if (!(await canSeeRoom(targetUser, room))) continue
       if (await isMuted(String(target), room)) continue
+      const { buildMentionMail } = await import('../services/mail-builders.js')
+      const builtMention = await buildMentionMail({
+        senderId: req.user?.id ?? null,
+        senderName,
+        room,
+        message
+      }).catch(() => null)
       await notifyUser(app, String(target), {
         subject: `${senderName ?? 'Someone'} mentioned you in chat`,
         message: message.slice(0, 300),
@@ -313,7 +331,10 @@ export async function chatRoutes(app: FastifyInstance) {
         // Pseudo-collection: clients resolve '__chat__' + room into opening
         // the chat room rather than a record route.
         collection: '__chat__',
-        item: room
+        item: room,
+        ...(builtMention
+          ? { template: builtMention.template, template_data: builtMention.data }
+          : {})
       })
     }
 

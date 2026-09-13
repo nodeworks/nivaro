@@ -1,0 +1,15 @@
+{% layout 'base' %}
+{% block content %}
+{% render 'partials/eyebrow', text: 'Covering for a colleague' %}
+{% assign _text79106 = tasks.size | append: ' task(s) delegated to you' %}{% render 'partials/heading', text: _text79106 %}
+{% assign _text31813 = from_name | append: ' is out of office — their open tasks are yours until they are back.' %}{% render 'partials/lead', text: _text31813 %}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;border:1px solid #dde3ea;border-radius:8px;border-collapse:separate;overflow:hidden;">
+  {%- for t in tasks -%}
+  <tr>
+    <td style="padding:9px 14px;border-bottom:1px solid #eef2f6;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#1e293b;"><a href="{{ t.url }}" style="color:#1e293b;text-decoration:none;font-weight:600;">{{ t.title }}</a></td>
+    <td align="right" style="padding:9px 14px;border-bottom:1px solid #eef2f6;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#7a90a6;white-space:nowrap;">{% if t.due_label %}due {{ t.due_label }}{% endif %}</td>
+  </tr>
+  {%- endfor -%}
+</table>
+{% render 'partials/button', url: tasks_url, label: 'Open my tasks' %}
+{% endblock %}

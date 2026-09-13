@@ -16,6 +16,11 @@ vi.mock('../../../middleware/workspace.js', () => ({
 }))
 
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
+// The bulk-actions registry gate (builtinAllowed) reads nivaro_bulk_actions;
+// these suites exercise the endpoints' own rules, so the gate is open here.
+vi.mock('../../../services/bulk-actions.js', () => ({
+  builtinAllowed: vi.fn(async () => true)
+}))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))

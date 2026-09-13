@@ -586,6 +586,544 @@ export function registerCoreMailTypes(): void {
       }
     }
   })
+  // ── Dedicated templates (mail-builders.ts) — sampled from their own rows ──
+  const B = () => import('./mail-builders.js')
+  const rt = (built: {
+    subject: string
+    html?: string
+    template: string
+    data: Record<string, unknown>
+  }) => built
+  const renderBuilt = async (
+    b: { template: string; subject: string; data: Record<string, unknown> },
+    first_name: string | null
+  ) => ({
+    subject: b.subject,
+    html: await renderMailTemplate(b.template, { ...b.data, first_name, subject: b.subject })
+  })
+  const emailOf = async (userId: string | null | undefined, reason: string) => {
+    if (!userId) return []
+    const u = (await db('nivaro_users').where({ id: userId }).first('email')) as
+      | { email: string }
+      | undefined
+    return u?.email ? [{ email: u.email, reason }] : []
+  }
+  void rt
+
+  registerMailType({
+    key: 'task_assigned',
+    label: 'Task assigned',
+    group: 'People',
+    description: 'Sent to the assignee when a task is created for them or reassigned.',
+    template: 'task_assigned',
+    category: 'workflow',
+    sample: { kind: 'record', collection: 'nivaro_tasks' },
+    samples: async (q) => {
+      let qb = db('nivaro_tasks as t')
+        .leftJoin('nivaro_users as a', 'a.id', 't.assignee')
+        .orderBy('t.id', 'desc')
+        .limit(30)
+        .select('t.id', 't.title', 't.collection', 't.item', 't.status', 'a.email')
+      if (q.trim()) qb = qb.where('t.title', 'like', `%${q.trim()}%`)
+      const rows = (await qb) as Array<{
+        id: number
+        title: string
+        collection: string
+        item: string
+        status: string
+        email: string | null
+      }>
+      return rows.map((r) => ({
+        id: String(r.id),
+        label: r.title,
+        hint: `${r.collection}/${r.item} · ${r.status} · ${r.email ?? 'unassigned'}`
+      }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildTaskAssignedMail } = await B()
+      const b = await buildTaskAssignedMail(id)
+      if (!b) throw new Error('Task not found')
+      const t = (await db('nivaro_tasks').where({ id }).first('assignee')) as
+        | { assignee: string }
+        | undefined
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients: await emailOf(t?.assignee, 'assignee'),
+        category: 'workflow'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'approval',
+    label: 'Approval requested / rejected / completed',
+    group: 'People',
+    description:
+      'Approval-chain notices: approvers are asked at each step; the requester hears the outcome.',
+    template: 'approval',
+    category: 'workflow',
+    sample: { kind: 'record', collection: 'nivaro_approval_instances' },
+    samples: async (q) => {
+      const rows = (await db('nivaro_approval_instances as i')
+        .join('nivaro_approval_chains as c', 'c.id', 'i.chain')
+        .orderBy('i.id', 'desc')
+        .limit(30)
+        .select('i.id', 'i.collection', 'i.item', 'i.status', 'c.name')) as Array<{
+        id: number
+        collection: string
+        item: string
+        status: string
+        name: string
+      }>
+      const needle = q.trim().toLowerCase()
+      return rows
+        .map((r) => ({
+          id: String(r.id),
+          label: `${r.name} — ${r.collection}/${r.item}`,
+          hint: r.status
+        }))
+        .filter((o) => !needle || o.label.toLowerCase().includes(needle))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildApprovalMail } = await B()
+      const inst = (await db('nivaro_approval_instances')
+        .where({ id })
+        .first('status', 'started_by')) as { status: string; started_by: string } | undefined
+      if (!inst) throw new Error('Approval instance not found')
+      const kind =
+        inst.status === 'rejected'
+          ? 'rejected'
+          : inst.status === 'approved'
+            ? 'completed'
+            : 'requested'
+      const b = await buildApprovalMail(id, kind)
+      if (!b) throw new Error('Approval instance not found')
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients: await emailOf(
+          inst.started_by,
+          kind === 'requested' ? 'approver (sample: requester)' : 'requester'
+        ),
+        category: 'workflow'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'sla_escalation',
+    label: 'SLA escalation',
+    group: 'Alerts & monitoring',
+    description:
+      'A record breached its SLA and nobody acknowledged — sent per ladder tier to the owner / manager / named user.',
+    template: 'sla_escalation',
+    category: 'sla',
+    sample: { kind: 'record', collection: 'nivaro_sla_escalations' },
+    samples: async (q) => {
+      const rows = (await db('nivaro_sla_escalations as e')
+        .join('nivaro_sla_rules as r', 'r.id', 'e.rule')
+        .orderBy('e.id', 'desc')
+        .limit(30)
+        .select('e.id', 'e.collection', 'e.item', 'e.tier', 'e.notified_at', 'r.name')) as Array<{
+        id: number
+        collection: string
+        item: string
+        tier: number
+        notified_at: Date
+        name: string
+      }>
+      const byCol = new Map<string, Set<string>>()
+      for (const r of rows)
+        byCol.set(r.collection, (byCol.get(r.collection) ?? new Set()).add(String(r.item)))
+      const labels = await getLabels(byCol).catch(() => ({}) as Record<string, string>)
+      const needle = q.trim().toLowerCase()
+      return rows
+        .map((r) => ({
+          id: String(r.id),
+          label: `${labels[`${r.collection}:${r.item}`] || r.item} — ${r.name} (tier ${r.tier + 1})`,
+          hint: new Date(r.notified_at).toLocaleString('en-US')
+        }))
+        .filter((o) => !needle || o.label.toLowerCase().includes(needle))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildSlaEscalationMail } = await B()
+      const e = (await db('nivaro_sla_escalations as e')
+        .join('nivaro_sla_rules as r', 'r.id', 'e.rule')
+        .where('e.id', id)
+        .first('e.*', 'r.name', 'r.state_key', 'r.workflow_template', 'r.duration_hours')) as
+        | {
+            collection: string
+            item: string
+            tier: number
+            entered_state_at: Date
+            recipients: string | null
+            name: string
+            state_key: string
+            workflow_template: string | null
+            duration_hours: number
+          }
+        | undefined
+      if (!e) throw new Error('Escalation not found')
+      const { resolveFriendlyId } = await import('./workflow-transitions.js')
+      const friendly = await resolveFriendlyId(e.collection, String(e.item)).catch(() =>
+        String(e.item)
+      )
+      const hoursPast = Math.max(
+        0,
+        (Date.now() - new Date(e.entered_state_at).getTime()) / 3_600_000 -
+          Number(e.duration_hours || 0)
+      )
+      const b = await buildSlaEscalationMail({
+        ruleName: e.name,
+        stateKey: e.state_key,
+        templateId: e.workflow_template,
+        tier: e.tier,
+        hoursPast,
+        friendly,
+        collection: e.collection,
+        item: String(e.item)
+      })
+      let recipients: MailRendered['recipients'] = []
+      try {
+        const ids = JSON.parse(e.recipients ?? '[]') as string[]
+        for (const uid of ids) recipients.push(...(await emailOf(uid, 'escalation recipient')))
+      } catch {
+        recipients = []
+      }
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients,
+        category: 'sla'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'alert_record',
+    label: 'Alert (record threshold)',
+    group: 'Alerts & monitoring',
+    description:
+      "A per-record alert definition fired (field crossed its threshold) — sent to the definition's subscribers.",
+    template: 'alert',
+    category: 'alerts',
+    sample: { kind: 'record', collection: 'nivaro_alert_log' },
+    samples: async (q) => {
+      const rows = (await db('nivaro_alert_log as l')
+        .join('nivaro_alert_definitions as d', 'd.id', 'l.alert_definition')
+        .orderBy('l.id', 'desc')
+        .limit(30)
+        .select(
+          'l.id',
+          'l.collection',
+          'l.item',
+          'l.field_value',
+          'l.triggered_at',
+          'd.name'
+        )) as Array<{
+        id: number
+        collection: string
+        item: string
+        field_value: string | null
+        triggered_at: Date
+        name: string
+      }>
+      const needle = q.trim().toLowerCase()
+      return rows
+        .map((r) => ({
+          id: String(r.id),
+          label: `${r.name} — ${r.collection}/${r.item} = ${r.field_value ?? ''}`,
+          hint: new Date(r.triggered_at).toLocaleString('en-US')
+        }))
+        .filter((o) => !needle || o.label.toLowerCase().includes(needle))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildRecordAlertMail } = await B()
+      const l = (await db('nivaro_alert_log as l')
+        .join('nivaro_alert_definitions as d', 'd.id', 'l.alert_definition')
+        .where('l.id', id)
+        .first(
+          'l.item',
+          'l.field_value',
+          'd.id as def_id',
+          'd.name',
+          'd.collection',
+          'd.field',
+          'd.operator',
+          'd.threshold'
+        )) as
+        | {
+            item: string
+            field_value: string | null
+            def_id: number
+            name: string
+            collection: string
+            field: string
+            operator: string
+            threshold: unknown
+          }
+        | undefined
+      if (!l) throw new Error('Alert log row not found')
+      const b = await buildRecordAlertMail(l, String(l.item), String(l.field_value ?? ''))
+      const subs = (await db('nivaro_alert_subscriptions as s')
+        .join('nivaro_users as u', 'u.id', 's.user')
+        .where('s.alert_definition', l.def_id)
+        .where('s.notify_email', 1)
+        .select('u.email')) as Array<{ email: string }>
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients: subs.map((s) => ({ email: s.email, reason: 'alert subscriber' })),
+        category: 'alerts'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'access_request',
+    label: 'Access request (to admins)',
+    group: 'System',
+    description:
+      'Someone hit the access-denied panel and asked for help — admins get the request with the reasons they are blocked.',
+    template: 'access_request',
+    category: 'system',
+    sample: { kind: 'record', collection: 'nivaro_access_requests' },
+    samples: async (q) => {
+      const rows = (await db('nivaro_access_requests as a')
+        .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+        .orderBy('a.id', 'desc')
+        .limit(30)
+        .select(
+          'a.id',
+          'a.collection',
+          'a.item',
+          'a.status',
+          'a.created_at',
+          'u.first_name',
+          'u.last_name',
+          'u.email'
+        )) as Array<{
+        id: number
+        collection: string
+        item: string | null
+        status: string
+        created_at: Date
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+      }>
+      const needle = q.trim().toLowerCase()
+      return rows
+        .map((r) => ({
+          id: String(r.id),
+          label: `${userName(r)} → ${r.collection}${r.item ? `/${r.item}` : ''}`,
+          hint: `${r.status} · ${new Date(r.created_at).toLocaleString('en-US')}`
+        }))
+        .filter((o) => !needle || o.label.toLowerCase().includes(needle))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildAccessRequestMail } = await B()
+      const r = (await db('nivaro_access_requests as a')
+        .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+        .where('a.id', id)
+        .first('a.*', 'u.first_name', 'u.last_name', 'u.email')) as
+        | {
+            user: string
+            collection: string
+            item: string | null
+            note: string | null
+            reasons: string | null
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+          }
+        | undefined
+      if (!r) throw new Error('Access request not found')
+      const { resolveFriendlyId } = await import('./workflow-transitions.js')
+      const friendly = r.item
+        ? await resolveFriendlyId(r.collection, String(r.item)).catch(() => String(r.item))
+        : null
+      let reasons: Array<{ message?: string }> = []
+      try {
+        reasons = r.reasons ? (JSON.parse(r.reasons) as Array<{ message?: string }>) : []
+      } catch {
+        reasons = []
+      }
+      const b = await buildAccessRequestMail({
+        requesterId: r.user,
+        requesterName: userName(r) || 'A user',
+        collection: r.collection,
+        item: r.item,
+        friendly,
+        note: r.note,
+        reasons
+      })
+      const admins = (await db('nivaro_users as u')
+        .join('nivaro_roles as ro', 'ro.id', 'u.role')
+        .where('ro.admin_access', true)
+        .whereNot('u.status', 'suspended')
+        .limit(10)
+        .select('u.email')) as Array<{ email: string }>
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients: admins.map((a) => ({ email: a.email, reason: 'administrator' })),
+        category: 'system'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'mention',
+    label: 'Chat mention',
+    group: 'People',
+    description: 'Someone @mentioned you in chat (or used @channel in a room you belong to).',
+    template: 'mention',
+    category: 'mentions',
+    sample: { kind: 'record', collection: 'chat_messages' },
+    samples: async (q) => {
+      let qb = db('chat_messages as m')
+        .leftJoin('nivaro_users as u', 'u.id', 'm.sender')
+        .where('m.message', 'like', '%@[%')
+        .orderBy('m.id', 'desc')
+        .limit(30)
+        .select(
+          'm.id',
+          'm.room',
+          'm.message',
+          'm.created_at',
+          'u.first_name',
+          'u.last_name',
+          'u.email'
+        )
+      if (q.trim()) qb = qb.where('m.message', 'like', `%${q.trim()}%`)
+      const rows = (await qb.catch(() => [])) as Array<{
+        id: number
+        room: string
+        message: string
+        created_at: Date
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+      }>
+      return rows.map((r) => ({
+        id: String(r.id),
+        label: r.message.replace(/\s+/g, ' ').slice(0, 90),
+        hint: `${userName(r) || 'someone'} · ${r.room} · ${new Date(r.created_at).toLocaleString('en-US')}`
+      }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildMentionMail } = await B()
+      const m = (await db('chat_messages as m')
+        .leftJoin('nivaro_users as u', 'u.id', 'm.sender')
+        .where('m.id', id)
+        .first('m.room', 'm.message', 'm.sender', 'u.first_name', 'u.last_name', 'u.email')) as
+        | {
+            room: string
+            message: string
+            sender: string | null
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+          }
+        | undefined
+      if (!m) throw new Error('Message not found')
+      const b = await buildMentionMail({
+        senderId: m.sender,
+        senderName: userName(m) || null,
+        room: m.room,
+        message: m.message
+      })
+      const names = [...m.message.matchAll(/@\[([^\]]+)\]/g)].map((x) => x[1])
+      const recipients: MailRendered['recipients'] = []
+      for (const n of names.slice(0, 10)) {
+        const [first, ...rest] = n.split(' ')
+        const u = (await db('nivaro_users')
+          .where({ first_name: first })
+          .andWhere('last_name', rest.join(' '))
+          .first('email')
+          .catch(() => undefined)) as { email: string } | undefined
+        if (u?.email) recipients.push({ email: u.email, reason: 'mentioned' })
+      }
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients,
+        category: 'mentions'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'queue_entry',
+    label: 'Queue: new items',
+    group: 'Workflow',
+    description:
+      'A queue you subscribe to gained items — the newest ones, linked. Sample = the queue; the items shown are its current newest.',
+    template: 'queue_entry',
+    category: 'workflow',
+    sample: { kind: 'record', collection: 'nivaro_queues' },
+    samples: async (q) => {
+      let qb = db('nivaro_queues').orderBy('name').limit(40).select('id', 'name')
+      if (q.trim()) qb = qb.where('name', 'like', `%${q.trim()}%`)
+      const rows = (await qb) as Array<{ id: string; name: string }>
+      return rows.map((r) => ({ id: String(r.id), label: r.name }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildQueueEntryMail } = await B()
+      const queue = (await db('nivaro_queues').where({ id }).first('id', 'name', 'owner')) as
+        | { id: string; name: string; owner: string }
+        | undefined
+      if (!queue) throw new Error('Queue not found')
+      const { fetchQueueItems } = await import('./queues.js')
+      const owner = (await db('nivaro_users').where({ id: queue.owner }).first()) as
+        | Record<string, unknown>
+        | undefined
+      const { items } = await fetchQueueItems(queue.id, owner as never, 'all', {
+        page: 1,
+        limit: 5
+      } as never)
+      const b = buildQueueEntryMail({
+        queueId: queue.id,
+        queueName: queue.name,
+        items: items.map((i) => ({ label: i.label, collection: i.collection, item_id: i.item_id }))
+      })
+      const subs = (await db('nivaro_notification_subscriptions as s')
+        .join('nivaro_users as u', 'u.id', 's.user')
+        .where('s.queue_id', queue.id)
+        .where('s.is_active', 1)
+        .select('u.email')) as Array<{ email: string }>
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients: subs.map((s) => ({ email: s.email, reason: 'queue subscriber' })),
+        category: 'workflow'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'line_sla',
+    label: 'Lines missing a required id (line SLA)',
+    group: 'Alerts & monitoring',
+    description:
+      "Daily reminder to a record's owners while grid lines still lack a required field past the configured days.",
+    template: 'line_sla',
+    category: 'sla',
+    sample: { kind: 'none' },
+    samples: async () => [],
+    render: async (_id, { recipientUserId }) => {
+      const { scanLineSla } = await import('./line-sla.js')
+      const { buildLineSlaMail } = await B()
+      const findings = await scanLineSla()
+      const f = findings[0]
+      if (!f) throw new Error('No line-SLA findings right now (or no grid has line_sla enabled)')
+      const subject = `${f.friendlyId}: ${f.count} ${f.count === 1 ? 'line is' : 'lines are'} missing a ${f.label} (${f.days}d)`
+      const b = await buildLineSlaMail({ ...f, subject })
+      const recipients: MailRendered['recipients'] = []
+      for (const uid of f.ownerIds ?? []) recipients.push(...(await emailOf(uid, 'record owner')))
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId))),
+        recipients,
+        category: 'sla'
+      }
+    }
+  })
+
   // Generic notification emails — everything still routed through the plain
   // `notification` template, sampled from real inbox rows of that category so
   // each one is previewable exactly as it went out.

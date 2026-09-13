@@ -58,13 +58,19 @@ export async function delegateOpenTasks(userId: string, app?: FastifyInstance): 
 
     const fromName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'a colleague'
     if (app) {
+      const { buildTasksDelegatedMail } = await import('./mail-builders.js')
+      const built = await buildTasksDelegatedMail(
+        userId,
+        open.map((t) => t.id)
+      ).catch(() => null)
       await notifyUser(app, user.delegate_id, {
         subject: `${open.length} task${open.length === 1 ? '' : 's'} delegated to you`,
         category: 'workflow',
         message: `${fromName} is out of office — their open tasks were reassigned to you: ${open
           .slice(0, 5)
           .map((t) => t.title)
-          .join(', ')}${open.length > 5 ? '…' : ''}`
+          .join(', ')}${open.length > 5 ? '…' : ''}`,
+        ...(built ? { template: built.template, template_data: built.data } : {})
       }).catch(() => {})
     }
     await logActivity({

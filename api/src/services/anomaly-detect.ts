@@ -417,7 +417,7 @@ export async function runAnomalyChecks(
           to: rule.creator_email,
           subject,
           category: 'anomaly',
-          template: 'alert_notification',
+          template: 'alert',
           data: {
             rule_name: rule.name,
             metric_name: rule.def_name,

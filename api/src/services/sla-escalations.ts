@@ -168,13 +168,26 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
                 linkItem = info.parentId
               }
             }
+            const { buildSlaEscalationMail } = await import('./mail-builders.js')
+            const built = await buildSlaEscalationMail({
+              ruleName: rule.name,
+              stateKey: rule.state_key,
+              templateId: (rule as { workflow_template?: string | null }).workflow_template ?? null,
+              tier,
+              hoursPast,
+              friendly,
+              collection: linkCollection,
+              item: linkItem
+            })
             for (const uid of recipients) {
               await notifyUser(app, uid, {
-                subject: `SLA escalation (tier ${tier + 1}): ${rule.name}`,
+                subject: built.subject,
                 category: 'sla',
                 message: `${friendly} has been breached for ${Math.round(hoursPast)}h in "${rule.state_key}" with no acknowledgment. Open it and acknowledge to stop further escalation.`,
                 collection: linkCollection,
-                item: linkItem
+                item: linkItem,
+                template: built.template,
+                template_data: built.data
               }).catch(() => {})
             }
           }

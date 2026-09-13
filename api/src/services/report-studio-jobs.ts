@@ -3,12 +3,11 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { canSeeRoom } from './chat.js'
-import { sendRawMail } from './mail.js'
+import { sendMail, sendRawMail } from './mail.js'
 import { sendTeamsNotification } from './microsoft.js'
 import { notifyUser } from './notification-channels.js'
 import {
   type DateRange,
-  esc,
   parseJson,
   renderReportEmailHtml,
   resolveWidgetData,
@@ -191,16 +190,24 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
           })
         }
         if (alert.delivery_email && creator.email) {
-          await sendRawMail({
+          const { buildReportAlertMail } = await import('./mail-builders.js')
+          const built = buildReportAlertMail({
+            alertName: alert.name,
+            widgetTitle: widget.title,
+            conditions: conditions.map((c) => ({
+              field: c.field,
+              op: c.op,
+              value: c.value,
+              now: metrics[c.field] ?? 0
+            })),
+            reportId: String(alert.report)
+          })
+          await sendMail({
             to: creator.email,
-            subject: `Report alert: ${alert.name}`,
+            subject: built.subject,
             category: 'alerts',
-            html: `<div style="font-family:system-ui,sans-serif;max-width:560px">
-              <h2 style="color:#172940;font-size:16px">${esc(alert.name)}</h2>
-              <p style="font-size:13px;color:#111827">"${esc(widget.title)}" crossed your threshold.</p>
-              <p style="font-size:13px;color:#6b7280">${esc(summary)}</p>
-              <p><a href="${esc(config.ADMIN_URL)}/report-studio/${esc(alert.report)}" style="color:#00ceff;font-size:12px">Open the report →</a></p>
-            </div>`
+            template: built.template,
+            data: built.data
           }).catch(() => {})
         }
       } else if (!isFiring && openRow) {

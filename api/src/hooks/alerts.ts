@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { type AnomalyResult, evaluateAnomalyAlert } from '../services/anomaly.js'
-import { sendRawMail } from '../services/mail.js'
+import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
 
 let _app: FastifyInstance | null = null
@@ -110,20 +110,19 @@ async function notifyAlertSubscribers(
     // Email delivery — was accepted at subscribe time but never sent before.
     // Record field values flow into `message`, so everything is HTML-escaped.
     if (sub.notify_email && sub.email) {
-      const esc = (v: unknown) =>
-        String(v ?? '').replace(
-          /[&<>"']/g,
-          (c) =>
-            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
-        )
-      void sendRawMail({
-        to: sub.email as string,
-        subject,
-        category: 'alerts',
-        html: `<p>${esc(message)}</p><p style="color:#64748b;font-size:12px">Alert definition: ${esc(def.name)} · ${esc(def.collection)}</p>`,
-        collection: def.collection,
-        item
-      }).catch(() => {
+      void (async () => {
+        const { buildRecordAlertMail } = await import('../services/mail-builders.js')
+        const built = await buildRecordAlertMail(def, item, fieldValue, detail)
+        await sendMail({
+          to: sub.email as string,
+          subject: built.subject,
+          category: 'alerts',
+          template: built.template,
+          data: built.data,
+          collection: def.collection,
+          item
+        })
+      })().catch(() => {
         /* mail failures never block alert firing */
       })
     }

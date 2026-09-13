@@ -1,0 +1,9 @@
+{% layout 'base' %}
+{% block content %}
+{% render 'partials/eyebrow', text: 'Task assigned to you' %}
+{% render 'partials/heading', text: task_title %}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">{% if assigned_by %}Assigned by <strong>{{ assigned_by }}</strong>{% else %}Assigned to you{% endif %}{% if due_label %} &middot; due <strong>{{ due_label }}</strong>{% endif %}.</p>
+{% render 'partials/quote', text: task_description %}
+{% render 'partials/button', url: record_url, label: 'Open record', secondary_url: tasks_url, secondary_label: 'All my tasks' %}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

@@ -1,0 +1,9 @@
+{% layout 'base' %}
+{% block content %}
+{%- if channel_wide -%}{% render 'partials/eyebrow', text: 'Channel announcement' %}{%- else -%}{% render 'partials/eyebrow', text: 'You were mentioned' %}{%- endif -%}
+{% assign _text70828 = sender_name | append: ' in ' | append: room_label %}{% render 'partials/heading', text: _text70828 %}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  <tr><td style="padding:14px 18px;background-color:#f4f7fa;border:1px solid #dde3ea;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:#1e293b;">{{ excerpt }}</td></tr>
+</table>
+{% render 'partials/button', url: chat_url, label: 'Reply in chat' %}
+{% endblock %}

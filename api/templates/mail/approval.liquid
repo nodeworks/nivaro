@@ -1,0 +1,16 @@
+{% layout 'base' %}
+{% block content %}
+{%- if kind == 'requested' -%}{% render 'partials/eyebrow', text: 'Your approval is needed' %}
+{%- elsif kind == 'rejected' -%}{% render 'partials/eyebrow', text: 'Approval rejected', tone: 'danger' %}
+{%- else -%}{% render 'partials/eyebrow', text: 'Approval completed', tone: 'ok' %}{%- endif -%}
+{% render 'partials/heading', text: chain_name %}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">
+  {%- if kind == 'requested' -%}<strong>{{ step_label }}</strong> is waiting on you{% if requested_by %} &middot; requested by {{ requested_by }}{% endif %}.
+  {%- elsif kind == 'rejected' -%}{% if actor_name %}<strong>{{ actor_name }}</strong> rejected it{% else %}It was rejected{% endif %} at <strong>{{ step_label }}</strong>.
+  {%- else -%}Every step signed off{% if actor_name %} &mdash; last by <strong>{{ actor_name }}</strong>{% endif %}.{%- endif -%}
+</p>
+{% render 'partials/quote', text: comment, by: actor_name %}
+{% render 'partials/button', url: record_url, label: 'Open record', secondary_url: approvals_url, secondary_label: 'All approvals' %}
+{% render 'partials/record-card', card: record_card %}
+{% render 'partials/approval-chain', chain: steps %}
+{% endblock %}

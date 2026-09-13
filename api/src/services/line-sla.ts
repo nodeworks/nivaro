@@ -400,13 +400,16 @@ export async function runLineSlaSweep(
       .where('timestamp', '>=', since)
       .select('recipient')) as Array<{ recipient: string }>
     const done = new Set(already.map((r) => String(r.recipient).toUpperCase()))
+    const { buildLineSlaMail } = await import('./mail-builders.js')
+    const built = await buildLineSlaMail({ ...f, subject }).catch(() => null)
     for (const uid of owners) {
       if (done.has(uid.toUpperCase())) continue
       await notifyUser(app, uid, {
         subject,
         message: `${f.count} ${f.count === 1 ? 'line' : 'lines'} on ${f.friendlyId} still ${f.count === 1 ? 'has' : 'have'} no ${f.label}, ${f.days} days on. Open the record to fill them in.`,
         collection: f.parentCollection,
-        item: f.parentId
+        item: f.parentId,
+        ...(built ? { template: built.template, template_data: built.data } : {})
       })
       notified += 1
     }

@@ -3,10 +3,10 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { type AccessReason, explainAccess } from '../services/access-explain.js'
 import { logActivity } from '../services/activity.js'
-import { notifyUser } from '../services/notification-channels.js'
 import { type DigestSection, registerDigestSection } from '../services/daily-digest.js'
-import { resolveFriendlyId } from '../services/workflow-transitions.js'
+import { notifyUser } from '../services/notification-channels.js'
 import { bustUserScopeCache, listScopeDimensions } from '../services/user-scopes.js'
+import { resolveFriendlyId } from '../services/workflow-transitions.js'
 
 /** What granting would DO for a request, from the reasons captured when it
  *  was made — the smallest change that opens the record. */
@@ -157,13 +157,24 @@ export async function accessRequestRoutes(app: FastifyInstance) {
         .select('u.id')) as Array<{ id: string }>
       const friendly = item ? await resolveFriendlyId(collection, item).catch(() => item) : null
       const why = reasons?.length ? ` Why: ${reasons.map((r) => r.message).join(' ')}` : ''
+      const { buildAccessRequestMail } = await import('../services/mail-builders.js')
+      const built = await buildAccessRequestMail({
+        requesterId: req.user?.id ?? null,
+        requesterName: requester,
+        collection,
+        item,
+        friendly,
+        note,
+        reasons
+      }).catch(() => null)
       for (const a of admins) {
         await notifyUser(app, String(a.id), {
           subject: `${requester} requested access to ${item ? `${collection}/${friendly ?? item}` : collection}`,
           message: `${note || 'They hit the access-denied panel and asked for help.'}${why} Grant or deny under System → Access Requests.`,
           sender: req.user?.id ?? null,
           collection,
-          item
+          item,
+          ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => {})
       }
 
@@ -323,6 +334,14 @@ export async function accessRequestRoutes(app: FastifyInstance) {
       const target = item
         ? `${collection.replace(/_/g, ' ')} ${friendly}`
         : collection.replace(/_/g, ' ')
+      const { buildAccessDecisionMail } = await import('../services/mail-builders.js')
+      const builtDecision = await buildAccessDecisionMail({
+        decision: decision === 'granted' ? 'granted' : 'declined',
+        collection,
+        item,
+        friendly,
+        applied: done
+      }).catch(() => null)
       await notifyUser(app, requesterId, {
         subject:
           decision === 'granted'
@@ -334,7 +353,10 @@ export async function accessRequestRoutes(app: FastifyInstance) {
             : 'An administrator reviewed and declined this request.',
         sender: req.user?.id ?? null,
         collection,
-        item
+        item,
+        ...(builtDecision
+          ? { template: builtDecision.template, template_data: builtDecision.data }
+          : {})
       }).catch(() => {})
       return { data: { status: decision, applied: done, policy_added: policyAdded, remaining: [] } }
     }
@@ -405,6 +427,17 @@ export async function expireStaleAccessRequests(app: FastifyInstance): Promise<n
     await notifyUser(app, String(r.user), {
       subject: `Access request expired: ${String(r.collection).replace(/_/g, ' ')}${label ? ` ${label}` : ''}`,
       category: 'system',
+      ...(await (async () => {
+        const { buildAccessDecisionMail } = await import('../services/mail-builders.js')
+        const b = await buildAccessDecisionMail({
+          decision: 'expired',
+          collection: String(r.collection),
+          item: r.item ? String(r.item) : null,
+          friendly: label,
+          days: EXPIRE_AFTER_DAYS
+        }).catch(() => null)
+        return b ? { template: b.template, template_data: b.data } : {}
+      })()),
       message: `Nobody acted on your request within ${EXPIRE_AFTER_DAYS} days, so it was closed. If you still need it, open the record and request access again.`,
       collection: String(r.collection),
       item

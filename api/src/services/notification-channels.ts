@@ -106,6 +106,10 @@ export interface NotifyUserOptions {
    *  skips still apply. Flow notification ops set this by default: a flow
    *  author configured that notification deliberately. */
   always_inbox?: boolean
+  /** Dedicated Liquid template for the EMAIL channel (default 'notification');
+   *  `template_data` is merged into its context. Built by mail-builders.ts. */
+  template?: string
+  template_data?: Record<string, unknown>
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
 }
@@ -358,23 +362,33 @@ export async function notifyUser(
         | undefined
 
       if (channels.email && user?.email) {
+        // Generic notices get the record's header-strip card too (business
+        // collections only) — the same block the dedicated templates use.
+        const { cardFor } = await import('./mail-builders.js')
+        const card = opts.template_data?.record_card
+          ? null
+          : await cardFor(opts.collection, opts.item ?? null).catch(() => null)
         await sendMail({
           to: user.email,
           subject: opts.subject,
-          template: 'notification',
+          template: opts.template ?? 'notification',
           // Record context rides into the mail log so the record's Mail tab
           // sees every notification email about it.
           collection: opts.collection ?? undefined,
           item: opts.item != null ? String(opts.item) : undefined,
           data: {
             first_name: user.first_name,
+            subject: opts.subject,
             message: opts.message,
-            ...(opts.collection && opts.item
+            category: opts.category ?? classifyNotification(opts.subject),
+            ...(card ? { record_card: card } : {}),
+            ...(opts.collection && opts.item && !String(opts.collection).startsWith('__')
               ? {
                   action_url: `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`,
                   action_label: 'View item'
                 }
-              : {})
+              : {}),
+            ...(opts.template_data ?? {})
           }
         })
       }

@@ -40,6 +40,9 @@ function asRoleless() {
   currentUser.isAdmin = false
 }
 
+vi.mock('../../../services/bulk-actions.js', () => ({
+  builtinAllowed: vi.fn(async () => true)
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: currentUser.id, role: currentUser.role }

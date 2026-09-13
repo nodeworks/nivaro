@@ -1,0 +1,4 @@
+{%- comment -%} Small caps label above the heading. Usage: {% render 'partials/eyebrow', text: 'Task', tone: 'accent'|'warn'|'danger'|'ok'|'muted' %} {%- endcomment -%}
+{%- assign c = '#0284a8' -%}
+{%- if tone == 'warn' -%}{%- assign c = '#b45309' -%}{%- elsif tone == 'danger' -%}{%- assign c = '#b91c1c' -%}{%- elsif tone == 'ok' -%}{%- assign c = '#15803d' -%}{%- elsif tone == 'muted' -%}{%- assign c = '#7a90a6' -%}{%- endif -%}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:{{ c }};">{{ text }}</p>

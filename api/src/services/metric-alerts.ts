@@ -265,7 +265,7 @@ async function notifyImmediateSubscribers(
         to: sub.email,
         subject,
         category: 'alerts',
-        template: 'alert_notification',
+        template: 'alert',
         data: {
           rule_name: rule.name,
           metric_name: rule.def_name,

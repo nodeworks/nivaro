@@ -1,0 +1,12 @@
+{% layout 'base' %}
+{% block content %}
+{%- if decision == 'granted' -%}{% render 'partials/eyebrow', text: 'Access granted', tone: 'ok' %}{%- elsif decision == 'declined' -%}{% render 'partials/eyebrow', text: 'Access declined', tone: 'danger' %}{%- else -%}{% render 'partials/eyebrow', text: 'Access request expired', tone: 'muted' %}{%- endif -%}
+{% render 'partials/heading', text: target_label %}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">
+  {%- if decision == 'granted' -%}An administrator opened this up for you{% if applied and applied.size > 0 %} ({{ applied | join: '; ' }}){% endif %}. Reload and try again.
+  {%- elsif decision == 'declined' -%}An administrator reviewed and declined this request.
+  {%- else -%}Nobody acted on your request within {{ days }} days, so it was closed. If you still need it, open the record and request access again.{%- endif -%}
+</p>
+{%- if decision == 'granted' -%}{% render 'partials/button', url: record_url, label: 'Open it now' %}{%- endif -%}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

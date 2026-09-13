@@ -1,0 +1,8 @@
+{% layout 'base' %}
+{% block content %}
+{% render 'partials/eyebrow', text: 'Lines still incomplete', tone: 'warn' %}
+{% assign _text61158 = friendly_id | append: ': ' | append: count | append: ' line(s) missing a ' | append: field_label %}{% render 'partials/heading', text: _text61158 %}
+{% assign _text27380 = days | append: ' days on, these lines still have no ' | append: field_label | append: '. Open the record to fill them in.' %}{% render 'partials/lead', text: _text27380 %}
+{% render 'partials/button', url: record_url, label: 'Open record' %}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

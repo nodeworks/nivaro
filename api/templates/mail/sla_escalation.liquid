@@ -1,0 +1,8 @@
+{% layout 'base' %}
+{% block content %}
+{% assign _text9336 = 'SLA breached · escalation tier ' | append: tier %}{% render 'partials/eyebrow', text: _text9336, tone: 'danger'  %}
+{% assign _text58460 = friendly_id | append: ' has been stuck in ' | append: state_label %}{% render 'partials/heading', text: _text58460 %}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">Over the <strong>{{ rule_name }}</strong> limit by <strong>{% if days_past >= 2 %}{{ days_past | round }} days{% else %}{{ hours_past }}h{% endif %}</strong> with no acknowledgment. Open the record and acknowledge to stop further escalation, or move it on.</p>
+{% render 'partials/button', url: record_url, label: 'Open & acknowledge' %}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

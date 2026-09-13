@@ -99,6 +99,8 @@ function baseQuery() {
 
 async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: string): Promise<void> {
   if (task.assignee === actorId) return // self-assignment needs no notification
+  const { buildTaskAssignedMail } = await import('../services/mail-builders.js')
+  const built = await buildTaskAssignedMail(task.id).catch(() => null)
   await notifyUser(app, task.assignee, {
     subject: `Task assigned: ${task.title}`,
     category: 'workflow',
@@ -107,7 +109,8 @@ async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: stri
       : `You have been assigned a task on ${task.collection}/${task.item}.`,
     collection: task.collection,
     item: task.item,
-    sender: actorId
+    sender: actorId,
+    ...(built ? { template: built.template, template_data: built.data } : {})
   })
 }
 

@@ -1,10 +1,13 @@
 {% layout 'base' %}
 {% block content %}
-<p style="margin:0 0 18px;">Hi {{ first_name | default: 'there' }},</p>
-<p style="margin:0 0 18px;">{{ message }}</p>
-{% if action_url and action_label %}
-<p style="margin:0 0 18px;">
-  <a href="{{ action_url }}" style="display:inline-block;padding:12px 28px;background-color:#00ceff;color:#172940;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px;">{{ action_label }}</a>
-</p>
-{% endif %}
+{%- comment -%}
+Generic notice — the fallback for any notifyUser email without a dedicated
+template. Context: subject, message, first_name, category, record_card
+(auto-built for business records), action_url / action_label.
+{%- endcomment -%}
+{%- if category and category != 'other' -%}{% render 'partials/eyebrow', text: category, tone: 'muted' %}{%- endif -%}
+{% render 'partials/heading', text: subject %}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.55;color:#475569;">{% if first_name %}Hi {{ first_name }}, {% endif %}{{ message }}</p>
+{% render 'partials/button', url: action_url, label: action_label %}
+{% render 'partials/record-card', card: record_card %}
 {% endblock %}
