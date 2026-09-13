@@ -14,8 +14,7 @@ import {
   resolveStateOwners,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
-import { ADDENDUM_COLLECTION, fetchPipelineRecord } from '../services/pipeline-subject.js'
-import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
+import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
@@ -25,8 +24,7 @@ import {
   type ConditionRule,
   evalConditionRule,
   evaluateConditionRules,
-  fetchRecordForConditions,
-  parseConditionRules
+  fetchRecordForConditions
 } from '../services/workflow-conditions.js'
 import {
   diffSnapshots,
@@ -37,7 +35,6 @@ import {
 } from '../services/workflow-template-versions.js'
 import {
   applyTransition,
-  evaluateSkipCriteriaDetailed,
   resolveTransitionTarget,
   runAutoTransitions,
   syncStateField
@@ -3123,134 +3120,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-
-      const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
-        .where({ collection })
-        .first()
-
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
-
-      // No collection binding is fine when the record has its OWN instance —
-      // addendum workflows start from the layout's template (nivaro_addendums
-      // is never bound), and the chain resolves from the instance's template.
-      const templateId = binding?.template ?? instance?.template
-      if (!templateId) return reply.send({ data: null })
-
-      const states = await db<WorkflowState>('nivaro_workflow_states')
-        .where({ template: templateId })
-        .orderBy('sort')
-
-      // Skip prediction needs the record row (field_compare/lookup_compare
-      // criteria) — one fetch shared across states. Best-effort: an unreadable
-      // record just means no skip flags, never a failed response.
-      // Subject record — an addendum's rules read its PARENT (pipeline-subject.ts).
-      const record = await fetchPipelineRecord(collection, item)
-
-      // ── Path relevance ──────────────────────────────────────────────────
-      // A template can hold branch states (Oracle vs Beeline submission, CAR
-      // vs REQ endings) that this record will never visit. BFS the explicit
-      // transition graph from the initial state and mark reachable states.
-      // Edges survive when they are FORWARD (send-backs never extend a path)
-      // and either (a) their DISCRIMINATOR conditions pass — eq/neq/in/notin
-      // against the record (workflow_type eq 3 → Beeline) — or (b) the record
-      // actually took them (history), which covers skip-jump edges that exist
-      // only in history (Manager → VP when L2/Peer were skipped). Progress-
-      // style conditions (related_some lines, requisition nnull, within_days…)
-      // are treated as "will pass eventually" — they gate WHEN a transition
-      // fires, not WHICH branch the record belongs to. NOTE a departed state
-      // deliberately keeps its condition-passing template edges too: after a
-      // send-back the record re-walks from an earlier state, and restricting a
-      // left state to only its taken edges dead-ended the path at any state
-      // that was only ever left backward (PO/Completed vanished).
-      const onPath = new Set<string>()
-      try {
-        const transitions = (await db<WorkflowTransition>('nivaro_workflow_transitions')
-          .where({ template: templateId })
-          .whereNotNull('from_state')
-          .select('from_state', 'to_state', 'condition_rules')) as Array<{
-          from_state: string
-          to_state: string
-          condition_rules: string | null
-        }>
-        const historyRows = instance
-          ? ((await db('nivaro_workflow_history')
-              .where({ instance: instance.id })
-              .select('from_state', 'to_state')) as Array<{
-              from_state: string | null
-              to_state: string
-            }>)
-          : []
-        const takenEdges = new Set(
-          historyRows.filter((h) => h.from_state).map((h) => `${h.from_state}:${h.to_state}`)
-        )
-
-        const conditioned = transitions.filter((t) => t.condition_rules)
-        const conditionRecord =
-          conditioned.length > 0
-            ? await fetchRecordForConditions(
-                collection,
-                item,
-                conditioned.map((t) => t.condition_rules)
-              )
-            : record
-        const DISCRIMINATOR_OPS = new Set(['eq', 'neq', 'in', 'notin'])
-        const passes = (t: { condition_rules: string | null }) => {
-          const rules = parseConditionRules(t.condition_rules)
-          if (!rules) return true
-          return rules.every((r) => {
-            if (!r || typeof r !== 'object' || typeof r.field !== 'string' || !r.field) return true
-            if (!DISCRIMINATOR_OPS.has(String(r.op))) return true
-            return evalConditionRule(r, conditionRecord)
-          })
-        }
-
-        // Send-backs are backward edges (to a lower-sort state); following them
-        // in the BFS resurrects pruned branches (Beeline → Oracle Approval →
-        // send-back → Oracle Submission puts the Oracle branch back on a
-        // Beeline record's path). Forward flow only.
-        const sortOf = new Map(states.map((s) => [s.id, s.sort ?? 0]))
-        const fwd = new Map<string, string[]>()
-        for (const t of transitions) {
-          if ((sortOf.get(t.to_state) ?? 0) < (sortOf.get(t.from_state) ?? 0)) continue
-          if (!passes(t) && !takenEdges.has(`${t.from_state}:${t.to_state}`)) continue
-          const arr = fwd.get(t.from_state) ?? []
-          arr.push(t.to_state)
-          fwd.set(t.from_state, arr)
-        }
-        // Skip-jumps write history edges that exist in NO template transition
-        // (Manager → VP when the states between were skipped) — feed them into
-        // the graph so a historically-taken shortcut keeps the path connected.
-        for (const key of takenEdges) {
-          const [fromId, toId] = key.split(':')
-          if ((sortOf.get(toId) ?? 0) < (sortOf.get(fromId) ?? 0)) continue
-          const arr = fwd.get(fromId) ?? []
-          if (!arr.includes(toId)) {
-            arr.push(toId)
-            fwd.set(fromId, arr)
-          }
-        }
-
-        const queue = states.filter((s) => coerceBool(s.is_initial)).map((s) => s.id)
-        while (queue.length) {
-          const id = queue.shift() as string
-          if (onPath.has(id)) continue
-          onPath.add(id)
-          for (const next of fwd.get(id) ?? []) if (!onPath.has(next)) queue.push(next)
-        }
-        // History + current state are always relevant, whatever the graph says.
-        for (const h of historyRows) onPath.add(h.to_state)
-        if (instance?.current_state) onPath.add(instance.current_state)
-        // A template with no initial state (or a broken graph) yields nothing —
-        // degrade to showing everything rather than an empty chain.
-        if (onPath.size === 0) for (const s of states) onPath.add(s.id)
-      } catch {
-        // Relevance is a display refinement — on any failure fall back to
-        // "everything is on the path" rather than an empty chain.
-        for (const s of states) onPath.add(s.id)
-      }
-
+      // Path relevance + skip prediction + owners live in services/pipeline-chain.ts
+      // (shared with the transition emails).
+      const { computeStateChain } = await import('../services/pipeline-chain.js')
+      const chain = await computeStateChain(collection, item)
+      if (!chain) return reply.send({ data: null })
       const result: Record<
         string,
         {
@@ -3261,33 +3135,16 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           on_path: boolean
         }
       > = {}
-      await Promise.all(
-        states.map(async (s) => {
-          const [owners, skip] = await Promise.all([
-            resolveStateOwners(s.id, instance?.id ?? null, collection, item, db),
-            // The current state was already entered — a skip flag on it would
-            // read as a contradiction.
-            s.id === instance?.current_state
-              ? Promise.resolve({ skipped: false, reasons: [] as string[] })
-              : evaluateSkipCriteriaDetailed(
-                  s.id,
-                  record,
-                  instance?.id ?? null,
-                  collection,
-                  item,
-                  db
-                )
-          ])
-          result[s.id] = {
-            state: formatState(s),
-            owners,
-            skipped: skip.skipped,
-            skip_reasons: skip.reasons,
-            on_path: onPath.has(s.id)
-          }
-        })
-      )
-
+      for (const s of chain.states) {
+        const e = chain.entries[s.id]
+        result[s.id] = {
+          state: formatState(s as unknown as WorkflowState),
+          owners: e?.owners ?? [],
+          skipped: e?.skipped ?? false,
+          skip_reasons: e?.skip_reasons ?? [],
+          on_path: e?.on_path ?? true
+        }
+      }
       return reply.send({ data: result })
     }
   )

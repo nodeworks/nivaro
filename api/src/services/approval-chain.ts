@@ -1,127 +1,111 @@
 import { db } from '../db/index.js'
-import { type OwnerResolutionRequest, resolveStateOwnersBatch } from './pipeline-engine.js'
 
 /**
- * The approval chain as an email can show it: every state on the template in
- * order, marked done / current / upcoming, with who acted on the done ones
- * (from history) and who owns the current + next one. Branch states the
- * record will never visit are pruned the cheap way — hidden-stage states and
- * states with sort below the current one that history never touched are
- * dropped; the full condition-aware BFS lives in routes/pipelines.ts
- * (owners/all) and is deliberately not duplicated here.
+ * The approval chain as an email shows it — built on the SAME path-aware
+ * computation the PipelinePanel uses (pipeline-chain.ts): only states on this
+ * record's path, done / current / upcoming / skipped, who acted (history),
+ * who is waiting (owners). Escape states (cancel / reject) only appear while
+ * the record is actually there.
  */
 
 export interface ChainStep {
   key: string
   label: string
-  status: 'done' | 'current' | 'upcoming'
+  status: 'done' | 'current' | 'upcoming' | 'skipped'
   by: string | null
   at: string | null
   owners: string[]
+  skip_reason: string | null
 }
+
+const isEscape = (k: string) => /cancel|reject|abandon/i.test(k)
+const nameOf = (u: {
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
+}) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null
 
 export async function buildApprovalChain(
   instanceId: string,
   opts: { asOfStateId?: string | null; asOfTime?: Date | null } = {}
 ): Promise<ChainStep[]> {
   const instance = (await db('nivaro_workflow_instances').where({ id: instanceId }).first()) as
-    | {
-        id: string
-        template: string
-        collection: string
-        item: string
-        current_state: string | null
-      }
+    | { id: string; collection: string; item: string; current_state: string | null }
     | undefined
   if (!instance) return []
-  const states = (await db('nivaro_workflow_states')
-    .where({ template: instance.template })
-    .orderBy('sort')
-    .select('id', 'key', 'label', 'sort', 'stage_visibility')) as Array<{
-    id: string
-    key: string
-    label: string
-    sort: number
-    stage_visibility: string | null
-  }>
-  const history = (await db('nivaro_workflow_history as h')
-    .leftJoin('nivaro_users as u', 'u.id', 'h.user')
-    .where('h.instance', instanceId)
-    .orderBy('h.timestamp', 'asc')
-    .select(
-      'h.from_state',
-      'h.to_state',
-      'h.timestamp',
-      'u.first_name',
-      'u.last_name',
-      'u.email'
-    )) as Array<{
-    from_state: string | null
-    to_state: string
-    timestamp: Date
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-  }>
-  // A replayed history row (mail harness) reads the chain AS OF that move:
-  // current = the state it entered, history truncated to that moment.
-  const currentStateId = opts.asOfStateId ?? instance.current_state
-  const historyAsOf = opts.asOfTime
-    ? history.filter((h) => new Date(h.timestamp).getTime() <= (opts.asOfTime as Date).getTime())
-    : history
-  const currentSort = states.find((s) => s.id === currentStateId)?.sort ?? 0
-  // The LAST departure from each state = who acted there.
+  const { computeStateChain } = await import('./pipeline-chain.js')
+  const chain = await computeStateChain(instance.collection, String(instance.item), {
+    asOf:
+      opts.asOfStateId && opts.asOfTime ? { stateId: opts.asOfStateId, time: opts.asOfTime } : null
+  })
+  if (!chain) return []
+  const currentId = chain.currentStateId
+  const currentSort = chain.states.find((s) => s.id === currentId)?.sort ?? 0
+
+  // Who acted where: the LAST departure from each state, by name.
+  const userIds = [...new Set(chain.history.map((h) => h.user).filter((u): u is string => !!u))]
+  const users = userIds.length
+    ? ((await db('nivaro_users')
+        .whereIn('id', userIds)
+        .select('id', 'first_name', 'last_name', 'email')) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+        email: string
+      }>)
+    : []
+  const byId = new Map(users.map((u) => [u.id.toUpperCase(), u]))
   const actedAt = new Map<string, { by: string | null; at: string }>()
-  for (const h of historyAsOf) {
+  for (const h of chain.history) {
     if (!h.from_state) continue
-    const by = [h.first_name, h.last_name].filter(Boolean).join(' ') || h.email || null
-    actedAt.set(h.from_state, { by, at: new Date(h.timestamp).toISOString() })
+    const u = h.user ? byId.get(h.user.toUpperCase()) : undefined
+    actedAt.set(h.from_state, { by: u ? nameOf(u) : null, at: new Date(h.timestamp).toISOString() })
   }
-  const visited = new Set<string>(historyAsOf.map((h) => h.to_state))
-  // A cancel / rejected branch is never "upcoming" — it only shows once
-  // the record actually lands there.
-  const isEscape = (k: string) => /cancel|reject|abandon/i.test(k)
-  const steps = states.filter(
-    (s) =>
-      s.stage_visibility !== 'hide' &&
-      (s.id === currentStateId || visited.has(s.id) || (s.sort > currentSort && !isEscape(s.key)))
-  )
-  const upcoming = steps.filter((s) => s.sort > currentSort && s.id !== currentStateId)
-  const next = upcoming[0]
-  const ownerRequests: OwnerResolutionRequest[] = [currentStateId, next?.id]
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
-    .map((sid) => ({
-      key: sid,
-      stateId: sid,
-      instanceId,
-      collection: instance.collection,
-      itemId: String(instance.item)
-    }))
-  const ownersByState = ownerRequests.length
-    ? await resolveStateOwnersBatch(ownerRequests).catch(() => new Map())
-    : new Map()
-  const names = (sid: string) =>
-    (
-      (ownersByState.get(sid) ?? []) as Array<{
-        first_name?: string | null
-        last_name?: string | null
-        email?: string
-      }>
-    )
-      .map((o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email || '')
-      .filter(Boolean)
-      .slice(0, 6)
-  return steps.map((s) => {
-    const status: ChainStep['status'] =
-      s.id === currentStateId ? 'current' : s.sort > currentSort ? 'upcoming' : 'done'
+  const visited = new Set(chain.history.map((h) => h.to_state))
+
+  const steps: ChainStep[] = []
+  for (const s of chain.states) {
+    const e = chain.entries[s.id]
+    if (!e?.on_path) continue
+    if (s.stage_visibility === 'hide') continue
+    const isCurrent = s.id === currentId
+    // A cancel / reject branch is never "upcoming"; it shows only while the
+    // record sits there (an uncanceled record's Canceled stay is history).
+    if (isEscape(s.key) && !isCurrent) continue
+    const sort = s.sort ?? 0
+    let status: ChainStep['status']
+    if (isCurrent) status = 'current'
+    else if (sort < currentSort)
+      status =
+        visited.has(s.id) || actedAt.has(s.id) || s.is_initial === true || s.is_initial === 1
+          ? 'done'
+          : 'skipped'
+    else status = e.skipped ? 'skipped' : 'upcoming'
     const acted = actedAt.get(s.id)
-    return {
+    const owners =
+      status === 'current' || status === 'upcoming'
+        ? e.owners
+            .map((o) => nameOf(o) ?? '')
+            .filter(Boolean)
+            .slice(0, 6)
+        : []
+    steps.push({
       key: s.key,
       label: s.label,
       status,
       by: status === 'done' ? (acted?.by ?? null) : null,
       at: status === 'done' ? (acted?.at ?? null) : null,
-      owners: status === 'current' || s.id === next?.id ? names(s.id) : []
+      owners,
+      skip_reason: status === 'skipped' ? (e.skip_reasons[0] ?? null) : null
+    })
+  }
+  // Only the NEXT upcoming state carries owners — a long tail of names is noise.
+  let seenUpcoming = false
+  for (const st of steps) {
+    if (st.status === 'upcoming') {
+      if (seenUpcoming) st.owners = []
+      seenUpcoming = true
     }
-  })
+  }
+  return steps
 }
