@@ -13,10 +13,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
+import { invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
@@ -969,6 +969,22 @@ interface AllOwnersEntry {
    *  edges whose conditions this record satisfies. false = another branch's
    *  state (e.g. Beeline submission on an Oracle-path workflow); hide it. */
   on_path?: boolean
+  /** Owners who cannot act right now (#12) — OOO/suspended/redacted — with
+   *  the delegate that stands in for them, when one resolves. */
+  unavailable?: Array<{
+    id: string
+    name: string
+    reason: 'out' | 'suspended' | 'redacted'
+    delegate: { id: string; name: string; expires_at: string | null } | null
+  }>
+  /** Every raw owner of this state is unable to act — approvals would stall here. */
+  blocked?: boolean
+}
+
+const REASON_WORD: Record<string, string> = {
+  out: 'out of office',
+  suspended: 'suspended',
+  redacted: 'redacted'
 }
 
 function ApprovalChainView({
@@ -1038,6 +1054,8 @@ function ApprovalChainView({
                 const isCurrent = s.id === currentStateId
                 const isSkipped = data[s.id]?.skipped === true && !isCurrent
                 const skipReasons = (data[s.id]?.skip_reasons ?? []).filter(Boolean)
+                const unavailable = data[s.id]?.unavailable ?? []
+                const blocked = data[s.id]?.blocked === true && !isSkipped
                 return (
                   <div
                     key={s.id}
@@ -1048,8 +1066,10 @@ function ApprovalChainView({
                       // drops opacity modifiers on it. Kept very light so the
                       // tint doesn't clash with the state badge's own color.
                       isCurrent && 'bg-[#00ceff0f] dark:bg-[#00ceff1c]',
-                      isSkipped && 'opacity-60'
+                      isSkipped && 'opacity-60',
+                      blocked && 'bg-red-50 dark:bg-red-500/10'
                     )}
+                    data-chain-blocked={blocked ? '' : undefined}
                   >
                     <StateBadge label={s.label} color={s.color} small />
                     <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5'>
@@ -1088,7 +1108,55 @@ function ApprovalChainView({
                           </Tooltip>
                         </TooltipProvider>
                       ) : (
-                        <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
+                        <>
+                          <OwnerAvatars owners={owners} max={10} emptyLabel='—' />
+                          {unavailable.map((u) => (
+                            <span
+                              key={u.id}
+                              data-tip={`${u.name} is ${REASON_WORD[u.reason] ?? u.reason}${
+                                u.delegate
+                                  ? ` — ${u.delegate.name} covers${u.delegate.expires_at ? ` until ${new Date(u.delegate.expires_at).toLocaleDateString()}` : ''}`
+                                  : ' and nobody is covering'
+                              }`}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium',
+                                u.delegate
+                                  ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                                  : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                              )}
+                            >
+                              {u.name}
+                              {u.delegate ? (
+                                <>
+                                  {' → '}
+                                  {u.delegate.name}
+                                  {u.delegate.expires_at && (
+                                    <span className='opacity-70'>
+                                      , until{' '}
+                                      {new Date(u.delegate.expires_at).toLocaleDateString(
+                                        undefined,
+                                        {
+                                          month: 'short',
+                                          day: 'numeric'
+                                        }
+                                      )}
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                <span className='opacity-80'>
+                                  {' '}
+                                  · {REASON_WORD[u.reason] ?? u.reason}
+                                </span>
+                              )}
+                            </span>
+                          ))}
+                          {blocked && (
+                            <span className='inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-[10.5px] font-semibold text-white'>
+                              No one can act here
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -1114,13 +1182,16 @@ export function PipelinePanel({
   hideActionsExpanded,
   onBeforeTransition,
   addendumPending,
-  addendumView
+  addendumView,
+  asRole
 }: {
   collection: string
   item: string
   defaultExpanded?: boolean
   title?: string
   showApprovalChain?: boolean
+  /** Admin "view as role" (#8): evaluate available transitions for this role instead of the caller. */
+  asRole?: string | null
   /** Layout-configurable: suppress the transition buttons inside the slot
    * (collapsed header row / expanded body) — redundant when the record header
    * already renders PipelineTransitionButtons. */
@@ -1144,6 +1215,7 @@ export function PipelinePanel({
       onBeforeTransition={onBeforeTransition}
       addendumPending={addendumPending}
       addendumView={addendumView}
+      asRole={asRole}
     />
   )
 }
@@ -1258,7 +1330,8 @@ function PipelinePanelInner({
   hideActionsExpanded,
   onBeforeTransition,
   addendumPending,
-  addendumView
+  addendumView,
+  asRole
 }: {
   collection: string
   item: string
@@ -1270,6 +1343,7 @@ function PipelinePanelInner({
   onBeforeTransition?: () => boolean | Promise<boolean>
   addendumPending?: boolean
   addendumView?: boolean
+  asRole?: string | null
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -1304,13 +1378,15 @@ function PipelinePanelInner({
     }
     setPendingTransition(txId)
   }
-  const queryKey = ['pipeline-instance', collection, item]
+  const queryKey = ['pipeline-instance', collection, item, asRole ?? null]
   const { data, isLoading } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
       client
         .request<{ data: PipelinePanelData | null }>(
-          get(`/pipelines/instance/${collection}/${item}`)
+          get(
+            `/pipelines/instance/${collection}/${item}${asRole ? `?as_role=${encodeURIComponent(asRole)}` : ''}`
+          )
         )
         .then(
           (r) =>

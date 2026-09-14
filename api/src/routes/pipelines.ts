@@ -9,6 +9,7 @@ import { buildApprovalBrief } from '../services/approval-brief.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
+import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
   bustOwnerGroupCache,
   resolveStateOwners,
@@ -1834,10 +1835,16 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .where({ template: effectiveBinding.template })
       .orderBy('sort')
 
-    // Filter available transitions for this user
+    // Filter available transitions for this user. View-as-role (admin only):
+    // `?as_role=<roleId>` evaluates required_roles as THAT role instead of
+    // the caller's, so an admin can preview what a role's buttons look like.
+    // The admin bypass is dropped in that mode — otherwise every transition
+    // would show and the preview would be meaningless.
     const currentState = instance.current_state
-    const userRole = req.user?.role ?? null
-    const isAdmin = req.isAdmin ?? false
+    const asRoleRaw = (req.query as { as_role?: string } | undefined)?.as_role
+    const asRole = req.isAdmin && asRoleRaw ? String(asRoleRaw).toUpperCase() : null
+    const userRole = asRole ?? req.user?.role ?? null
+    const isAdmin = asRole ? false : (req.isAdmin ?? false)
 
     // Load the bound item row once when any transition carries condition rules,
     // so conditional branching can filter the offered transitions.
@@ -1866,7 +1873,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         if (isAdmin) return true
         const roles = parseJson(tx.required_roles) as string[] | null
         if (!roles || roles.length === 0) return true
-        return userRole !== null && roles.includes(userRole)
+        return (
+          userRole !== null &&
+          roles.some((r) => String(r).toUpperCase() === String(userRole).toUpperCase())
+        )
       })
       .map(formatTransition)
 
@@ -3133,6 +3143,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           skipped: boolean
           skip_reasons: string[]
           on_path: boolean
+          unavailable: UnavailableChainOwner[]
+          blocked: boolean
         }
       > = {}
       for (const s of chain.states) {
@@ -3142,7 +3154,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           owners: e?.owners ?? [],
           skipped: e?.skipped ?? false,
           skip_reasons: e?.skip_reasons ?? [],
-          on_path: e?.on_path ?? true
+          on_path: e?.on_path ?? true,
+          // Raw (pre-delegation) owners who cannot act + who covers them;
+          // blocked = nobody in the state can act (coverage-gaps rule).
+          unavailable: e?.unavailable ?? [],
+          blocked: e?.blocked ?? false
         }
       }
       return reply.send({ data: result })

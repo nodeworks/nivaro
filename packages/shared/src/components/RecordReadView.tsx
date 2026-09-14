@@ -18,6 +18,8 @@ interface LayoutGroup {
   label: string
   type: string | null
   sort: number
+  id?: number
+  container_id?: number | null
 }
 interface LayoutAssignment {
   field: string
@@ -48,6 +50,7 @@ interface FieldMeta {
   type: string | null
   interface?: string | null
   hidden?: boolean
+  label?: string | null
 }
 interface RelationRow {
   many_collection: string | null
@@ -124,7 +127,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     staleTime: 10 * 60_000,
     retry: false
   })
-  const { data: row } = useQuery({
+  const { data: row, isPending } = useQuery({
     queryKey: ['rrv-related', collection, String(id)],
     queryFn: () =>
       client
@@ -136,6 +139,10 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     retry: false
   })
   if (id == null) return <Empty />
+  if (!row && (isPending || !meta))
+    return (
+      <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 align-middle dark:bg-[hsl(var(--nvr-skeleton))]' />
+    )
   if (!row) return <span className='text-slate-400'>#{String(id)}</span>
   let label = ''
   const template = meta?.display_template
@@ -170,7 +177,73 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   )
 }
 
-/** Read-only child list for an O2M/M2M alias field — curated columns from a
+/** An M2M alias reads as the linked records' labels, not a table of junction
+ *  rows: the junction's companion leg names the target collection, each
+ *  linked id resolves through RelatedValue (display template + drill). */
+function M2MValue({
+  junction,
+  parentFk,
+  junctionField,
+  parentId
+}: {
+  junction: string
+  parentFk: string
+  junctionField: string
+  parentId: string
+}) {
+  const client = useNivaroClient()
+  const { data: jMeta } = useQuery({
+    queryKey: ['cbv-collection-meta', junction],
+    queryFn: () =>
+      client
+        .request<{ data: { relations: RelationRow[] } }>(get(`/collections/${junction}`))
+        .then((r) => r.data),
+    staleTime: 10 * 60_000,
+    retry: false
+  })
+  const target =
+    (jMeta?.relations ?? []).find(
+      (r) => r.many_collection === junction && r.many_field === junctionField && r.one_collection
+    )?.one_collection ?? null
+  const { data: ids } = useQuery({
+    queryKey: ['rrv-m2m', junction, parentFk, parentId, junctionField],
+    queryFn: () =>
+      client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${junction}`, {
+            filter: JSON.stringify({ [parentFk]: { _eq: parentId } }),
+            fields: `id,${junctionField}`,
+            limit: 200
+          })
+        )
+        .then((r) =>
+          (r.data ?? [])
+            .map((row) => row[junctionField])
+            .filter((v) => v != null)
+            .map((v) => String(typeof v === 'object' ? (v as { id?: unknown }).id : v))
+        )
+        .catch(() => [] as string[]),
+    staleTime: 30_000,
+    retry: false
+  })
+  if (!ids || !target)
+    return (
+      <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+    )
+  if (ids.length === 0) return <Empty />
+  return (
+    <span className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
+      {ids.map((id, i) => (
+        <span key={id} className='inline-flex items-center'>
+          <RelatedValue collection={target} id={id} />
+          {i < ids.length - 1 && <span className='text-slate-300 dark:text-slate-600'>,</span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/** Read-only child list for an O2M alias field — curated columns from a
  *  table layout when the grid assignment pins one. */
 function ChildTable({
   collection,
@@ -228,6 +301,7 @@ function ChildTable({
                   'uuid'
                 ].includes(f.type ?? '')
             )
+            .filter((f, i, arr) => arr.findIndex((x) => x.field === f.field) === i)
             .slice(0, 8)
         ),
     staleTime: 5 * 60_000,
@@ -565,15 +639,35 @@ export function RecordReadView({
       </div>
     )
   }
+  // Read mode has no wizard: a steps/tabs container is an INPUT pattern.
+  // Every group renders as a card in layout order — a container expands into
+  // its child steps in place, so the whole record reads top to bottom.
   const groups = [...layoutData.groups].sort((a, b) => a.sort - b.sort)
-  const sectionGroups = groups.filter((g) => g.type !== 'tab')
-  const tabGroups = groups.filter((g) => g.type === 'tab')
-  const [activeTab, setActiveTab] = useState<string | null>(null)
-  const currentTab = activeTab ?? tabGroups[0]?.key ?? null
+  const sectionGroups: LayoutGroup[] = []
+  for (const g of groups) {
+    if (g.type === 'container') {
+      for (const c of groups.filter((x) => x.container_id != null && x.container_id === g.id))
+        sectionGroups.push(c)
+      continue
+    }
+    if (g.container_id != null) continue
+    sectionGroups.push(g)
+  }
 
+  const isM2M = (a: LayoutAssignment) => !!aliasChild(a.field)?.junction_field
   const renderValue = (a: LayoutAssignment) => {
     const f = fieldByName.get(a.field)
     const ov = parseOverrides(a.overrides)
+    const m2m = aliasChild(a.field)
+    if (m2m?.junction_field && m2m.many_collection && m2m.many_field)
+      return (
+        <M2MValue
+          junction={m2m.many_collection}
+          parentFk={m2m.many_field}
+          junctionField={m2m.junction_field}
+          parentId={itemId}
+        />
+      )
     const v = record?.[a.field]
     const target = m2oTarget(a.field)
     if (target === 'nivaro_users' && v != null)
@@ -617,7 +711,8 @@ export function RecordReadView({
     )
   }
 
-  const isGrid = (a: LayoutAssignment) => !!aliasChild(a.field)
+  // Only O2M aliases are tables; M2M aliases read as linked labels.
+  const isGrid = (a: LayoutAssignment) => !!aliasChild(a.field) && !isM2M(a)
 
   // Sections render as cards on a two-column board (single column when
   // narrow); a card whose section holds a child-record grid spans the full
@@ -631,12 +726,17 @@ export function RecordReadView({
     : []
   const headerSet = new Set(headerFieldKeys)
   const isEmptyValue = (a: LayoutAssignment) => {
-    if (!record) return false
+    if (!record || isM2M(a)) return false
     const v = record[a.field]
     return v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
   }
   const assignmentFor = (field: string) => visible.find((a) => a.field === field)
-  const labelFor = (a: LayoutAssignment) => a.label_override ?? titleCase(a.field)
+  // The form's label order: layout override → column override → field label.
+  const labelFor = (a: LayoutAssignment) => {
+    const ovLabel = parseOverrides(a.overrides).label
+    if (typeof ovLabel === 'string' && ovLabel.trim()) return ovLabel
+    return a.label_override ?? fieldByName.get(a.field)?.label ?? titleCase(a.field)
+  }
 
   const renderSection = (g: LayoutGroup) => {
     const items = visible
@@ -675,13 +775,13 @@ export function RecordReadView({
                     style={long ? { gridColumn: '1 / -1' } : undefined}
                   >
                     <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                      {a.label_override ?? titleCase(a.field)}
+                      {labelFor(a)}
                     </dt>
                     <dd
                       className={`mt-0.5 min-w-0 ${
                         emphasis
                           ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
-                          : 'truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'
+                          : `${isM2M(a) ? '' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
                       }`}
                     >
                       {record ? (
@@ -750,39 +850,6 @@ export function RecordReadView({
       <div className='grid items-start gap-4 lg:grid-cols-2'>
         {sectionGroups.map(renderSection)}
       </div>
-      {tabGroups.length > 0 && (
-        <div className='mt-5'>
-          <div className='flex gap-1 border-b border-slate-200 dark:border-slate-700'>
-            {tabGroups.map((g) => (
-              <button
-                key={g.key}
-                type='button'
-                onClick={() => setActiveTab(g.key)}
-                className={`-mb-px border-b-2 px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
-                  currentTab === g.key
-                    ? 'border-[#00ceff] text-slate-900 dark:text-white'
-                    : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                }`}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          <div className='pt-3'>
-            {tabGroups
-              .filter((g) => g.key === currentTab)
-              .map((g) => (
-                <div key={g.key} className='space-y-3'>
-                  {visible
-                    .filter((a) => a.group_key === g.key)
-                    .sort((a, b) => a.sort - b.sort)
-                    .map((a) => (isGrid(a) ? renderGridAssignment(a) : null))}
-                  {renderWidgets(g.key)}
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

@@ -20,7 +20,10 @@ export interface CMSField {
   dependency_config: Record<string, unknown> | string | null
   /** {source_collection, source_fk_field?, field_map:{target:source}} — live copy from a related record when the FK changes. */
   cross_record_defaults?: Record<string, unknown> | string | null
-  validation_rules?: Array<{ type: string; value?: unknown; message?: string; soft?: boolean }> | string | null
+  validation_rules?:
+    | Array<{ type: string; value?: unknown; message?: string; soft?: boolean }>
+    | string
+    | null
   layout_assigned?: boolean
   /** Raw layout-assignment overrides (label, readonly, drilldown, ...) — passed through by field-config. */
   _overrides?: Record<string, unknown> | null
@@ -83,7 +86,7 @@ export interface SlotAssignment {
   lock_conditions?: string | null
   overrides?: Record<string, unknown> | string | null
   widget_id?: number | null
-  input_bindings?: string | null  // JSON: [{key,binding_type,binding_value}]
+  input_bindings?: string | null // JSON: [{key,binding_type,binding_value}]
 }
 
 export interface LayoutMeta {
@@ -98,6 +101,8 @@ export interface LayoutMeta {
   disable_comments?: boolean | number
   hide_integrity_banner?: boolean | number
   hide_sla_banner?: boolean | number
+  /** Per-layout "changes so far" tray at the bottom of the record body. */
+  changes_tray?: boolean | number
   disable_tasks?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number

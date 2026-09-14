@@ -14,6 +14,8 @@ import {
   Loader2,
   Save,
   Trash2,
+  BookOpen,
+  Eye,
   Wand2,
   Wrench,
   X
@@ -38,6 +40,7 @@ import {
   RelationPathDataContext,
   StaleFieldReportContext,
   useApiFetchConfig,
+  useItemNavigation,
   useNivaroClient
 } from '../context'
 import { del, get, patch, post } from '../lib/commands'
@@ -87,6 +90,10 @@ import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
+import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
+import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
+import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
+import { RecordReadView, type ReadViewLayout } from './RecordReadView'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -154,6 +161,7 @@ import {
   ExternalRequestsChip,
   ItemActionButtons,
   ItemLockBanner,
+  LockHolderButton,
   OwnersSlot,
   PipelinePanel,
   PipelineTransitionButtons,
@@ -412,6 +420,20 @@ function SaveProgressDialog({
 export { M2MStagingContext, useM2MStaging } from './item-edit/M2MStagingContext'
 export type { M2MStagingCtx, RenderFieldProps }
 
+/** What is unsaved right now — the leave-page prompt, the changes tray and
+ *  the host's own dirty indicator all read this one breakdown. */
+export interface UnsavedSummary {
+  fields: string[]
+  rows: number
+  edits: number
+  deletes: number
+  links: number
+  unlinks: number
+  total: number
+  /** "2 fields, 3 lines, 1 link" — empty when clean. */
+  text: string
+}
+
 export interface ItemEditFormProps {
   collection: string
   itemId?: string
@@ -445,7 +467,8 @@ export interface ItemEditFormProps {
    */
   /** Fires whenever the form's dirty state flips — lets a host (workspace
    *  tabs, close guards) track unsaved edits without reaching inside. */
-  onDirtyChange?: (dirty: boolean) => void
+  /** Dirty flag plus a breakdown of what is unsaved (fields, staged lines, links) — hosts render their own leave-page prompt from it. */
+  onDirtyChange?: (dirty: boolean, summary?: UnsavedSummary) => void
   /** false = skip the document.title side effect — a workspace-tab host keeps
    *  several forms mounted and only the ACTIVE one may own the browser tab. */
   documentTitle?: boolean
@@ -869,7 +892,7 @@ export function partitionRuleResults(
 export function ItemEditForm({
   collection,
   itemId: itemIdProp,
-  layoutSlug,
+  layoutSlug: layoutSlugProp,
   initialAddendumViewId,
   onAddendumViewChange,
   onBack,
@@ -904,6 +927,12 @@ export function ItemEditForm({
   const client = useNivaroClient()
   const fetchCfg = useApiFetchConfig()
   const { isAdmin, userId: authUserId } = useContext(ItemEditAuthContext)
+  // View as role (#8, admin): the previewed role's layout pins by slug when
+  // it has one; hidden/readonly fields are applied further down.
+  const viewAs = useViewAsRole(collection, isAdmin)
+  const itemNav = useItemNavigation()
+  const [viewAsOpen, setViewAsOpen] = useState(false)
+  const layoutSlug = viewAs.preview?.layout?.slug ?? layoutSlugProp
   const qc = useQueryClient()
   const itemId = itemIdProp ?? 'new'
   const isNew = !itemIdProp || itemIdProp === 'new'
@@ -979,6 +1008,7 @@ export function ItemEditForm({
     addendums_enabled?: boolean
     addendum_allowed_roles?: string | null
     addendum_allowed_states?: string | null
+    read_mode_toggle?: boolean
   }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
@@ -992,6 +1022,7 @@ export function ItemEditForm({
             addendums_enabled?: boolean
             addendum_allowed_roles?: string | null
             addendum_allowed_states?: string | null
+            read_mode_toggle?: boolean
           }
         }>(get(`/collections/${collection}`))
         .then((r) => r.data),
@@ -1164,6 +1195,28 @@ export function ItemEditForm({
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  // Remote-change ghosts (#2): field → what it was before someone else's
+  // write landed, until dismissed or the next save.
+  const [remoteChanges, setRemoteChanges] = useState<Record<string, RemoteFieldChange>>({})
+  const ownSaveAtRef = useRef(0)
+  const lastTouchRef = useRef<{ user_id: string | null; user_name: string | null } | null>(null)
+  // Read mode (#3): the grouped layout as RecordReadView — per user per collection.
+  const readModeKey = `nvr_read_mode_${collection}_${authUserId || 'anon'}`
+  const [readMode, setReadModeRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(readModeKey) === '1'
+    } catch {
+      return false
+    }
+  })
+  const setReadMode = (v: boolean) => {
+    setReadModeRaw(v)
+    try {
+      localStorage.setItem(readModeKey, v ? '1' : '0')
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }
   // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
   // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
   // staging) is persisted to IndexedDB per collection:record:user, ~800ms
@@ -1180,10 +1233,6 @@ export function ItemEditForm({
   // whose stored draft has not been looked at yet, or a clean form would
   // delete the draft it is about to be offered.
   const [recoveryCheckedKey, setRecoveryCheckedKey] = useState<string | null>(null)
-  useEffect(() => {
-    onDirtyChange?.(isDirty)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- callback identity is the host's concern
-  }, [isDirty])
   const [justSaved, setJustSaved] = useState(false)
 
   // Cross-field writes from structured interfaces (range/date-range end
@@ -2112,13 +2161,93 @@ export function ItemEditForm({
   }, [isNew, initialImportResult, relationsFetched, fieldConfigFetched, applyImportResult])
 
   useEffect(() => {
-    if (itemData) {
-      initialDataRef.current = itemData
-      draftRef.current = itemData
-      setDraft(itemData)
-      setIsDirty(false)
+    if (!itemData) return
+    const prev = initialDataRef.current
+    const firstLoad = Object.keys(prev).length === 0
+    const ownSave = Date.now() - ownSaveAtRef.current < 8000
+    // Someone else's write landed while this form was open (RecordLiveSync
+    // invalidated the record): note what moved so the fields can show a
+    // "was X · who, just now" ghost (#2), and — when the user has unsaved
+    // edits — merge only the fields they have NOT touched, keeping their
+    // draft dirty instead of silently replacing it.
+    if (!firstLoad && !ownSave) {
+      const changed = Object.keys(itemData).filter(
+        (k) => !k.startsWith('__') && !valuesEqual(prev[k], itemData[k])
+      )
+      if (changed.length > 0) {
+        const lt = lastTouchRef.current
+        const by = lt?.user_id && lt.user_id !== authUserId ? lt.user_name : null
+        const at = new Date().toISOString()
+        setRemoteChanges((cur) => {
+          const next = { ...cur }
+          for (const k of changed) next[k] = { was: prev[k], by, at }
+          return next
+        })
+        if (userTouchedRef.current.size > 0) {
+          initialDataRef.current = itemData
+          const merged = { ...draftRef.current }
+          for (const k of changed) if (!userTouchedRef.current.has(k)) merged[k] = itemData[k]
+          draftRef.current = merged
+          setDraft(merged)
+          return
+        }
+      }
     }
+    initialDataRef.current = itemData
+    draftRef.current = itemData
+    setDraft(itemData)
+    setIsDirty(false)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: authUserId only attributes the ghost
   }, [itemData])
+
+  // ── What is unsaved (#15 dirty guard, #6 changes tray, #17 rail dots) ───
+  const unsavedSummary = useMemo<UnsavedSummary>(() => {
+    const base = initialDataRef.current
+    const fields: string[] = []
+    for (const k of Object.keys(draft)) {
+      if (k.startsWith('__')) continue
+      if (!userTouchedRef.current.has(k)) continue
+      if (valuesEqual(draft[k], base[k])) continue
+      fields.push(k)
+    }
+    const size = <T,>(m: Map<string, T>, f: (v: T) => number) =>
+      [...m.values()].reduce((n, v) => n + f(v), 0)
+    const rows = size(pendingO2MRows, (r) => r.length)
+    const edits = size(pendingO2MEdits, (e) => e.size)
+    const deletes = size(pendingO2MDeletes, (d) => d.size)
+    const links = size(m2mLinks, (l) => l.length)
+    const unlinks = size(m2mUnlinks, (u) => u.size)
+    const total = fields.length + rows + edits + deletes + links + unlinks
+    const parts: string[] = []
+    if (fields.length) parts.push(`${fields.length} field${fields.length === 1 ? '' : 's'}`)
+    const lines = rows + edits + deletes
+    if (lines) parts.push(`${lines} line${lines === 1 ? '' : 's'}`)
+    if (links + unlinks) parts.push(`${links + unlinks} link${links + unlinks === 1 ? '' : 's'}`)
+    return { fields, rows, edits, deletes, links, unlinks, total, text: parts.join(', ') }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: userTouchedRef / initialDataRef mutate with draft
+  }, [draft, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes, m2mLinks, m2mUnlinks])
+  const hasUnsaved = isDirty || unsavedSummary.total > 0
+  useEffect(() => {
+    onDirtyChange?.(hasUnsaved, unsavedSummary)
+    window.dispatchEvent(
+      new CustomEvent('nvr:form-unsaved', {
+        detail: { collection, item: isNew ? 'new' : String(itemId), ...unsavedSummary }
+      })
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callback identity is the host's concern
+  }, [hasUnsaved, unsavedSummary])
+  // Leave-page prompt covers staged lines and links, not only scalar dirt.
+  useEffect(() => {
+    if (!hasUnsaved) return
+    const h = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = unsavedSummary.text
+        ? `You have unsaved changes: ${unsavedSummary.text}.`
+        : 'You have unsaved changes.'
+    }
+    window.addEventListener('beforeunload', h)
+    return () => window.removeEventListener('beforeunload', h)
+  }, [hasUnsaved, unsavedSummary.text])
 
   // Recovery check: once the record (or the blank new form) is ready, look
   // for a stored draft. A draft whose every value now equals the loaded
@@ -3289,12 +3418,19 @@ export function ItemEditForm({
   const lockEnabled = showLockBanner && !isNew && !!colMeta?.item_locking_enabled
   const {
     lockHolder,
-    acquired: _acquired,
+    acquired: lockAcquired,
     isReadOnly,
     takeOver,
     takingOver,
     requestLock,
-    requesting
+    requesting,
+    queue: lockQueue,
+    myPosition: lockQueuePosition,
+    joinQueue: joinLockQueue,
+    leaveQueue: leaveLockQueue,
+    joining: joiningLockQueue,
+    myNote: lockNote,
+    saveNote: saveLockNote
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
 
   // ── Layout / groups ────────────────────────────────────────────────────────
@@ -3715,11 +3851,14 @@ export function ItemEditForm({
       seen.add(f.field)
       return true
     })
-    if (!assignedFieldSet) return deduped
-    return deduped.filter(
+    const roleVisible = viewAs.active
+      ? deduped.filter((f) => !viewAs.hidden.has(f.field))
+      : deduped
+    if (!assignedFieldSet) return roleVisible
+    return roleVisible.filter(
       (f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)
     )
-  }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData])
+  }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData, viewAs.active, viewAs.hidden])
 
   const groups = useMemo<FieldGroup[]>(() => {
     return (activeLayoutData?.groups ?? []).sort((a, b) => a.sort - b.sort)
@@ -4129,6 +4268,23 @@ export function ItemEditForm({
     itemId,
     isNew
   ])
+  // Jump AND focus (#14): after the scroll/flash lands, put the caret in the
+  // field's first focusable input so Enter/typing continues from there.
+  const focusFieldInput = (key: string) => {
+    const jumped = jumpToField(key)
+    if (!jumped) return
+    const tryFocus = (attempt: number) => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-field="${key}"] input:not([type=hidden]), [data-field="${key}"] textarea, [data-field="${key}"] [role="combobox"], [data-field="${key}"] button`
+      )
+      if (el) {
+        el.focus({ preventScroll: true })
+        return
+      }
+      if (attempt < 10) setTimeout(() => tryFocus(attempt + 1), 150)
+    }
+    setTimeout(() => tryFocus(0), 200)
+  }
   const jumpToField = (key: string): boolean => {
     const el = document.querySelector(`[data-field="${key}"]`)
     if (el) {
@@ -4978,6 +5134,7 @@ export function ItemEditForm({
   // past) — comparing touch-to-touch keeps clock skew out of the decision.
   const staleBaselineRef = useRef<string | null>(null)
   const [staleBy, setStaleBy] = useState<string | null>(null)
+  lastTouchRef.current = lastTouch ?? null
   useEffect(() => {
     if (isNew || !lastTouch) return
     if (staleBaselineRef.current === null) {
@@ -5288,7 +5445,7 @@ export function ItemEditForm({
       }
       // Jump-to-error (#191): scroll + flash the first invalid field.
       const firstBad = keys[0]
-      if (firstBad) setTimeout(() => jumpToField(firstBad), 150)
+      if (firstBad) setTimeout(() => focusFieldInput(firstBad), 150)
       return false
     }
     return true
@@ -6004,6 +6161,8 @@ export function ItemEditForm({
       // read from userTouchedRef BEFORE the dirty state clears.
       setJustSaved(true)
       setTimeout(() => setJustSaved(false), 1600)
+      ownSaveAtRef.current = Date.now()
+      setRemoteChanges({})
       // Rich-text mentions (#188): "@First Last" typed into a rich-text body
       // the user just changed notifies that person (exact directory-name
       // match, case-insensitive; best-effort, never blocks the save).
@@ -6163,6 +6322,190 @@ export function ItemEditForm({
       if (locked) lockedFields.add(a.field)
     }
   }
+  // Role preview (#8): fields the previewed role may read but not update.
+  if (viewAs.active) for (const f of viewAs.readonly) lockedFields.add(f)
+
+  // Why is this input read-only? (#7) — one sentence per locked/readonly
+  // field, rendered on the lock glyph + the input's hover tip.
+  const lockReasons: Record<string, string> = {}
+  {
+    const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
+    const currentStateKey = currentStateId
+      ? ((pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId)?.key ?? null)
+      : null
+    const stateLabel = currentStateKey ? titleCase(currentStateKey.replace(/_/g, ' ')) : null
+    for (const a of assignments) {
+      if (!a.lock_conditions || !lockedFields.has(a.field)) continue
+      try {
+        const conds = JSON.parse(a.lock_conditions) as Array<{
+          type: string
+          state_keys?: string[]
+          role_ids?: string[]
+        }>
+        if (conds.some((c) => c.type === 'pipeline_state' && c.state_keys?.length))
+          lockReasons[a.field] = stateLabel
+            ? `Locked while the record is in ${stateLabel}`
+            : 'Locked by the record’s current state'
+        else if (conds.some((c) => c.type === 'role'))
+          lockReasons[a.field] = 'Locked for your role'
+      } catch {
+        /* malformed lock config — generic glyph */
+      }
+    }
+    for (const f of fieldConfig ?? []) {
+      const key = f.field
+      if (lockReasons[key]) continue
+      if (viewAs.active && viewAs.readonly.has(key)) {
+        lockReasons[key] = `${viewAs.preview?.role.name ?? 'This role'} cannot edit this field`
+        continue
+      }
+      if (isReadOnly) {
+        lockReasons[key] = `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — read-only until the lock is released`
+        continue
+      }
+      if (viewingAddendum) {
+        lockReasons[key] = 'Viewing an addendum — switch to the current record to edit'
+        continue
+      }
+      if (!f.readonly) continue
+      const ov = (f._overrides ?? null) as Record<string, unknown> | null
+      if (f.computed_type === 'rollup')
+        lockReasons[key] = 'Calculated from related rows — change the rows, not this total'
+      else if (f.computed_type === 'write')
+        lockReasons[key] = f.computed_formula
+          ? `Calculated: ${f.computed_formula}`
+          : 'Calculated on save from other fields'
+      else if (f.interface === 'relation-path')
+        lockReasons[key] = 'Value from a related record — edit it there'
+      else if (ov?.readonly === true) lockReasons[key] = 'Read-only on this layout'
+      else if (SYSTEM_FIELDS.has(key)) lockReasons[key] = 'Set by the system'
+      else lockReasons[key] = 'Read-only field'
+    }
+  }
+
+  // Apply-to-lines (#5): a header/field assignment carrying
+  // overrides.apply_to_lines {grid, target, label?} gets a button that copies
+  // its value onto every row of that grid (the grid stages, rules re-derive).
+  const applyToLines: Record<
+    string,
+    { label?: string; count?: number | null; onApply: (value: unknown) => void }
+  > = {}
+  for (const a of assignments) {
+    const ov = (
+      typeof a.overrides === 'string' ? parseJson<Record<string, unknown>>(a.overrides) : a.overrides
+    ) as Record<string, unknown> | null
+    const spec = ov?.apply_to_lines as { grid?: string; target?: string; label?: string } | undefined
+    if (!spec?.grid || !spec?.target) continue
+    const grid = spec.grid
+    const target = spec.target
+    applyToLines[a.field] = {
+      label: spec.label,
+      count: grid in o2mEffectiveCounts ? o2mEffectiveCounts[grid] : null,
+      onApply: (value) => {
+        // The grid answers by stamping `handled` on the detail. When it is not
+        // mounted (another step), jump to it and re-ask until it answers.
+        const fire = () => {
+          const detail = { collection, grid, target, value, handled: false }
+          window.dispatchEvent(new CustomEvent('nvr:grid-apply-field', { detail }))
+          return detail.handled
+        }
+        if (fire()) return
+        jumpToField(grid)
+        let tries = 0
+        const tick = () => {
+          if (fire() || ++tries >= 5) return
+          window.setTimeout(tick, 350)
+        }
+        window.setTimeout(tick, 150)
+      }
+    }
+  }
+  // Rail diff dots (#17) + changes tray (#6) read the same breakdown.
+  const labelOf = (k: string) =>
+    (fieldConfig ?? []).find((f) => f.field === k)?.label || titleCase(k.replace(/_/g, ' '))
+  const changedFieldMap: Record<string, { from: unknown }> = {}
+  for (const k of unsavedSummary.fields) changedFieldMap[k] = { from: initialDataRef.current[k] }
+  const changeItems: ChangeItem[] = []
+  for (const k of unsavedSummary.fields)
+    changeItems.push({
+      key: `f:${k}`,
+      kind: 'field',
+      label: labelOf(k),
+      from: initialDataRef.current[k],
+      to: draft[k],
+      onRevert: () => handleFieldChange(k, initialDataRef.current[k] ?? null),
+      onJump: () => jumpToField(k)
+    })
+  const gridLabel = (rc: string) => titleCase(rc.replace(/_/g, ' '))
+  for (const [key, rows] of pendingO2MRows) {
+    const [rc, mf] = key.split('.')
+    rows.forEach((r, idx) =>
+      changeItems.push({
+        key: `r:${key}:${idx}`,
+        kind: 'row',
+        label: gridLabel(rc),
+        detail: `new line ${idx + 1}${r.line_number != null ? ` (#${String(r.line_number)})` : ''}`,
+        onRevert: () => o2mStagingCtx.removeRow(rc, mf, idx)
+      })
+    )
+  }
+  for (const [key, edits] of pendingO2MEdits) {
+    const [rc, mf] = key.split('.')
+    for (const [rowId, ch] of edits)
+      changeItems.push({
+        key: `e:${key}:${rowId}`,
+        kind: 'edit',
+        label: gridLabel(rc),
+        detail: `row ${rowId}: ${Object.keys(ch)
+          .filter((c) => !c.startsWith('__'))
+          .map((c) => titleCase(c.replace(/_/g, ' ')))
+          .join(', ')}`,
+        onRevert: () => o2mStagingCtx.cancelPendingEdit(rc, mf, rowId)
+      })
+  }
+  for (const [key, dels] of pendingO2MDeletes) {
+    const [rc, mf] = key.split('.')
+    for (const rowId of dels)
+      changeItems.push({
+        key: `d:${key}:${rowId}`,
+        kind: 'delete',
+        label: gridLabel(rc),
+        detail: `row ${rowId}`,
+        onRevert: () => o2mStagingCtx.cancelPendingDelete(rc, mf, rowId)
+      })
+  }
+  for (const [key, ids] of m2mLinks)
+    for (const id of ids)
+      changeItems.push({
+        key: `l:${key}:${String(id)}`,
+        kind: 'link',
+        label: labelOf(key),
+        detail: `+ #${String(id)}`,
+        onRevert: () => m2mStagingCtx.unstageLink(key, id)
+      })
+  for (const [key, ids] of m2mUnlinks)
+    for (const id of ids)
+      changeItems.push({
+        key: `u:${key}:${String(id)}`,
+        kind: 'unlink',
+        label: labelOf(key),
+        detail: `− junction #${String(id)}`,
+        onRevert: () => m2mStagingCtx.unstageUnlink(key, id)
+      })
+
+  const fieldAffordances = {
+    remoteChanges,
+    dismissRemoteChange: (field: string) =>
+      setRemoteChanges((cur) => {
+        if (!(field in cur)) return cur
+        const next = { ...cur }
+        delete next[field]
+        return next
+      }),
+    lockReasons,
+    applyToLines,
+    openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
+  }
 
   function renderSentinel(key: string) {
     if (key === '__pipeline__' && showPipeline) {
@@ -6179,6 +6522,7 @@ export function ItemEditForm({
           hideActionsCollapsed={!!pipelineSlotOpts.hide_actions_collapsed}
           hideActionsExpanded={!!pipelineSlotOpts.hide_actions_expanded}
           onBeforeTransition={validateAll}
+          asRole={viewAs.roleId}
           addendumPending={
             !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
           }
@@ -7231,7 +7575,7 @@ export function ItemEditForm({
               <button
                 type='button'
                 onClick={() => handleSave()}
-                disabled={saveMut.isPending || isReadOnly}
+                disabled={saveMut.isPending || isReadOnly || viewAs.active}
                 className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0] disabled:opacity-50'
               >
                 <Save className='h-3.5 w-3.5' />
@@ -7536,6 +7880,7 @@ export function ItemEditForm({
                       <LiveRowsContext.Provider value={liveRowsCtx}>
                         <StagedRelationsContext.Provider value={stagedRelsCtx}>
                           <M2MStagingContext.Provider value={m2mStagingCtx}>
+                          <FieldAffordancesContext.Provider value={fieldAffordances}>
                             {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
@@ -7870,6 +8215,37 @@ export function ItemEditForm({
                                           dialog; the group supplies border + dividers. */}
                                       {!isNew && itemId ? (
                                         <HeaderToolGroup>
+                                          {lockEnabled && lockAcquired && !lockHolder && (
+                                            <LockHolderButton
+                                              note={lockNote}
+                                              onSave={saveLockNote}
+                                              waiting={lockQueue}
+                                            />
+                                          )}
+                                          {!!colMeta?.read_mode_toggle && (
+                                            <button
+                                              type='button'
+                                              onClick={() => setReadMode(!readMode)}
+                                              aria-pressed={readMode}
+                                              aria-label={readMode ? 'Switch to edit mode' : 'Switch to read mode'}
+                                              title={
+                                                readMode
+                                                  ? 'Read mode — click to edit'
+                                                  : 'Read mode — a no-inputs view for reviewing'
+                                              }
+                                              data-read-mode-toggle
+                                              className={cn(
+                                                'inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground',
+                                                readMode && 'bg-accent text-accent-foreground'
+                                              )}
+                                            >
+                                              {readMode ? (
+                                                <BookOpen className='h-4 w-4' strokeWidth={2} />
+                                              ) : (
+                                                <Eye className='h-4 w-4' strokeWidth={2} />
+                                              )}
+                                            </button>
+                                          )}
                                           <FindInRecordButton
                                             compact
                                             fields={findableFields}
@@ -8231,6 +8607,20 @@ export function ItemEditForm({
                                                 <Wrench className='h-3.5 w-3.5' />
                                                 Raw edit
                                               </Button>
+                                              {!isNew && (
+                                                <Button
+                                                  type='button'
+                                                  variant='outline'
+                                                  size='sm'
+                                                  onClick={() => setViewAsOpen(true)}
+                                                  title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
+                                                  className='gap-1.5'
+                                                  data-view-as-role-open
+                                                >
+                                                  <Eye className='h-3.5 w-3.5' />
+                                                  View as role…
+                                                </Button>
+                                              )}
                                               {effectiveShowClone && (
                                                 <CloneDialog
                                                   collection={collection}
@@ -8491,6 +8881,19 @@ export function ItemEditForm({
                                         />
                                       )}
                                     </HeaderTools>
+                                    {!!activeLayoutData?.layout?.changes_tray && !readMode && (
+                                      <ChangesTray
+                                        items={changeItems}
+                                        saving={saveMut.isPending}
+                                        onRevertAll={
+                                          changeItems.length > 1
+                                            ? () => {
+                                                for (const it of changeItems) it.onRevert()
+                                              }
+                                            : undefined
+                                        }
+                                      />
+                                    )}
                                     {!isStepsMode && (
                                       <div className='relative'>
                                         {isDirty && !saveMut.isPending && (
@@ -8529,7 +8932,7 @@ export function ItemEditForm({
                                           type='button'
                                           size='sm'
                                           onClick={() => handleSave()}
-                                          disabled={saveMut.isPending || isReadOnly}
+                                          disabled={saveMut.isPending || isReadOnly || viewAs.active}
                                           className={cn(
                                             'gap-1.5 transition-colors duration-300',
                                             justSaved &&
@@ -9073,7 +9476,7 @@ export function ItemEditForm({
                                   {showValidationSummary && validationSummaryItems.length > 0 && (
                                     <ValidationSummary
                                       items={validationSummaryItems}
-                                      onJump={jumpToField}
+                                      onJump={focusFieldInput}
                                       onDismiss={() => setShowValidationSummary(false)}
                                     />
                                   )}
@@ -9085,6 +9488,18 @@ export function ItemEditForm({
                                     </div>
                                   )}
 
+                                  {viewAsOpen && (
+                                    <ViewAsRoleBar
+                                      roles={viewAs.roles}
+                                      roleId={viewAs.roleId}
+                                      onChange={(id) => {
+                                        viewAs.setRoleId(id)
+                                        if (!id) setViewAsOpen(false)
+                                      }}
+                                      preview={viewAs.preview}
+                                      loading={viewAs.loading}
+                                    />
+                                  )}
                                   {recovery.state === 'offer' && (
                                     <div className='nvr-expand-in'>
                                       <DraftRecoveryBanner
@@ -9154,6 +9569,11 @@ export function ItemEditForm({
                                         isAdmin={isAdmin}
                                         onRequestLock={requestLock}
                                         requesting={requesting}
+                                        queue={lockQueue}
+                                        myPosition={lockQueuePosition}
+                                        onJoinQueue={joinLockQueue}
+                                        onLeaveQueue={leaveLockQueue}
+                                        joining={joiningLockQueue}
                                       />
                                     </div>
                                   )}
@@ -9185,11 +9605,21 @@ export function ItemEditForm({
                                       </button>
                                     </div>
                                   )}
-                                  {hasTabs
-                                    ? isStepsMode
-                                      ? renderStepsMode()
-                                      : renderTabMode()
-                                    : renderSectionMode()}
+                                  {readMode && !isNew && activeLayoutData?.layout ? (
+                                    <RecordReadView
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      layoutData={activeLayoutData as unknown as ReadViewLayout}
+                                    />
+                                  ) : hasTabs ? (
+                                    isStepsMode ? (
+                                      renderStepsMode()
+                                    ) : (
+                                      renderTabMode()
+                                    )
+                                  ) : (
+                                    renderSectionMode()
+                                  )}
                                   {extraBottomContent}
                                 </div>
                                 {summaryEnabled && (
@@ -9243,6 +9673,7 @@ export function ItemEditForm({
                                           staging={m2mStagingCtx}
                                           errors={validationErrors}
                                           staleFields={staleFields}
+                                          changedFields={changedFieldMap}
                                           // M2M alias values never live in the draft, so the panel
                                           // cannot judge them empty on its own — it would mark a
                                           // populated field "required". Hand it the state the form
@@ -9345,6 +9776,7 @@ export function ItemEditForm({
                                 )}
                               </div>
                             </div>
+                          </FieldAffordancesContext.Provider>
                           </M2MStagingContext.Provider>
                         </StagedRelationsContext.Provider>
                       </LiveRowsContext.Provider>

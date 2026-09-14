@@ -4,12 +4,17 @@ import {
   ChevronRight,
   Clock,
   FileUp,
+  GripHorizontal,
   GripVertical,
   History,
+  ListChecks,
   Loader2,
+  PanelBottomOpen,
+  Rows3,
+  SquarePen,
   X
 } from 'lucide-react'
-import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   type ChangeReasonChallenge,
@@ -125,11 +130,13 @@ import {
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
+import { useOptionalRealtime } from '../../lib/realtime'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
+import { GridBulkEditDialog } from './GridBulkEditDialog'
 import {
   applyDisplayTemplate,
   EMPTY_NESTED_OPS,
@@ -477,6 +484,7 @@ function AllocateDrawer({
   rowDefaults,
   parentDraft,
   invalidate,
+  onLocalWrite,
   staging,
   stagingActive,
   pendingRows,
@@ -491,6 +499,8 @@ function AllocateDrawer({
   rowDefaults: Record<string, unknown>
   parentDraft: Record<string, unknown> | undefined
   invalidate: () => void
+  /** A live write landed for this grid row (null = a row was created). */
+  onLocalWrite?: (rowId: string | null) => void
   /** When stagingActive, drawer edits queue into O2M staging and land with the
    *  outer form's Save — nothing writes immediately. */
   staging?: ReturnType<typeof useO2MStaging>
@@ -657,6 +667,7 @@ function AllocateDrawer({
           })
         )
       }
+      onLocalWrite?.(existing?.id != null ? String(existing.id) : null)
       invalidate()
     } catch {
       /* row save errors surface via grid refresh */
@@ -1304,11 +1315,16 @@ export function InlineTableField({
   prefillParentId,
   parentFieldKey,
   readOnly = false,
-  emptyLabel
+  emptyLabel,
+  editorMode
 }: {
   relatedCollection: string
   manyField: string
   parentId: string
+  /** options.editor_mode — where a row's editor renders: 'drawer' (under the
+   *  row, the default) or 'split' (docked below the table, arrow keys walk the
+   *  rows). A per-user toolbar toggle (localStorage) wins over this. */
+  editorMode?: 'drawer' | 'split'
   /** Same table display, but no editing: hides the Add toolbar, + Add row,
    *  row delete/undo, and blocks cell edit entry. */
   readOnly?: boolean
@@ -1381,6 +1397,151 @@ export function InlineTableField({
   const isNew = parentId === 'new'
   const parentDraftCtx = useParentDraft()
   const reimportHandler = useReimportHandler()
+  const realtime = useOptionalRealtime()
+
+  // ── Editor placement (backlog #4): drawer under the row vs a docked split
+  // panel below the table. The per-user choice (localStorage) beats the
+  // option; the option beats the default. When the host didn't pass the
+  // option through, the PARENT field's own config is consulted (field-level
+  // options.editor_mode) — one cached field-config read, shared with the form.
+  const editorPrefKey = `nvr_grid_editor_${relatedCollection}_${parentFieldKey ?? manyField}`
+  const [editorPref, setEditorPref] = useState<'drawer' | 'split' | null>(() => {
+    if (typeof localStorage === 'undefined') return null
+    try {
+      const v = localStorage.getItem(editorPrefKey)
+      return v === 'split' || v === 'drawer' ? v : null
+    } catch {
+      return null
+    }
+  })
+  const { data: parentFieldCfg } = useQuery<CMSField[]>({
+    queryKey: ['field-config', parentCollection ?? '', null],
+    queryFn: () =>
+      client
+        .request<{ data: CMSField[] }>(get(`/field-config/${parentCollection}`))
+        .then((r) => r.data ?? []),
+    enabled: editorMode === undefined && !!parentCollection && !!parentFieldKey,
+    staleTime: 5 * 60_000
+  })
+  const configuredEditorMode = useMemo<'drawer' | 'split'>(() => {
+    if (editorMode) return editorMode
+    const f = parentFieldCfg?.find((c) => c.field === parentFieldKey)
+    const opts = f?.options
+      ? typeof f.options === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(f.options as string) as Record<string, unknown>
+            } catch {
+              return {}
+            }
+          })()
+        : (f.options as Record<string, unknown>)
+      : {}
+    return opts?.editor_mode === 'split' ? 'split' : 'drawer'
+  }, [editorMode, parentFieldCfg, parentFieldKey])
+  const splitMode = !readOnly && (editorPref ?? configuredEditorMode) === 'split'
+  const setEditorPlacement = (mode: 'drawer' | 'split') => {
+    setEditorPref(mode)
+    try {
+      localStorage.setItem(editorPrefKey, mode)
+    } catch {
+      /* private mode */
+    }
+  }
+  const splitHeightKey = `nvr_grid_split_h_${relatedCollection}`
+  const [splitHeight, setSplitHeight] = useState<number>(() => {
+    if (typeof localStorage === 'undefined') return 320
+    try {
+      const n = Number(localStorage.getItem(splitHeightKey))
+      return Number.isFinite(n) && n >= 160 ? Math.min(n, 900) : 320
+    } catch {
+      return 320
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(splitHeightKey, String(splitHeight))
+    } catch {
+      /* private mode */
+    }
+  }, [splitHeight, splitHeightKey])
+  const splitDragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  // Assigned below once the row helpers exist (they sit past the loading
+  // early-return); the key listener reads the latest through the ref.
+  const moveSelectionRef = useRef<(delta: 1 | -1) => Promise<void>>(async () => {})
+  const applyFieldToAllRef = useRef<(target: string, value: unknown) => Promise<void>>(
+    async () => {}
+  )
+  // An apply that arrives while the grid is still loading its rows (the host
+  // jumped to this step and asked right away) waits here until they land.
+  const pendingApplyRef = useRef<{ target: string; value: unknown } | null>(null)
+  const gridReadyRef = useRef(false)
+  // "Apply header field to all lines" (backlog #5): a host dispatches window
+  // event `nvr:grid-apply-field` {collection: PARENT collection, grid: the
+  // O2M field key on the parent (or the child collection name), target: child
+  // column, value}. A grid answers only when the parent collection matches
+  // (when it knows its parent) AND the grid key is its own field key
+  // (parentFieldKey ?? manyField) or its child collection.
+  useEffect(() => {
+    if (readOnly || typeof window === 'undefined') return
+    const onApply = (e: Event) => {
+      const d = (
+        e as CustomEvent<{
+          collection?: string
+          grid?: string
+          target?: string
+          value?: unknown
+          handled?: boolean
+        }>
+      ).detail
+      if (!d || typeof d.target !== 'string' || !d.target) return
+      if (parentCollection && d.collection !== parentCollection) return
+      const gridKey = parentFieldKey ?? manyField
+      if (d.grid !== gridKey && d.grid !== relatedCollection) return
+      d.handled = true
+      if (!gridReadyRef.current) {
+        pendingApplyRef.current = { target: d.target, value: d.value ?? null }
+        return
+      }
+      void applyFieldToAllRef.current(d.target, d.value ?? null)
+    }
+    window.addEventListener('nvr:grid-apply-field', onApply)
+    return () => window.removeEventListener('nvr:grid-apply-field', onApply)
+  }, [readOnly, parentCollection, parentFieldKey, manyField, relatedCollection])
+  // Split mode: ↑/↓ with focus inside the TABLE (never inside an input, a
+  // picker or a dialog) walk the selection. Native listener on the wrapper so
+  // the rows themselves stay plain table rows.
+  useEffect(() => {
+    const el = tableWrapRef.current
+    if (!el || !splitMode) return
+    const onKey = (e: KeyboardEvent) => {
+      if (!editStateRef.current) return
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      const tag = t.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t.isContentEditable) return
+      if (t.closest('[role="listbox"],[role="combobox"],[data-nvr-combobox-panel],[role="dialog"]'))
+        return
+      e.preventDefault()
+      void moveSelectionRef.current(e.key === 'ArrowDown' ? 1 : -1)
+    }
+    el.addEventListener('keydown', onKey)
+    return () => el.removeEventListener('keydown', onKey)
+  }, [splitMode])
+
+  // ── Row selection + bulk edit (backlog #11) ────────────────────────────────
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkEditOpen, setBulkEditOpen] = useState(false)
+  const toggleSelected = (key: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
 
   // Per-line submission errors — shares the failure banner's query key/cache.
   const subErrLineField = submissionErrors ? (submissionErrors.line_field ?? 'line_number') : null
@@ -3233,6 +3394,158 @@ export function InlineTableField({
       ? [...presetCols, ...summaryCols]
       : displayCols
 
+  // ── "Since you opened" (backlog #13) ──────────────────────────────────────
+  // A baseline snapshot of the SAVED rows this grid first loaded (displayed
+  // column values only). Every later rows fetch is diffed against it: rows
+  // the baseline lacks were added, rows now missing were removed, rows whose
+  // shown values moved were changed — unless THIS tab wrote them (its own
+  // saves, deletes, bulk writes and staged-batch flushes are stamped for 10s
+  // and absorbed into the baseline as they land). Staged edits live in
+  // staging and never touch this: a refetch simply re-merges over them.
+  const baselineRef = useRef<Map<string, Record<string, unknown>> | null>(null)
+  const [baselineVersion, setBaselineVersion] = useState(0)
+  const localWritesRef = useRef<Map<string, number>>(new Map())
+  const localCreateAtRef = useRef(0)
+  const LOCAL_WRITE_GRACE_MS = 10_000
+  const stampLocalWrite = (id: string | number) =>
+    localWritesRef.current.set(String(id), Date.now())
+  const displayKeysSig = displayCols
+    .map((c) => c.field)
+    .filter((f) => !f.includes('.'))
+    .join(',')
+  const snapshotRow = useCallback(
+    (r: Record<string, unknown>): Record<string, unknown> => {
+      const out: Record<string, unknown> = {}
+      for (const k of displayKeysSig ? displayKeysSig.split(',') : []) {
+        const v = r[k]
+        out[k] = v === undefined || (v !== null && typeof v === 'object') ? null : v
+      }
+      return out
+    },
+    [displayKeysSig]
+  )
+  const snapshotsEqual = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    for (const k of Object.keys(b)) if (String(a[k] ?? '') !== String(b[k] ?? '')) return false
+    return true
+  }
+  const wroteRecently = (id: string, now: number) => {
+    const ts = localWritesRef.current.get(id)
+    return !!ts && now - ts < LOCAL_WRITE_GRACE_MS
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per rows fetch (rowsUpdatedAt); the rest are read fresh from refs/closure
+  useEffect(() => {
+    if (isNew || rowsLoading || !displayKeysSig) return
+    if (!baselineRef.current) {
+      baselineRef.current = new Map(rawRows.map((r) => [String(r.id), snapshotRow(r)]))
+      setBaselineVersion((v) => v + 1)
+      return
+    }
+    // Absorb this tab's own writes into the baseline as they land.
+    const base = baselineRef.current
+    const now = Date.now()
+    const idsNow = new Set<string>()
+    let touched = false
+    for (const r of rawRows) {
+      const id = String(r.id)
+      idsNow.add(id)
+      if (wroteRecently(id, now)) {
+        base.set(id, snapshotRow(r))
+        touched = true
+      } else if (!base.has(id) && now - localCreateAtRef.current < LOCAL_WRITE_GRACE_MS) {
+        base.set(id, snapshotRow(r))
+        touched = true
+      }
+    }
+    for (const id of [...base.keys()]) {
+      if (!idsNow.has(id) && wroteRecently(id, now)) {
+        base.delete(id)
+        touched = true
+      }
+    }
+    if (touched) setBaselineVersion((v) => v + 1)
+  }, [rowsUpdatedAt, isNew, rowsLoading, displayKeysSig])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stagedSignature stands in for the staged maps it serialises; pendingEdits is read fresh
+  const sinceOpened = useMemo(() => {
+    const base = baselineRef.current
+    if (!base || isNew) return null
+    const now = Date.now()
+    const added = new Set<string>()
+    const changed = new Set<string>()
+    const removed: string[] = []
+    const idsNow = new Set<string>()
+    for (const r of rawRows) {
+      const id = String(r.id)
+      idsNow.add(id)
+      const b = base.get(id)
+      if (!b) {
+        added.add(id)
+        continue
+      }
+      // The user's own staged change is not "remote"; neither is a write this
+      // tab made moments ago and the fetch is only now reflecting.
+      if (pendingEdits.has(id) || wroteRecently(id, now)) continue
+      if (!snapshotsEqual(snapshotRow(r), b)) changed.add(id)
+    }
+    for (const id of base.keys()) if (!idsNow.has(id)) removed.push(id)
+    if (added.size === 0 && changed.size === 0 && removed.length === 0) return null
+    return { added, changed, removed, total: added.size + changed.size + removed.length }
+  }, [rawRows, baselineVersion, stagedSignature, isNew, snapshotRow])
+  const dismissSinceOpened = () => {
+    baselineRef.current = new Map(rawRows.map((r) => [String(r.id), snapshotRow(r)]))
+    setBaselineVersion((v) => v + 1)
+  }
+  // Who changed them, when the grid already knows (cell provenance is only
+  // fetched for revision-enabled grids): the newest delta per changed row.
+  const sinceOpenedWho = useMemo(() => {
+    if (!sinceOpened) return []
+    const names = new Set<string>()
+    for (const id of sinceOpened.changed) {
+      const entries = Object.values(cellProvenance[id] ?? {})
+      if (entries.length === 0) continue
+      const newest = entries.reduce((a, b) => (String(b.at) > String(a.at) ? b : a))
+      if (newest.who) names.add(newest.who)
+    }
+    return [...names]
+  }, [sinceOpened, cellProvenance])
+  // Any write to the child collection (by anyone) refreshes the rows, debounced.
+  useEffect(() => {
+    if (!realtime || isNew) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsub = realtime.subscribeCollections([relatedCollection], () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      }, 1500)
+    })
+    return () => {
+      unsub()
+      if (timer) clearTimeout(timer)
+    }
+  }, [realtime, relatedCollection, manyField, parentId, isNew, qc])
+  // A staged batch that just FLUSHED (parent save) or was discarded shrinks
+  // staging — stamp what it covered as this tab's own writes, so the rows
+  // that come back changed are not reported as someone else's.
+  const prevStagedRef = useRef<{
+    edits: Set<string>
+    deletes: Set<string>
+    pending: number
+  } | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stagedSignature serialises the three staged structures read here
+  useEffect(() => {
+    const cur = {
+      edits: new Set(pendingEdits.keys()),
+      deletes: new Set(pendingDeletes),
+      pending: pendingRows.length
+    }
+    const prev = prevStagedRef.current
+    prevStagedRef.current = cur
+    if (!prev) return
+    for (const id of prev.edits) if (!cur.edits.has(id)) stampLocalWrite(id)
+    for (const id of prev.deletes) if (!cur.deletes.has(id)) stampLocalWrite(id)
+    if (cur.pending < prev.pending) localCreateAtRef.current = Date.now()
+  }, [stagedSignature])
+
   // Fields configured for the apply values form (group_key === '__apply_values__')
   const applyValuesCols = useMemo(
     () =>
@@ -3809,6 +4122,7 @@ export function InlineTableField({
         d.applied = res2.data.applied + pendingChanges.length
         d.failed = res2.data.failed
       }
+      for (const c of savedChanges) stampLocalWrite(String(c.id))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({
         queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]
@@ -4183,8 +4497,11 @@ export function InlineTableField({
     }
   }
 
-  async function saveEdit() {
-    if (!editState) return
+  /** Resolves true when the row COMMITTED (saved, staged, or closed as a
+   *  no-op) and false when it stayed open — a required field missing, a
+   *  unique conflict, a change-reason challenge, or a failed write. */
+  async function saveEdit(): Promise<boolean> {
+    if (!editState) return false
     // If the user opened ANOTHER row while this save was in flight (outside
     // click commits, then the click lands on the next row), finishing must
     // not close the editor they just opened.
@@ -4211,7 +4528,7 @@ export function InlineTableField({
 
       if (conflict) {
         setUniqueError(`A row with the same ${uniqueBy.join(' + ')} already exists.`)
-        return
+        return false
       }
     }
     // Required columns (field-level or layout override) must hold a value
@@ -4230,7 +4547,7 @@ export function InlineTableField({
         `Required: ${missingRequired.map((c) => c.label || titleCase(c.field)).join(', ')}`
       )
       setEditState((s) => (s ? { ...s, missing: missingRequired.map((c) => c.field) } : s))
-      return
+      return false
     }
     setUniqueError(null)
     setSaving(true)
@@ -4244,13 +4561,13 @@ export function InlineTableField({
         }
         clearIfStillEditing()
         setSaving(false)
-        return
+        return true
       }
       if (editState.rowId === 'new') {
         if ((isNew || isPendingMode) && staging) {
           staging.queueRow(relatedCollection, manyField, withNextOrder({ ...editState.draft }))
           clearIfStillEditing()
-          return
+          return true
         }
         // Strip __m2m_*/__o2m_* staging keys before POST — those are handled separately below
         const m2mEntries = Object.entries(editState.draft).filter(([k]) => k.startsWith('__m2m_'))
@@ -4274,12 +4591,14 @@ export function InlineTableField({
             setCrChallenge({
               challenge,
               retry: async (reason: string) => {
-                await client.request(
+                const created = await client.request<{ data?: { id?: unknown } }>(
                   post(`/items/${relatedCollection}${pCtx}`, {
                     ...createBody,
                     _change_reason: reason
                   })
                 )
+                localCreateAtRef.current = Date.now()
+                if (created?.data?.id != null) stampLocalWrite(String(created.data.id))
                 qc.invalidateQueries({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
                 })
@@ -4287,11 +4606,13 @@ export function InlineTableField({
               }
             })
             setSaving(false)
-            return
+            return false
           }
           throw err
         }
         const newRowId = newRowRes?.data?.id
+        localCreateAtRef.current = Date.now()
+        if (newRowId != null) stampLocalWrite(String(newRowId))
         if (newRowId != null && m2mEntries.length) {
           await Promise.all(
             m2mEntries.map(([key, relatedId]) => {
@@ -4373,14 +4694,14 @@ export function InlineTableField({
           // flush PATCH with no fields) — close without queueing instead.
           if (Object.keys(queuedPayload).length === 0 && nestedOpsEntries.length === 0) {
             clearIfStillEditing()
-            return
+            return true
           }
           staging.queueEdit(relatedCollection, manyField, editState.rowId, {
             ...queuedPayload,
             ...Object.fromEntries(nestedOpsEntries)
           })
           clearIfStillEditing()
-          return
+          return true
         }
         try {
           await client.request(
@@ -4394,6 +4715,7 @@ export function InlineTableField({
               challenge,
               retry: async (reason: string) => {
                 await client.request(patch(url, { ...rowPayload, _change_reason: reason }))
+                stampLocalWrite(savedRowId)
                 qc.invalidateQueries({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
                 })
@@ -4401,15 +4723,17 @@ export function InlineTableField({
               }
             })
             setSaving(false)
-            return
+            return false
           }
           throw err
         }
+        stampLocalWrite(savedRowId)
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
       clearIfStillEditing()
+      return true
     } catch {
-      /* ignore */
+      return false
     } finally {
       setSaving(false)
     }
@@ -4461,6 +4785,7 @@ export function InlineTableField({
               client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, applyValues))
             )
           )
+          for (const row of rows) stampLocalWrite(String(row.id))
           qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
         }
       }
@@ -4501,6 +4826,7 @@ export function InlineTableField({
           post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
         )
       }
+      localCreateAtRef.current = Date.now()
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* ignore */
@@ -4530,6 +4856,7 @@ export function InlineTableField({
           post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
         )
       }
+      localCreateAtRef.current = Date.now()
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch (err) {
       toast.error(`Could not add rows: ${(err as Error)?.message ?? 'unknown error'}`)
@@ -4553,6 +4880,7 @@ export function InlineTableField({
           post(`/items/${relatedCollection}${pCtx}`, { ...rd, [manyField]: parentId })
         )
       }
+      localCreateAtRef.current = Date.now()
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* ignore */
@@ -4630,6 +4958,7 @@ export function InlineTableField({
     }
     try {
       await client.request(del(`/items/${relatedCollection}/${id}${pCtx}`))
+      stampLocalWrite(String(id))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       if (editState?.rowId === String(id)) {
         setEditState(null)
@@ -4941,12 +5270,331 @@ export function InlineTableField({
   // `table-fixed` an overshooting colSpan is NOT clamped: the browser invents
   // a phantom column with the leftover width and no header cell, which reads
   // as a darker strip on the right of the header (reported from efp-new dark).
+  // Selection column renders only on the record's own rows (never in the
+  // addendum view, which draws its own cells) — and it counts here.
+  const selectColOn = selectMode && activeView === 'original' && !readOnly
   const nestedColSpan =
+    (selectColOn ? 1 : 0) +
     (enableReorder && (rowOrderField || isNew || isPendingMode) ? 1 : 0) +
     (showLineNumbers ? 1 : 0) +
     (isNew || isPendingMode ? 1 : 0) +
     effectiveCols.length +
     1
+  // Which leading cell renders FIRST in a saved row — the "since you opened"
+  // tick sits in it. Mirrors the header's cell order exactly.
+  const firstLeadCell: 'select' | 'reorder' | 'num' | 'status' | 'data' = selectColOn
+    ? 'select'
+    : enableReorder && (rowOrderField || isPendingMode)
+      ? 'reorder'
+      : showLineNumbers
+        ? 'num'
+        : isPendingMode
+          ? 'status'
+          : 'data'
+  const sinceTick = (id: string): ReactNode => {
+    if (!sinceOpened) return null
+    const tone = sinceOpened.added.has(id)
+      ? 'bg-emerald-500'
+      : sinceOpened.changed.has(id)
+        ? 'bg-amber-500'
+        : null
+    if (!tone) return null
+    return (
+      <span
+        aria-hidden='true'
+        className={cn('pointer-events-none absolute inset-y-0 left-0 w-0.5', tone)}
+      />
+    )
+  }
+
+  /** The rows a person can SEE right now, in render order: saved rows within
+   *  the render cap and not in a collapsed section (staged edits merged, staged
+   *  deletes skipped), then the staged new rows. Drives arrow-key navigation,
+   *  select-all and the bulk edit. */
+  type RowTarget = {
+    key: string
+    kind: 'saved' | 'pending'
+    row: Record<string, unknown>
+    idx: number
+  }
+  const visibleRowTargets = (): RowTarget[] => {
+    const out: RowTarget[] = []
+    if (activeView !== 'original') return out
+    if (!isNew) {
+      rows.slice(0, renderCap).forEach((r, ri) => {
+        const id = String(r.id)
+        if (pendingDeletes.has(id)) return
+        if (sectionsActive) {
+          const sec = sectionOf(r)
+          if (sec !== null && collapsedSections.has(sec)) return
+        }
+        out.push({
+          key: id,
+          kind: 'saved',
+          row: pendingEdits.has(id) ? { ...r, ...pendingEdits.get(id) } : r,
+          idx: ri
+        })
+      })
+    }
+    pendingRows.forEach((r, i) => {
+      out.push({ key: `pending:${i}`, kind: 'pending', row: r, idx: i })
+    })
+    return out
+  }
+  const selectableKeys = selectColOn ? visibleRowTargets().map((t) => t.key) : []
+  const allVisibleSelected =
+    selectableKeys.length > 0 && selectableKeys.every((k) => selectedIds.has(k))
+  const selectedTargets = selectColOn
+    ? visibleRowTargets().filter((t) => selectedIds.has(t.key))
+    : []
+
+  /** Does the open editor hold anything the row doesn't? Computed columns are
+   *  ignored (startEdit re-derives them); staged relation keys count when
+   *  they carry something. */
+  const editDraftDirty = (): boolean => {
+    const cur = editStateRef.current
+    if (!cur) return false
+    if (cur.rowId === 'new') return true
+    const base = visibleRowTargets().find((t) => t.key === cur.rowId)?.row ?? {}
+    for (const [k, v] of Object.entries(cur.draft)) {
+      if (k.startsWith('__')) {
+        if (Array.isArray(v) ? v.length > 0 : v != null && typeof v === 'object')
+          if (JSON.stringify(v) !== JSON.stringify(EMPTY_NESTED_OPS)) return true
+        continue
+      }
+      if (computedWriteFields.has(k)) continue
+      if (!displayCols.some((c) => c.field === k)) continue
+      if (String(v ?? '') !== String(base[k] ?? '')) return true
+    }
+    return false
+  }
+
+  /** Split mode: ArrowUp/ArrowDown walk the rows. A dirty editor commits
+   *  first (exactly like the outside-click commit); a row that refuses to
+   *  close — missing required field, unique conflict — keeps the selection. */
+  const moveSelection = async (delta: 1 | -1) => {
+    const cur = editStateRef.current
+    if (!cur || cur.rowId === 'new') return
+    const targets = visibleRowTargets()
+    const i = targets.findIndex((t) => t.key === cur.rowId)
+    if (i < 0) return
+    const j = i + delta
+    if (j < 0 || j >= targets.length) return
+    if (editDraftDirty()) {
+      const ok = await saveEdit()
+      if (!ok) return
+    } else {
+      cancelEdit()
+    }
+    const next = targets[j]
+    if (next.kind === 'pending') startPendingEdit(next.row, next.idx)
+    else startEdit(next.row)
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-o2m-row="${relatedCollection}:${next.key}"]`
+      )
+      if (!el) return
+      el.focus({ preventScroll: true })
+      el.scrollIntoView({ block: 'nearest' })
+    }, 0)
+  }
+  moveSelectionRef.current = moveSelection
+
+  /** Bulk lines edit: the touched values land on every selected row, each
+   *  row's rules re-run per touched field exactly as a live edit would
+   *  (probe → changed_field passes, auto targets blanked, locks honoured), and
+   *  the result goes out through the grid's OWN write path for its mode. */
+  async function applyBulkEdit(touched: Record<string, unknown>) {
+    await applyValuesToTargets(
+      touched,
+      visibleRowTargets().filter((t) => selectedIds.has(t.key)),
+      { clearSelection: true, noun: 'row' }
+    )
+  }
+  /** Every row the grid holds (saved minus staged deletes, then pending) —
+   *  collapsed sections and rows past the render cap included. */
+  const allRowTargets = (): RowTarget[] => {
+    const out: RowTarget[] = []
+    if (activeView !== 'original') return out
+    if (!isNew) {
+      rows.forEach((r, ri) => {
+        const id = String(r.id)
+        if (pendingDeletes.has(id)) return
+        out.push({
+          key: id,
+          kind: 'saved',
+          row: pendingEdits.has(id) ? { ...r, ...pendingEdits.get(id) } : r,
+          idx: ri
+        })
+      })
+    }
+    pendingRows.forEach((r, i) => {
+      out.push({ key: `pending:${i}`, kind: 'pending', row: r, idx: i })
+    })
+    return out
+  }
+  async function applyValuesToTargets(
+    touched: Record<string, unknown>,
+    targets: RowTarget[],
+    opts: { clearSelection: boolean; noun: 'row' | 'line' }
+  ) {
+    const keys = Object.keys(touched)
+    if (keys.length === 0 || targets.length === 0) return
+    const ruleTargetKeys = (rowRules ?? [])
+      .filter((r) => (r as { target_type?: string }).target_type !== 'lock')
+      .map((r) => (r as { target_field: string }).target_field)
+      .filter((k) => typeof k === 'string' && k.length > 0 && k !== 'id')
+    const writableKeys = new Set([
+      ...displayCols.map((c) => c.field).filter((k) => !k.includes('.') && !k.startsWith('__')),
+      ...ruleTargetKeys
+    ])
+    const plan: Array<{ t: RowTarget; changes: Record<string, unknown> }> = []
+    for (const t of targets) {
+      let cur = applyComputedFields({ ...t.row, ...touched })
+      let locks: string[] = []
+      let expected: Record<string, unknown> | undefined
+      if (rowRules?.length) {
+        try {
+          const probe = await client.request<{
+            locks?: string[]
+            expected?: Record<string, unknown>
+          }>(
+            post('/field-rules/evaluate', {
+              collection: relatedCollection,
+              data: t.row,
+              locks_only: true,
+              probe: true,
+              parent_context: buildParentCtx(),
+              row_rules: rowRules
+            })
+          )
+          locks = probe.locks ?? []
+          expected = probe.expected
+        } catch {
+          /* rules stay unknown for this row — the server still enforces locks */
+        }
+        for (const k of keys) {
+          if (locks.includes(k)) continue
+          const autoFields = autoTargetsFor(k, { ...t.row }, expected)
+          const evalData: Record<string, unknown> = { ...cur }
+          for (const f of autoFields) evalData[f] = null
+          try {
+            const res = await client.request<{
+              updates?: Record<string, unknown>
+              locks?: string[]
+              expected?: Record<string, unknown>
+            }>(
+              post('/field-rules/evaluate', {
+                collection: relatedCollection,
+                data: evalData,
+                changed_field: k,
+                probe: true,
+                parent_context: buildParentCtx(),
+                row_rules: rowRules
+              })
+            )
+            const fresh: Record<string, unknown> = {}
+            for (const [uk, uv] of Object.entries(res.updates ?? {})) {
+              if (uk in touched) continue
+              fresh[uk] = uv
+            }
+            for (const f of autoFields) if (!(f in fresh) && !(f in touched)) fresh[f] = null
+            cur = applyComputedFields({ ...cur, ...fresh })
+            locks = res.locks ?? locks
+            expected = res.expected ?? expected
+          } catch {
+            /* a rule pass that fails leaves the touched value as typed */
+          }
+        }
+      }
+      const changes: Record<string, unknown> = {}
+      for (const k of keys) if (!locks.includes(k)) changes[k] = touched[k] ?? null
+      for (const [k, v] of Object.entries(cur)) {
+        if (k in changes || k === 'id' || k === manyField) continue
+        if (computedWriteFields.has(k) || !writableKeys.has(k)) continue
+        if (String(v ?? '') !== String(t.row[k] ?? '')) changes[k] = v
+      }
+      plan.push({ t, changes })
+    }
+    const finish = (applied: number, failed: string[]) => {
+      if (opts.clearSelection) setSelectedIds(new Set())
+      const noun = applied === 1 ? opts.noun : `${opts.noun}s`
+      if (failed.length)
+        toast.error(
+          `Applied to ${applied} ${noun} — ${failed.length} failed: ${failed.slice(0, 3).join('; ')}`
+        )
+      else toast.success(`Applied to ${applied} ${noun}`)
+    }
+    if ((isNew || isPendingMode) && staging) {
+      let applied = 0
+      for (const { t, changes } of plan) {
+        if (Object.keys(changes).length === 0) continue
+        if (t.kind === 'pending')
+          staging.updateRow(relatedCollection, manyField, t.idx, {
+            ...(pendingRows[t.idx] ?? t.row),
+            ...changes
+          })
+        else staging.queueEdit(relatedCollection, manyField, t.key, changes)
+        applied++
+      }
+      finish(applied, [])
+      return
+    }
+    // Immediate mode: one PATCH per saved row, in order. A change-reason
+    // challenge pauses the run; the reason then rides every remaining write.
+    let applied = 0
+    const failed: string[] = []
+    const writeFrom = async (start: number, reason?: string): Promise<void> => {
+      for (let i = start; i < plan.length; i++) {
+        const { t, changes } = plan[i]
+        if (Object.keys(changes).length === 0) continue
+        if (t.kind === 'pending') {
+          staging?.updateRow(relatedCollection, manyField, t.idx, {
+            ...(pendingRows[t.idx] ?? t.row),
+            ...changes
+          })
+          applied++
+          continue
+        }
+        try {
+          await client.request(
+            patch(
+              `/items/${relatedCollection}/${t.key}${pCtx}`,
+              reason ? { ...changes, _change_reason: reason } : changes
+            )
+          )
+          stampLocalWrite(t.key)
+          applied++
+        } catch (err) {
+          const challenge = reason ? null : changeReasonChallenge(err)
+          if (challenge) {
+            // writeFrom(i, reason) resumes here and finishes the run itself;
+            // rows written before the challenge are already on the server.
+            setCrChallenge({ challenge, retry: (r: string) => writeFrom(i, r) })
+            qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+            return
+          }
+          failed.push(`#${t.key} ${(err as Error)?.message ?? 'failed'}`)
+        }
+      }
+      qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      finish(applied, failed)
+    }
+    await writeFrom(0)
+  }
+  applyFieldToAllRef.current = (target, value) =>
+    applyValuesToTargets({ [target]: value }, allRowTargets(), {
+      clearSelection: false,
+      noun: 'line'
+    })
+  gridReadyRef.current = true
+  if (pendingApplyRef.current) {
+    const p = pendingApplyRef.current
+    pendingApplyRef.current = null
+    // Past the loading early-return: rows are here. Run after this render
+    // commits so the staging state updates land on a settled grid.
+    window.setTimeout(() => void applyFieldToAllRef.current(p.target, p.value), 0)
+  }
 
   /**
    * Wide grids are unreadable to edit in place: a dozen columns squeezed into
@@ -4963,8 +5611,11 @@ export function InlineTableField({
   // Threshold, not configuration: the panel earns its place exactly when a row
   // stops fitting readably across the table, which is what column count tells
   // us. Narrow grids keep the inline editor.
-  const rowEditorMode: 'panel' | 'inline' =
-    effectiveCols.filter((c) => !isSummaryCol(c)).length >= 6 ? 'panel' : 'inline'
+  const rowEditorMode: 'panel' | 'inline' | 'split' = splitMode
+    ? 'split'
+    : effectiveCols.filter((c) => !isSummaryCol(c)).length >= 6
+      ? 'panel'
+      : 'inline'
 
   /** Short human handle for the row being edited, for the panel header — the
    *  first text-ish column that has a value, else the row id. */
@@ -5118,262 +5769,272 @@ export function InlineTableField({
     !!c.readonly ||
     isSummaryCol(c)
 
-  const renderRowEditorPanel = (args: {
+  type RowEditorArgs = {
     identity: ReactNode
     draft: Record<string, unknown>
     rowId?: string
     saveLabel: string
     drawer?: ReactNode
     onDelete?: (e: React.MouseEvent) => void
-  }) => (
-    // Spans EVERY column — the leading grip/number/status cells are hidden
-    // while the panel renders (the panel header already says "Line N · …"),
-    // so nothing pushes the form to the right.
-    <td colSpan={nestedColSpan} className='p-0'>
-      <div
-        className='my-1.5 rounded-lg border border-nvr-cyan/40 bg-white px-4 py-3 shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className='mb-3 flex items-center justify-between gap-3 border-b border-slate-100 pb-2 dark:border-border'>
-          <div className='min-w-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-            {args.identity}
-          </div>
-          <div className='flex shrink-0 items-center gap-1.5'>
-            {args.onDelete && (
-              <button
-                type='button'
-                onClick={args.onDelete}
-                className='rounded px-2 py-1 text-[11px] text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
-              >
-                Delete
-              </button>
-            )}
-            <button
-              type='button'
-              onClick={cancelEdit}
-              className='rounded px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 dark:hover:bg-muted'
-            >
-              Cancel
-            </button>
-            <button
-              type='button'
-              disabled={saving}
-              onClick={saveEdit}
-              className='rounded bg-nvr-cyan px-3 py-1 text-[11px] font-medium text-white transition-[filter] hover:brightness-110 disabled:opacity-50'
-            >
-              {saving ? 'Saving…' : args.saveLabel}
-            </button>
-          </div>
+    /** Docked (split) placement: the container owns the chrome. */
+    bare?: boolean
+  }
+  const renderRowEditorBody = (args: RowEditorArgs) => (
+    <div
+      className={
+        args.bare
+          ? 'px-4 py-3'
+          : 'my-1.5 rounded-lg border border-nvr-cyan/40 bg-white px-4 py-3 shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
+      }
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className='mb-3 flex items-center justify-between gap-3 border-b border-slate-100 pb-2 dark:border-border'>
+        <div className='min-w-0 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+          {args.identity}
         </div>
-        {/* Derived values are what this row COMPUTES TO, not something to fill
+        <div className='flex shrink-0 items-center gap-1.5'>
+          {args.onDelete && (
+            <button
+              type='button'
+              onClick={args.onDelete}
+              className='rounded px-2 py-1 text-[11px] text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
+            >
+              Delete
+            </button>
+          )}
+          <button
+            type='button'
+            onClick={cancelEdit}
+            className='rounded px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 dark:hover:bg-muted'
+          >
+            Cancel
+          </button>
+          <button
+            type='button'
+            disabled={saving}
+            onClick={saveEdit}
+            className='rounded bg-nvr-cyan px-3 py-1 text-[11px] font-medium text-white transition-[filter] hover:brightness-110 disabled:opacity-50'
+          >
+            {saving ? 'Saving…' : args.saveLabel}
+          </button>
+        </div>
+      </div>
+      {/* Derived values are what this row COMPUTES TO, not something to fill
             in — as inputs' neighbours they read like fields left blank. They
             get their own strip above the form, the way a record's header
             summarises it. */}
-        {(() => {
-          // The derived-values strip is PRESET-INDEPENDENT: a preset narrows
-          // the table's columns, but the panel always summarises what the row
-          // computes to (Line $, Allocated, Available) — hiding Allocated
-          // from the "Line" view must not strip it from the editor.
-          const stripCols = [
-            ...displayCols.filter(isPanelReadOnly),
-            ...effectiveCols.filter((c) => isSummaryCol(c))
-          ]
-          return (
-            stripCols.length > 0 &&
-            (() => {
-              const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
+      {(() => {
+        // The derived-values strip is PRESET-INDEPENDENT: a preset narrows
+        // the table's columns, but the panel always summarises what the row
+        // computes to (Line $, Allocated, Available) — hiding Allocated
+        // from the "Line" view must not strip it from the editor.
+        const stripCols = [
+          ...displayCols.filter(isPanelReadOnly),
+          ...effectiveCols.filter((c) => isSummaryCol(c))
+        ]
+        return (
+          stripCols.length > 0 &&
+          (() => {
+            const overlay = liveOverlayDraft(args.draft, { rowKey: args.rowId ?? '__new__' })
+            return (
+              <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
+                {stripCols.map((c) => {
+                  const label = c.label || titleCase(c.field)
+                  const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+                  // options may arrive as a JSON string — parse like renderCell does
+                  const colOpts = c.options
+                    ? ((typeof c.options === 'string'
+                        ? (() => {
+                            try {
+                              return JSON.parse(c.options as string)
+                            } catch {
+                              return {}
+                            }
+                          })()
+                        : c.options) as Record<string, unknown>)
+                    : {}
+                  const colFormula =
+                    typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
+                  const liveFormulaVal =
+                    c.interface === 'formula-column' && colFormula
+                      ? evaluateNumeric(colFormula, (ref) =>
+                          ref.includes('.')
+                            ? resolvedPathData?.rows[args.rowId ?? '']?.[ref]?.value
+                            : overlay[ref]
+                        )
+                      : null
+                  return (
+                    <div key={c.field} className='flex min-w-0 flex-col justify-start'>
+                      <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                        {label}
+                      </span>
+                      <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                        {isComputedWrite ? (
+                          renderCell(c, overlay[c.field] ?? args.draft[c.field])
+                        ) : liveFormulaVal != null ? (
+                          <span className='tabular-nums'>
+                            {liveFormulaVal.toLocaleString(
+                              'en-US',
+                              numericIntlOptions(colOpts, colOpts.format as string | undefined)
+                            )}
+                          </span>
+                        ) : c.computed_type === 'rollup' ? (
+                          renderCell(c, overlay[c.field] ?? args.draft[c.field], args.rowId)
+                        ) : isSummaryCol(c) ? (
+                          summaryCellValue(c, args.draft, true)
+                        ) : (
+                          renderCell(c, args.draft[c.field], args.rowId)
+                        )}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()
+        )
+      })()}
+      <div
+        className='grid items-start gap-x-4 gap-y-3'
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
+      >
+        {effectiveCols
+          .filter((c) => !isPanelReadOnly(c))
+          .map((c) => {
+            const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
+            // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
+            // shorthand; a labelled form should read like prose.
+            const label = c.label || titleCase(c.field)
+            // Interfaces that only ever DISPLAY a derived value: rendering an
+            // input for them offers an edit that goes nowhere.
+            const displayOnlyIface =
+              c.interface === 'formula-column' ||
+              c.interface === 'match-agg-column' ||
+              c.interface === 'relation-path'
+            if (isSummaryCol(c)) {
               return (
-                <div className='mb-3 flex flex-wrap items-stretch gap-x-6 gap-y-2 rounded-md bg-slate-50/80 px-3 py-2 dark:bg-muted/40'>
-                  {stripCols.map((c) => {
-                    const label = c.label || titleCase(c.field)
-                    const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-                    // options may arrive as a JSON string — parse like renderCell does
-                    const colOpts = c.options
-                      ? ((typeof c.options === 'string'
-                          ? (() => {
-                              try {
-                                return JSON.parse(c.options as string)
-                              } catch {
-                                return {}
-                              }
-                            })()
-                          : c.options) as Record<string, unknown>)
-                      : {}
-                    const colFormula =
-                      typeof colOpts.column_formula === 'string' ? colOpts.column_formula : ''
-                    const liveFormulaVal =
-                      c.interface === 'formula-column' && colFormula
-                        ? evaluateNumeric(colFormula, (ref) =>
-                            ref.includes('.')
-                              ? resolvedPathData?.rows[args.rowId ?? '']?.[ref]?.value
-                              : overlay[ref]
-                          )
-                        : null
-                    return (
-                      <div key={c.field} className='flex min-w-0 flex-col justify-start'>
-                        <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
-                          {label}
-                        </span>
-                        <span className='mt-0.5 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-                          {isComputedWrite ? (
-                            renderCell(c, overlay[c.field] ?? args.draft[c.field])
-                          ) : liveFormulaVal != null ? (
-                            <span className='tabular-nums'>
-                              {liveFormulaVal.toLocaleString(
-                                'en-US',
-                                numericIntlOptions(colOpts, colOpts.format as string | undefined)
-                              )}
-                            </span>
-                          ) : c.computed_type === 'rollup' ? (
-                            renderCell(c, overlay[c.field] ?? args.draft[c.field], args.rowId)
-                          ) : isSummaryCol(c) ? (
-                            summaryCellValue(c, args.draft, true)
-                          ) : (
-                            renderCell(c, args.draft[c.field], args.rowId)
-                          )}
-                        </span>
-                      </div>
-                    )
-                  })}
+                <div key={c.field} className='flex min-w-0 flex-col gap-1'>
+                  <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
+                    {label}
+                  </span>
+                  <div className='text-[12px] text-slate-500'>
+                    {summaryCellValue(c, args.draft, true)}
+                  </div>
                 </div>
               )
-            })()
-          )
-        })()}
-        <div
-          className='grid items-start gap-x-4 gap-y-3'
-          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
-        >
-          {effectiveCols
-            .filter((c) => !isPanelReadOnly(c))
-            .map((c) => {
-              const isComputedWrite = c.computed_type === 'write' && !!c.computed_formula
-              // A raw column name (LINE_TYPE, SUPPLIER_ITEM) is the table's
-              // shorthand; a labelled form should read like prose.
-              const label = c.label || titleCase(c.field)
-              // Interfaces that only ever DISPLAY a derived value: rendering an
-              // input for them offers an edit that goes nowhere.
-              const displayOnlyIface =
-                c.interface === 'formula-column' ||
-                c.interface === 'match-agg-column' ||
-                c.interface === 'relation-path'
-              if (isSummaryCol(c)) {
-                return (
-                  <div key={c.field} className='flex min-w-0 flex-col gap-1'>
-                    <span className='text-[10px] font-medium uppercase tracking-wide text-slate-400'>
-                      {label}
-                    </span>
-                    <div className='text-[12px] text-slate-500'>
-                      {summaryCellValue(c, args.draft, true)}
-                    </div>
-                  </div>
-                )
-              }
-              const isMissing = !!editState?.missing?.includes(c.field)
-              return (
-                <div
-                  key={c.field}
+            }
+            const isMissing = !!editState?.missing?.includes(c.field)
+            return (
+              <div
+                key={c.field}
+                className={cn(
+                  'flex min-w-0 flex-col gap-1',
+                  isMissing &&
+                    'rounded-md [&_input]:border-red-400 [&_input]:ring-1 [&_input]:ring-red-300 [&_button]:border-red-400 [&_button]:ring-1 [&_button]:ring-red-300 dark:[&_input]:border-red-600 dark:[&_input]:ring-red-800 dark:[&_button]:border-red-600 dark:[&_button]:ring-red-800'
+                )}
+              >
+                <span
                   className={cn(
-                    'flex min-w-0 flex-col gap-1',
-                    isMissing &&
-                      'rounded-md [&_input]:border-red-400 [&_input]:ring-1 [&_input]:ring-red-300 [&_button]:border-red-400 [&_button]:ring-1 [&_button]:ring-red-300 dark:[&_input]:border-red-600 dark:[&_input]:ring-red-800 dark:[&_button]:border-red-600 dark:[&_button]:ring-red-800'
+                    'flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide',
+                    isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
                   )}
                 >
-                  <span
-                    className={cn(
-                      'flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide',
-                      isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
-                    )}
-                  >
-                    {label}
-                    {isMissing && (
-                      <span className='ml-1 normal-case tracking-normal'>· required</span>
-                    )}
-                    {(() => {
-                      const prov = ruleProvenance(c.field)
-                      if (!prov) return null
-                      return prov === 'auto' ? (
-                        <span
-                          className='rounded bg-sky-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
-                          data-tip='Set automatically by a row rule'
-                        >
-                          auto
-                        </span>
-                      ) : (
-                        <span className='flex items-center gap-1'>
-                          <span
-                            className='rounded bg-amber-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
-                            data-tip='Differs from what the row rules would set'
-                          >
-                            overridden
-                          </span>
-                          {!readOnly && !editState?.locks?.includes(c.field) && (
-                            <button
-                              type='button'
-                              onClick={() => resetToAuto(c.field)}
-                              className='rounded px-1 text-[10px] normal-case tracking-normal text-nvr-cyan hover:underline'
-                              data-tip='Reset to the rule-derived value'
-                            >
-                              ↺ reset
-                            </button>
-                          )}
-                        </span>
-                      )
-                    })()}
-                  </span>
-                  {isComputedWrite ? (
-                    <div className='text-[12px] italic text-slate-500'>
-                      {renderCell(
-                        c,
-                        evalClientFormula(c.computed_formula as string, args.draft) ??
-                          args.draft[c.field]
-                      )}
-                    </div>
-                  ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
-                    <div
-                      className='text-[12px] text-slate-500'
-                      data-tip={
-                        editState?.locks?.includes(c.field) ? lockReasonText(c.field) : undefined
-                      }
-                    >
-                      {renderCell(c, args.draft[c.field], args.rowId)}
-                    </div>
-                  ) : editState?.locksPending && lockTargets.has(c.field) ? (
-                    // A lock rule may apply to this field; its first evaluation
-                    // hasn't answered yet. Hold input for that beat rather than
-                    // accept a value the lock would then silently drop.
-                    <div
-                      className='h-9 animate-pulse rounded-md border border-dashed border-border bg-[hsl(var(--nvr-skeleton))] px-2 text-[11px] leading-9 text-slate-400'
-                      data-tip='Checking whether this field is locked for this row…'
-                    >
-                      {renderCell(c, args.draft[c.field], args.rowId)}
-                    </div>
-                  ) : (
-                    <FieldRenderer
-                      field={
-                        { ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']
-                      }
-                      value={args.draft[c.field] ?? null}
-                      onChange={(v) => setDraftField(c.field, v)}
-                      relations={childRelations}
-                      collection={relatedCollection}
-                      itemId={args.rowId ?? 'new'}
-                      cascadeFilter={fieldCascadeFilters[c.field]}
-                      pinnedOption={pinnedOptionFor(c.field, args.draft)}
-                    />
+                  {label}
+                  {isMissing && (
+                    <span className='ml-1 normal-case tracking-normal'>· required</span>
                   )}
-                </div>
-              )
-            })}
-        </div>
-        {rowMatchPanel &&
-          args.rowId &&
-          !args.rowId.startsWith('pending:') &&
-          args.rowId !== 'new' && (
-            <RowMatchPanel config={rowMatchPanel} result={rowMatches.byRow.get(args.rowId)} />
-          )}
-        {args.drawer}
+                  {(() => {
+                    const prov = ruleProvenance(c.field)
+                    if (!prov) return null
+                    return prov === 'auto' ? (
+                      <span
+                        className='rounded bg-sky-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
+                        data-tip='Set automatically by a row rule'
+                      >
+                        auto
+                      </span>
+                    ) : (
+                      <span className='flex items-center gap-1'>
+                        <span
+                          className='rounded bg-amber-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
+                          data-tip='Differs from what the row rules would set'
+                        >
+                          overridden
+                        </span>
+                        {!readOnly && !editState?.locks?.includes(c.field) && (
+                          <button
+                            type='button'
+                            onClick={() => resetToAuto(c.field)}
+                            className='rounded px-1 text-[10px] normal-case tracking-normal text-nvr-cyan hover:underline'
+                            data-tip='Reset to the rule-derived value'
+                          >
+                            ↺ reset
+                          </button>
+                        )}
+                      </span>
+                    )
+                  })()}
+                </span>
+                {isComputedWrite ? (
+                  <div className='text-[12px] italic text-slate-500'>
+                    {renderCell(
+                      c,
+                      evalClientFormula(c.computed_formula as string, args.draft) ??
+                        args.draft[c.field]
+                    )}
+                  </div>
+                ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
+                  <div
+                    className='text-[12px] text-slate-500'
+                    data-tip={
+                      editState?.locks?.includes(c.field) ? lockReasonText(c.field) : undefined
+                    }
+                  >
+                    {renderCell(c, args.draft[c.field], args.rowId)}
+                  </div>
+                ) : editState?.locksPending && lockTargets.has(c.field) ? (
+                  // A lock rule may apply to this field; its first evaluation
+                  // hasn't answered yet. Hold input for that beat rather than
+                  // accept a value the lock would then silently drop.
+                  <div
+                    className='h-9 animate-pulse rounded-md border border-dashed border-border bg-[hsl(var(--nvr-skeleton))] px-2 text-[11px] leading-9 text-slate-400'
+                    data-tip='Checking whether this field is locked for this row…'
+                  >
+                    {renderCell(c, args.draft[c.field], args.rowId)}
+                  </div>
+                ) : (
+                  <FieldRenderer
+                    field={
+                      { ...c, sort: c.sort ?? 0 } as Parameters<typeof FieldRenderer>[0]['field']
+                    }
+                    value={args.draft[c.field] ?? null}
+                    onChange={(v) => setDraftField(c.field, v)}
+                    relations={childRelations}
+                    collection={relatedCollection}
+                    itemId={args.rowId ?? 'new'}
+                    cascadeFilter={fieldCascadeFilters[c.field]}
+                    pinnedOption={pinnedOptionFor(c.field, args.draft)}
+                  />
+                )}
+              </div>
+            )
+          })}
       </div>
+      {rowMatchPanel &&
+        args.rowId &&
+        !args.rowId.startsWith('pending:') &&
+        args.rowId !== 'new' && (
+          <RowMatchPanel config={rowMatchPanel} result={rowMatches.byRow.get(args.rowId)} />
+        )}
+      {args.drawer}
+    </div>
+  )
+  // Spans EVERY column — the leading grip/number/status cells are hidden
+  // while the panel renders (the panel header already says "Line N · …"),
+  // so nothing pushes the form to the right.
+  const renderRowEditorPanel = (args: RowEditorArgs) => (
+    <td colSpan={nestedColSpan} className='p-0'>
+      {renderRowEditorBody(args)}
     </td>
   )
 
@@ -5482,6 +6143,10 @@ export function InlineTableField({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
                 })
               }
+              onLocalWrite={(id) => {
+                if (id) stampLocalWrite(id)
+                else localCreateAtRef.current = Date.now()
+              }}
               staging={staging}
               stagingActive={(isNew || isPendingMode) && !!staging}
               pendingRows={pendingRows}
@@ -5534,6 +6199,7 @@ export function InlineTableField({
                   return
                 }
                 await client.request(patch(`/items/${relatedCollection}/${rowId}`, changes))
+                stampLocalWrite(rowId)
                 await qc.invalidateQueries({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
                 })
@@ -5619,6 +6285,65 @@ export function InlineTableField({
               re-run rules…
             </button>
           )}
+          {activeView === 'original' && rows.length + pendingRows.length > 0 && (
+            <button
+              type='button'
+              aria-label={selectMode ? 'Hide row selection' : 'Select rows'}
+              aria-pressed={selectMode}
+              data-tip={
+                selectMode
+                  ? 'Hide the selection checkboxes'
+                  : 'Tick rows to edit several lines at once'
+              }
+              onClick={() => {
+                setSelectMode((v) => !v)
+                setSelectedIds(new Set())
+              }}
+              className={cn(
+                'inline-flex h-6 items-center gap-1 rounded border px-2 transition-colors',
+                selectMode
+                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
+              )}
+            >
+              <ListChecks className='h-3 w-3' aria-hidden='true' />
+              {selectMode ? 'Selecting' : 'Select rows'}
+            </button>
+          )}
+          {selectColOn && selectedIds.size > 0 && (
+            <button
+              type='button'
+              onClick={() => setBulkEditOpen(true)}
+              data-tip='Set the same values on every selected line'
+              className='inline-flex h-6 items-center gap-1 rounded border border-amber-400 bg-amber-50 px-2 font-medium text-amber-700 transition-colors hover:border-amber-500 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-300'
+            >
+              <SquarePen className='h-3 w-3' aria-hidden='true' />
+              Edit {selectedIds.size} selected…
+            </button>
+          )}
+          <button
+            type='button'
+            aria-label={splitMode ? 'Switch to inline editor' : 'Switch to split editor'}
+            aria-pressed={splitMode}
+            data-tip={
+              splitMode
+                ? 'Edit each line where it sits in the table'
+                : 'Edit lines in a panel docked under the table — ↑/↓ walk the rows'
+            }
+            onClick={() => setEditorPlacement(splitMode ? 'drawer' : 'split')}
+            className={cn(
+              'inline-flex h-6 w-6 items-center justify-center rounded border transition-colors',
+              splitMode
+                ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
+            )}
+          >
+            {splitMode ? (
+              <Rows3 className='h-3 w-3' aria-hidden='true' />
+            ) : (
+              <PanelBottomOpen className='h-3 w-3' aria-hidden='true' />
+            )}
+          </button>
           {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
           {presetSwitcher}
           {showRowRevisions && !isNew && (
@@ -5821,6 +6546,46 @@ export function InlineTableField({
           )
         })()}
 
+      {sinceOpened &&
+        !isNew &&
+        activeView === 'original' &&
+        (() => {
+          const n = sinceOpened.total
+          const parts: string[] = []
+          if (sinceOpened.added.size) parts.push(`${sinceOpened.added.size} added`)
+          if (sinceOpened.changed.size) parts.push(`${sinceOpened.changed.size} changed`)
+          if (sinceOpened.removed.length) parts.push(`${sinceOpened.removed.length} removed`)
+          const removedLabels = sinceOpened.removed
+            .slice(0, 5)
+            .map((id) => rowIdentityLabel(baselineRef.current?.get(id) ?? { id }))
+          return (
+            <div className='flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'>
+              <span className='font-medium'>
+                {n} {n === 1 ? 'line' : 'lines'} changed by others since you opened
+              </span>
+              <span className='text-amber-700/80 dark:text-amber-300/80'>
+                {parts.join(' · ')}
+                {sinceOpenedWho.length > 0 && ` · changed by ${sinceOpenedWho.join(', ')}`}
+              </span>
+              {removedLabels.length > 0 && (
+                <span className='text-amber-700/80 dark:text-amber-300/80'>
+                  removed: {removedLabels.join(', ')}
+                  {sinceOpened.removed.length > removedLabels.length
+                    ? ` +${sinceOpened.removed.length - removedLabels.length}`
+                    : ''}
+                </span>
+              )}
+              <button
+                type='button'
+                onClick={dismissSinceOpened}
+                className='ml-auto h-6 rounded border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-800 hover:border-amber-400 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-200'
+                data-tip='Take the current rows as the new baseline'
+              >
+                Dismiss
+              </button>
+            </div>
+          )
+        })()}
       {isPrefilling && (
         <div className='rounded-lg border border-slate-200 p-3 space-y-1.5'>
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
@@ -5831,6 +6596,7 @@ export function InlineTableField({
       {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
       {readOnly && presetSwitcher}
       <div
+        ref={tableWrapRef}
         className={
           isPrefilling
             ? 'hidden'
@@ -5851,6 +6617,19 @@ export function InlineTableField({
         >
           <thead className='bg-slate-50 border-b border-slate-200 [&>tr>th:first-child]:rounded-tl-lg [&>tr>th:last-child]:rounded-tr-lg'>
             <tr>
+              {selectColOn && (
+                <th className='w-7 px-1.5 py-2 align-middle'>
+                  <input
+                    type='checkbox'
+                    aria-label='Select all rows'
+                    className='accent-[#00ceff]'
+                    checked={allVisibleSelected}
+                    onChange={(e) =>
+                      setSelectedIds(e.target.checked ? new Set(selectableKeys) : new Set())
+                    }
+                  />
+                </th>
+              )}
               {enableReorder && (rowOrderField || isNew || isPendingMode) && <th className='w-6' />}
               {showLineNumbers && (
                 <th className='w-8 px-2 py-2 text-left font-medium text-slate-400 text-[11px]'>
@@ -5877,6 +6656,7 @@ export function InlineTableField({
             {/* Defaults row */}
             {defaultsOpen && (
               <tr className='border-b border-nvr-cyan/20 bg-nvr-cyan/5'>
+                {selectColOn && <td className='w-7' />}
                 {enableReorder && (rowOrderField || isNew || isPendingMode) && (
                   <td className='w-6' />
                 )}
@@ -5978,6 +6758,8 @@ export function InlineTableField({
                   ) : null
                 if (sectionCollapsed) return <Fragment key={id}>{sectionHeader}</Fragment>
                 const isEditing = editState?.rowId === id
+                // Split mode edits in the docked panel: the row only highlights.
+                const inlineEdit = isEditing && !splitMode
                 const isDragging = dragIdx === ri
                 const isDropTarget = dropIdx === ri && dragIdx !== ri
                 const isPendingEdit = pendingEdits.has(id)
@@ -5994,6 +6776,7 @@ export function InlineTableField({
                     <tr
                       data-o2m-row={`${relatedCollection}:${id}`}
                       data-o2m-editing={isEditing ? '' : undefined}
+                      tabIndex={splitMode ? -1 : undefined}
                       draggable={enableReorder && !!rowOrderField && !isEditing && !isPendingDelete}
                       onDragStart={() => handleDragStart(ri)}
                       onDragOver={(e) => handleDragOver(e, ri)}
@@ -6030,7 +6813,9 @@ export function InlineTableField({
                           ? 'opacity-50 bg-red-50/40 cursor-default line-through'
                           : '',
                         !isPendingDelete && isEditing
-                          ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                          ? splitMode
+                            ? 'bg-[#e6f8ff] outline-none dark:bg-nvr-cyan/15 cursor-default'
+                            : 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                           : '',
                         !isPendingDelete && !isEditing
                           ? lineError
@@ -6043,18 +6828,37 @@ export function InlineTableField({
                     >
                       {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
                         <>
+                          {selectColOn && (
+                            <td
+                              className='relative w-7 px-1.5 align-middle'
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => e.stopPropagation()}
+                            >
+                              {sinceTick(id)}
+                              <input
+                                type='checkbox'
+                                aria-label={`Select line ${ri + 1}`}
+                                className='accent-[#00ceff]'
+                                checked={selectedIds.has(id)}
+                                disabled={isPendingDelete}
+                                onChange={() => toggleSelected(id)}
+                              />
+                            </td>
+                          )}
                           {enableReorder && (rowOrderField || isPendingMode) && (
                             <td
-                              className='w-6 px-1 align-middle'
+                              className='relative w-6 px-1 align-middle'
                               onClick={(e) => e.stopPropagation()}
                             >
+                              {firstLeadCell === 'reorder' && sinceTick(id)}
                               {rowOrderField && (
                                 <GripVertical className='h-3 w-3 text-slate-300 cursor-grab' />
                               )}
                             </td>
                           )}
                           {showLineNumbers && (
-                            <td className='w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                            <td className='relative w-8 px-2 align-middle text-slate-400 text-[11px] select-none'>
+                              {firstLeadCell === 'num' && sinceTick(id)}
                               <span className='inline-flex items-center gap-1'>
                                 {ri + 1}
                                 {rowMatchPanel && (
@@ -6091,7 +6895,8 @@ export function InlineTableField({
                             </td>
                           )}
                           {isPendingMode && (
-                            <td className='px-3 py-1 align-middle w-20'>
+                            <td className='relative px-3 py-1 align-middle w-20'>
+                              {firstLeadCell === 'status' && sinceTick(id)}
                               {!showLineNumbers && rowMatchPanel && (
                                 <RowMatchDot
                                   result={rowMatches.byRow.get(id)}
@@ -6150,7 +6955,7 @@ export function InlineTableField({
                             // stored rollup yet — overlay this row's live drawer
                             // snapshot so Allocated / Available read true.
                             const rowOverlay = liveOverlayDraft(displayRow, { rowKey: id })
-                            return effectiveCols.map((c) => {
+                            return effectiveCols.map((c, ci) => {
                               if (isSummaryCol(c)) {
                                 return (
                                   <td key={c.field} className='px-2 py-1 align-top'>
@@ -6182,9 +6987,13 @@ export function InlineTableField({
                               return (
                                 <td
                                   key={c.field}
-                                  className={cn('px-2 py-1 align-top', prov && 'relative')}
+                                  className={cn(
+                                    'px-2 py-1 align-top',
+                                    (prov || (ci === 0 && firstLeadCell === 'data')) && 'relative'
+                                  )}
                                   data-tip={provTip}
                                 >
+                                  {ci === 0 && firstLeadCell === 'data' && sinceTick(id)}
                                   {prov && (
                                     <button
                                       type='button'
@@ -6203,13 +7012,14 @@ export function InlineTableField({
                                     <div className='py-0.5 overflow-hidden text-slate-500 italic'>
                                       {renderCell(c, computedDisplayVal)}
                                     </div>
-                                  ) : (isEditing && !isPendingDelete) || isM2MIface(c.interface) ? (
+                                  ) : (inlineEdit && !isPendingDelete) ||
+                                    isM2MIface(c.interface) ? (
                                     // A field a rule LOCKS on this row is read-only here too
                                     // (the server drops the write anyway) and says why on hover.
                                     <div
                                       onClick={(e) => e.stopPropagation()}
                                       data-tip={
-                                        isEditing && editState?.locks?.includes(c.field)
+                                        inlineEdit && editState?.locks?.includes(c.field)
                                           ? lockReasonText(c.field)
                                           : undefined
                                       }
@@ -6231,9 +7041,9 @@ export function InlineTableField({
                                           editState?.draft ?? {}
                                         )}
                                         displayOnly={
-                                          !isEditing ||
+                                          !inlineEdit ||
                                           isPendingDelete ||
-                                          (isEditing && !!editState?.locks?.includes(c.field))
+                                          (inlineEdit && !!editState?.locks?.includes(c.field))
                                         }
                                       />
                                     </div>
@@ -6269,7 +7079,7 @@ export function InlineTableField({
                           })()}
                       {!(isEditing && !isPendingDelete && rowEditorMode === 'panel') && (
                         <td className='px-1 py-1 align-middle'>
-                          {isEditing && !isPendingDelete ? (
+                          {inlineEdit && !isPendingDelete ? (
                             <div
                               className='flex items-stretch gap-1'
                               onClick={(e) => e.stopPropagation()}
@@ -6375,7 +7185,7 @@ export function InlineTableField({
                     )}
                     {isEditing &&
                       !isPendingDelete &&
-                      rowEditorMode !== 'panel' &&
+                      rowEditorMode === 'inline' &&
                       drawerRelations &&
                       drawerRelations.length > 0 && (
                         <tr
@@ -6444,13 +7254,28 @@ export function InlineTableField({
 
             {/* New row being entered. Distinct from both the saved rows and the
               staged pending ones: this is the row currently being typed. */}
-            {isEditingNew && (
+            {isEditingNew && splitMode && (
+              <tr
+                data-o2m-editing
+                className='border-b border-slate-100 bg-[#e6f8ff] dark:bg-nvr-cyan/15'
+              >
+                <td
+                  colSpan={nestedColSpan}
+                  className='px-3 py-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+                >
+                  {showLineNumbers ? `Line ${rows.length + pendingRows.length + 1} · ` : ''}
+                  New line — fill it in below
+                </td>
+              </tr>
+            )}
+            {isEditingNew && !splitMode && (
               <tr
                 data-o2m-editing
                 className='border-b border-slate-100 bg-[#f0fbff] dark:bg-nvr-cyan/5'
               >
                 {rowEditorMode !== 'panel' && (
                   <>
+                    {selectColOn && <td className='w-7' />}
                     {(rowOrderField || isNew || isPendingMode) && <td className='w-6' />}
                     {/* This row had no number cell at all, so every column after it
                       sat one place left of its header. It also shows the number the
@@ -6702,6 +7527,7 @@ export function InlineTableField({
               pendingRows.map((row, ri) => {
                 const pendingRowId = `pending:${ri}`
                 const isEditing = editState?.rowId === pendingRowId
+                const inlineEdit = isEditing && !splitMode
                 const isPDragging = dragIdx === ri
                 const isPDropTarget = dropIdx === ri && dragIdx !== ri
                 const isPrefilled = !!row.__prefilled
@@ -6713,6 +7539,8 @@ export function InlineTableField({
                       // every click INSIDE an open pending-row form classified as
                       // outside and committed it shut. Saved rows always had it.
                       data-o2m-editing={isEditing ? '' : undefined}
+                      data-o2m-row={`${relatedCollection}:${pendingRowId}`}
+                      tabIndex={splitMode ? -1 : undefined}
                       draggable={enableReorder && !isEditing}
                       onDragStart={() => handleDragStart(ri)}
                       onDragOver={(e) => handleDragOver(e, ri)}
@@ -6747,7 +7575,9 @@ export function InlineTableField({
                         isPDragging ? 'opacity-40' : '',
                         isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                         isEditing
-                          ? 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
+                          ? splitMode
+                            ? 'bg-[#e6f8ff] outline-none dark:bg-nvr-cyan/15 cursor-default'
+                            : 'bg-[#f0fbff] dark:bg-nvr-cyan/5 cursor-default'
                           : isPrefilled
                             ? 'hover:bg-slate-50 dark:hover:bg-muted cursor-pointer'
                             : 'bg-amber-50/40 hover:bg-amber-50/70 dark:bg-amber-400/10 dark:hover:bg-amber-400/15 cursor-pointer'
@@ -6755,6 +7585,21 @@ export function InlineTableField({
                     >
                       {!(isEditing && rowEditorMode === 'panel') && (
                         <>
+                          {selectColOn && (
+                            <td
+                              className='w-7 px-1.5 align-middle'
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type='checkbox'
+                                aria-label={`Select line ${rows.length + ri + 1}`}
+                                className='accent-[#00ceff]'
+                                checked={selectedIds.has(pendingRowId)}
+                                onChange={() => toggleSelected(pendingRowId)}
+                              />
+                            </td>
+                          )}
                           {enableReorder && (
                             <td
                               className='w-6 px-1 align-middle'
@@ -6842,7 +7687,7 @@ export function InlineTableField({
                                 c.computed_type === 'write' && !!c.computed_formula
                               const isMM = isM2MIface(c.interface)
                               const m2mKey = `__m2m_${c.field}`
-                              const m2mTarget = isMM && isEditing ? resolveM2MTarget(c) : null
+                              const m2mTarget = isMM && inlineEdit ? resolveM2MTarget(c) : null
                               const displayVal = isComputedWrite
                                 ? (evalClientFormula(
                                     c.computed_formula as string,
@@ -6875,7 +7720,7 @@ export function InlineTableField({
                                     <div className='py-0.5 overflow-hidden text-slate-500 italic'>
                                       {renderCell(c, displayVal)}
                                     </div>
-                                  ) : isMM && isEditing && m2mTarget ? (
+                                  ) : isMM && inlineEdit && m2mTarget ? (
                                     <div onClick={(e) => e.stopPropagation()}>
                                       <RelationCombobox
                                         collection={m2mTarget.targetCollection}
@@ -6886,7 +7731,7 @@ export function InlineTableField({
                                     </div>
                                   ) : isMM ? (
                                     <span className='text-slate-300 text-[11px]'>—</span>
-                                  ) : isEditing ? (
+                                  ) : inlineEdit ? (
                                     <div onClick={(e) => e.stopPropagation()}>
                                       <FieldRenderer
                                         field={
@@ -6926,7 +7771,7 @@ export function InlineTableField({
                           })()}
                       {!(isEditing && rowEditorMode === 'panel') && (
                         <td className='px-1 py-1 align-middle'>
-                          {isEditing ? (
+                          {inlineEdit ? (
                             <div
                               className='flex items-stretch gap-1'
                               onClick={(e) => e.stopPropagation()}
@@ -6980,7 +7825,7 @@ export function InlineTableField({
                     {/* Panel mode renders the drawer INSIDE the panel — this strip is
                   the inline-mode placement only, or the editors double up. */}
                     {isEditing &&
-                      rowEditorMode !== 'panel' &&
+                      rowEditorMode === 'inline' &&
                       drawerRelations &&
                       drawerRelations.length > 0 && (
                         <tr
@@ -7059,6 +7904,7 @@ export function InlineTableField({
                 <tfoot>
                   <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
                     {/* Leading cells must mirror the header exactly: reorder, line #, status */}
+                    {selectColOn && <td />}
                     {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
                     {showLineNumbers && <td />}
                     {(isNew || isPendingMode) && <td />}
@@ -7164,6 +8010,104 @@ export function InlineTableField({
           </div>
         )}
       </div>
+
+      {splitMode &&
+        editState &&
+        activeView === 'original' &&
+        (() => {
+          const rowId = editState.rowId
+          const isPendingRow = rowId.startsWith('pending:')
+          const pIdx = isPendingRow ? parseInt(rowId.split(':')[1], 10) : -1
+          const savedIdx =
+            !isPendingRow && rowId !== 'new' ? rows.findIndex((r) => String(r.id) === rowId) : -1
+          const savedRow = savedIdx >= 0 ? rows[savedIdx] : undefined
+          const lineNo =
+            rowId === 'new'
+              ? rows.length + pendingRows.length + 1
+              : isPendingRow
+                ? rows.length + pIdx + 1
+                : savedIdx + 1
+          const prefix = showLineNumbers ? `Line ${lineNo} · ` : ''
+          const identity =
+            rowId === 'new' ? `${prefix}New line` : `${prefix}${rowIdentityLabel(editState.draft)}`
+          return (
+            <div
+              data-o2m-editing=''
+              data-grid-split-editor=''
+              className='flex flex-col rounded-lg border border-nvr-cyan/40 bg-white shadow-[0_6px_24px_-8px_rgba(15,23,42,0.35)] ring-1 ring-nvr-cyan/15 dark:border-nvr-cyan/30 dark:bg-card'
+              style={{ height: splitHeight }}
+            >
+              {/* Drag handle: pull down for a taller editor; the height sticks per browser. */}
+              <button
+                type='button'
+                aria-label='Resize editor panel'
+                data-tip='Drag to resize · ↑/↓ nudge'
+                className='flex h-3 w-full shrink-0 cursor-row-resize touch-none select-none items-center justify-center rounded-t-lg border-b border-nvr-cyan/20 text-slate-300 hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nvr-cyan dark:text-slate-500'
+                onPointerDown={(e) => {
+                  splitDragRef.current = { startY: e.clientY, startH: splitHeight }
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                }}
+                onPointerMove={(e) => {
+                  const d = splitDragRef.current
+                  if (!d) return
+                  setSplitHeight(Math.max(160, Math.min(900, d.startH + (e.clientY - d.startY))))
+                }}
+                onPointerUp={() => {
+                  splitDragRef.current = null
+                }}
+                onPointerCancel={() => {
+                  splitDragRef.current = null
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setSplitHeight((h) =>
+                      Math.max(160, Math.min(900, h + (e.key === 'ArrowDown' ? 24 : -24)))
+                    )
+                  }
+                }}
+              >
+                <GripHorizontal className='h-3 w-3' aria-hidden='true' />
+              </button>
+              <div className='min-h-0 flex-1 overflow-y-auto'>
+                {renderRowEditorBody({
+                  identity,
+                  draft: editState.draft,
+                  rowId: rowId === 'new' ? undefined : rowId,
+                  saveLabel: rowId === 'new' ? 'Add' : 'Save',
+                  bare: true,
+                  onDelete: savedRow
+                    ? (e) => deleteRow(savedRow, e)
+                    : isPendingRow
+                      ? (e) => {
+                          e.stopPropagation()
+                          staging?.removeRow(relatedCollection, manyField, pIdx)
+                        }
+                      : undefined,
+                  // Grandchild rows of an unsaved row stage against the draft.
+                  drawer: renderDrawerRelations(savedRow ? rowId : undefined, editState.draft)
+                })}
+              </div>
+            </div>
+          )
+        })()}
+
+      <GridBulkEditDialog
+        open={bulkEditOpen}
+        onOpenChange={setBulkEditOpen}
+        columns={displayCols.filter(
+          (c) =>
+            !isPanelReadOnly(c) &&
+            !c.field.includes('.') &&
+            !isM2MIface(c.interface) &&
+            !SYSTEM_FIELDS.has(c.field)
+        )}
+        rows={selectedTargets.map((t) => t.row)}
+        relations={childRelations}
+        collection={relatedCollection}
+        cascadeFilters={fieldCascadeFilters}
+        onApply={applyBulkEdit}
+      />
 
       <RowHistorySheet
         mode='timeline'

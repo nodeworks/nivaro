@@ -4581,6 +4581,7 @@ function SettingsTab({
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
+      <ReadModeToggleSection tableName={tableName} />
       <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
       <GenerateTestDataCard tableName={tableName} />
@@ -4718,6 +4719,48 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
         </div>
         <Switch
           checked={meta?.integrity_badge !== false}
+          onCheckedChange={(v) => saveMut.mutate(v)}
+          disabled={saveMut.isPending || meta === undefined}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** Read-mode toggle (migration 306): lets reviewers flip the record form to a
+ *  no-inputs view. Off by default — reviewers on a collection that never
+ *  needs it should not see one more switch. */
+function ReadModeToggleSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const { data: meta } = useQuery({
+    queryKey: ['collection-meta-read-mode', tableName],
+    queryFn: () =>
+      api
+        .get<{ data: { read_mode_toggle?: boolean } }>(`/collections/${tableName}`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const saveMut = useMutation({
+    mutationFn: (read_mode_toggle: boolean) =>
+      api.patch(`/collections/${tableName}`, { read_mode_toggle }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
+      toast.success('Read-mode toggle setting saved')
+    },
+    onError: () => toast.error('Failed to update setting')
+  })
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+      <div className='flex items-center justify-between px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800'>Read-mode toggle</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Show the Read mode switch on the record form. Lets reviewers flip the form to a
+            no-inputs view. Off by default.
+          </p>
+        </div>
+        <Switch
+          checked={meta?.read_mode_toggle === true}
           onCheckedChange={(v) => saveMut.mutate(v)}
           disabled={saveMut.isPending || meta === undefined}
         />
@@ -16297,6 +16340,7 @@ interface CollectionLayout {
   disable_tasks?: boolean | number
   hide_integrity_banner?: boolean | number
   hide_sla_banner?: boolean | number
+  changes_tray?: boolean | number
   disable_revisions?: boolean | number
   disable_clone?: boolean | number
   disable_delete?: boolean | number
@@ -16832,6 +16876,7 @@ function LayoutsTab({
           | 'disable_tasks'
           | 'hide_integrity_banner'
           | 'hide_sla_banner'
+          | 'changes_tray'
           | 'disable_revisions'
           | 'disable_clone'
           | 'disable_delete'
@@ -18133,6 +18178,25 @@ function LayoutsTab({
                             patchLayoutMut.mutate({
                               id: selected.id,
                               hide_sla_banner: e.target.checked
+                            })
+                          }
+                          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
+                        />
+                      </label>
+                      <label className='flex cursor-pointer items-center justify-between gap-3'>
+                        <span
+                          className='text-[11px] text-slate-500 dark:text-slate-400'
+                          title="Show the 'changes so far' tray — a collapsible list of every unsaved field and line with per-item revert"
+                        >
+                          Changes tray
+                        </span>
+                        <input
+                          type='checkbox'
+                          checked={!!selected.changes_tray}
+                          onChange={(e) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              changes_tray: e.target.checked
                             })
                           }
                           className='h-3.5 w-3.5 rounded accent-nvr-cyan'

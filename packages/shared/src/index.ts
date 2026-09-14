@@ -71,7 +71,8 @@ export type {
   HeaderWidgetInfo,
   ItemEditFormProps,
   M2MStagingCtx,
-  RenderFieldProps
+  RenderFieldProps,
+  UnsavedSummary
 } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
@@ -100,7 +101,13 @@ export {
   ChangeReasonDialog,
   changeReasonChallenge
 } from './components/item-edit/ChangeReasonDialog'
+export { type ChangeItem, ChangesTray } from './components/item-edit/ChangesTray'
 export { CloneDialog } from './components/item-edit/CloneDialog'
+export {
+  type FieldAffordances,
+  FieldAffordancesContext,
+  type RemoteFieldChange
+} from './components/item-edit/FieldAffordances'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'

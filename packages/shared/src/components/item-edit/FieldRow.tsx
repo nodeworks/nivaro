@@ -21,6 +21,14 @@ import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
+import {
+  LockReasonBadge,
+  PresenceSoftLockStrip,
+  RemoteChangeGhost,
+  useFieldAffordances,
+  useFieldContextMenu,
+  usePresenceSoftLock
+} from './FieldAffordances'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import {
   buildCascadeFilter,
@@ -673,6 +681,28 @@ export function FieldRow({
   const queryClient = useQueryClient()
   const client = useNivaroClient()
   const [isGenerating, setIsGenerating] = useState(false)
+  // Per-field affordances handed down by the record form (remote ghosts,
+  // lock reasons, apply-to-lines, related-record opener) — null in hosts that
+  // render FieldRow outside ItemEditForm.
+  const affordances = useFieldAffordances()
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const {
+    onContextMenu: onFieldContextMenu,
+    onKeyDown: onFieldMenuKeyDown,
+    menu: fieldContextMenu
+  } = useFieldContextMenu({
+    wrapperRef,
+    field,
+    value: draft[field.field],
+    relations,
+    collection,
+    itemId,
+    openRelated: affordances?.openRelated
+  })
+  const softLock = usePresenceSoftLock(wrapperRef)
+  const remoteChange = affordances?.remoteChanges[field.field]
+  const lockReason = affordances?.lockReasons[field.field]
+  const applyToLines = affordances?.applyToLines[field.field]
 
   async function handleGenerate() {
     setIsGenerating(true)
@@ -897,7 +927,16 @@ export function FieldRow({
   }
 
   return (
-    <div data-field={field.field} className='group/fieldrow space-y-1.5'>
+    // biome-ignore lint/a11y/noStaticElementInteractions: the wrapper only hosts the field context menu (right-click / Shift+F10); the inputs inside stay the controls
+    <div
+      ref={wrapperRef}
+      data-field={field.field}
+      className='group/fieldrow space-y-1.5'
+      onContextMenu={onFieldContextMenu}
+      onKeyDown={onFieldMenuKeyDown}
+      onFocusCapture={softLock.onFocusCapture}
+    >
+      {fieldContextMenu}
       {cascadeRules.length > 0 && (
         <CascadeEffectController
           cascadeRules={cascadeRules}
@@ -959,6 +998,22 @@ export function FieldRow({
             </button>
           )}
           {swapButton}
+          {applyToLines && !locked && !field.readonly && (
+            <button
+              type='button'
+              onClick={() => applyToLines.onApply(draft[field.field] ?? null)}
+              disabled={draft[field.field] == null || draft[field.field] === ''}
+              data-apply-to-lines={field.field}
+              data-tip={
+                applyToLines.count != null
+                  ? `Copy this value onto all ${applyToLines.count} lines (staged until you save)`
+                  : 'Copy this value onto every line (staged until you save)'
+              }
+              className='inline-flex items-center gap-1 rounded border border-nvr-cyan/40 px-1.5 py-0.5 text-[10.5px] font-medium text-[#0e7490] transition-colors hover:bg-nvr-cyan/10 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+            >
+              {applyToLines.label ?? 'Apply to lines'} ↓
+            </button>
+          )}
           {addendumHints.length > 0 && (
             <TooltipProvider delayDuration={100}>
               <Tooltip>
@@ -981,7 +1036,9 @@ export function FieldRow({
               </Tooltip>
             </TooltipProvider>
           )}
-          {locked && (
+          {(locked || field.readonly) && lockReason ? (
+            <LockReasonBadge reason={lockReason} />
+          ) : locked ? (
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -994,7 +1051,7 @@ export function FieldRow({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          )}
+          ) : null}
           {cascadeRules.length > 0 &&
             (() => {
               // Icon always shows for a cascade-configured field: cyan when the
@@ -1034,8 +1091,19 @@ export function FieldRow({
             })()}
         </div>
       )}
+      {softLock.editor && !locked && (
+        <PresenceSoftLockStrip
+          editor={softLock.editor}
+          confirming={softLock.confirming}
+          onConfirm={softLock.confirm}
+          onCancel={softLock.cancel}
+        />
+      )}
       {swapContent ?? (
-        <div className={cn(locked && !isFileField && 'cursor-not-allowed')}>
+        <div
+          className={cn(locked && !isFileField && 'cursor-not-allowed')}
+          data-tip={(locked || field.readonly) && lockReason ? lockReason : undefined}
+        >
           <div
             key={autoFillTick ?? 0}
             className={cn(
@@ -1097,6 +1165,12 @@ export function FieldRow({
             )}
           </div>
         </div>
+      )}
+      {remoteChange && (
+        <RemoteChangeGhost
+          change={remoteChange}
+          onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+        />
       )}
     </div>
   )

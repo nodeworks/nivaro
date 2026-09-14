@@ -5,7 +5,13 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
-import { applyDisplayTemplate, parseJson, SENTINEL_FIELDS, SYSTEM_FIELDS, richTextToPlain } from './helpers'
+import {
+  applyDisplayTemplate,
+  parseJson,
+  richTextToPlain,
+  SENTINEL_FIELDS,
+  SYSTEM_FIELDS
+} from './helpers'
 import type { M2MStagingCtx } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
@@ -465,6 +471,20 @@ function getDisplayText(val: unknown): string {
 
 // ─── SummaryPanel ──────────────────────────────────────────────────────────────
 
+const summaryText = (v: unknown): string => {
+  if (v === null || v === undefined || v === '') return 'empty'
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'object') {
+    const id = (v as Record<string, unknown>).id
+    if (id != null) return `#${String(id)}`
+    return Array.isArray(v) ? `${v.length} items` : 'a value'
+  }
+  const s = String(v)
+    .replace(/<[^>]+>/g, '')
+    .trim()
+  return s.length > 48 ? `${s.slice(0, 48)}…` : s
+}
+
 export function SummaryPanel({
   allSteps,
   groupedMap,
@@ -479,6 +499,7 @@ export function SummaryPanel({
   staleFields,
   aliasEmptiness,
   layoutFields,
+  changedFields,
   onFieldClick
 }: {
   allSteps: StepDef[]
@@ -499,6 +520,9 @@ export function SummaryPanel({
   /** Fields assigned to the resolved layout — when present, the Related
    *  catch-all only lists O2M aliases the layout actually carries. */
   layoutFields?: Set<string> | null
+  /** Fields whose draft value differs from the last saved value (#17) — a dot
+   *  beside the label, old → new on hover. */
+  changedFields?: Record<string, { from: unknown }>
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -618,6 +642,13 @@ export function SummaryPanel({
                     )}
                   >
                     <span className='truncate'>{label}</span>
+                    {changedFields?.[f.field] && (
+                      <span
+                        data-summary-changed
+                        data-tip={`Unsaved — was ${summaryText(changedFields[f.field].from)} → now ${getDisplayText(val)}`}
+                        className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
+                      />
+                    )}
                     {needsValue && (
                       <span className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
                         required

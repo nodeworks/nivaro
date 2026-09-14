@@ -637,9 +637,16 @@ async function resolveFilterValues(
   return out
 }
 
+export interface OwnerResolutionOptions {
+  /** Return the RAW owner set — no out-of-office → delegate substitution.
+   *  The approval-chain availability read uses it to name "Beth → Kim". */
+  skipDelegation?: boolean
+}
+
 export async function resolveStateOwnersBatch(
   requests: OwnerResolutionRequest[],
-  database: typeof db = db
+  database: typeof db = db,
+  opts: OwnerResolutionOptions = {}
 ): Promise<Map<string, ResolvedOwner[]>> {
   const result = new Map<string, ResolvedOwner[]>()
   if (requests.length === 0) return result
@@ -1036,7 +1043,9 @@ export async function resolveStateOwnersBatch(
   for (const req of withGroups) {
     for (const o of combinedByKey.get(req.key) ?? []) allOwnerIds.add(o.id)
   }
-  const substitutions = await buildDelegationSubstitutions([...allOwnerIds], database)
+  const substitutions = opts.skipDelegation
+    ? new Map<string, ResolvedOwner | null>()
+    : await buildDelegationSubstitutions([...allOwnerIds], database)
 
   for (const req of requests) {
     const owners = combinedByKey.get(req.key) ?? []

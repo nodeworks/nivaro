@@ -186,6 +186,9 @@ export async function collectionsRoutes(app: FastifyInstance) {
         browser_config: browserConfig,
         change_reason_config: changeReasonConfig,
         empty_state: emptyState,
+        // Migration 306 — bit column, always a boolean on the wire (an image
+        // whose DB predates the column reads undefined → false).
+        read_mode_toggle: !!(col as { read_mode_toggle?: unknown }).read_mode_toggle,
         delete_guard: (() => {
           const rawDg = (col as { delete_guard?: string | null }).delete_guard
           if (!rawDg) return null
@@ -253,6 +256,12 @@ export async function collectionsRoutes(app: FastifyInstance) {
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
+    if ('read_mode_toggle' in body) {
+      patch.read_mode_toggle = (body as { read_mode_toggle?: unknown }).read_mode_toggle === true
+      // updateCollection reads back through the metadata cache — bust it so
+      // the PATCH response carries the new value, not the 30s-old one.
+      svc.clearMetadataCache()
+    }
     // #619: slug_field must name a real physical column when set — a stale or
     // mistyped name would make every by-slug lookup 500 instead of 404.
     if ('slug_field' in body) {

@@ -1,5 +1,11 @@
 import { db } from '../db/index.js'
-import { type ResolvedOwner, resolveStateOwners } from './pipeline-engine.js'
+import { selectInChunks } from './db-batch.js'
+import {
+  coerceBool as engineCoerceBool,
+  type OwnerResolutionRequest,
+  type ResolvedOwner,
+  resolveStateOwnersBatch
+} from './pipeline-engine.js'
 import { fetchPipelineRecord } from './pipeline-subject.js'
 import {
   evalConditionRule,
@@ -25,11 +31,145 @@ import {
  * state, history truncated to that time.
  */
 
+export interface UnavailableChainOwner {
+  id: string
+  name: string
+  reason: 'out' | 'suspended' | 'redacted'
+  /** The working delegate covering an out-of-office owner, else null. */
+  delegate: { id: string; name: string; expires_at: string | null } | null
+}
+
 export interface ChainEntry {
+  /** Post-delegation owners (an OOO owner is replaced by their delegate). */
   owners: ResolvedOwner[]
   skipped: boolean
   skip_reasons: string[]
   on_path: boolean
+  /** RAW owners (pre-delegation) who cannot act right now, with who covers them. */
+  unavailable: UnavailableChainOwner[]
+  /** ≥1 raw owner and NONE can act — every owner suspended/redacted, or out
+   *  with no working delegate (the coverage-gaps rule). */
+  blocked: boolean
+}
+
+interface AvailabilityUserRow {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  status: string | null
+  is_redacted: boolean | number | null
+  is_out_of_office: boolean | number | null
+  delegate_id: string | null
+  delegate_expires_at: Date | null
+}
+
+const userName = (u: {
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
+  id?: string
+}) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id || 'Unknown'
+
+/** Suspended / inactive / redacted — cannot act, whatever their OOO flag. */
+function hardUnavailable(u: AvailabilityUserRow): 'suspended' | 'redacted' | null {
+  if (engineCoerceBool(u.is_redacted)) return 'redacted'
+  if (u.status === 'suspended') return 'suspended'
+  if (u.status != null && u.status !== 'active') return 'suspended'
+  return null
+}
+
+/**
+ * Availability of every RAW owner across the chain, in two batched user
+ * lookups (owners, then their delegates) — never per owner. Mirrors
+ * services/coverage-gaps.ts: an owner is covered when they are active, or
+ * out of office with a delegate who is themselves active and not out.
+ */
+async function computeAvailability(
+  rawByState: Map<string, ResolvedOwner[]>
+): Promise<Map<string, { unavailable: UnavailableChainOwner[]; blocked: boolean }>> {
+  const out = new Map<string, { unavailable: UnavailableChainOwner[]; blocked: boolean }>()
+  const ownerIds = new Set<string>()
+  for (const owners of rawByState.values()) for (const o of owners) ownerIds.add(String(o.id))
+  if (ownerIds.size === 0) {
+    for (const k of rawByState.keys()) out.set(k, { unavailable: [], blocked: false })
+    return out
+  }
+  const cols = [
+    'id',
+    'first_name',
+    'last_name',
+    'email',
+    'status',
+    'is_redacted',
+    'is_out_of_office',
+    'delegate_id',
+    'delegate_expires_at'
+  ]
+  const ownerRows = (await selectInChunks([...ownerIds], 2000, (chunk) =>
+    db('nivaro_users').whereIn('id', chunk).select(cols)
+  )) as AvailabilityUserRow[]
+  const byId = new Map(ownerRows.map((u) => [String(u.id).toUpperCase(), u]))
+  const delegateIds = [
+    ...new Set(
+      ownerRows
+        .map((u) => (u.delegate_id ? String(u.delegate_id).toUpperCase() : null))
+        .filter((id): id is string => !!id && !byId.has(id))
+    )
+  ]
+  if (delegateIds.length > 0) {
+    const delegateRows = (await selectInChunks(delegateIds, 2000, (chunk) =>
+      db('nivaro_users').whereIn('id', chunk).select(cols)
+    )) as AvailabilityUserRow[]
+    for (const d of delegateRows) byId.set(String(d.id).toUpperCase(), d)
+  }
+  const now = Date.now()
+  const workingDelegate = (u: AvailabilityUserRow): AvailabilityUserRow | null => {
+    if (!u.delegate_id) return null
+    if (u.delegate_expires_at && new Date(u.delegate_expires_at).getTime() <= now) return null
+    const d = byId.get(String(u.delegate_id).toUpperCase())
+    if (!d || hardUnavailable(d) || engineCoerceBool(d.is_out_of_office)) return null
+    return d
+  }
+  for (const [stateId, owners] of rawByState) {
+    const unavailable: UnavailableChainOwner[] = []
+    let covered = 0
+    for (const o of owners) {
+      const u = byId.get(String(o.id).toUpperCase())
+      if (!u) {
+        // Unknown user row — cannot act.
+        unavailable.push({ id: o.id, name: userName(o), reason: 'suspended', delegate: null })
+        continue
+      }
+      const hard = hardUnavailable(u)
+      if (hard) {
+        unavailable.push({ id: o.id, name: userName(u), reason: hard, delegate: null })
+        continue
+      }
+      if (engineCoerceBool(u.is_out_of_office)) {
+        const d = workingDelegate(u)
+        if (d) covered++
+        unavailable.push({
+          id: o.id,
+          name: userName(u),
+          reason: 'out',
+          delegate: d
+            ? {
+                id: d.id,
+                name: userName(d),
+                expires_at: u.delegate_expires_at
+                  ? new Date(u.delegate_expires_at).toISOString()
+                  : null
+              }
+            : null
+        })
+        continue
+      }
+      covered++
+    }
+    out.set(stateId, { unavailable, blocked: owners.length > 0 && covered === 0 })
+  }
+  return out
 }
 
 export interface StateChain {
@@ -145,31 +285,55 @@ export async function computeStateChain(
     for (const s of states) onPath.add(s.id)
   }
 
-  const entries: Record<string, ChainEntry> = {}
-  await Promise.all(
-    states.map(async (s) => {
-      const [owners, skip] = await Promise.all([
-        resolveStateOwners(s.id, instance?.id ?? null, collection, item, db).catch(
-          () => [] as ResolvedOwner[]
-        ),
-        s.id === currentStateId
-          ? Promise.resolve({ skipped: false, reasons: [] as string[] })
-          : evaluateSkipCriteriaDetailed(
-              s.id,
-              record,
-              instance?.id ?? null,
-              collection,
-              item,
-              db
-            ).catch(() => ({ skipped: false, reasons: [] as string[] }))
-      ])
-      entries[s.id] = {
-        owners,
-        skipped: skip.skipped,
-        skip_reasons: skip.reasons,
-        on_path: onPath.has(s.id)
-      }
-    })
+  // Owners for EVERY state in one batch, twice: the post-delegation set the
+  // panel has always shown, and the raw set that says who is actually out and
+  // who covers them. Availability then needs two user lookups for the whole
+  // chain, never one per owner.
+  const requests: OwnerResolutionRequest[] = states.map((s) => ({
+    key: s.id,
+    stateId: s.id,
+    instanceId: instance?.id ?? null,
+    collection,
+    itemId: item
+  }))
+  const [ownersByState, rawByState, skipByState] = await Promise.all([
+    resolveStateOwnersBatch(requests, db).catch(() => new Map<string, ResolvedOwner[]>()),
+    resolveStateOwnersBatch(requests, db, { skipDelegation: true }).catch(
+      () => new Map<string, ResolvedOwner[]>()
+    ),
+    Promise.all(
+      states.map(async (s) => {
+        const skip =
+          s.id === currentStateId
+            ? { skipped: false, reasons: [] as string[] }
+            : await evaluateSkipCriteriaDetailed(
+                s.id,
+                record,
+                instance?.id ?? null,
+                collection,
+                item,
+                db
+              ).catch(() => ({ skipped: false, reasons: [] as string[] }))
+        return [s.id, skip] as const
+      })
+    ).then((pairs) => new Map(pairs))
+  ])
+  const availability = await computeAvailability(rawByState).catch(
+    () => new Map<string, { unavailable: UnavailableChainOwner[]; blocked: boolean }>()
   )
+
+  const entries: Record<string, ChainEntry> = {}
+  for (const s of states) {
+    const skip = skipByState.get(s.id) ?? { skipped: false, reasons: [] }
+    const avail = availability.get(s.id) ?? { unavailable: [], blocked: false }
+    entries[s.id] = {
+      owners: ownersByState.get(s.id) ?? [],
+      skipped: skip.skipped,
+      skip_reasons: skip.reasons,
+      on_path: onPath.has(s.id),
+      unavailable: avail.unavailable,
+      blocked: avail.blocked
+    }
+  }
   return { templateId, instance, currentStateId, states, history, entries }
 }

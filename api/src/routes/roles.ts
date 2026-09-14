@@ -4,7 +4,13 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
-import { getPoliciesForRole, parsePolicyFields, parseRowFilter } from '../services/permissions.js'
+import {
+  can,
+  getAllowedFields,
+  getPoliciesForRole,
+  parsePolicyFields,
+  parseRowFilter
+} from '../services/permissions.js'
 import type { Role, User } from '../types.js'
 
 /**
@@ -253,6 +259,40 @@ export async function rolesRoutes(app: FastifyInstance) {
       .select('id', 'first_name', 'last_name', 'email', 'status', 'last_access')
       .orderBy('first_name')
     return reply.send({ data: users })
+  })
+
+  // View-as-role (record form): what this role may read/update on a
+  // collection, through the SAME can()/getAllowedFields() the items service
+  // uses, with a synthetic user carrying the role (simulate's precedent).
+  // `null` fields = every field; `[]` = a policy that names no fields.
+  app.get('/:id/field-access/:collection', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, collection } = req.params as { id: string; collection: string }
+    const role = await db<Role>('nivaro_roles').where({ id }).first()
+    if (!role) return reply.code(404).send({ error: 'Role not found' })
+    const simUser = {
+      id: '00000000-0000-0000-0000-000000000000',
+      role: id,
+      email: 'simulated@nivaro',
+      status: 'active'
+    } as unknown as User
+    const [can_read, can_update] = await Promise.all([
+      can(simUser, 'read', collection),
+      can(simUser, 'update', collection)
+    ])
+    const [read_fields, update_fields] = await Promise.all([
+      can_read ? getAllowedFields(simUser, 'read', collection) : Promise.resolve([]),
+      can_update ? getAllowedFields(simUser, 'update', collection) : Promise.resolve([])
+    ])
+    return reply.send({
+      data: {
+        role: { id: role.id, name: role.name, admin_access: !!role.admin_access },
+        collection,
+        can_read,
+        can_update,
+        read_fields,
+        update_fields
+      }
+    })
   })
 
   // Permission simulator — "what would a user with this role see/do?"

@@ -29,6 +29,9 @@ export function ValidationSummary({
   onDismiss: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  // Ordered walk (#14): "Next" (and Enter on a row) visits the problems in
+  // layout order — the cursor is the next row to visit.
+  const [cursor, setCursor] = useState(0)
   if (items.length === 0) return null
   const n = items.length
   const locations = new Set(items.map((i) => i.location).filter(Boolean))
@@ -36,6 +39,13 @@ export function ValidationSummary({
     locations.size > 1 || (locations.size === 1 && items.some((i) => !i.location))
   const visible = expanded ? items : items.slice(0, COLLAPSED_LIMIT)
   const hidden = n - visible.length
+  const visit = (idx: number) => {
+    const it = items[idx]
+    if (!it) return
+    onJump(it.field)
+    setCursor((idx + 1) % n)
+    if (idx + 1 >= COLLAPSED_LIMIT) setExpanded(true)
+  }
   return (
     <div
       role='alert'
@@ -48,6 +58,16 @@ export function ValidationSummary({
         <span className='text-[12.5px] font-medium text-red-800 dark:text-red-300'>
           Can’t save yet — {n} field{n === 1 ? '' : 's'} need{n === 1 ? 's' : ''} attention
         </span>
+        {n > 1 && (
+          <button
+            type='button'
+            onClick={() => visit(cursor)}
+            data-validation-next
+            className='ml-1 inline-flex h-6 items-center gap-1 rounded-md border border-red-300 bg-white px-2 text-[11px] font-medium text-red-800 hover:bg-red-100 dark:border-red-500/40 dark:bg-transparent dark:text-red-200 dark:hover:bg-red-400/20'
+          >
+            Next issue ({cursor + 1}/{n}) →
+          </button>
+        )}
         <button
           type='button'
           onClick={onDismiss}
@@ -58,11 +78,17 @@ export function ValidationSummary({
         </button>
       </div>
       <ul className='nvr-stagger-direct mt-1.5 space-y-0.5'>
-        {visible.map((it) => (
-          <li key={it.field} className='nvr-section-enter flex items-baseline gap-2 text-[12px]'>
+        {visible.map((it, idx) => (
+          <li
+            key={it.field}
+            className={cn(
+              'nvr-section-enter flex items-baseline gap-2 rounded-sm px-1 -mx-1 text-[12px]',
+              idx === cursor && n > 1 && 'bg-red-100/70 dark:bg-red-400/15'
+            )}
+          >
             <button
               type='button'
-              onClick={() => onJump(it.field)}
+              onClick={() => visit(idx)}
               className='shrink-0 font-medium text-red-800 underline decoration-dotted underline-offset-2 hover:decoration-solid dark:text-red-300'
             >
               {it.label}

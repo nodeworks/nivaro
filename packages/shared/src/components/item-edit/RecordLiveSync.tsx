@@ -29,7 +29,9 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
         ['pipeline-all-owners', collection, itemId],
         ['comments', collection, itemId],
         ['revisions', collection, itemId],
-        ['erp-submissions', collection, itemId]
+        ['erp-submissions', collection, itemId],
+        // Who made the write — the field ghosts (#2) attribute from it.
+        ['last-touch', collection, itemId]
       ]) {
         void qc.invalidateQueries({ queryKey: key })
       }
@@ -92,7 +94,7 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
       window.removeEventListener('nvr:upload-state', onLocal)
       window.removeEventListener('nvr:record-uploading', onRelayed)
       unsub()
-          unsubComment()
+      unsubComment()
       unsubTyping()
       window.removeEventListener('nvr:comment-typing-out', onTypingOut)
     }

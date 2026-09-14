@@ -12,11 +12,24 @@ interface ItemLock {
   user: string
   locked_at: Date
   expires_at: Date
+  note?: string | null
 }
+
+const NOTE_MAX = 300
 
 function isExpired(lock: ItemLock): boolean {
   return new Date(lock.expires_at).getTime() <= Date.now()
 }
+
+function cleanNote(raw: unknown): string | null {
+  if (raw == null) return null
+  const s = String(raw).trim().slice(0, NOTE_MAX)
+  return s.length > 0 ? s : null
+}
+
+// The Fastify instance, for the release paths that run outside a handler's
+// closure (an expired lock discovered by getCurrentLock). Set in itemLocksRoutes.
+let _app: FastifyInstance | null = null
 
 async function getCurrentLock(collection: string, item: string): Promise<ItemLock | null> {
   const lock = (await db('nivaro_item_locks').where({ collection, item }).first()) as
@@ -25,9 +38,86 @@ async function getCurrentLock(collection: string, item: string): Promise<ItemLoc
   if (!lock) return null
   if (isExpired(lock)) {
     await db('nivaro_item_locks').where({ id: lock.id }).delete()
+    // An expiry IS a release — the next person in line should hear about it.
+    if (_app) await handOffToQueue(_app, collection, item)
     return null
   }
   return lock
+}
+
+// ── Wait queue (migration 306) ─────────────────────────────────────────────
+// nivaro_item_lock_queue: who is waiting for a record, in the order they
+// asked. When the lock is released the FIRST row is popped and told (socket
+// `lock:available` to their user room + an in-app notification) so their
+// client auto-acquires; everyone else stays queued for the next release.
+
+interface QueueEntry {
+  user: string
+  name: string
+  requested_at: Date
+}
+
+async function queueFor(collection: string, item: string): Promise<QueueEntry[]> {
+  const rows = (await db('nivaro_item_lock_queue as q')
+    .leftJoin('nivaro_users as u', 'u.id', 'q.user')
+    .where({ 'q.collection': collection, 'q.item': item })
+    .orderBy('q.requested_at', 'asc')
+    .orderBy('q.id', 'asc')
+    .select('q.user', 'q.requested_at', 'u.first_name', 'u.last_name', 'u.email')) as Array<{
+    user: string
+    requested_at: Date
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+  }>
+  return rows.map((r) => ({
+    user: r.user,
+    name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || r.user,
+    requested_at: r.requested_at
+  }))
+}
+
+function queuePosition(queue: QueueEntry[], userId: string): number | null {
+  const idx = queue.findIndex((q) => String(q.user).toUpperCase() === String(userId).toUpperCase())
+  return idx === -1 ? null : idx + 1
+}
+
+async function leaveQueue(collection: string, item: string, userId: string): Promise<void> {
+  await db('nivaro_item_lock_queue')
+    .where({ collection, item })
+    .whereRaw('UPPER([user]) = ?', [String(userId).toUpperCase()])
+    .delete()
+    .catch(() => {})
+}
+
+/**
+ * Pop the head of the wait queue and tell them the record is free. Called on
+ * every release path (explicit release, idle release, expiry, handoff
+ * response). Never throws — a release must never fail because the hand-off
+ * notification did.
+ */
+async function handOffToQueue(app: FastifyInstance, collection: string, item: string) {
+  try {
+    const queue = await queueFor(collection, item)
+    const next = queue[0]
+    if (!next) return
+    await db('nivaro_item_lock_queue')
+      .where({ collection, item })
+      .whereRaw('UPPER([user]) = ?', [String(next.user).toUpperCase()])
+      .delete()
+    app.io?.to(`user:${next.user}`).emit('lock:available', { collection, item: String(item) })
+    const { notifyUser } = await import('../services/notification-channels.js')
+    await notifyUser(app, next.user, {
+      subject: `It's your turn to edit ${collection}/${item}`,
+      message: `The edit lock on ${collection}/${item} was released and you were next in line.`,
+      collection,
+      item: String(item),
+      category: 'system',
+      target: { kind: 'record', collection, id: String(item) }
+    }).catch(() => {})
+  } catch {
+    /* hand-off is best-effort */
+  }
 }
 
 async function lockHolderName(userId: string): Promise<string | null> {
@@ -69,6 +159,7 @@ function emitLockEvent(
 }
 
 export async function itemLocksRoutes(app: FastifyInstance) {
+  _app = app
   app.addHook('preHandler', authenticate)
 
   // ── Config: GET/PATCH locking enabled flag per collection (admin) ─────────
@@ -123,17 +214,25 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     }
 
     const lock = await getCurrentLock(collection, item)
-    if (!lock) return reply.send({ data: null })
+    const queue = await queueFor(collection, item)
+    const my_position = queuePosition(queue, req.user!.id)
+    // Free record: `data` stays null (clients read null = free) but the queue
+    // still rides along so a waiting client can show its position.
+    if (!lock) return reply.send({ data: null, queue, my_position })
 
     return reply.send({
       data: {
         collection: lock.collection,
         item: lock.item,
         user: lock.user,
+        locked_by: lock.user,
         locked_by_name: await lockHolderName(lock.user),
+        note: lock.note ?? null,
         locked_at: lock.locked_at,
         expires_at: lock.expires_at,
-        is_mine: lock.user === req.user!.id
+        is_mine: lock.user === req.user!.id,
+        queue,
+        my_position
       }
     })
   })
@@ -156,6 +255,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         'l.user',
         'l.locked_at',
         'l.expires_at',
+        'l.note',
         db.raw("CONCAT(u.first_name, ' ', u.last_name) as holder_name"),
         'u.email as holder_email'
       )) as Array<Record<string, unknown>>
@@ -168,6 +268,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, item } = req.params
       const me = req.user!.id
+      const body = (req.body ?? {}) as { note?: unknown }
+      const noteGiven = body.note !== undefined
+      const note = cleanNote(body.note)
 
       // Silently no-op when locking is disabled for this collection
       if (!(await isLockingEnabled(collection))) {
@@ -180,6 +283,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           error: 'Item is locked by another user',
           locked_by: existing.user,
           locked_by_name: await lockHolderName(existing.user),
+          note: existing.note ?? null,
           expires_at: existing.expires_at
         })
       }
@@ -188,7 +292,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       const expiresAt = new Date(now.getTime() + LOCK_TTL_MS)
 
       if (existing) {
-        await db('nivaro_item_locks').where({ id: existing.id }).update({ expires_at: expiresAt })
+        await db('nivaro_item_locks')
+          .where({ id: existing.id })
+          .update(noteGiven ? { expires_at: expiresAt, note } : { expires_at: expiresAt })
       } else {
         try {
           await db('nivaro_item_locks').insert({
@@ -196,7 +302,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
             item,
             user: me,
             locked_at: now,
-            expires_at: expiresAt
+            expires_at: expiresAt,
+            note
           })
         } catch {
           const winner = await getCurrentLock(collection, item)
@@ -205,12 +312,15 @@ export async function itemLocksRoutes(app: FastifyInstance) {
               error: 'Item is locked by another user',
               locked_by: winner.user,
               locked_by_name: await lockHolderName(winner.user),
+              note: winner.note ?? null,
               expires_at: winner.expires_at
             })
           }
         }
       }
 
+      // Holding the lock means no longer waiting for it.
+      await leaveQueue(collection, item, me)
       emitLockEvent(app, collection, item, me, true)
 
       if (!existing) {
@@ -230,11 +340,98 @@ export async function itemLocksRoutes(app: FastifyInstance) {
               collection,
               item,
               user: lock.user,
+              locked_by: lock.user,
+              note: lock.note ?? null,
               locked_at: lock.locked_at,
               expires_at: lock.expires_at
             }
           : null
       })
+    }
+  )
+
+  // POST /:collection/:item/lock/note — the holder updates their own note.
+  app.post<{ Params: { collection: string; item: string }; Body: { note?: unknown } }>(
+    '/:collection/:item/lock/note',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      const me = req.user!.id
+      const existing = await getCurrentLock(collection, item)
+      if (!existing || existing.user !== me) {
+        return reply.code(403).send({ error: 'You do not hold a lock on this item' })
+      }
+      const note = cleanNote(req.body?.note)
+      await db('nivaro_item_locks').where({ id: existing.id }).update({ note })
+      emitLockEvent(app, collection, item, me, true)
+      return reply.send({ data: { collection, item, user: me, note } })
+    }
+  )
+
+  // POST /:collection/:item/lock/queue — join the wait queue (idempotent).
+  app.post<{ Params: { collection: string; item: string } }>(
+    '/:collection/:item/lock/queue',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      const me = req.user!
+      if (!(await isLockingEnabled(collection))) {
+        return reply.send({ data: null, locking_disabled: true })
+      }
+      const existing = await getCurrentLock(collection, item)
+      if (existing && existing.user === me.id) {
+        return reply.code(400).send({ error: 'You already hold this lock' })
+      }
+      let queue = await queueFor(collection, item)
+      const already = queuePosition(queue, me.id)
+      if (already === null) {
+        try {
+          await db('nivaro_item_lock_queue').insert({
+            collection,
+            item: String(item),
+            user: me.id,
+            requested_at: new Date()
+          })
+        } catch {
+          /* UNIQUE race — already queued */
+        }
+        queue = await queueFor(collection, item)
+      }
+      const position = queuePosition(queue, me.id) ?? queue.length
+      // Tell the holder someone is waiting — same channels as lock/request.
+      if (existing && already === null) {
+        const fromName =
+          [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id
+        app.io?.to(`user:${existing.user}`).emit('lock:queued', {
+          collection,
+          item: String(item),
+          user_name: fromName,
+          position,
+          from: { id: me.id, name: fromName }
+        })
+        const { notifyUser } = await import('../services/notification-channels.js')
+        await notifyUser(app, existing.user, {
+          subject: 'Someone is waiting to edit',
+          message: `${fromName} is waiting for ${collection}/${item} (position ${position} in line).`,
+          collection,
+          item: String(item),
+          sender: me.id,
+          category: 'system',
+          target: { kind: 'record', collection, id: String(item) }
+        }).catch(() => {})
+      }
+      return reply.send({ data: { position, queue } })
+    }
+  )
+
+  // DELETE /:collection/:item/lock/queue — leave the wait queue.
+  app.delete<{ Params: { collection: string; item: string } }>(
+    '/:collection/:item/lock/queue',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection, item } = req.params
+      await leaveQueue(collection, item, req.user!.id)
+      return reply.code(204).send()
     }
   )
 
@@ -287,6 +484,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         locked_at: new Date(),
         expires_at: new Date(Date.now() + 5 * 60_000)
       })
+      // The taker now holds it — they are no longer waiting. The rest of the
+      // queue stays: the lock was not released, it changed hands.
+      await leaveQueue(collection, item, req.user!.id)
       await logActivity({
         action: 'lock-force-take',
         user: req.user!.id,
@@ -318,7 +518,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         return reply.code(404).send({
           error: 'You do not hold a lock on this item',
           locked_by: existing?.user ?? null,
-          locked_by_name: existing ? await lockHolderName(existing.user) : null
+          locked_by_name: existing ? await lockHolderName(existing.user) : null,
+          note: existing?.note ?? null
         })
       }
 
@@ -335,6 +536,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         const idleMinutes = Number(settings?.lock_idle_release_minutes)
         if (Number.isFinite(idleMinutes) && idleMinutes > 0 && idleSeconds >= idleMinutes * 60) {
           await db('nivaro_item_locks').where({ id: existing.id }).del()
+          emitLockEvent(app, collection, item, me, false)
+          await handOffToQueue(app, collection, item)
           return reply.send({ data: null, idle_released: true })
         }
       }
@@ -364,6 +567,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
 
       await db('nivaro_item_locks').where({ id: existing.id }).delete()
       emitLockEvent(app, collection, item, existing.user, false)
+      await handOffToQueue(app, collection, item)
 
       await logActivity({
         action: 'lock-release',
@@ -423,6 +627,12 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     if (existing && existing.user === me.id && action === 'release') {
       await db('nivaro_item_locks').where({ id: existing.id }).delete()
       emitLockEvent(app, collection, item, me.id, false)
+      // The explicit requester is the intended recipient (they get
+      // lock:response below and auto-acquire); drop their queue row so the
+      // hand-off does not ALSO wake the queue head and race them. When the
+      // requester never queued, the head of the queue is told as usual.
+      await leaveQueue(collection, item, to)
+      await handOffToQueue(app, collection, item)
       await logActivity({
         action: 'lock-release',
         user: me.id,

@@ -270,7 +270,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         role: { id: role.id, name: role.name, admin_access: !!role.admin_access },
         can_read: !!canRead,
         can_update: !!canUpdate,
-        layout: picked ? { id: picked.id, name: picked.name, is_active: !!picked.is_active } : null,
+        // slug: the shared form pins the previewed layout by it.
+        layout: picked
+          ? {
+              id: picked.id,
+              name: picked.name,
+              is_active: !!picked.is_active,
+              slug: (picked.slug as string | null | undefined) ?? null
+            }
+          : null,
         // null field list = policy grants all fields
         hidden_fields: readSet ? allFields.filter((f) => !readSet.has(f)) : [],
         readonly_fields:
@@ -337,6 +345,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
     layout.default_values = parseDefaultValues(layout.default_values)
     layout.quick_picker = parseQuickPicker(layout.quick_picker)
+    layout.changes_tray = !!layout.changes_tray
 
     let [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -459,6 +468,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!layout) return reply.send({ data: null })
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
+    layout.changes_tray = !!layout.changes_tray
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -534,6 +544,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'display_mode',
         'hide_integrity_banner',
         'hide_sla_banner',
+        'changes_tray',
         'dossier_enabled',
         'dossier_label',
         'quick_picker',
@@ -555,6 +566,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       row.quick_picker = parseQuickPicker(row.quick_picker)
       row.header_fields = parseQuickPicker(row.header_fields)
       row.hide_empty = !!row.hide_empty
+      row.changes_tray = !!row.changes_tray
     }
     return reply.send({ data: rows })
   })
@@ -613,6 +625,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     row.quick_picker = parseQuickPicker(row.quick_picker)
     row.header_fields = parseQuickPicker(row.header_fields)
     row.hide_empty = !!row.hide_empty
+    row.changes_tray = !!row.changes_tray
     return reply.send({ data: row })
   })
 
@@ -653,6 +666,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       parent_layout_id: number | null
       hide_integrity_banner: boolean
       hide_sla_banner: boolean
+      changes_tray: boolean
       dossier_enabled: boolean
       dossier_label: string | null
       quick_picker: string[] | null
@@ -736,6 +750,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.dossier_label !== undefined)
       patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
     if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
+    if (body.changes_tray !== undefined) patch.changes_tray = body.changes_tray === true
     if (body.quick_picker !== undefined) {
       if (body.quick_picker !== null && !Array.isArray(body.quick_picker))
         return reply
@@ -783,6 +798,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     updated.quick_picker = parseQuickPicker(updated.quick_picker)
     updated.header_fields = parseQuickPicker(updated.header_fields)
     updated.hide_empty = !!updated.hide_empty
+    updated.changes_tray = !!updated.changes_tray
 
     await logActivity({
       action: 'update',
