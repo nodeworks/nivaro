@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-14T19:58:52.645Z",
+  "generated_at": "2026-09-14T20:41:04.094Z",
   "releases": [
+    {
+      "version": "0.1.280",
+      "tag": "v0.1.280",
+      "date": "2026-09-14T16:40:54-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "highlight",
+              "text": "at-risk rules filter rows, not just tint them",
+              "hash": "96581992"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "www",
+              "text": "document the Requests panel and Inbound integrations view",
+              "hash": "e4b28952"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.279",
       "tag": "v0.1.279",
-      "date": "2026-09-14T15:58:41-04:00",
+      "date": "2026-09-14T15:58:52-04:00",
       "sections": [
         {
           "label": "Added",
