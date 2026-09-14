@@ -64,7 +64,8 @@ export function useRecordPresence(collection: string | undefined, item: string |
       socket.emit('record:join', { collection, item })
     })
 
-    socket.on('record:viewers', (payload: { viewers: Viewer[] }) => {
+    socket.on('record:viewers', (payload: { collection?: string | null; item?: string | null; viewers: Viewer[] }) => {
+      if (payload?.collection != null && payload?.item != null && (payload.collection !== collection || String(payload.item) !== String(item))) return
       setViewers(payload.viewers ?? [])
     })
 

@@ -470,9 +470,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       return joinedRecordRoom
     }
 
+    // The payload names its record: a client with several record tabs mounted
+    // (efp-new keeps every open tab alive) sits in several rooms at once, and
+    // a bare `{viewers}` was applied by EVERY tab's hook — two people sharing
+    // one background tab each saw the other "also viewing" the record they
+    // actually had open (Rob, 2026-09-14).
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
-      io.to(room).emit('record:viewers', { viewers })
+      const m = /^record:(.+):([^:]+)$/.exec(room)
+      io.to(room).emit('record:viewers', { collection: m?.[1] ?? null, item: m?.[2] ?? null, viewers })
     }
     const leaveOneRoom = (room: string) => {
       joinedRecordRooms.delete(room)
