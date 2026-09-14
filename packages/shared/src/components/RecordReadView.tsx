@@ -6,7 +6,9 @@ import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { titleCase } from '../lib/utils'
+import { FileM2MField } from './item-edit/FilePickerField'
 import { UserChip } from './item-edit/GroupSection'
+import type { CMSRelation } from './item-edit/types'
 import { richTextToPlain } from './item-edit/helpers'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
@@ -267,7 +269,9 @@ function M2MValue({
   parentFk,
   junctionField,
   parentId,
-  onCount
+  onCount,
+  onTarget,
+  relation
 }: {
   junction: string
   parentFk: string
@@ -275,6 +279,10 @@ function M2MValue({
   parentId: string
   /** Reports how many records are linked — hide_empty hides the field at 0. */
   onCount?: (n: number) => void
+  /** Reports the resolved target collection (files render as a block). */
+  onTarget?: (collection: string) => void
+  /** The alias relation row — lets a files alias render the file list. */
+  relation?: RelationRow
 }) {
   const client = useNivaroClient()
   const { data: jMeta } = useQuery({
@@ -315,11 +323,28 @@ function M2MValue({
   useEffect(() => {
     if (linked !== undefined) onCount?.(linked)
   }, [linked, onCount])
+  useEffect(() => {
+    if (target) onTarget?.(target)
+  }, [target, onTarget])
   if (!ids || !target)
     return (
       <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
     )
   if (ids.length === 0) return <Empty />
+  // Files read as the edit form's file rows (icon, name, type, size, date,
+  // uploader, missing badge, download) minus remove/upload — a name list
+  // says less and looks worse (Rob's files2.png).
+  if (target === 'nivaro_files' && relation)
+    return (
+      <div className='mt-1'>
+        <FileM2MField
+          relation={relation as unknown as CMSRelation}
+          parentId={parentId}
+          allRelations={[]}
+          disabled
+        />
+      </div>
+    )
   return (
     <span className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
       {ids.map((id, i) => (
@@ -1015,6 +1040,12 @@ export function RecordReadView({
       setRelCounts((cur) => (cur[field] === n ? cur : { ...cur, [field]: n })),
     []
   )
+  const [relTargets, setRelTargets] = useState<Record<string, string>>({})
+  const targetReporter = useCallback(
+    (field: string) => (t: string) =>
+      setRelTargets((cur) => (cur[field] === t ? cur : { ...cur, [field]: t })),
+    []
+  )
   const renderWidgets = (groupKey: string | null) => {
     const slots = widgetSlots
       .filter((w) => w.group_key === groupKey)
@@ -1093,6 +1124,8 @@ export function RecordReadView({
           junctionField={m2m.junction_field}
           parentId={itemId}
           onCount={countReporter(a.field)}
+          onTarget={targetReporter(a.field)}
+          relation={m2m}
         />
       )
     const v = record?.[a.field]
@@ -1290,10 +1323,18 @@ export function RecordReadView({
                   return (
                     <div
                       key={a.field}
-                      // A list of linked records (files, tags) is a row, not a
-                      // fact: it takes the whole width instead of folding
-                      // inside one track while the card sits mostly empty.
-                      className={`min-w-0 ${long || isM2M(a) ? 'col-span-full' : emphasis || wide ? 'col-span-2' : ''}`}
+                      // A file list, or a long list of links, is a row rather
+                      // than a fact and takes the whole width; a two-value
+                      // alias (Zone, Region) stays a fact in one track.
+                      className={`min-w-0 ${
+                        long ||
+                        (isM2M(a) &&
+                          (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > 3))
+                          ? 'col-span-full'
+                          : emphasis || wide
+                            ? 'col-span-2'
+                            : ''
+                      }`}
                     >
                       <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                         {labelFor(a)}
