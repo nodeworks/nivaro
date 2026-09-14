@@ -252,9 +252,12 @@ export function CatalogPickerField({
   const [editing, setEditing] = useState<Record<string, string>>({})
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
 
-  // Child collection relations → resolve the catalog collection
-  const { data: childRelations = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['collection-meta', relatedCollection],
+  // Child collection relations → resolve the catalog collection. Own query key:
+  // other shared components cache DIFFERENT shapes under
+  // ['collection-meta', <collection>] (the whole meta object, r.data, …) and a
+  // collision handed this hook an object, `.find` blew up → "does not resolve".
+  const { data: childRelations = [], isPending: childRelationsPending } = useQuery<CMSRelation[]>({
+    queryKey: ['collection-relations', relatedCollection],
     queryFn: () =>
       client
         .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
@@ -1121,6 +1124,13 @@ export function CatalogPickerField({
 
   const qtyInput = (catalogId: string, catalogRow: Record<string, unknown>) => {
     const qty = currentQty(catalogId)
+    // Read-only (Summary mode): the figure, not a disabled box.
+    if (readOnly)
+      return (
+        <span className='inline-block w-20 shrink-0 text-right tabular-nums text-slate-700 dark:text-slate-200'>
+          {qty && qty > 0 ? qty : '—'}
+        </span>
+      )
     const editVal = editing[catalogId]
     const shown = editVal !== undefined ? editVal : qty && qty > 0 ? String(qty) : ''
     return (
@@ -1148,6 +1158,16 @@ export function CatalogPickerField({
     )
   }
 
+  // Relations still loading (or a rate-limited retry): a skeleton, never the
+  // "does not resolve" message — that one is for a genuinely broken config.
+  if (!catalogCol && childRelationsPending) {
+    return (
+      <div className='space-y-2 py-1' aria-busy='true'>
+        <div className='h-8 w-full animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        <div className='h-8 w-2/3 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+      </div>
+    )
+  }
   if (!catalogCol) {
     return (
       <p className='py-1 text-[12px] text-slate-400'>
@@ -1159,6 +1179,11 @@ export function CatalogPickerField({
 
   return (
     <div className='space-y-3'>
+      {/* Read-only (Summary mode, read views): the catalog browser — search,
+          sections, favorites, builders — is picking chrome; only the Summary
+          table of what was picked (with its totals) renders. */}
+      {!readOnly && (
+        <>
       <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
         <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
           <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
@@ -1438,6 +1463,8 @@ export function CatalogPickerField({
           />
         ))}
 
+        </>
+      )}
       {/* ── Summary of everything picked + arbitrary add ─────────────────────── */}
       <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
         <div className='flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted'>

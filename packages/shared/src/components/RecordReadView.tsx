@@ -872,7 +872,9 @@ export function RecordReadView({
   layoutData,
   flush,
   renderSlot,
-  integrityMarks
+  integrityMarks,
+  renderGrid,
+  gridCounts
 }: {
   collection: string
   itemId: string
@@ -893,6 +895,15 @@ export function RecordReadView({
    * finding gets an amber mark whose tip lists the messages.
    */
   integrityMarks?: boolean
+  /**
+   * Host-rendered child grid for an O2M alias — the record form passes its
+   * real inline grid in read-only mode so Summary keeps everything the edit
+   * grid decorates (PO match dots, row lints, submission errors, presets,
+   * aggregate footer). Return null to fall back to the plain child table.
+   */
+  renderGrid?: (assignment: LayoutAssignment) => ReactNode
+  /** Row counts per O2M alias when the host renders the grids (hide_empty). */
+  gridCounts?: Record<string, number>
 }) {
   const client = useNivaroClient()
   const { data: integrity } = useRecordIntegrity(collection, itemId, !!integrityMarks)
@@ -1245,7 +1256,7 @@ export function RecordReadView({
     // A grid with no rows / an alias with no links is empty too (once its
     // count has reported); it stays mounted so the count keeps reporting.
     const relEmpty = (a: LayoutAssignment) =>
-      hideEmpty && (isGrid(a) || isM2M(a)) && relCounts[a.field] === 0
+      hideEmpty && (isGrid(a) || isM2M(a)) && (gridCounts?.[a.field] ?? relCounts[a.field]) === 0
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
     const shownWidgets = groupWidgets.filter((w) => widgetHasContent(w.field))
@@ -1370,7 +1381,7 @@ export function RecordReadView({
                     </span>
                   </div>
                 ) : null}
-                {renderGridAssignment(a)}
+                {(renderGrid ? renderGrid(a) : null) ?? renderGridAssignment(a)}
               </div>
             ))}
             {renderWidgets(g.key)}

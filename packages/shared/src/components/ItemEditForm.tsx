@@ -9871,6 +9871,32 @@ export function ItemEditForm({
                                       // The integrity banner is hidden in Summary mode; the
                                       // affected fields carry an amber mark instead.
                                       integrityMarks
+                                      // Child grids are the REAL inline grid, read-only — PO
+                                      // match dots, row lints, submission errors, presets and
+                                      // the aggregate footer all come along (Rob: "linked lines
+                                      // to POs, highlighted errors, MDSi errors — just can't
+                                      // edit").
+                                      renderGrid={(a) => {
+                                        const f = (fieldConfig ?? []).find((x) => x.field === a.field)
+                                        if (!f) return null
+                                        return (
+                                          <FieldRow
+                                            key={`summary-grid-${a.field}`}
+                                            field={{ ...f, readonly: true }}
+                                            draft={effectiveDraft}
+                                            onChange={handleFieldChange}
+                                            relations={relations}
+                                            collection={collection}
+                                            itemId={itemId}
+                                            visible={true}
+                                            locked={false}
+                                            layoutAiEnabled={layoutAiEnabled}
+                                            renderField={renderField}
+                                            onCountChange={handleM2MCountChange}
+                                          />
+                                        )
+                                      }}
+                                      gridCounts={o2mEffectiveCounts}
                                     />
                                   ) : hasTabs ? (
                                     isStepsMode ? (
