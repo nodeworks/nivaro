@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-14T22:59:08.888Z",
+  "generated_at": "2026-09-14T23:48:27.360Z",
   "releases": [
+    {
+      "version": "0.1.285",
+      "tag": "v0.1.285",
+      "date": "2026-09-14T19:48:17-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "figure strip + sum cap on inline tables; cap hook sees computed sums",
+              "hash": "1ee5dfb8"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "change-reason",
+              "text": "year context on staged forecast edits; dialogs escape the collapsed header",
+              "hash": "7704601c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch",
+              "text": "one email per real change, naming the child row's own changes",
+              "hash": "b9254c2c"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.284",
       "tag": "v0.1.284",
-      "date": "2026-09-14T18:58:58-04:00",
+      "date": "2026-09-14T18:59:08-04:00",
       "sections": [
         {
           "label": "Added",
