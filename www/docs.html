@@ -13031,7 +13031,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-inbound","label":"Inbound integrations"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -13039,7 +13039,10 @@ POST /api/search/semantic/reindex
             <li>Filter by time range, route, method, status class, and user.</li>
             <li>p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.</li>
             <li>The ring buffer self-prunes — no maintenance required and bounded storage.</li>
+            <li>The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.</li>
           </ul>
+          <h2 class="doc-h2" id="api-analytics-inbound">Inbound integrations</h2>
+          <p class="doc-p">Every request records how it authenticated, and a call that is not a browser session — a static-token user or a named API key — is by definition an integration. The Integrations page (Monitoring → Integrations → Inbound calls) rolls those callers up one card each: calls, errors, latency, last call, last error and top paths; picking a card scopes the request list to that caller. The Directus-era root aliases (<code class="doc-code">POST /files</code>, <code class="doc-code">POST /graphql</code>) that third-party integrations still use are logged like any <code class="doc-code">/api</code> route.</p>
           <!-- /SYNC:api-analytics -->
         </div>
 
