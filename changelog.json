@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-14T17:27:03.601Z",
+  "generated_at": "2026-09-14T18:09:22.133Z",
   "releases": [
+    {
+      "version": "0.1.275",
+      "tag": "v0.1.275",
+      "date": "2026-09-14T14:09:11-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "surface the network cause behind \"fetch failed\"",
+              "hash": "0aa3b52c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.274",
       "tag": "v0.1.274",
-      "date": "2026-09-14T13:26:54-04:00",
+      "date": "2026-09-14T13:27:03-04:00",
       "sections": [
         {
           "label": "Added",
