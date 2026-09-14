@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
+import { parseSummaryModeRules, validateSummaryModeRules } from '../services/summary-mode.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
 // Synthesis policy: nivaro_* system tables get an explicit per-table column
@@ -189,12 +190,11 @@ export async function collectionsRoutes(app: FastifyInstance) {
         // Migration 306 — bit column, always a boolean on the wire (an image
         // whose DB predates the column reads undefined → false).
         read_mode_toggle: !!(col as { read_mode_toggle?: unknown }).read_mode_toggle,
-        // Migration 307 — JSON list of role uuids that open the form in Read
-        // mode by default; always an array on the wire (null/invalid → []).
-        read_mode_default_roles:
-          parseJsonList(
-            (col as { read_mode_default_roles?: string | null }).read_mode_default_roles
-          ) ?? [],
+        // Migration 310 — Summary Mode rules (role × state → mode); always the
+        // normalized object on the wire (null/invalid → {default:'edit', rules:[]}).
+        summary_mode_rules: parseSummaryModeRules(
+          (col as { summary_mode_rules?: string | null }).summary_mode_rules
+        ),
         delete_guard: (() => {
           const rawDg = (col as { delete_guard?: string | null }).delete_guard
           if (!rawDg) return null
@@ -249,7 +249,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       slug_field?: unknown
       empty_state?: unknown
       upsert_keys?: unknown
-      read_mode_default_roles?: unknown
+      summary_mode_rules?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
@@ -260,7 +260,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       slug_field: rawSlugField,
       empty_state: rawEmptyState,
       upsert_keys: rawUpsertKeys,
-      read_mode_default_roles: rawReadModeRoles,
+      summary_mode_rules: rawSummaryRules,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
@@ -270,31 +270,12 @@ export async function collectionsRoutes(app: FastifyInstance) {
       // the PATCH response carries the new value, not the 30s-old one.
       svc.clearMetadataCache()
     }
-    // Migration 307: role uuids whose members open the form in Read mode by
-    // default. Array of uuid-shaped strings, cap 50; empty/null clears.
-    if ('read_mode_default_roles' in body) {
-      if (rawReadModeRoles == null) {
-        patch.read_mode_default_roles = null
-      } else {
-        if (!Array.isArray(rawReadModeRoles)) {
-          return reply.code(400).send({ error: 'read_mode_default_roles must be an array' })
-        }
-        if (rawReadModeRoles.length > 50) {
-          return reply.code(400).send({ error: 'read_mode_default_roles: at most 50 roles' })
-        }
-        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-        const roles: string[] = []
-        for (const r of rawReadModeRoles) {
-          if (typeof r !== 'string' || !uuidRe.test(r)) {
-            return reply
-              .code(400)
-              .send({ error: 'read_mode_default_roles entries must be role ids (uuid)' })
-          }
-          const up = r.toUpperCase()
-          if (!roles.includes(up)) roles.push(up)
-        }
-        patch.read_mode_default_roles = roles.length > 0 ? JSON.stringify(roles) : null
-      }
+    // Migration 310: Summary Mode rules — {default, rules[{roles, states,
+    // states_op, mode}]}; validated + normalized, the empty default stores NULL.
+    if ('summary_mode_rules' in body) {
+      const v = validateSummaryModeRules(rawSummaryRules)
+      if (v.error) return reply.code(400).send({ error: v.error })
+      patch.summary_mode_rules = v.value ? JSON.stringify(v.value) : null
       // Same read-back-through-cache trap as read_mode_toggle.
       svc.clearMetadataCache()
     }

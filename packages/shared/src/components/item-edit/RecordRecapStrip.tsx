@@ -75,7 +75,7 @@ export function RecordRecapStrip({
 
   return (
     <div
-      className='flex items-center gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3.5 py-2 dark:border-sky-500/30 dark:bg-sky-500/10'
+      className='nvr-expand-in flex items-center gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3.5 py-2 dark:border-sky-500/30 dark:bg-sky-500/10'
       data-record-recap
     >
       <History className='h-4 w-4 shrink-0 text-sky-500' />

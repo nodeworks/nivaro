@@ -11,6 +11,7 @@ export * from './sections/command-center.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/detail-sheets.js'
+export * from './sections/summary-mode.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -119,6 +120,7 @@ import {
   trashDocs
 } from './sections/data-safety.js'
 import { detailSheets } from './sections/detail-sheets.js'
+import { summaryMode } from './sections/summary-mode.js'
 import {
   devexCdcStream,
   devexCodegen,
@@ -799,6 +801,7 @@ export const navSections: NavGroup[] = [
       layoutStepsMode,
       layoutQuickPicker,
       detailSheets,
+      summaryMode,
       layoutSummaryPanel,
       layoutPageSlots,
       layoutConditional,

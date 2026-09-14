@@ -257,6 +257,7 @@ export {
 } from './lib/draft-store'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
+export * from './lib/summary-mode'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
 export {

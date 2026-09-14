@@ -541,6 +541,7 @@
           <a class="docs-nav-item" data-section="layout-steps-mode" href="#s-layout-steps-mode">Layout Steps / Wizard</a>
           <a class="docs-nav-item" data-section="layout-quick-picker" href="#s-layout-quick-picker">Quick Picker</a>
           <a class="docs-nav-item" data-section="detail-sheets" href="#s-detail-sheets">Detail Sheets &amp; Review Widgets</a>
+          <a class="docs-nav-item" data-section="summary-mode" href="#s-summary-mode">Summary Mode</a>
           <a class="docs-nav-item" data-section="bulk-actions" href="#s-bulk-actions">Bulk Actions</a>
           <a class="docs-nav-item" data-section="layout-summary-panel" href="#s-layout-summary-panel">Layout Summary Panel</a>
           <a class="docs-nav-item" data-section="layout-page-slots" href="#s-layout-page-slots">Layout Page Slots</a>
@@ -8346,6 +8347,38 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
 → { "data": { "rows": { "1": { "chips": [{ "label": "PO match", "tone": "ok", "title": "…" }], "can_act": true } } } }</code></pre>
           <div class="doc-note">A group with exactly one entry (sibling mode) opens expanded. Without an action endpoint the widget PATCHes each row directly with the note as the change reason.</div>
           <!-- /SYNC:detail-sheets -->
+        </div>
+
+        <!-- SUMMARY MODE -->
+        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"}]'>
+          <!-- SYNC:summary-mode -->
+          <h1 class="doc-h1" id="summary-mode">Summary Mode</h1>
+          <p class="doc-p">Summary mode is the record form rendered as a read-only presentation: the active grouped layout as section cards and definition grids, child tables instead of editable grids, related records as labels and drill links. Nothing on the record itself can be changed until the viewer switches to Edit — but the Notes and Tasks slots stay live, so a reviewer can comment on or assign work from the summary without leaving it.</p>
+          <h3 class="doc-h3">Switching modes</h3>
+          <p class="doc-p">When the collection has Summary mode enabled, the record header carries a Summary / Edit segmented control with the active side filled. The choice lasts for the current visit only — nothing is stored per user; every open runs the opening-mode rules again. New records always open in Edit. The right-hand summary rail collapses while in Summary mode and returns when switching back.</p>
+          <h3 class="doc-h3">Which mode a record opens in</h3>
+          <p class="doc-p">Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list and a state test: "when role is X and state is / is not [states] → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.</p>
+          <pre class="doc-pre"><code>PATCH /api/collections/workflows
+{
+  "read_mode_toggle": true,
+  "summary_mode_rules": {
+    "default": "summary",
+    "rules": [
+      { "states": ["started", "__none__"], "states_op": "in", "mode": "edit" }
+    ]
+  }
+}</code></pre>
+          <div class="doc-note">The example above is the typical approval-flow setup: a record is editable while it is still being drafted (started, or no pipeline instance yet) and opens as a summary once it has moved on. Anyone can still flip to Edit — the rules pick the first impression, permissions decide what can actually be saved.</div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>default</td><td>'edit' or 'summary' — used when no rule matches.</td></tr>
+              <tr><td>rules[].roles</td><td>Role ids (uuid). Empty or omitted = any role.</td></tr>
+              <tr><td>rules[].states</td><td>Pipeline state keys, plus the sentinel '__none__' for records with no instance. Empty or omitted = any state.</td></tr>
+              <tr><td>rules[].states_op</td><td>'in' (default) or 'not_in' — inverts the state test.</td></tr>
+              <tr><td>rules[].mode</td><td>'edit' or 'summary' — the mode to open in when the rule matches.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">GET /api/collections/:collection returns the normalized object (never null). The server validates on PATCH: at most 20 rules, 50 roles or states per rule, uuid-shaped roles, key-shaped states. Storing the empty default clears the column.</p>
+          <!-- /SYNC:summary-mode -->
         </div>
 
         <!-- BULK ACTIONS -->

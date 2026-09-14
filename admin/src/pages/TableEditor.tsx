@@ -4741,9 +4741,20 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
 }
 
 /** Form UX card: the per-collection record-form switches that are not
- *  per-layout — the Read-mode toggle (migration 306) and which roles land in
- *  read mode by default (`read_mode_default_roles`, string[] of role ids).
- *  The changes tray is per layout and lives on the Layouts tab. */
+ *  per-layout — the Summary-mode toggle (migration 306) and the Summary Mode
+ *  rules (migration 310: `summary_mode_rules` — which mode the form OPENS in,
+ *  by viewer role and/or the record's pipeline state; first match wins, new
+ *  records always Edit). The changes tray is per layout and lives on the
+ *  Layouts tab. */
+type SummaryModeRuleDraft = {
+  roles: string[] | null
+  states: string[] | null
+  states_op: 'in' | 'not_in'
+  mode: 'summary' | 'edit'
+}
+type SummaryModeRulesDraft = { default: 'summary' | 'edit'; rules: SummaryModeRuleDraft[] }
+const NO_STATE_KEY = '__none__'
+
 function FormUxSection({
   tableName,
   onGoToLayouts
@@ -4752,13 +4763,12 @@ function FormUxSection({
   onGoToLayouts?: () => void
 }) {
   const qc = useQueryClient()
-  const [addOpen, setAddOpen] = useState(false)
   const { data: meta } = useQuery({
     queryKey: ['collection-meta-read-mode', tableName],
     queryFn: () =>
       api
         .get<{
-          data: { read_mode_toggle?: boolean; read_mode_default_roles?: string[] | null }
+          data: { read_mode_toggle?: boolean; summary_mode_rules?: SummaryModeRulesDraft | null }
         }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName
@@ -4768,25 +4778,185 @@ function FormUxSection({
     queryFn: () => api.get('/roles').then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
+  const { data: states = [] } = useQuery<Array<{ key: string; label: string; color?: string }>>({
+    queryKey: ['collection-states-form-ux', tableName],
+    queryFn: () =>
+      api.get(`/queues/collection-states/${tableName}`).then((r) => r.data.data ?? []),
+    enabled: !!tableName
+  })
   const saveMut = useMutation({
-    mutationFn: (patch: { read_mode_toggle?: boolean; read_mode_default_roles?: string[] }) =>
+    mutationFn: (patch: { read_mode_toggle?: boolean; summary_mode_rules?: SummaryModeRulesDraft }) =>
       api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
       toast.success('Form UX setting saved')
     },
-    onError: () => toast.error('Failed to update setting')
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg || 'Failed to update setting')
+    }
   })
-  const selectedRoleIds = useMemo(
-    () => (Array.isArray(meta?.read_mode_default_roles) ? meta.read_mode_default_roles : []),
-    [meta]
-  )
-  const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id
-  const addable = roles.filter((r) => !selectedRoleIds.includes(r.id))
+  const cfg: SummaryModeRulesDraft = useMemo(() => {
+    const raw = meta?.summary_mode_rules
+    return {
+      default: raw?.default === 'summary' ? 'summary' : 'edit',
+      rules: Array.isArray(raw?.rules)
+        ? raw.rules.map((r) => ({
+            roles: Array.isArray(r.roles) && r.roles.length > 0 ? r.roles : null,
+            states: Array.isArray(r.states) && r.states.length > 0 ? r.states : null,
+            states_op: r.states_op === 'not_in' ? 'not_in' : 'in',
+            mode: r.mode === 'summary' ? 'summary' : 'edit'
+          }))
+        : []
+    }
+  }, [meta])
+  const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })
+  const updateRule = (i: number, patch: Partial<SummaryModeRuleDraft>) =>
+    save({ ...cfg, rules: cfg.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
+  const removeRule = (i: number) => save({ ...cfg, rules: cfg.rules.filter((_, j) => j !== i) })
+  const addRule = () =>
+    save({
+      ...cfg,
+      rules: [
+        ...cfg.rules,
+        { roles: null, states: null, states_op: 'in', mode: cfg.default === 'summary' ? 'edit' : 'summary' }
+      ]
+    })
+  const roleName = (id: string) =>
+    roles.find((r) => r.id.toLowerCase() === id.toLowerCase())?.name ?? id
+  const stateLabel = (key: string) =>
+    key === NO_STATE_KEY ? 'No state yet' : (states.find((s) => s.key === key)?.label ?? key)
+  const stateOptions = [{ key: NO_STATE_KEY, label: 'No state yet' }, ...states]
   const busy = saveMut.isPending || meta === undefined
+  const toggleOn = meta?.read_mode_toggle === true
+
+  const ModeSeg = ({
+    value,
+    onChange,
+    small
+  }: {
+    value: 'summary' | 'edit'
+    onChange: (v: 'summary' | 'edit') => void
+    small?: boolean
+  }) => (
+    <div
+      role='radiogroup'
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-md border border-slate-300 bg-white p-0.5 font-medium',
+        small ? 'h-7 text-[11px]' : 'h-8 text-[11.5px]'
+      )}
+    >
+      {(['summary', 'edit'] as const).map((m) => (
+        <button
+          key={m}
+          type='button'
+          role='radio'
+          aria-checked={value === m}
+          disabled={busy}
+          onClick={() => onChange(m)}
+          className={cn(
+            'inline-flex h-full items-center rounded px-2.5 transition-colors',
+            value === m ? 'bg-nvr-cyan text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+          )}
+        >
+          {m === 'summary' ? 'Summary' : 'Edit'}
+        </button>
+      ))}
+    </div>
+  )
+
+  const ChipPicker = ({
+    values,
+    options,
+    labelOf,
+    onChange,
+    addLabel,
+    anyLabel,
+    searchPlaceholder
+  }: {
+    values: string[] | null
+    options: Array<{ id: string; name: string }>
+    labelOf: (id: string) => string
+    onChange: (next: string[] | null) => void
+    addLabel: string
+    anyLabel: string
+    searchPlaceholder: string
+  }) => {
+    const [open, setOpen] = useState(false)
+    const selected = values ?? []
+    const selLower = new Set(selected.map((v) => v.toLowerCase()))
+    const addable = options.filter((o) => !selLower.has(o.id.toLowerCase()))
+    return (
+      <div className='flex min-w-0 flex-wrap items-center gap-1'>
+        {selected.length === 0 && (
+          <span className='text-[11.5px] italic text-slate-400'>{anyLabel}</span>
+        )}
+        {selected.map((id) => (
+          <span
+            key={id}
+            className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-2 pr-1 text-[11.5px] text-slate-700'
+          >
+            {labelOf(id)}
+            <button
+              type='button'
+              aria-label={`Remove ${labelOf(id)}`}
+              disabled={busy}
+              onClick={() => {
+                const next = selected.filter((v) => v !== id)
+                onChange(next.length > 0 ? next : null)
+              }}
+              className='rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          </span>
+        ))}
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant='outline'
+              size='sm'
+              role='combobox'
+              aria-expanded={open}
+              disabled={busy || addable.length === 0}
+              className='h-6 gap-1 px-2 text-[11.5px] font-normal'
+            >
+              <Plus className='h-3 w-3' />
+              {addLabel}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className='w-[240px] p-0' align='start'>
+            <Command>
+              <CommandInput placeholder={searchPlaceholder} className='h-8 text-[12px]' />
+              <CommandList>
+                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+                  Nothing to add
+                </CommandEmpty>
+                <CommandGroup>
+                  {addable.map((o) => (
+                    <CommandItem
+                      key={o.id}
+                      value={o.name}
+                      onSelect={() => {
+                        onChange([...selected, o.id])
+                        setOpen(false)
+                      }}
+                      className='text-[12px]'
+                    >
+                      {o.name}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
+    )
+  }
 
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white' data-form-ux-card>
       <div className='border-b border-slate-100 px-4 py-3'>
         <p className='text-[13px] font-medium text-slate-800'>Form UX</p>
         <p className='mt-0.5 text-[12px] text-slate-500'>
@@ -4794,100 +4964,129 @@ function FormUxSection({
         </p>
       </div>
       <div className='divide-y divide-slate-100'>
-        {/* Read-mode toggle */}
+        {/* Summary-mode toggle */}
         <div className='flex items-center justify-between px-4 py-3'>
           <div>
-            <p className='text-[12.5px] font-medium text-slate-700'>Read-mode toggle</p>
+            <p className='text-[12.5px] font-medium text-slate-700'>Summary mode</p>
             <p className='mt-0.5 text-[12px] text-slate-500'>
-              Show the Read mode switch on the record form. Lets reviewers flip the form to a
-              no-inputs view. Off by default.
+              Show the Summary / Edit switch on the record form. Summary mode is a read-only view
+              of the record (notes and tasks stay live). Off by default.
             </p>
           </div>
           <Switch
-            checked={meta?.read_mode_toggle === true}
+            checked={toggleOn}
             onCheckedChange={(v) => saveMut.mutate({ read_mode_toggle: v })}
             disabled={busy}
+            data-summary-mode-switch
           />
         </div>
-        {/* Default read-mode roles */}
-        <div className='px-4 py-3'>
-          <p className='text-[12.5px] font-medium text-slate-700'>
-            Open in read mode by default for
-          </p>
-          <p className='mt-0.5 text-[12px] text-slate-500'>
-            Members of these roles land on the read view first and switch to edit when they need it.
-            Empty = everyone opens the editable form.
-          </p>
-          <div className='mt-2 flex flex-wrap items-center gap-1.5'>
-            {selectedRoleIds.map((id) => (
-              <span
-                key={id}
-                className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-2 pr-1 text-[11.5px] text-slate-700'
+        {/* Opening-mode rules */}
+        <div className={cn('px-4 py-3', !toggleOn && 'opacity-60')} data-summary-mode-rules>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <div>
+              <p className='text-[12.5px] font-medium text-slate-700'>Opens in</p>
+              <p className='mt-0.5 text-[12px] text-slate-500'>
+                Which mode a saved record opens in. Rules run top to bottom, the first match wins,
+                otherwise the default. New records always open in Edit.
+              </p>
+            </div>
+            <div className='flex items-center gap-2'>
+              <span className='text-[11.5px] text-slate-500'>Default</span>
+              <ModeSeg value={cfg.default} onChange={(v) => save({ ...cfg, default: v })} />
+            </div>
+          </div>
+          {!toggleOn && (
+            <p className='mt-2 text-[11.5px] text-amber-700'>
+              Rules only apply while the Summary mode switch above is on.
+            </p>
+          )}
+          <div className='mt-3 space-y-2'>
+            {cfg.rules.map((r, i) => (
+              <div
+                key={i}
+                data-summary-mode-rule
+                className='flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2'
               >
-                {roleName(id)}
+                <span className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                  When
+                </span>
+                <div className='flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2'>
+                  <div className='flex items-center gap-1.5'>
+                    <span className='text-[11.5px] text-slate-500'>role</span>
+                    <ChipPicker
+                      values={r.roles}
+                      options={roles}
+                      labelOf={roleName}
+                      onChange={(next) => updateRule(i, { roles: next })}
+                      addLabel='Add role'
+                      anyLabel='any role'
+                      searchPlaceholder='Search roles…'
+                    />
+                  </div>
+                  <div className='flex items-center gap-1.5'>
+                    <span className='text-[11.5px] text-slate-500'>state</span>
+                    <Select
+                      value={r.states_op}
+                      onValueChange={(v) => updateRule(i, { states_op: v as 'in' | 'not_in' })}
+                      disabled={busy}
+                    >
+                      <SelectTrigger className='h-6 w-[76px] text-[11.5px]'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='in'>is</SelectItem>
+                        <SelectItem value='not_in'>is not</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <ChipPicker
+                      values={r.states}
+                      options={stateOptions.map((s) => ({ id: s.key, name: s.label }))}
+                      labelOf={stateLabel}
+                      onChange={(next) => updateRule(i, { states: next })}
+                      addLabel='Add state'
+                      anyLabel='any state'
+                      searchPlaceholder='Search states…'
+                    />
+                  </div>
+                </div>
+                <span className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+                  open in
+                </span>
+                <ModeSeg value={r.mode} onChange={(v) => updateRule(i, { mode: v })} small />
                 <button
                   type='button'
-                  aria-label={`Remove ${roleName(id)}`}
+                  aria-label='Remove rule'
                   disabled={busy}
-                  onClick={() =>
-                    saveMut.mutate({
-                      read_mode_default_roles: selectedRoleIds.filter((r) => r !== id)
-                    })
-                  }
-                  className='rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700'
+                  onClick={() => removeRule(i)}
+                  className='rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700'
                 >
-                  <X className='h-3 w-3' />
+                  <X className='h-3.5 w-3.5' />
                 </button>
-              </span>
+              </div>
             ))}
-            <Popover open={addOpen} onOpenChange={setAddOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  role='combobox'
-                  aria-expanded={addOpen}
-                  disabled={busy || addable.length === 0}
-                  className='h-6 gap-1 px-2 text-[11.5px] font-normal'
-                >
-                  <Plus className='h-3 w-3' />
-                  Add role
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className='w-[240px] p-0' align='start'>
-                <Command>
-                  <CommandInput placeholder='Search roles…' className='h-8 text-[12px]' />
-                  <CommandList>
-                    <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-                      No roles
-                    </CommandEmpty>
-                    <CommandGroup>
-                      {addable.map((r) => (
-                        <CommandItem
-                          key={r.id}
-                          value={r.name}
-                          onSelect={() => {
-                            saveMut.mutate({
-                              read_mode_default_roles: [...selectedRoleIds, r.id]
-                            })
-                            setAddOpen(false)
-                          }}
-                          className='text-[12px]'
-                        >
-                          {r.name}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-            {selectedRoleIds.length === 0 && (
-              <span className='text-[11.5px] text-slate-400'>
-                No roles — editable form for all.
-              </span>
+            {cfg.rules.length === 0 && (
+              <p className='text-[11.5px] text-slate-400'>
+                No rules — every saved record opens in {cfg.default === 'summary' ? 'Summary' : 'Edit'}{' '}
+                mode.
+              </p>
             )}
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={busy || cfg.rules.length >= 20}
+              onClick={addRule}
+              className='h-7 gap-1 text-[11.5px]'
+              data-summary-mode-add-rule
+            >
+              <Plus className='h-3 w-3' />
+              Add rule
+            </Button>
           </div>
+          {states.length === 0 && (
+            <p className='mt-2 text-[11.5px] text-slate-400'>
+              This collection is not bound to a pipeline, so state rules only match "No state yet".
+            </p>
+          )}
         </div>
         {/* Changes tray pointer */}
         <div className='px-4 py-2.5 text-[12px] text-slate-500'>

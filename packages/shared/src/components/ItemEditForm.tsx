@@ -16,6 +16,7 @@ import {
   Trash2,
   BookOpen,
   Eye,
+  PencilLine,
   Wand2,
   Wrench,
   X
@@ -55,6 +56,13 @@ import {
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { extSlotKey } from '../lib/layout-slots'
+import {
+  type SummaryModeRules,
+  normalizeSummaryModeRules,
+  resolveSummaryMode,
+  summaryRulesNeedRole,
+  summaryRulesNeedState
+} from '../lib/summary-mode'
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
@@ -1009,7 +1017,7 @@ export function ItemEditForm({
     addendum_allowed_roles?: string | null
     addendum_allowed_states?: string | null
     read_mode_toggle?: boolean
-    read_mode_default_roles?: string[]
+    summary_mode_rules?: SummaryModeRules | null
   }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
@@ -1024,6 +1032,7 @@ export function ItemEditForm({
             addendum_allowed_roles?: string | null
             addendum_allowed_states?: string | null
             read_mode_toggle?: boolean
+            summary_mode_rules?: SummaryModeRules | null
           }
         }>(get(`/collections/${collection}`))
         .then((r) => r.data),
@@ -1201,11 +1210,16 @@ export function ItemEditForm({
   const [remoteChanges, setRemoteChanges] = useState<Record<string, RemoteFieldChange>>({})
   const ownSaveAtRef = useRef(0)
   const lastTouchRef = useRef<{ user_id: string | null; user_name: string | null } | null>(null)
-  // Read mode (#3): the grouped layout as RecordReadView. Session-only —
-  // nothing is persisted (Rob): every load starts in edit mode unless the
-  // person's role is listed on the collection (see the role-default effect).
+  // Summary mode (#3): the grouped layout as RecordReadView. Session-only —
+  // nothing is persisted (Rob): every load starts in Edit unless the
+  // collection's summary_mode_rules (role × state) say otherwise — see the
+  // rule-resolution effect. The toggle then flips it for this mount only.
   const [readMode, setReadModeRaw] = useState<boolean>(false)
   const setReadMode = (v: boolean) => setReadModeRaw(v)
+  const summaryRules = useMemo(
+    () => (colMeta?.read_mode_toggle ? normalizeSummaryModeRules(colMeta.summary_mode_rules) : null),
+    [colMeta?.read_mode_toggle, colMeta?.summary_mode_rules]
+  )
   // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
   // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
   // staging) is persisted to IndexedDB per collection:record:user, ~800ms
@@ -3468,17 +3482,26 @@ export function ItemEditForm({
 
   const addendumEnabled = !!colMeta?.addendums_enabled && !isNew
 
-  const { data: currentUserData } = useQuery<{ role?: string | null } | null>({
+  // Summary-mode rules decide the opening mode by role and/or state; the two
+  // lookups below only run when something needs them (locks, addendums, or a
+  // rule that mentions the dimension) — the old role-only default silently
+  // never fired on collections with neither locks nor addendums.
+  const summaryNeedsRole = !isNew && summaryRulesNeedRole(summaryRules)
+  const summaryNeedsState = !isNew && summaryRulesNeedState(summaryRules)
+
+  const { data: currentUserData, isError: currentUserError } = useQuery<{
+    role?: string | null
+  } | null>({
     queryKey: ['current-user-me'],
     queryFn: () =>
       client
         .request<{ data: { role?: string | null } }>(get('/users/me'))
         .then((r) => r.data ?? null),
     staleTime: 5 * 60_000,
-    enabled: hasLockConditions || addendumEnabled
+    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole
   })
 
-  const { data: pipelineInstanceData } = useQuery<{
+  const { data: pipelineInstanceData, isError: pipelineInstanceError } = useQuery<{
     instance?: { current_state?: string | null } | null
     states?: Array<{ id: string; key: string }>
   } | null>({
@@ -3495,7 +3518,7 @@ export function ItemEditForm({
         )
         .catch(() => null),
     staleTime: 30_000,
-    enabled: (hasLockConditions || addendumEnabled) && !isNew
+    enabled: (hasLockConditions || addendumEnabled || summaryNeedsState) && !isNew
   })
 
   const addendumCanCreate = useMemo(() => {
@@ -6558,18 +6581,63 @@ export function ItemEditForm({
         onRevert: () => m2mStagingCtx.unstageUnlink(key, id)
       })
 
-  // Role default (#2): a role listed on the collection opens saved records in
-  // read mode; the toggle then flips it for this mount only (never stored).
-  const readModeRoleDefault = useRef(false)
+  // Opening mode (#2): resolved ONCE per record from the collection's
+  // summary_mode_rules against the viewer's role and the record's pipeline
+  // state — after both lookups the rules need have answered, so a state rule
+  // never judges an unloaded state as "no state". The toggle flips it for this
+  // mount only (never stored).
+  const summaryResolvedFor = useRef<string | null>(null)
+  // State (not just the ref) so the body can HOLD until the opening mode is
+  // known — otherwise the form paints Edit for a beat and snaps to Summary
+  // (Rob: "flashes edit mode first").
+  const [summaryResolvedKey, setSummaryResolvedKey] = useState<string | null>(null)
+  const summaryRecordKey = `${collection}|${String(itemId)}`
   useEffect(() => {
-    if (readModeRoleDefault.current || isNew) return
-    const roles = colMeta?.read_mode_default_roles
-    const role = currentUserData?.role ? String(currentUserData.role).toLowerCase() : null
-    if (!Array.isArray(roles) || !role || !colMeta?.read_mode_toggle) return
-    if (!roles.some((r) => String(r).toLowerCase() === role)) return
-    readModeRoleDefault.current = true
-    setReadModeRaw(true)
-  }, [colMeta?.read_mode_default_roles, colMeta?.read_mode_toggle, currentUserData?.role, isNew])
+    const key = summaryRecordKey
+    if (summaryResolvedFor.current === key || isNew || !summaryRules) return
+    if (summaryNeedsRole && currentUserData === undefined && !currentUserError) return
+    if (summaryNeedsState && pipelineInstanceData === undefined && !pipelineInstanceError) return
+    const stateId = pipelineInstanceData?.instance?.current_state ?? null
+    const stateKey = pipelineInstanceData?.states?.find((s) => s.id === stateId)?.key ?? null
+    summaryResolvedFor.current = key
+    const mode = resolveSummaryMode(summaryRules, {
+      role: currentUserData?.role ? String(currentUserData.role) : null,
+      stateKey,
+      isNew
+    })
+    if (mode === 'summary') setReadModeRaw(true)
+    setSummaryResolvedKey(key)
+  }, [
+    summaryRecordKey,
+    isNew,
+    summaryRules,
+    summaryNeedsRole,
+    summaryNeedsState,
+    currentUserData,
+    currentUserError,
+    pipelineInstanceData,
+    pipelineInstanceError
+  ])
+  // True once the opening mode is known: new records and collections without
+  // the toggle settle immediately; otherwise wait for colMeta (the rules) and
+  // the resolution above. The body renders a skeleton until then.
+  const summaryModeSettled =
+    isNew || (colMeta !== undefined && (!summaryRules || summaryResolvedKey === summaryRecordKey))
+  // Summary mode collapses the right-hand rail by default (Rob) — the read
+  // view is the summary; the rail would repeat it. Restore whatever the rail
+  // was doing when the person switches back to Edit.
+  const railBeforeSummary = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (readMode) {
+      if (railBeforeSummary.current === null) railBeforeSummary.current = summaryCollapsed
+      setSummaryCollapsed(true)
+    } else if (railBeforeSummary.current !== null) {
+      setSummaryCollapsed(railBeforeSummary.current)
+      railBeforeSummary.current = null
+    }
+    // summaryCollapsed deliberately not a dep — this reacts to the MODE flip only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readMode])
   // Rail dots revert (#9): the same handlers the changes popover uses.
   const revertByField: Record<string, () => void> = {}
   for (const it of changeItems) {
@@ -8315,6 +8383,53 @@ export function ItemEditForm({
                                       {/* Record tools: one compact icon group instead of a strip of
                                           equal-weight buttons. Each tool keeps its own popover /
                                           dialog; the group supplies border + dividers. */}
+                                      {/* Summary ⇄ Edit — a labelled segmented control, not an
+                                          icon pill: the active side is filled so the current mode
+                                          reads at a glance (Rob: "make it obvious what mode I'm in"). */}
+                                      {!isNew && itemId && !!colMeta?.read_mode_toggle && summaryModeSettled ? (
+                                        <div
+                                          role='radiogroup'
+                                          aria-label='Form mode'
+                                          data-summary-mode-toggle
+                                          data-mode={readMode ? 'summary' : 'edit'}
+                                          className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background p-0.5 text-[11.5px] font-medium shadow-sm'
+                                        >
+                                          <button
+                                            type='button'
+                                            role='radio'
+                                            aria-checked={readMode}
+                                            data-summary-mode-option='summary'
+                                            title='Summary mode — a read-only view of this record'
+                                            onClick={() => setReadMode(true)}
+                                            className={cn(
+                                              'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                              readMode
+                                                ? 'bg-nvr-cyan text-white shadow-sm'
+                                                : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                            )}
+                                          >
+                                            <BookOpen className='h-3.5 w-3.5' strokeWidth={2} />
+                                            Summary
+                                          </button>
+                                          <button
+                                            type='button'
+                                            role='radio'
+                                            aria-checked={!readMode}
+                                            data-summary-mode-option='edit'
+                                            title='Edit mode — change this record'
+                                            onClick={() => setReadMode(false)}
+                                            className={cn(
+                                              'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                              !readMode
+                                                ? 'bg-nvr-cyan text-white shadow-sm'
+                                                : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                            )}
+                                          >
+                                            <PencilLine className='h-3.5 w-3.5' strokeWidth={2} />
+                                            Edit
+                                          </button>
+                                        </div>
+                                      ) : null}
                                       {!isNew && itemId ? (
                                         <HeaderToolGroup>
                                           {lockEnabled && !lockHolder && (lockAcquired || lockReleased) && (
@@ -8327,30 +8442,6 @@ export function ItemEditForm({
                                               released={lockReleased && !lockAcquired}
                                               onRelock={relockLock}
                                             />
-                                          )}
-                                          {!!colMeta?.read_mode_toggle && (
-                                            <button
-                                              type='button'
-                                              onClick={() => setReadMode(!readMode)}
-                                              aria-pressed={readMode}
-                                              aria-label={readMode ? 'Switch to edit mode' : 'Switch to read mode'}
-                                              title={
-                                                readMode
-                                                  ? 'Read mode — click to edit'
-                                                  : 'Read mode — a no-inputs view for reviewing'
-                                              }
-                                              data-read-mode-toggle
-                                              className={cn(
-                                                'inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground',
-                                                readMode && 'bg-accent text-accent-foreground'
-                                              )}
-                                            >
-                                              {readMode ? (
-                                                <BookOpen className='h-4 w-4' strokeWidth={2} />
-                                              ) : (
-                                                <Eye className='h-4 w-4' strokeWidth={2} />
-                                              )}
-                                            </button>
                                           )}
                                           <FindInRecordButton
                                             compact
@@ -9041,6 +9132,9 @@ export function ItemEditForm({
                                           disabled={saveMut.isPending || isReadOnly || viewAs.active}
                                           className={cn(
                                             'gap-1.5 transition-colors duration-300',
+                                            // Summary mode has nothing to save — the button would
+                                            // only contradict the "read-only" strip.
+                                            readMode && !isNew && 'hidden',
                                             justSaved &&
                                               'bg-emerald-500 hover:bg-emerald-500 text-white'
                                           )}
@@ -9631,24 +9725,24 @@ export function ItemEditForm({
                                       />
                                     </div>
                                   )}
+                                  {/* No wrapper div: the strip renders null until there is a
+                                      recap, and an EMPTY sibling inside this space-y stack still
+                                      costs a 16px gap above the next banner (Rob's "more top
+                                      padding than side padding"). */}
                                   {!isNew && itemId && (
-                                    <div className='nvr-expand-in'>
-                                      <RecordRecapStrip
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    </div>
+                                    <RecordRecapStrip
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                    />
                                   )}
                                   {!isNew &&
                                     itemId &&
                                     !activeLayoutData?.layout?.hide_integrity_banner && (
-                                      <div className='nvr-expand-in'>
-                                        <RecordIntegrityBanner
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                          onJumpToField={flashField}
-                                        />
-                                      </div>
+                                      <RecordIntegrityBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                        onJumpToField={flashField}
+                                      />
                                     )}
                                   {!isNew &&
                                     itemId &&
@@ -9711,12 +9805,32 @@ export function ItemEditForm({
                                       </button>
                                     </div>
                                   )}
-                                  {readMode && !isNew && activeLayoutData?.layout ? (
+                                  {!summaryModeSettled ? (
+                                    <div
+                                      data-summary-mode-pending
+                                      aria-busy='true'
+                                      className='space-y-4'
+                                    >
+                                      <Skeleton className='h-10 w-full' />
+                                      <div className='grid gap-4 lg:grid-cols-2'>
+                                        <Skeleton className='h-40 w-full' />
+                                        <Skeleton className='h-40 w-full' />
+                                      </div>
+                                      <Skeleton className='h-56 w-full' />
+                                    </div>
+                                  ) : readMode && !isNew && activeLayoutData?.layout ? (
                                     <RecordReadView
                                       collection={collection}
                                       itemId={String(itemId)}
                                       layoutData={activeLayoutData as unknown as ReadViewLayout}
                                       flush
+                                      // Notes + tasks stay live in Summary mode — the record's
+                                      // FIELDS are read-only, the conversation about it is not.
+                                      renderSlot={(key) =>
+                                        key === '__comments__' || key === '__tasks__'
+                                          ? renderSentinel(key)
+                                          : null
+                                      }
                                     />
                                   ) : hasTabs ? (
                                     isStepsMode ? (

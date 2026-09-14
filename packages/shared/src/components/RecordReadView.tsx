@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
@@ -689,13 +689,22 @@ export function RecordReadView({
   collection,
   itemId,
   layoutData,
-  flush
+  flush,
+  renderSlot
 }: {
   collection: string
   itemId: string
   layoutData: ReadViewLayout
-  /** Host already pads and scrolls the body (the record form's read mode). */
+  /** Host already pads and scrolls the body (the record form's Summary mode). */
   flush?: boolean
+  /**
+   * Page-slot sentinels (`__comments__`, `__tasks__`, …) the host wants to
+   * keep LIVE inside the read view — Summary mode is read-only for the
+   * record's fields, but notes and tasks stay editable (Rob). Return null to
+   * skip a slot. A slot placed in a section renders inside that card; the
+   * rest render full-width under the cards, in layout order.
+   */
+  renderSlot?: (key: string, assignment: LayoutAssignment) => ReactNode
 }) {
   const client = useNivaroClient()
   const { data: meta } = useQuery({
@@ -769,6 +778,32 @@ export function RecordReadView({
     } catch {
       return []
     }
+  }
+  // Non-widget sentinel slots the host chose to render (see `renderSlot`).
+  const liveSlots = renderSlot
+    ? layoutData.assignments
+        .filter(
+          (a) =>
+            a.field.startsWith('__') &&
+            !a.field.startsWith('__widget_') &&
+            (a.is_visible === undefined || !!a.is_visible)
+        )
+        .sort((a, b) => a.sort - b.sort)
+    : []
+  const renderLiveSlots = (groupKey: string | null) => {
+    if (!renderSlot) return null
+    const nodes = liveSlots
+      .filter((a) => (groupKey === null ? a.group_key == null : a.group_key === groupKey))
+      .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
+      .filter((s) => s.node != null)
+    if (nodes.length === 0) return null
+    return (
+      <div className='mt-3 space-y-4' data-read-live-slots>
+        {nodes.map((s) => (
+          <div key={s.key}>{s.node}</div>
+        ))}
+      </div>
+    )
   }
   const renderWidgets = (groupKey: string | null) => {
     const slots = widgetSlots
@@ -955,10 +990,11 @@ export function RecordReadView({
       .filter((a) => !(hideEmpty && !isGrid(a) && isEmptyValue(a)))
       .sort((a, b) => a.sort - b.sort)
     const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
-    if (items.length === 0 && groupWidgets.length === 0) return null
+    const groupLive = liveSlots.filter((a) => a.group_key === g.key)
+    if (items.length === 0 && groupWidgets.length === 0 && groupLive.length === 0) return null
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
-    const fullWidth = grids.length > 0 || groupWidgets.length > 0
+    const fullWidth = grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0
     return (
       <section
         key={g.key}
@@ -1032,11 +1068,16 @@ export function RecordReadView({
               </div>
             ))}
             {renderWidgets(g.key)}
+            {renderLiveSlots(g.key)}
           </div>
         )}
       </section>
     )
   }
+  // Top-level slots (no group) sit under the cards, full width. The edit form
+  // orders them in its unified group order; here they follow the cards, which
+  // is where a reviewer looks for the conversation after the facts.
+  const trailingSlots = renderLiveSlots(null)
 
   // Header band: the layout's identity fields above the cards — first one as
   // the title, the rest as compact label/value pairs. Empty ones drop out.
@@ -1088,6 +1129,7 @@ export function RecordReadView({
       <div className='grid items-start gap-4 lg:grid-cols-2'>
         {sectionGroups.map(renderSection)}
       </div>
+      {trailingSlots && <div className='mt-1'>{trailingSlots}</div>}
     </div>
   )
 }
