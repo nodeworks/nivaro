@@ -5796,11 +5796,14 @@ export function ItemEditForm({
             post(`/items/${collection}`, payload)
           )
           savedId = String(r.data.id)
-        } else if (Object.keys(payload).length > 0) {
+        } else if (Object.keys(payload).some((k) => !k.startsWith('_'))) {
           await client.request(patch(`/items/${collection}/${itemId}`, payload))
           savedId = itemId
         } else {
-          // No field changes — skip PATCH to avoid empty update error
+          // No field changes — skip the PATCH. `_change_reason` / `_base_revision`
+          // alone are not a change: a reason collected for a LINE edit rode
+          // along here and produced a no-op update on the record (activity row,
+          // "was updated" watch email) while only a child row had moved.
           savedId = itemId
         }
         updateStep('main', { status: 'done' })

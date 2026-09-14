@@ -9,12 +9,17 @@ event ('created'|'updated'|'deleted'), changes [{label, old, new}], via_child
 <h1 style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:21px;font-weight:700;line-height:1.3;color:#172940;">{{ record_card.title | default: friendly_id }} was {{ event }}d</h1>
 <p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">
   {%- if via_child -%}
-  {{ actor_name | default: 'Someone' }} {{ via_child.event }}d a {{ via_child.collection_label }} row on this record.
+  {{ actor_name | default: 'Someone' }} {{ via_child.event }}d {% if via_child.label %}the {{ via_child.collection_label }} row <strong>{{ via_child.label }}</strong>{% else %}a {{ via_child.collection_label }} row{% endif %} on this record{% if changes and changes.size > 0 %} &mdash; {{ changes.size }} field(s) changed{% endif %}.
   {%- else -%}
   {{ actor_name | default: 'Someone' }} {{ event }}d this record{% if changes and changes.size > 0 %} &mdash; {{ changes.size }} field(s) changed{% endif %}.
   {%- endif -%}
 </p>
 {% render 'partials/button', url: record_url, label: 'Open record' %}
-{% render 'partials/changed-fields', changes: changes, title: 'What changed' %}
+{%- if via_child and via_child.label -%}
+{%- capture changes_title -%}What changed on {{ via_child.collection_label }} {{ via_child.label }}{%- endcapture -%}
+{%- else -%}
+{%- capture changes_title -%}What changed{%- endcapture -%}
+{%- endif -%}
+{% render 'partials/changed-fields', changes: changes, title: changes_title %}
 {% render 'partials/record-card', card: record_card %}
 {% endblock %}

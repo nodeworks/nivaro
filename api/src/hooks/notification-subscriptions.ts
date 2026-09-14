@@ -9,6 +9,7 @@ import {
   renderChangesToken,
   renderNotificationTemplate
 } from '../services/notification-templates.js'
+import { computeDelta } from '../services/revisions.js'
 import { hooks } from './registry.js'
 
 /** A subscription that names ONE record (the per-record bell): filter_field
@@ -97,11 +98,29 @@ async function fireSubscriptionNotifications(
   /** Set when this fires on behalf of a CHILD-row write (a workflow line):
    *  only record-scoped watches of the parent are told, and the wording
    *  names the child. */
-  viaChild?: { collection: string; item: string; event: 'create' | 'update' | 'delete' },
+  viaChild?: {
+    collection: string
+    item: string
+    event: 'create' | 'update' | 'delete'
+    /** The child row's own friendly label ("2026" for a forecast year). */
+    label?: string | null
+    /** The child row's labelled old → new list (its OWN fields). */
+    changes?: Array<{ field: string; label: string; old: string; new: string }>
+  },
   /** The row BEFORE an update — powers the old → new table in the email. */
   previous?: Record<string, unknown> | null
 ) {
   try {
+    // An update that changed nothing (a meta-only PATCH, an alias-only write,
+    // a re-save) is not news — nobody wants "X was updated" with an empty
+    // change list. Judged on the re-read row vs the row before; child-row
+    // roll-ups are judged by the caller on the child's own delta.
+    if (eventType === 'update' && !viaChild && data && previous) {
+      const delta = computeDelta(previous, data)
+      for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
+        delete delta[k]
+      if (Object.keys(delta).length === 0) return
+    }
     // Find all active subscriptions matching this collection+event
     const subs = await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
@@ -165,14 +184,22 @@ async function fireSubscriptionNotifications(
       const collectionLabel = collection.replace(/_/g, ' ')
       const label = friendly ? `Watching ${friendly}` : sub.label || `${collection} ${eventType}`
       const childLabel = viaChild ? viaChild.collection.replace(/_/g, ' ') : null
+      const childRef = viaChild ? (viaChild.label ? `${childLabel} ${viaChild.label}` : `${childLabel} row`) : null
+      const childWhat =
+        viaChild?.changes?.length
+          ? ` — ${viaChild.changes
+              .slice(0, 3)
+              .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
+              .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
+          : ''
       const recordRef = friendly ? friendly : `item ${item} in ${collection}`
       let subject = viaChild
-        ? `${label}: ${childLabel} ${viaChild.event}d${by}`
+        ? `${label}: ${childRef} ${viaChild.event}d${by}`
         : friendly
           ? `${label}: ${eventType}d${by}`
           : `${label}: ${eventType} in ${collection}${by}`
       let message = viaChild
-        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childLabel} ${viaChild.item} on ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
+        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childRef} on ${recordRef}${childWhat}`
         : actorName
           ? `${actorName} ${eventType}d ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
           : `${recordRef} was ${eventType}d${friendly ? ` (${collectionLabel})` : ''}`
@@ -258,9 +285,19 @@ async function fireSubscriptionNotifications(
             record_card: card,
             record_url: card?.url ?? `${config.ADMIN_URL}/collections/${collection}/${item}`,
             friendly_id: friendly ?? card?.title ?? String(item),
-            changes: delta ? await labelledChanges(collection, delta, previous) : [],
+            changes: viaChild
+              ? (viaChild.changes ?? [])
+              : delta
+                ? await labelledChanges(collection, delta, previous)
+                : [],
             via_child: viaChild
-              ? { ...viaChild, collection_label: viaChild.collection.replace(/_/g, ' ') }
+              ? {
+                  collection: viaChild.collection,
+                  item: viaChild.item,
+                  event: viaChild.event,
+                  label: viaChild.label ?? null,
+                  collection_label: viaChild.collection.replace(/_/g, ' ')
+                }
               : null,
             subscription_label: sub.label || `${collectionLabel} subscription`
           }
@@ -547,10 +584,30 @@ async function rollUpToParents(
   event: 'create' | 'update' | 'delete',
   childItem: string,
   row: Record<string, unknown> | null,
-  actorUserId: string | undefined
+  actorUserId: string | undefined,
+  previous?: Record<string, unknown> | null
 ) {
   if (!row) return
   const rels = await parentRelationsOf(child)
+  if (rels.length === 0) return
+  // What moved on the child row — the email shows THAT, not the parent's
+  // header fields (Rob: "show the changes instead of a blanket set of
+  // fields"). A child update that changed nothing rolls up to nobody.
+  let changes: Array<{ field: string; label: string; old: string; new: string }> | undefined
+  if (event === 'update') {
+    if (!previous) return
+    const delta = computeDelta(previous, row)
+    for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
+      delete delta[k]
+    if (Object.keys(delta).length === 0) return
+    try {
+      const { labelledChanges } = await import('../services/mail-types.js')
+      changes = await labelledChanges(child, delta, previous)
+    } catch {
+      changes = undefined
+    }
+  }
+  const label = await friendlyRecordLabel(child, childItem).catch(() => null)
   for (const rel of rels) {
     const parentId = row[rel.fk]
     if (parentId == null || parentId === '') continue
@@ -560,7 +617,13 @@ async function rollUpToParents(
       String(parentId),
       { id: parentId },
       actorUserId,
-      { collection: child, item: childItem, event }
+      {
+        collection: child,
+        item: childItem,
+        event,
+        label: label && label !== `#${childItem}` ? label : null,
+        changes
+      }
     ).catch(() => undefined)
   }
 }
@@ -587,7 +650,14 @@ export function registerNotificationSubscriptionHooks() {
       undefined,
       (ctx.previousData as Record<string, unknown> | null) ?? null
     )
-    await rollUpToParents(ctx.collection, 'update', item, row, ctx.user?.id)
+    await rollUpToParents(
+      ctx.collection,
+      'update',
+      item,
+      row,
+      ctx.user?.id,
+      (ctx.previousData as Record<string, unknown> | null) ?? null
+    )
   })
 
   hooks.after('*', 'delete', async (ctx) => {
