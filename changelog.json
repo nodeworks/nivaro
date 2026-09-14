@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-09-14T22:19:59.149Z",
+  "generated_at": "2026-09-14T22:59:08.888Z",
   "releases": [
+    {
+      "version": "0.1.284",
+      "tag": "v0.1.284",
+      "date": "2026-09-14T18:58:58-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "summary",
+              "text": "real grids render read-only with linkage, errors and totals",
+              "hash": "63d43afa"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "record:viewers names its record",
+              "hash": "9983ebf7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "no empty banner wrappers above the record body",
+              "hash": "b46e99dc"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "rate limiting is off unless RATE_LIMIT_PER_MINUTE is set",
+              "hash": "35dff0be"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.283",
       "tag": "v0.1.283",
-      "date": "2026-09-14T18:19:50-04:00",
+      "date": "2026-09-14T18:19:59-04:00",
       "sections": [
         {
           "label": "Fixed",
