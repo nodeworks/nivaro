@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFile } from '../services/files.js'
+import { INTERNAL_DISPATCH_HEADER } from './api-logger.js'
 
 /**
  * Root-level aliases for integrations written against the Directus-era API.
@@ -45,6 +46,10 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
    * queries, auth and error shaping can never drift between the two paths.
    */
   app.post('/graphql', async (req, reply) => {
+    // Resolve the caller for the request log (auth/ip/user land on the OUTER
+    // row); the real 401 shaping stays with the inner GraphQL handler, so an
+    // invalid token still comes back as a GraphQL error, never a bare 401.
+    await authenticate(req, reply).catch(() => undefined)
     // Only what the handler needs. Hop-by-hop and length headers describe the
     // ORIGINAL request; inject sets its own, and forwarding the old ones makes
     // it reject the call outright.
@@ -53,6 +58,7 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
     if (auth) headers.authorization = auth
     if (req.headers.cookie) headers.cookie = req.headers.cookie
     headers['content-type'] = 'application/json'
+    headers[INTERNAL_DISPATCH_HEADER] = '1'
     const res = await app.inject({
       method: 'POST',
       url: '/api/graphql',

@@ -2462,7 +2462,7 @@ export async function createOne(
   // A create may carry a provenance note the same way an update carries a
   // change reason ("import:Bid Import:<file>") — stripped before any column
   // write, stored on the activity row so history can say where a line came from.
-  const createReason =
+  let createReason =
     typeof (data as Record<string, unknown>)._change_reason === 'string'
       ? String((data as Record<string, unknown>)._change_reason).trim()
       : ''
@@ -2497,16 +2497,19 @@ export async function createOne(
   const crCreateConfig = parseChangeReasonConfig(
     (col as unknown as { change_reason_config?: string | null }).change_reason_config
   )
-  if (crCreateConfig?.on_create && !createReason) {
-    const flagged = crCreateConfig.fields.filter(
-      (f) =>
-        callerFields.has(f) &&
-        (data as Record<string, unknown>)[f] != null &&
-        (data as Record<string, unknown>)[f] !== ''
-    )
-    if (flagged.length > 0)
-      throw new ChangeReasonRequiredError(flagged, crCreateConfig, data as Record<string, unknown>)
-  }
+  // The throw waits until the before hooks have run: an extension hook may
+  // supply the reason on the caller's behalf (an integration that cannot
+  // send one — LinX's forecast creates), which is a stated provenance, not a
+  // bypass. Flagged fields are still judged on what the CALLER wrote.
+  const createFlagged =
+    crCreateConfig?.on_create && !createReason
+      ? crCreateConfig.fields.filter(
+          (f) =>
+            callerFields.has(f) &&
+            (data as Record<string, unknown>)[f] != null &&
+            (data as Record<string, unknown>)[f] !== ''
+        )
+      : []
 
   // Workspace item quota — checked against the active workspace (default when unscoped)
   const quotaWorkspace = workspaceId ?? (await fetchDefaultWorkspaceId())
@@ -2517,6 +2520,18 @@ export async function createOne(
 
   const ctx = { collection, action: 'create' as const, payload: data, user, database: db, req }
   await hooks.trigger('before', ctx)
+
+  if (typeof (ctx.payload as Record<string, unknown>)._change_reason === 'string') {
+    if (!createReason)
+      createReason = String((ctx.payload as Record<string, unknown>)._change_reason).trim()
+    delete (ctx.payload as Record<string, unknown>)._change_reason
+  }
+  if (crCreateConfig && createFlagged.length > 0 && !createReason)
+    throw new ChangeReasonRequiredError(
+      createFlagged,
+      crCreateConfig,
+      data as Record<string, unknown>
+    )
 
   // before_create rules — may mutate the payload (e.g. set_field)
   await evaluateRules(collection, 'before_create', ctx.payload)

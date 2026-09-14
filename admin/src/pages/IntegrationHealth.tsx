@@ -1,11 +1,15 @@
+import { createNivaro } from '@nivaro/sdk'
+import { InboundCallersView, NivaroProvider } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { Link2, Play, RotateCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
+
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 interface ApiHealth {
   id: number
@@ -40,7 +44,12 @@ interface Health {
     avg_ms: number
     max_ms: number
   }>
-  oauth_health?: Array<{ api: string; ok: boolean; expires_in_s: number | null; error: string | null }>
+  oauth_health?: Array<{
+    api: string
+    ok: boolean
+    expires_in_s: number | null
+    error: string | null
+  }>
 }
 
 /**
@@ -227,9 +236,14 @@ export function IntegrationHealthPage() {
                   {(data.oauth_health ?? []).map((o) => (
                     <div key={o.api} className='flex items-center gap-2 px-4 py-2 text-[12.5px]'>
                       <span
-                        className={cn('h-2 w-2 rounded-full', o.ok ? 'bg-emerald-500' : 'bg-red-500')}
+                        className={cn(
+                          'h-2 w-2 rounded-full',
+                          o.ok ? 'bg-emerald-500' : 'bg-red-500'
+                        )}
                       />
-                      <span className='font-medium text-slate-700 dark:text-slate-200'>{o.api}</span>
+                      <span className='font-medium text-slate-700 dark:text-slate-200'>
+                        {o.api}
+                      </span>
                       <span className='ml-auto text-[11.5px] text-slate-400'>
                         {o.ok
                           ? o.expires_in_s != null
@@ -264,7 +278,8 @@ export function IntegrationHealthPage() {
                   </thead>
                   <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
                     {(data.outbound_24h ?? []).map((o) => {
-                      const okPct = o.calls > 0 ? Math.round((Number(o.ok_calls) / o.calls) * 100) : 0
+                      const okPct =
+                        o.calls > 0 ? Math.round((Number(o.ok_calls) / o.calls) * 100) : 0
                       return (
                         <tr key={`${o.api_name}-${o.method}-${o.path}`}>
                           <td className='px-4 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
@@ -283,8 +298,12 @@ export function IntegrationHealthPage() {
                           >
                             {okPct}%
                           </td>
-                          <td className='px-2 py-1.5 text-right tabular-nums'>{Math.round(Number(o.avg_ms))}ms</td>
-                          <td className='px-4 py-1.5 text-right tabular-nums'>{Number(o.max_ms)}ms</td>
+                          <td className='px-2 py-1.5 text-right tabular-nums'>
+                            {Math.round(Number(o.avg_ms))}ms
+                          </td>
+                          <td className='px-4 py-1.5 text-right tabular-nums'>
+                            {Number(o.max_ms)}ms
+                          </td>
                         </tr>
                       )
                     })}
@@ -353,6 +372,11 @@ export function IntegrationHealthPage() {
             </div>
           </>
         )}
+        <div className='mt-6'>
+          <NivaroProvider client={sharedClient}>
+            <InboundCallersView />
+          </NivaroProvider>
+        </div>
         <ContractsCard />
       </div>
     </div>

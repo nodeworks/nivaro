@@ -17,6 +17,11 @@ declare module 'fastify' {
     apiKeyId?: number | null
     /** Set when the request authenticated via a masquerade token (nvm_*) — the admin who issued it. */
     masqueradeAdminId?: string
+    /**
+     * How this request authenticated — stamped by `authenticate` so the API
+     * logger can tell an integration's token call from a person's session.
+     */
+    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade'
   }
 }
 
@@ -198,6 +203,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
       // Named API key
       if (token.startsWith('nvk_')) {
         await authenticateApiKey(req, token)
+        req.authMethod = 'api_key'
         return
       }
       // Masquerade token — admin-issued, Redis-backed, resolves to the target user
@@ -216,6 +222,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
         if (!user) throw httpError(401, 'Masqueraded user is not active')
         await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
+        req.authMethod = 'masquerade'
         return
       }
       // Static user token
@@ -224,6 +231,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
         .first()
       if (user) {
         await hydrateRole(req, user)
+        req.authMethod = 'token'
         return
       }
     }
@@ -242,6 +250,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
   }
 
   await hydrateRole(req, user)
+  req.authMethod = 'session'
 }
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {

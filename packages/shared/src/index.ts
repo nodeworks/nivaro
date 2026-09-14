@@ -125,6 +125,13 @@ export { JsonMapEditor } from './components/JsonMapEditor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
+export {
+  type ApiCaller,
+  type ApiLogRow,
+  ApiRequestLog,
+  type ApiRequestLogFilters,
+  InboundCallersView
+} from './components/monitoring/ApiRequestLog'
 export type {
   BellLaneTab,
   BellNotification,

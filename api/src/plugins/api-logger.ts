@@ -10,8 +10,22 @@ interface ApiLogRow {
   user: string | null
   collection: string | null
   api_key_id: number | null
+  auth: string | null
+  ip: string | null
+  user_agent: string | null
+  error: string | null
   created_at: Date
 }
+
+/**
+ * Root-level Directus-era aliases (plugins/legacy-compat.ts) that third
+ * parties like MWF still call. They sit outside /api/ but ARE API traffic —
+ * without this MWF's file pushes were invisible to every log surface.
+ */
+const LEGACY_ALIASES = new Set(['/files', '/graphql'])
+/** Header the /graphql alias sets on its inner app.inject — log the OUTER call once, not both. */
+export const INTERNAL_DISPATCH_HEADER = 'x-nivaro-internal-dispatch'
+const ERROR_BODY_CAP = 1000
 
 const FLUSH_INTERVAL_MS = 5000
 const FLUSH_THRESHOLD = 50
@@ -24,8 +38,16 @@ function extractCollection(path: string): string | null {
   return match ? match[1] : null
 }
 
-function shouldSkip(path: string): boolean {
-  if (!path.startsWith('/api/')) return true
+function clientIp(req: { headers: Record<string, unknown>; ip: string }): string | null {
+  const fwd = req.headers['x-forwarded-for']
+  const first = (Array.isArray(fwd) ? fwd[0] : typeof fwd === 'string' ? fwd : '')
+    .split(',')[0]
+    .trim()
+  return (first || req.ip || null)?.slice(0, 64) ?? null
+}
+
+function shouldSkip(path: string, method: string): boolean {
+  if (!path.startsWith('/api/')) return !(LEGACY_ALIASES.has(path) && method === 'POST')
   if (path.startsWith('/api/health')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
@@ -80,10 +102,27 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   }, FLUSH_INTERVAL_MS)
   timer.unref()
 
+  // Keep the first KB of an error body so a rejected integration call can be
+  // read back from the request list ("why did my push 400") without replaying
+  // it. Only string/Buffer payloads — streams (static files) pass untouched.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode < 400) return payload
+    if (typeof payload === 'string') {
+      ;(req as unknown as { __nvrErr?: string }).__nvrErr = payload.slice(0, ERROR_BODY_CAP)
+    } else if (Buffer.isBuffer(payload)) {
+      ;(req as unknown as { __nvrErr?: string }).__nvrErr = payload
+        .subarray(0, ERROR_BODY_CAP)
+        .toString('utf8')
+    }
+    return payload
+  })
+
   app.addHook('onResponse', async (req, reply) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
-    if (shouldSkip(path)) return
+    if (shouldSkip(path, req.method)) return
+    if (req.headers[INTERNAL_DISPATCH_HEADER]) return
 
+    const ua = req.headers['user-agent']
     buffer.push({
       method: req.method,
       path: path.slice(0, 500),
@@ -92,6 +131,10 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       user: req.user?.id ?? null,
       collection: extractCollection(path),
       api_key_id: req.apiKeyId ?? null,
+      auth: req.authMethod ?? (req.user ? 'session' : 'none'),
+      ip: clientIp(req as unknown as { headers: Record<string, unknown>; ip: string }),
+      user_agent: typeof ua === 'string' ? ua.slice(0, 300) : null,
+      error: (req as unknown as { __nvrErr?: string }).__nvrErr ?? null,
       created_at: new Date()
     })
 
@@ -105,6 +148,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         status: reply.statusCode,
         latency_ms: Math.round(reply.elapsedTime),
         user: req.user?.id ?? null,
+        auth: req.authMethod ?? null,
         at: Date.now()
       })
     }

@@ -14,8 +14,14 @@ export const obsApiAnalytics: DocSection = {
       items: [
         'Filter by time range, route, method, status class, and user.',
         'p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.',
-        'The ring buffer self-prunes — no maintenance required and bounded storage.'
+        'The ring buffer self-prunes — no maintenance required and bounded storage.',
+        'The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.'
       ]
+    },
+    { type: 'h2', id: 'api-analytics-inbound', text: 'Inbound integrations' },
+    {
+      type: 'p',
+      text: 'Every request records how it authenticated, and a call that is not a browser session — a static-token user or a named API key — is by definition an integration. The Integrations page (Monitoring → Integrations → Inbound calls) rolls those callers up one card each: calls, errors, latency, last call, last error and top paths; picking a card scopes the request list to that caller. The Directus-era root aliases (`POST /files`, `POST /graphql`) that third-party integrations still use are logged like any `/api` route.'
     }
   ]
 }

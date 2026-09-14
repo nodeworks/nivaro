@@ -1,7 +1,10 @@
+import { createNivaro } from '@nivaro/sdk'
+import { ApiRequestLog, NivaroProvider } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -11,9 +14,10 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table'
-import { SlowTracesPanel } from '@/components/slow-traces'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
+
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 interface Summary {
   total: number
@@ -163,7 +167,15 @@ export function ApiAnalyticsPage() {
                 <XAxis dataKey='label' tick={{ fontSize: 10 }} minTickGap={24} />
                 <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
                 <Tooltip
-                  contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }}
+                  contentStyle={{
+                    fontSize: 12,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    color: '#f1f5f9'
+                  }}
+                  labelStyle={{ color: '#f1f5f9' }}
+                  itemStyle={{ color: '#e2e8f0' }}
                   formatter={(value, name) => {
                     if (name === 'count') return [formatNumber(Number(value ?? 0)), 'Requests']
                     if (name === 'errors') return [formatNumber(Number(value ?? 0)), 'Errors']
@@ -288,6 +300,15 @@ export function ApiAnalyticsPage() {
           <RumPanel />
         </div>
         <div className='mt-6'>
+          <NivaroProvider client={sharedClient}>
+            <ApiRequestLog
+              hours={hours}
+              title='Requests'
+              description='Every /api call plus the root /files and /graphql aliases integrations use — filter by path, method, status or how the caller authenticated; expand a row for the response body on failures.'
+            />
+          </NivaroProvider>
+        </div>
+        <div className='mt-6'>
           <RuleEvalPanel />
         </div>
         <div className='mt-6'>
@@ -317,8 +338,7 @@ function ByKeyPanel({ hours }: { hours: number }) {
     }>
   >({
     queryKey: ['api-analytics-by-key', hours],
-    queryFn: () =>
-      api.get(`/api-analytics/by-key?hours=${hours}`).then((r) => r.data.data)
+    queryFn: () => api.get(`/api-analytics/by-key?hours=${hours}`).then((r) => r.data.data)
   })
   if (rows.length === 0) return null
   return (
@@ -374,7 +394,8 @@ function RumPanel() {
     lcp_p75: number | null
     route_p75: number | null
   }> = data?.data ?? []
-  const ms = (v: number | null) => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`)
+  const ms = (v: number | null) =>
+    v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <div className='flex items-center justify-between'>
@@ -426,9 +447,15 @@ function RumPanel() {
                   {r.route}
                 </td>
                 <td className='py-1.5 pr-3 text-slate-500'>{r.samples}</td>
-                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>{ms(r.lcp_p75)}</td>
-                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>{ms(r.load_p75)}</td>
-                <td className='py-1.5 text-slate-600 dark:text-muted-foreground'>{ms(r.route_p75)}</td>
+                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
+                  {ms(r.lcp_p75)}
+                </td>
+                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
+                  {ms(r.load_p75)}
+                </td>
+                <td className='py-1.5 text-slate-600 dark:text-muted-foreground'>
+                  {ms(r.route_p75)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -460,14 +487,18 @@ function IndexAdvisorPanel() {
   const bulkRun = useQuery({
     queryKey: ['index-bulk-run', bulkRunId],
     queryFn: () =>
-      api
-        .get('/job-runs', { params: { kind: 'recalc', job_id: 'index-bulk', limit: 5 } })
-        .then(
-          (r) =>
-            (r.data.data as Array<{ id: number; status: string; progress: string | null; outcome: string | null; error: string | null }>).find(
-              (x) => x.id === bulkRunId
-            ) ?? null
-        ),
+      api.get('/job-runs', { params: { kind: 'recalc', job_id: 'index-bulk', limit: 5 } }).then(
+        (r) =>
+          (
+            r.data.data as Array<{
+              id: number
+              status: string
+              progress: string | null
+              outcome: string | null
+              error: string | null
+            }>
+          ).find((x) => x.id === bulkRunId) ?? null
+      ),
     enabled: bulkRunId != null,
     refetchInterval: 2500
   })
@@ -480,7 +511,12 @@ function IndexAdvisorPanel() {
     }
   }, [bulkDone, bulkRunId, refetch])
   const bulkProgress = bulkRun.data?.progress
-    ? (JSON.parse(bulkRun.data.progress) as { done: number; total: number; current: string; failed: number })
+    ? (JSON.parse(bulkRun.data.progress) as {
+        done: number
+        total: number
+        current: string
+        failed: number
+      })
     : null
 
   const apply = async (s: { table: string; column: string }) => {
@@ -522,7 +558,9 @@ function IndexAdvisorPanel() {
     <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div>
-          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Index advisor</p>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Index advisor
+          </p>
           <p className='mt-0.5 text-[11.5px] text-slate-400'>
             Columns your config filters on (foreign keys, queue filters, row-level security,
             workflow state mirrors) that have no index on tables over{' '}
@@ -615,7 +653,11 @@ function IndexAdvisorPanel() {
  *  slow-request trace ring never sees (it only keeps requests over
  *  TRACE_SLOW_MS). Per replica, in-memory, since boot. */
 function RuleEvalPanel() {
-  const { data = [], refetch, isFetching } = useQuery<
+  const {
+    data = [],
+    refetch,
+    isFetching
+  } = useQuery<
     Array<{
       collection: string
       count: number
@@ -639,12 +681,21 @@ function RuleEvalPanel() {
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <div className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border'>
         <div>
-          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Row-rule evaluation</h3>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            Row-rule evaluation
+          </h3>
           <p className='text-[11px] text-slate-500'>
-            Grid autofill passes per child collection — every keystroke in a row editor pays one. Since this replica booted.
+            Grid autofill passes per child collection — every keystroke in a row editor pays one.
+            Since this replica booted.
           </p>
         </div>
-        <Button size='sm' variant='outline' className='h-7 text-[11px]' onClick={() => void refetch()} disabled={isFetching}>
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-7 text-[11px]'
+          onClick={() => void refetch()}
+          disabled={isFetching}
+        >
           Refresh
         </Button>
       </div>
