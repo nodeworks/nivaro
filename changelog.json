@@ -1,10 +1,94 @@
 {
-  "generated_at": "2026-09-13T22:16:15.683Z",
+  "generated_at": "2026-09-14T04:02:13.823Z",
   "releases": [
+    {
+      "version": "0.1.271",
+      "tag": "v0.1.271",
+      "date": "2026-09-14T00:02:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "ItemEditForm to-dos #2–#17 — read mode, changes pill, ghosts, view-as-role, lock queue",
+              "hash": "9e9aa979"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "tiered record-header actions — icon tool group, inline actions, More menu",
+              "hash": "31af57a4"
+            },
+            {
+              "section": "Added",
+              "scope": "item-edit",
+              "text": "unsaved-draft recovery",
+              "hash": "bd01764a"
+            },
+            {
+              "section": "Added",
+              "scope": "delegation",
+              "text": "delegation console in the shared package",
+              "hash": "95fced53"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "lanes, delivery status, replies, escalation chain, templates, analytics, broadcast receipts",
+              "hash": "06e844ae"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "NotificationBell component both apps can embed",
+              "hash": "7155204a"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "contextual targets + inline actions, admin test bench",
+              "hash": "b0a5fa7a"
+            },
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "\"why me\" footer on every email + delivery board",
+              "hash": "21fe0025"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "allowlist HTML sanitizer for rich-text read views",
+              "hash": "fa372ffd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "rail diff dots name M2O/M2M changes; read mode parity with the edit form",
+              "hash": "8b012d3d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "pass assignment-level editor_mode to the lines grid",
+              "hash": "3580ef77"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.1.270",
       "tag": "v0.1.270",
-      "date": "2026-09-13T18:16:06-04:00",
+      "date": "2026-09-13T18:16:15-04:00",
       "sections": [
         {
           "label": "Fixed",
