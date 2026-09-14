@@ -774,6 +774,11 @@ export const atRiskFlagging: DocSection = {
       type: 'p',
       text: 'At-risk rules are the generic row-highlight engine: rows matching a rule\'s conditions get a coloured tint in the collection browser AND in queue worklists — overdue items, budget overruns, records sent back for rework, missing data. Flagged rows also get a flag icon, and an "At risk (N)" chip above the table filters the view down to flagged rows only.'
     },
+    { type: 'h3', text: 'Filtering by a rule' },
+    {
+      type: 'p',
+      text: 'Every rule is also a filter. In the collection browser each active rule renders as a pill in the toolbar ("On hold", "Sent back"); in queues the "Row colors" legend swatches are the same toggles, and the filter rail carries a "Highlight rule" select. The filter runs server-side over the whole set — the rule\'s conditions compile to SQL (`$at_risk` items condition; queue `at_risk_rule` filter) — so paging and totals are exact. Several picked rules OR together. Cross-field references (`{{field}} * n`) filter too; a rule with an operator that cannot compile matches nothing rather than everything.'
+    },
     { type: 'h3', text: 'Managing rules' },
     {
       type: 'p',

@@ -22,3 +22,16 @@ export function rowHighlightTextClass(color?: string | null): string {
   if (!color) return ROW_HIGHLIGHT_TINTS.red.text
   return (ROW_HIGHLIGHT_TINTS[color] ?? ROW_HIGHLIGHT_TINTS.red).text
 }
+
+/** Solid swatch for a rule's colour — the dot on filter pills and legends. */
+export function rowHighlightDotClass(color?: string | null): string {
+  const map: Record<string, string> = {
+    red: 'bg-red-500',
+    amber: 'bg-amber-500',
+    yellow: 'bg-yellow-400',
+    green: 'bg-emerald-500',
+    blue: 'bg-sky-500',
+    purple: 'bg-purple-500'
+  }
+  return map[color ?? 'red'] ?? map.red
+}

@@ -13,8 +13,8 @@ import {
   Rows3,
   Search,
   Sparkles,
-  X,
-  Wand2
+  Wand2,
+  X
 } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -29,7 +29,6 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { del, get, patch, post } from '../lib/commands'
-import { BulkActionButtons, useBuiltinGate } from './bulk/BulkActionButtons'
 import {
   type ColumnFormatConfig,
   countFromResolved,
@@ -37,7 +36,7 @@ import {
   formatValue
 } from '../lib/format-value'
 import { useOptionalRealtime } from '../lib/realtime'
-import { rowHighlightClass } from '../lib/row-highlight'
+import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -45,11 +44,12 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
-import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { cn } from '../lib/utils'
+import { BulkActionButtons, useBuiltinGate } from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
 import { HScrollProxy } from './HScrollProxy'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
+import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -3918,6 +3918,10 @@ export function CollectionBrowserView({
   const debouncedColFilters = useDebounced(colFilters, 350)
   // Session-only toggle (not part of saved views): show only records being amended.
   const [addendumsOnly, setAddendumsOnly] = useState(false)
+  // Highlight-rule pills ("On hold", "Sent back"): the same nivaro_at_risk_rules
+  // rows that tint rows also FILTER the list through the `$at_risk` condition
+  // (OR across picked rules). Session-only, like the addendums pill.
+  const [riskFilter, setRiskFilter] = useState<number[]>([])
   const conditionsParam = useMemo(() => {
     const conds: Array<{ path: string[]; op: string; value: unknown }> = []
     for (const f of filters) {
@@ -4013,6 +4017,11 @@ export function CollectionBrowserView({
     }
     // Records being amended: an addendum still in flight (draft/submitted/review).
     if (addendumsOnly) conds.push({ path: ['$addendums'], op: '_eq', value: 'active' })
+    if (riskFilter.length === 1) conds.push({ path: ['$at_risk'], op: '_eq', value: riskFilter[0] })
+    else if (riskFilter.length > 1)
+      (conds as unknown[]).push({
+        or: riskFilter.map((id) => ({ path: ['$at_risk'], op: '_eq', value: id }))
+      })
     return conds.length > 0 ? JSON.stringify(conds) : undefined
   }, [
     filters,
@@ -4021,7 +4030,8 @@ export function CollectionBrowserView({
     debouncedColFilters,
     linkConds,
     cellExcludes,
-    addendumsOnly
+    addendumsOnly,
+    riskFilter
   ])
   // Any filter change resets to page 1 (the query key already refetches).
   // Map display mode (#19): available when the collection carries lat/long
@@ -4158,9 +4168,11 @@ export function CollectionBrowserView({
     queryKey: ['cbv-risk-rules', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number }> }>(get('/at-risk/rules/active', { collection }))
+        .request<{ data: Array<{ id: number; name: string; highlight_color?: string | null }> }>(
+          get('/at-risk/rules/active', { collection })
+        )
         .then((r) => r.data ?? [])
-        .catch(() => []),
+        .catch(() => [] as Array<{ id: number; name: string; highlight_color?: string | null }>),
     enabled: !!collection,
     staleTime: 60_000,
     retry: false
@@ -5434,6 +5446,32 @@ export function CollectionBrowserView({
             Active addendums
           </button>
         )}
+        {riskRules.map((rule) => {
+          const on = riskFilter.includes(rule.id)
+          return (
+            <button
+              key={rule.id}
+              type='button'
+              onClick={() => {
+                setRiskFilter((v) => (on ? v.filter((id) => id !== rule.id) : [...v, rule.id]))
+                setPage(1)
+              }}
+              aria-pressed={on}
+              data-cbv-risk-pill={rule.id}
+              title={`Only records highlighted by "${rule.name}"`}
+              className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+                on
+                  ? 'border-slate-400 bg-slate-100 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${rowHighlightDotClass(rule.highlight_color ?? 'red')}`}
+              />
+              {rule.name}
+            </button>
+          )
+        })}
         {pendingLive > 0 && (
           <button
             type='button'
@@ -7074,6 +7112,15 @@ export function CollectionBrowserView({
           <HScrollProxy scrollerRef={tableScrollRef} />
           <RowHighlightLegend
             collections={collection ? [collection] : []}
+            selectedIds={riskFilter}
+            onToggle={(rule) => {
+              setRiskFilter((v) =>
+                rule.ids.some((id) => v.includes(id))
+                  ? v.filter((id) => !rule.ids.includes(id))
+                  : [...v, ...rule.ids]
+              )
+              setPage(1)
+            }}
             className='shrink-0 border-t border-slate-100 bg-white px-3 py-1.5 dark:border-slate-800 dark:bg-slate-900'
           />
           {groupBy && total > 500 && (

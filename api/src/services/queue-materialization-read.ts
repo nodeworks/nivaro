@@ -1,11 +1,11 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { businessHoursElapsed } from '../routes/sla.js'
-import { getSlaScheduleSync } from './business-hours.js'
 import type { User } from '../types.js'
+import { getSlaScheduleSync } from './business-hours.js'
+import { parseJson } from './pipeline-engine.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
-import { parseJson } from './pipeline-engine.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -44,6 +44,9 @@ export function requiresLiveResolveFallback(
   // Addendum presence is not cached (it changes outside any write to the
   // record) — a filter on it needs the live resolver's per-row summary.
   if (_filters && (_filters as Record<string, unknown>).addendums) return true
+  // The cache stores at_risk + colour, never WHICH rule matched — a filter on
+  // a specific highlight rule needs the live evaluator.
+  if (_filters && (_filters as Record<string, unknown>).at_risk_rule) return true
   // Only an owners sort still live-resolves (it would need SQL string
   // aggregation across the owners M2M). priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +

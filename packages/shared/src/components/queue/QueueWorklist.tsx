@@ -1,6 +1,3 @@
-import { TickerNumber } from '../TickerNumber'
-import { EmptyState } from '../EmptyState'
-import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import {
   closestCenter,
   DndContext,
@@ -18,14 +15,15 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bell,
-  Eye,
-  Inbox,
   AlertTriangle,
+  Bell,
   ChevronDown,
+  Eye,
+  FileDiff,
   Filter,
   Flame,
   GripVertical,
+  Inbox,
   PanelLeftClose,
   Pin,
   Play,
@@ -37,8 +35,7 @@ import {
   Save,
   SlidersHorizontal,
   Star,
-  X,
-  FileDiff
+  X
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -52,23 +49,24 @@ import {
   useOverlayState
 } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
+import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
-import { RowActionsMenu } from '../CollectionBrowserView'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
-import { RowHighlightLegend } from '../RowHighlightLegend'
+import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
+import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
-  titleCase,
   cn,
   formatDate,
   formatDateTime,
   formatNumber,
-  humanHours
+  humanHours,
+  titleCase
 } from '../../lib/utils'
-import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
-import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
+import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
+import { RowActionsMenu } from '../CollectionBrowserView'
 import {
   type Column,
   DataTable,
@@ -77,8 +75,11 @@ import {
   filterDefLabel,
   filterValueDisplay
 } from '../DataTable'
+import { EmptyState } from '../EmptyState'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
+import { RowHighlightLegend } from '../RowHighlightLegend'
+import { TickerNumber } from '../TickerNumber'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -86,7 +87,6 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { OwnerAvatars } from './OwnerAvatars'
-import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
@@ -125,6 +125,8 @@ export interface QueueItemRow {
   sla_status: 'ok' | 'warning' | 'breached' | null
   at_risk: boolean
   at_risk_color?: string | null
+  /** Matching highlight rule (live path; the cache carries colour only). */
+  at_risk_rule?: { id: number; name: string } | null
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
@@ -1174,6 +1176,38 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     }))
   })
   const addendumsEnabled = addendumMetaQueries.some((q) => q.data === true)
+  // Active highlight rules across the source collections — a "Highlight rule"
+  // filter (On hold / Sent back) that pairs with the row tint.
+  const riskRuleQueries = useQueries({
+    queries: sourceCollections.map((col) => ({
+      queryKey: ['queue-collection-risk-rules', col],
+      queryFn: () =>
+        client
+          .request<{ data: Array<{ id: number; name: string; highlight_color?: string | null }> }>(
+            get('/at-risk/rules/active', { collection: col })
+          )
+          .then((r) => r.data ?? [])
+          .catch(() => [] as Array<{ id: number; name: string; highlight_color?: string | null }>),
+      staleTime: 5 * 60 * 1000
+    }))
+  })
+  const riskRuleStamp = riskRuleQueries.map((q) => q.dataUpdatedAt).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
+  const riskRuleOptions = useMemo(() => {
+    const seen = new Map<string, { label: string; value: string }>()
+    for (const q of riskRuleQueries) {
+      for (const r of q.data ?? []) {
+        const existing = seen.get(r.name)
+        // Same-named rules on two source collections merge into one option
+        // whose value carries both ids (the server matches any of them).
+        seen.set(r.name, {
+          label: r.name,
+          value: existing ? `${existing.value},${r.id}` : String(r.id)
+        })
+      }
+    }
+    return [...seen.values()]
+  }, [riskRuleStamp])
   const stateQueries = useQueries({
     queries: sourceCollections.map((col) => ({
       queryKey: ['queue-collection-states', col],
@@ -1702,7 +1736,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       sortable: true,
       render: (row) =>
         row.at_risk ? (
-          <span className={rowHighlightTextClass(row.at_risk_color ?? 'red')}>⚑ At risk</span>
+          <span className={rowHighlightTextClass(row.at_risk_color ?? 'red')}>
+            ⚑ {row.at_risk_rule?.name ?? 'At risk'}
+          </span>
         ) : row.predicted_risk ? (
           <span className='text-amber-500' title={row.predicted_note ?? undefined}>
             ⚑ Predicted
@@ -2134,6 +2170,16 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         { label: 'No', value: 'no' }
       ]
     },
+    ...(riskRuleOptions.length > 0
+      ? [
+          {
+            key: 'at_risk_rule',
+            placeholder: 'Highlight rule',
+            type: 'select' as const,
+            options: riskRuleOptions
+          }
+        ]
+      : []),
     { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
     ...(addendumsEnabled
       ? [
@@ -2249,6 +2295,18 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                 .map((s) => s.collection as string)
             )
           ]}
+          selectedIds={String(filterValues.at_risk_rule ?? '')
+            .split(',')
+            .map((v) => Number(v))
+            .filter((n) => Number.isFinite(n) && n > 0)}
+          onToggle={(rule) => {
+            const value = rule.ids.join(',')
+            setFilterValues((prev) => ({
+              ...prev,
+              at_risk_rule: prev.at_risk_rule === value ? '' : value
+            }))
+            setPage(1)
+          }}
           className='mb-2'
         />
         <div className='mb-3 flex flex-wrap items-center gap-x-4 gap-y-2'>

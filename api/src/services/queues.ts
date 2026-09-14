@@ -9,16 +9,16 @@ import {
 } from '../routes/at-risk.js'
 import { computeStatusBatch, type SlaInstanceRow } from '../routes/sla.js'
 import type { CMSRelation, User } from '../types.js'
-import { getCollection, getRelations } from './collections.js'
-import { selectInChunks } from './db-batch.js'
-import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
-import { can } from './permissions.js'
 import {
   type ActiveAddendumInstance,
   type AddendumSummary,
   activeAddendumInstancesForCollection,
   addendumSummaryBatch
 } from './addendum-summary.js'
+import { getCollection, getRelations } from './collections.js'
+import { selectInChunks } from './db-batch.js'
+import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
+import { can } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -386,6 +386,8 @@ export interface QueueItem {
   at_risk: boolean
   /** Matching at-risk rule's highlight color — drives row tinting in the tables. */
   at_risk_color?: string | null
+  /** Matching at-risk rule (live path only — not in the materialized cache). */
+  at_risk_rule?: { id: number; name: string } | null
   /** Workflow state uuid — rides into the materialized cache for prediction. */
   state_id?: string | null
   /** Historical-P80 stuck prediction. */
@@ -577,6 +579,15 @@ export function applyColumnFilters(
       }
       if (key === 'at_risk') {
         if (item.at_risk !== (value === 'yes')) return false
+        continue
+      }
+      // A specific highlight rule (id, or array of ids = any of them). Live
+      // path only — the cache holds colour, not rule; the read routes here.
+      if (key === 'at_risk_rule') {
+        const wanted = (Array.isArray(value) ? value : String(value).split(',')).map((v) =>
+          String(v).trim()
+        )
+        if (!item.at_risk_rule || !wanted.includes(String(item.at_risk_rule.id))) return false
         continue
       }
       if (key === 'addendums') {
@@ -1986,6 +1997,7 @@ export async function resolveCollectionSource(
       sla_status: slaMap[id]?.status ?? null,
       at_risk: !!atRiskMap[id]?.at_risk,
       at_risk_color: atRiskMap[id]?.color ?? null,
+      at_risk_rule: atRiskMap[id] ? { id: atRiskMap[id].rule_id, name: atRiskMap[id].rule } : null,
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: slaMap[id]?.elapsed_hours ?? null,

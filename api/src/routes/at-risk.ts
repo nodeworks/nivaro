@@ -218,19 +218,91 @@ export function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
 export function evaluateRows(
   rows: Record<string, unknown>[],
   rules: ParsedRule[]
-): Record<string, { at_risk: true; rule: string; color: HighlightColor }> {
-  const result: Record<string, { at_risk: true; rule: string; color: HighlightColor }> = {}
+): Record<string, { at_risk: true; rule: string; rule_id: number; color: HighlightColor }> {
+  const result: Record<
+    string,
+    { at_risk: true; rule: string; rule_id: number; color: HighlightColor }
+  > = {}
   for (const row of rows) {
     const id = row.id
     if (id === null || id === undefined) continue
     for (const rule of rules) {
       if (ruleMatches(row, rule.conditions)) {
-        result[String(id)] = { at_risk: true, rule: rule.name, color: rule.color }
+        result[String(id)] = { at_risk: true, rule: rule.name, rule_id: rule.id, color: rule.color }
         break // ANY rule matching flags the row; first match wins for display
       }
     }
   }
   return result
+}
+
+/**
+ * Compile one rule's conditions into a knex WHERE on `alias` — the SQL twin
+ * of `ruleMatches`, so a highlight can also be FILTERED on server-side
+ * (`$at_risk` items condition, queue `at_risk_rule` filter). Semantics mirror
+ * the JS evaluator: conditions AND; `neq` is null-safe (a NULL is "not
+ * equal", as in JS); `{{ref}} * n` / `+ n` compare against another column.
+ * Returns false when a condition cannot be expressed (unknown op) so callers
+ * can fall back rather than silently widening the match.
+ */
+export function applyRuleConditions(
+  q: { where: (...a: unknown[]) => unknown; whereRaw: (sql: string, b?: unknown[]) => unknown },
+  alias: string,
+  conditions: AtRiskCondition[]
+): boolean {
+  const col = (f: string) => `[${alias}].[${f}]`
+  for (const c of conditions) {
+    if (!IDENTIFIER_RE.test(c.field)) return false
+    const ref = typeof c.value === 'string' ? FIELD_REF_RE.exec(c.value.trim()) : null
+    if (ref && !IDENTIFIER_RE.test(ref[1])) return false
+    // Right-hand side: a literal binding or another column (+ scale/offset).
+    const rhs = ref
+      ? ref[2] === '*'
+        ? `(${col(ref[1])} * ${Number(ref[3])})`
+        : ref[2] === '+'
+          ? `(${col(ref[1])} + ${Number(ref[3])})`
+          : col(ref[1])
+      : '?'
+    const bind = ref ? [] : [normalizeLiteral(c.value)]
+    switch (c.op) {
+      case 'null':
+        q.whereRaw(`${col(c.field)} IS NULL`)
+        break
+      case 'nnull':
+        q.whereRaw(`${col(c.field)} IS NOT NULL`)
+        break
+      case 'eq':
+        q.whereRaw(`${col(c.field)} = ${rhs}`, bind)
+        break
+      case 'neq':
+        q.whereRaw(`(${col(c.field)} <> ${rhs} OR ${col(c.field)} IS NULL)`, bind)
+        break
+      case 'gt':
+      case 'gte':
+      case 'lt':
+      case 'lte': {
+        const op = { gt: '>', gte: '>=', lt: '<', lte: '<=' }[c.op]
+        q.whereRaw(`${col(c.field)} ${op} ${rhs}`, bind)
+        break
+      }
+      case 'contains':
+        if (ref) return false
+        q.whereRaw(`${col(c.field)} LIKE ?`, [
+          `%${String(c.value ?? '').replace(/[%_[]/g, (m) => `[${m}]`)}%`
+        ])
+        break
+      default:
+        return false
+    }
+  }
+  return true
+}
+
+/** Booleans compare against bit columns as 1/0; everything else binds as-is. */
+function normalizeLiteral(v: unknown): unknown {
+  if (v === true || v === 'true') return 1
+  if (v === false || v === 'false') return 0
+  return v
 }
 
 export async function atRiskRoutes(app: FastifyInstance) {

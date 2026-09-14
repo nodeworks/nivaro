@@ -1548,6 +1548,39 @@ function applyPlannedCondition(
 
 type OrCondition = { or: FilterCondition[] }
 
+/** Active at-risk rules named by a `$at_risk` condition value (id / ids / 'any'). */
+async function loadRiskRules(collection: string, value: unknown) {
+  const raw = Array.isArray(value) ? value : [value]
+  const wantAll = raw.some((v) => v === 'any' || v === '*')
+  const ids = raw.map((v) => Number(v)).filter((n) => Number.isFinite(n))
+  const { parseActiveRules } = await import('../routes/at-risk.js')
+  const ruleRows = (await db('nivaro_at_risk_rules')
+    .where({ collection, is_active: true })
+    .modify((b) => {
+      if (!wantAll) void b.whereIn('id', ids.length ? ids : [-1])
+    })
+    .orderBy('id')) as Parameters<typeof parseActiveRules>[0]
+  return parseActiveRules(ruleRows)
+}
+
+/** Sync WHERE for pre-loaded rules: OR across rules, AND inside each; none = match nothing. */
+function applyRiskRules(
+  q: QB,
+  collection: string,
+  rules: Awaited<ReturnType<typeof loadRiskRules>>,
+  applyRule: typeof import('../routes/at-risk.js')['applyRuleConditions']
+) {
+  if (rules.length === 0) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  for (const rule of rules) {
+    q.orWhere(function (this: QB) {
+      if (!applyRule(this as never, collection, rule.conditions)) this.whereRaw('1 = 0')
+    })
+  }
+}
+
 async function applyConditions(
   q: QB,
   conditions: Array<FilterCondition | OrCondition>,
@@ -1557,17 +1590,30 @@ async function applyConditions(
     // OR group: each branch is a normal path condition; the group ANDs with
     // the rest of the conditions (EFP project-type _or parity).
     if ('or' in cond && Array.isArray(cond.or)) {
-      const branches: Array<{ plan: NonNullable<PathPlan>; op: string; value: unknown }> = []
+      type Branch =
+        | { kind: 'path'; plan: NonNullable<PathPlan>; op: string; value: unknown }
+        | { kind: 'risk'; rules: Awaited<ReturnType<typeof loadRiskRules>> }
+      const branches: Branch[] = []
       for (const sub of cond.or) {
         if (!Array.isArray(sub.path) || sub.path.length === 0) continue
+        // `$at_risk` is the one virtual path an OR group understands (the
+        // highlight-rule pills OR their picks); other `$` paths are skipped.
+        if (sub.path[0] === '$at_risk' && sub.path.length === 1) {
+          branches.push({ kind: 'risk', rules: await loadRiskRules(collection, sub.value) })
+          continue
+        }
+        if (sub.path[0].startsWith('$')) continue
         const plan = await planConditionPath(collection, sub.path)
-        if (plan) branches.push({ plan, op: sub.op, value: sub.value })
+        if (plan) branches.push({ kind: 'path', plan, op: sub.op, value: sub.value })
       }
       if (branches.length === 0) continue
+      const { applyRuleConditions } = await import('../routes/at-risk.js')
       q.where(function () {
         for (const b of branches) {
           this.orWhere(function () {
-            applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value)
+            if (b.kind === 'risk')
+              applyRiskRules(this as QB, collection, b.rules, applyRuleConditions)
+            else applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value)
           })
         }
       })
@@ -1605,6 +1651,19 @@ async function applyConditions(
       }
       if (want === 'none') q.whereNotExists(cb)
       else q.whereExists(cb)
+      continue
+    }
+    // Virtual path: at-risk highlight rules — value = rule id (or an array of
+    // ids, OR'd; 'any' = every active rule). The rule's conditions compile to
+    // SQL through applyRuleConditions, so the same rule that TINTS a row can
+    // FILTER the list ("on hold" pill). A rule that cannot compile (unknown
+    // op) matches nothing rather than everything.
+    if (cond.path[0] === '$at_risk' && cond.path.length === 1) {
+      const rules = await loadRiskRules(collection, cond.value)
+      const { applyRuleConditions } = await import('../routes/at-risk.js')
+      q.where(function (this: QB) {
+        applyRiskRules(this, collection, rules, applyRuleConditions)
+      })
       continue
     }
     // Content-presence virtual paths (#397/#398): $has_comments / $has_tasks /
