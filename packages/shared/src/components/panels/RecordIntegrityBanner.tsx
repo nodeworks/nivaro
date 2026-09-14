@@ -75,11 +75,20 @@ export function RecordIntegrityBanner({
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [openIdx, setOpenIdx] = useState<number | null>(null)
-  const { data } = useQuery<{
+  type Result = {
     enabled: boolean
     checked_at?: string | null
+    live?: boolean
     findings: Finding[]
-  }>({
+  }
+  // Two reads race on mount: the STORED findings (the latest collection
+  // sweep — instant, but as old as that sweep) paint first, then the LIVE
+  // check (POST …/check, the same evaluator over this one record, sub-second)
+  // replaces them. Rob 2026-09-14: the sweep view lagged days behind the
+  // record — lines fixed since still read as broken. Both keys share the
+  // ['record-integrity', collection, itemId] prefix so every existing
+  // invalidation (Fix, save) refreshes both.
+  const { data: stored } = useQuery<Result>({
     queryKey: ['record-integrity', collection, itemId],
     queryFn: () =>
       client
@@ -90,6 +99,22 @@ export function RecordIntegrityBanner({
         .catch(() => ({ enabled: false, findings: [] }) as never),
     staleTime: 5 * 60_000
   })
+  const { data: live, isFetching: checking } = useQuery<Result>({
+    queryKey: ['record-integrity', collection, itemId, 'live'],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(
+          post(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}/check`, {})
+        )
+        .then((r) => r.data)
+        // A failed live check must not blank the banner — the stored view stands.
+        .catch(() => null as never),
+    staleTime: 60_000,
+    // Never spin the banner on a background refetch storm — one live check per
+    // mount / invalidation is the contract.
+    refetchOnWindowFocus: false
+  })
+  const data = live ?? stored
 
   const invalidateRecord = () => {
     void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })
@@ -112,11 +137,28 @@ export function RecordIntegrityBanner({
         <span className='text-[12.5px] font-medium text-amber-800 dark:text-amber-300'>
           {n} data integrity issue{n === 1 ? '' : 's'} on this record
         </span>
-        {data.checked_at && (
-          <span className='text-[11px] text-amber-600/80 dark:text-amber-400/70'>
+        {data.live ? (
+          <span
+            className='text-[11px] text-amber-600/80 dark:text-amber-400/70'
+            data-integrity-checked='live'
+          >
+            checked just now
+          </span>
+        ) : checking ? (
+          <span
+            className='text-[11px] text-amber-600/80 dark:text-amber-400/70'
+            data-integrity-checked='checking'
+          >
+            checking…
+          </span>
+        ) : data.checked_at ? (
+          <span
+            className='text-[11px] text-amber-600/80 dark:text-amber-400/70'
+            data-integrity-checked='stored'
+          >
             checked {new Date(data.checked_at).toLocaleDateString()}
           </span>
-        )}
+        ) : null}
         <button
           type='button'
           onClick={() => setExpanded((v) => !v)}

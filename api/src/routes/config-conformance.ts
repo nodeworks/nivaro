@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { runConformance, summarizeAllCollections } from '../services/config-conformance.js'
+import {
+  checkRecord,
+  runConformance,
+  summarizeAllCollections
+} from '../services/config-conformance.js'
 import {
   AUTO_APPLY_KINDS,
   aiProposal,
@@ -98,6 +102,38 @@ async function filterProposalsForUser(
   return out
 }
 
+/** Which findings the Fix button can actually repair: every finding opens the
+ *  proposal picker (at worst it offers routing the issue to the record's
+ *  owner); `legacy_fixable` keeps the old one-click semantics — a stale
+ *  cascade value on a PHYSICAL column can be cleared (an M2M alias PATCHed
+ *  to null is silently stripped), an empty display part backed by auto_id
+ *  can be regenerated, a row-rule finding can be re-derived. */
+async function annotateFindings(
+  collection: string,
+  findings: Array<{ field: string | null; rule: string; message: string }>
+) {
+  const { autoIdFieldsFor } = await import('../services/auto-ids.js')
+  const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
+  const physical = new Set(
+    (
+      (await db('information_schema.columns')
+        .where({ table_name: collection })
+        .pluck('column_name')
+        .catch(() => [])) as string[]
+    ).map((c) => c.toLowerCase())
+  )
+  return findings.map((f) => ({
+    field: f.field,
+    rule: f.rule,
+    message: f.message,
+    fixable: !!f.field,
+    legacy_fixable:
+      (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
+      (f.rule === 'display' && !!f.field && autoIds.has(f.field)) ||
+      (f.rule === 'row-rule' && !!f.field)
+  }))
+}
+
 /** Record-scoped integrity lookup — authenticated (not admin): the banner on
  *  a record form is for whoever can read the record. Separate plugin because
  *  the main router is requireAdmin-hooked. */
@@ -130,39 +166,90 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
         rule: string
         message: string
       }>
-      // Annotate which findings the Fix button can actually repair: a stale
-      // cascade value can be cleared, and an empty display-template part
-      // backed by an auto_id config can be regenerated. required/validation
-      // need a human value — never auto-fixable.
-      const { autoIdFieldsFor } = await import('../services/auto-ids.js')
-      const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
-      // Cascade clears only work on PHYSICAL columns — an M2M alias PATCHed
-      // to null is silently stripped by updateOne, so offering Fix there
-      // would be a lie.
-      const physical = new Set(
-        (
-          (await db('information_schema.columns')
-            .where({ table_name: collection })
-            .pluck('column_name')
-            .catch(() => [])) as string[]
-        ).map((c) => c.toLowerCase())
-      )
       return {
         data: {
           enabled: true,
           run_id: run.id,
           checked_at: run.finished_at,
-          findings: findings.map((f) => ({
-            ...f,
-            // Every finding opens the proposal picker now (at worst it offers
-            // routing the issue to the record's owner); `legacy_fixable` keeps
-            // the old one-click semantics for clients that predate proposals.
-            fixable: !!f.field,
-            legacy_fixable:
-              (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
-              (f.rule === 'display' && !!f.field && autoIds.has(f.field)) ||
-              (f.rule === 'row-rule' && !!f.field)
-          }))
+          findings: await annotateFindings(collection, findings)
+        }
+      }
+    }
+  )
+
+  /** LIVE check of one record — the banner fires this in the background as
+   *  the form loads, so a record fixed since the last sweep stops showing
+   *  the sweep's stale findings. The latest completed run's rows for this
+   *  record are reconciled to the fresh result (same idea as the Fix path's
+   *  clearFinding), so the Data Integrity page agrees with the form. */
+  app.post<{ Params: { collection: string; id: string } }>(
+    '/record/:collection/:id/check',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Invalid collection' })
+      }
+      const meta = (await db('nivaro_collections')
+        .where({ collection })
+        .first('integrity_badge')) as { integrity_badge?: unknown } | undefined
+      if (meta && meta.integrity_badge === false) return { data: { enabled: false, findings: [] } }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const result = await checkRecord(collection, String(id))
+      if (!result) return reply.code(404).send({ error: 'Not found' })
+      const run = (await db('nivaro_conformance_runs')
+        .where({ collection, status: 'completed' })
+        .orderBy('id', 'desc')
+        .first('id')) as { id: number } | undefined
+      if (run) {
+        // Reconcile: the run's rows for THIS record become the live answer.
+        const stale = (await db('nivaro_conformance_findings')
+          .where({ run: run.id, item_id: String(id) })
+          .count({ n: '*' })
+          .first()) as { n: number | string } | undefined
+        const staleN = Number(stale?.n ?? 0)
+        await db('nivaro_conformance_findings')
+          .where({ run: run.id, item_id: String(id) })
+          .del()
+        if (result.findings.length > 0) {
+          const { getLabels } = await import('../services/queues.js')
+          const labels = await getLabels(new Map([[collection, new Set([String(id)])]])).catch(
+            () => ({}) as Record<string, string>
+          )
+          await db('nivaro_conformance_findings').insert(
+            result.findings.map((f) => ({
+              run: run.id,
+              item_id: f.item_id,
+              item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
+              field: f.field,
+              rule: f.rule,
+              message: f.message.slice(0, 1000)
+            }))
+          )
+        }
+        const delta = result.findings.length - staleN
+        if (delta !== 0) {
+          await db('nivaro_conformance_runs')
+            .where('id', run.id)
+            .update({
+              violation_count: db.raw(
+                'CASE WHEN violation_count + ? < 0 THEN 0 ELSE violation_count + ? END',
+                [delta, delta]
+              )
+            })
+            .catch(() => {})
+        }
+      }
+      return {
+        data: {
+          enabled: true,
+          run_id: run?.id ?? null,
+          checked_at: new Date().toISOString(),
+          live: true,
+          ms: result.ms,
+          findings: await annotateFindings(collection, result.findings)
         }
       }
     }

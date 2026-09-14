@@ -656,11 +656,11 @@ export async function runConformance(
   }
 }
 
-async function evaluate(
-  runId: number,
-  checks: CompiledChecks,
-  rowCap: number
-): Promise<ConformanceSummary> {
+/** The physical columns a check set needs from the parent row — required
+ *  flags on alias fields (M2M pickers) have no scalar column to test here. */
+async function columnsFor(
+  checks: CompiledChecks
+): Promise<{ physical: Set<string>; selectable: string[] }> {
   const { collection } = checks
   const columns = new Set<string>(['id'])
   for (const r of checks.requiredFields) {
@@ -681,8 +681,6 @@ async function evaluate(
   for (const rc of checks.rowRules) {
     for (const f of parentFieldsFor(rc)) columns.add(f)
   }
-  // Only real columns survive — required flags on alias fields (M2M pickers)
-  // have no scalar column to test here.
   const physical = new Set(
     (
       (await db.raw(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`, [
@@ -691,6 +689,313 @@ async function evaluate(
     ).map((c) => c.COLUMN_NAME)
   )
   const selectable = [...columns].filter((c) => physical.has(c))
+  return { physical, selectable }
+}
+
+export interface RecordFinding {
+  item_id: string
+  field: string
+  rule: string
+  message: string
+}
+
+/**
+ * Evaluate every compiled check over one batch of parent rows. Shared by the
+ * collection sweep (chunk by chunk) and the per-record live check the form
+ * banner fires on load — one evaluator, so the two can never disagree.
+ */
+async function evaluateRows(
+  checks: CompiledChecks,
+  rows: Array<Record<string, unknown>>,
+  physical: Set<string>
+): Promise<RecordFinding[]> {
+  const { collection } = checks
+  const findings: RecordFinding[] = []
+
+  // ── required + validation, plain JS per row ──────────────────────────
+  for (const row of rows) {
+    for (const r of checks.requiredFields) {
+      if (r.kind !== 'column' || !physical.has(r.field)) continue
+      const msg = applyValidationRule({ type: 'required' }, row[r.field], r.label)
+      if (msg)
+        findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
+    }
+    for (const v of checks.validation) {
+      if (!physical.has(v.field)) continue
+      for (const rule of v.rules) {
+        const msg = applyValidationRule(rule, row[v.field], v.label, row)
+        if (msg) {
+          findings.push({
+            item_id: String(row.id),
+            field: v.field,
+            rule: 'validation',
+            message: msg
+          })
+          break
+        }
+      }
+    }
+    for (const d of checks.dateOffsets) {
+      if (!physical.has(d.field) || !physical.has(d.baseline)) continue
+      const value = parseDay(row[d.field])
+      const created = parseDay(row[d.baseline])
+      if (value == null || created == null) continue
+      const diff = Math.round((value - created) / 86_400_000)
+      const bad = d.op === 'min' ? diff < d.days : diff > d.days
+      if (bad) {
+        findings.push({
+          item_id: String(row.id),
+          field: d.field,
+          rule: 'validation',
+          message: `${d.label} was ${diff} day(s) from creation — the rule required at ${d.op === 'min' ? 'least' : 'most'} ${d.days}`
+        })
+      }
+    }
+  }
+
+  // ── required M2M aliases: zero junction rows = empty ─────────────────
+  for (const r of checks.requiredFields) {
+    if (r.kind !== 'm2m' || !r.junction) continue
+    // NOTE: .distinct(col).select(col) doubles the column on mssql and the
+    // value comes back as a nested array (the chat-DM .pluck trap) — plain
+    // .distinct(col) alone selects it correctly.
+    const linked = new Set(
+      (
+        (await db(r.junction.table)
+          .whereIn(r.junction.srcFk, rows.map((x) => x.id) as never[])
+          .distinct(r.junction.srcFk)) as Array<Record<string, unknown>>
+      ).map((l) => String(l[r.junction?.srcFk ?? '']))
+    )
+    for (const row of rows) {
+      if (!linked.has(String(row.id))) {
+        findings.push({
+          item_id: String(row.id),
+          field: r.field,
+          rule: 'required',
+          message: `${r.label} has no linked records`
+        })
+      }
+    }
+  }
+
+  // ── cascade availability, batched per rule ───────────────────────────
+  // A field with several cascade rules (unit: by project type, unit type
+  // AND install location) reports ONE finding per record listing every
+  // failing parent, not one row per rule.
+  const cascadeFails = new Map<
+    string,
+    { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
+  >()
+  for (const c of checks.cascades) {
+    if (!c.childIsM2M && !physical.has(c.field)) continue
+    const rowIds = rows.map((r) => r.id)
+
+    // Child value(s) per row: a plain M2O reads the column; an M2M alias
+    // reads its junction set (each linked id must be available).
+    const childSets = new Map<string, Set<string>>()
+    if (c.childIsM2M && c.childJunction) {
+      const links = (await db(c.childJunction.table)
+        .whereIn(c.childJunction.srcFk, rowIds as never[])
+        .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<Record<string, unknown>>
+      for (const l of links) {
+        const key = String(l[c.childJunction.srcFk])
+        if (!childSets.has(key)) childSets.set(key, new Set())
+        childSets.get(key)?.add(String(l[c.childJunction.tgtFk]))
+      }
+    } else {
+      for (const row of rows) {
+        const v = row[c.field]
+        if (v != null && v !== '') childSets.set(String(row.id), new Set([String(v)]))
+      }
+    }
+
+    // Parent value set per row.
+    const parentSets = new Map<string, Set<string>>()
+    if (c.parentIsM2M && c.parentJunction) {
+      const links = (await db(c.parentJunction.table)
+        .whereIn(c.parentJunction.srcFk, rowIds as never[])
+        .select(c.parentJunction.srcFk, c.parentJunction.tgtFk)) as Array<Record<string, unknown>>
+      for (const l of links) {
+        const key = String(l[c.parentJunction.srcFk])
+        if (!parentSets.has(key)) parentSets.set(key, new Set())
+        parentSets.get(key)?.add(String(l[c.parentJunction.tgtFk]))
+      }
+    } else if (physical.has(c.parent_field)) {
+      for (const row of rows) {
+        const pv = row[c.parent_field]
+        if (pv != null && pv !== '') parentSets.set(String(row.id), new Set([String(pv)]))
+      }
+    }
+
+    // Availability of the DISTINCT child values under each parent.
+    const childVals = [...new Set([...childSets.values()].flatMap((set) => [...set]))]
+    if (childVals.length === 0) continue
+    // childValue → the set of parent values it is available under
+    const availability = new Map<string, Set<string>>()
+    if (c.filterIsM2M && c.filterJunction) {
+      const links = (await db(c.filterJunction.table)
+        .whereIn(c.filterJunction.srcFk, childVals as never[])
+        .select(c.filterJunction.srcFk, c.filterJunction.tgtFk)) as Array<Record<string, unknown>>
+      for (const l of links) {
+        const key = String(l[c.filterJunction.srcFk])
+        if (!availability.has(key)) availability.set(key, new Set())
+        availability.get(key)?.add(String(l[c.filterJunction.tgtFk]))
+      }
+    } else {
+      const targets = (await db(c.target)
+        .whereIn('id', childVals as never[])
+        .select('id', c.filter_column)) as Array<Record<string, unknown>>
+      for (const t of targets) {
+        const fv = t[c.filter_column]
+        availability.set(String(t.id), fv == null ? new Set() : new Set([String(fv)]))
+      }
+    }
+
+    for (const row of rows) {
+      const children = childSets.get(String(row.id))
+      if (!children || children.size === 0) continue
+      const parents = parentSets.get(String(row.id))
+      // No parent value on the row: the picker would show all (or prune the
+      // clause) — not a conformance failure.
+      if (!parents || parents.size === 0) continue
+      const bad = [...children].filter((child) => {
+        const avail = availability.get(child)
+        return !(avail && [...avail].some((a) => parents.has(a)))
+      })
+      if (bad.length > 0) {
+        const key = `${row.id}|${c.field}`
+        let agg = cascadeFails.get(key)
+        if (!agg) {
+          agg = {
+            field: c.field,
+            fieldLabel: c.fieldLabel,
+            isM2M: c.childIsM2M,
+            badCount: 0,
+            parents: []
+          }
+          cascadeFails.set(key, agg)
+        }
+        agg.badCount = Math.max(agg.badCount, bad.length)
+        agg.parents.push(c.parentLabel)
+      }
+    }
+  }
+
+  for (const [key, agg] of cascadeFails) {
+    const rowId = key.slice(0, key.length - agg.field.length - 1)
+    const parents =
+      agg.parents.length > 1
+        ? `${agg.parents.slice(0, -1).join(', ')} or ${agg.parents[agg.parents.length - 1]}`
+        : agg.parents[0]
+    findings.push({
+      item_id: rowId,
+      field: agg.field,
+      rule: 'cascade',
+      message: agg.isM2M
+        ? `${agg.badCount} linked ${agg.fieldLabel} value(s) are not available options for the current ${parents}`
+        : `${agg.fieldLabel} value is not an available option for the current ${parents}`
+    })
+  }
+
+  // ── display template completeness, hops batch-resolved per level ─────
+  if (checks.displayTokens.length > 0) {
+    const emptyParts = new Map<string, string[]>()
+    for (const t of checks.displayTokens) {
+      // rowId → current value along the hop chain
+      let values = new Map<string, unknown>(
+        rows.map((r) => [String(r.id), r[t.hops.length > 0 ? t.hops[0].fk : t.leaf]])
+      )
+      for (let i = 0; i < t.hops.length; i++) {
+        const nextCol = i + 1 < t.hops.length ? t.hops[i + 1].fk : t.leaf
+        const ids = [...new Set([...values.values()].filter((v) => v != null && v !== ''))]
+        const fetched =
+          ids.length === 0
+            ? []
+            : ((await db(t.hops[i].target)
+                .whereIn('id', ids as never[])
+                .select('id', nextCol)) as Array<Record<string, unknown>>)
+        const byId = new Map(fetched.map((f) => [String(f.id), f[nextCol]]))
+        values = new Map(
+          [...values.entries()].map(([rowId, v]) => [
+            rowId,
+            v == null || v === '' ? null : (byId.get(String(v)) ?? null)
+          ])
+        )
+      }
+      for (const [rowId, v] of values) {
+        if (v == null || String(v).trim() === '') {
+          if (!emptyParts.has(rowId)) emptyParts.set(rowId, [])
+          emptyParts.get(rowId)?.push(t.raw)
+        }
+      }
+    }
+    for (const [rowId, parts] of emptyParts) {
+      findings.push({
+        item_id: rowId,
+        field: parts[0].split('.')[0],
+        rule: 'display',
+        message: `Display template part(s) empty: ${parts.map((p) => `{{${p}}}`).join(', ')} — the record shows as its internal id`
+      })
+    }
+  }
+
+  // ── inline-grid row rules: stored child values vs what the rules derive ─
+  for (const rc of checks.rowRules) {
+    try {
+      findings.push(...(await evaluateRowRuleCheck(rc, rows)))
+    } catch (err) {
+      console.warn(`conformance row-rule check skipped for ${collection}.${rc.aliasField}:`, err)
+    }
+  }
+  return findings
+}
+
+// compileChecks walks field config + layouts + relations (several reads);
+// a form load must not pay that on every record, so live checks share one
+// compiled set per collection for a minute. Busted by the central metadata
+// hook alongside every other per-collection cache.
+const compiledCache = new Map<string, { at: number; checks: Promise<CompiledChecks> }>()
+const COMPILED_TTL_MS = 60_000
+export function bustCompiledChecks(collection?: string): void {
+  if (collection) compiledCache.delete(collection)
+  else compiledCache.clear()
+}
+async function compileChecksCached(collection: string): Promise<CompiledChecks> {
+  const hit = compiledCache.get(collection)
+  if (hit && Date.now() - hit.at < COMPILED_TTL_MS) return hit.checks
+  const checks = compileChecks(collection)
+  compiledCache.set(collection, { at: Date.now(), checks })
+  checks.catch(() => compiledCache.delete(collection))
+  return checks
+}
+
+/**
+ * Live integrity check for ONE record — what the collection sweep would say
+ * about it right now. Sub-second: the same evaluator over a single row.
+ * Returns null when the record does not exist.
+ */
+export async function checkRecord(
+  collection: string,
+  id: string
+): Promise<{ findings: RecordFinding[]; ms: number } | null> {
+  const t0 = Date.now()
+  const checks = await compileChecksCached(collection)
+  const { physical, selectable } = await columnsFor(checks)
+  const row = (await db(collection)
+    .where('id', id as never)
+    .first(selectable)) as Record<string, unknown> | undefined
+  if (!row) return null
+  const findings = await evaluateRows(checks, [row], physical)
+  return { findings, ms: Date.now() - t0 }
+}
+
+async function evaluate(
+  runId: number,
+  checks: CompiledChecks,
+  rowCap: number
+): Promise<ConformanceSummary> {
+  const { collection } = checks
+  const { physical, selectable } = await columnsFor(checks)
 
   let checked = 0
   let violations = 0
@@ -713,243 +1018,7 @@ async function evaluate(
     lastId = rows[rows.length - 1].id
     checked += rows.length
 
-    const findings: Array<{ item_id: string; field: string; rule: string; message: string }> = []
-
-    // ── required + validation, plain JS per row ──────────────────────────
-    for (const row of rows) {
-      for (const r of checks.requiredFields) {
-        if (r.kind !== 'column' || !physical.has(r.field)) continue
-        const msg = applyValidationRule({ type: 'required' }, row[r.field], r.label)
-        if (msg)
-          findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
-      }
-      for (const v of checks.validation) {
-        if (!physical.has(v.field)) continue
-        for (const rule of v.rules) {
-          const msg = applyValidationRule(rule, row[v.field], v.label, row)
-          if (msg) {
-            findings.push({
-              item_id: String(row.id),
-              field: v.field,
-              rule: 'validation',
-              message: msg
-            })
-            break
-          }
-        }
-      }
-      for (const d of checks.dateOffsets) {
-        if (!physical.has(d.field) || !physical.has(d.baseline)) continue
-        const value = parseDay(row[d.field])
-        const created = parseDay(row[d.baseline])
-        if (value == null || created == null) continue
-        const diff = Math.round((value - created) / 86_400_000)
-        const bad = d.op === 'min' ? diff < d.days : diff > d.days
-        if (bad) {
-          findings.push({
-            item_id: String(row.id),
-            field: d.field,
-            rule: 'validation',
-            message: `${d.label} was ${diff} day(s) from creation — the rule required at ${d.op === 'min' ? 'least' : 'most'} ${d.days}`
-          })
-        }
-      }
-    }
-
-    // ── required M2M aliases: zero junction rows = empty ─────────────────
-    for (const r of checks.requiredFields) {
-      if (r.kind !== 'm2m' || !r.junction) continue
-      // NOTE: .distinct(col).select(col) doubles the column on mssql and the
-      // value comes back as a nested array (the chat-DM .pluck trap) — plain
-      // .distinct(col) alone selects it correctly.
-      const linked = new Set(
-        (
-          (await db(r.junction.table)
-            .whereIn(r.junction.srcFk, rows.map((x) => x.id) as never[])
-            .distinct(r.junction.srcFk)) as Array<Record<string, unknown>>
-        ).map((l) => String(l[r.junction?.srcFk ?? '']))
-      )
-      for (const row of rows) {
-        if (!linked.has(String(row.id))) {
-          findings.push({
-            item_id: String(row.id),
-            field: r.field,
-            rule: 'required',
-            message: `${r.label} has no linked records`
-          })
-        }
-      }
-    }
-
-    // ── cascade availability, batched per rule ───────────────────────────
-    // A field with several cascade rules (unit: by project type, unit type
-    // AND install location) reports ONE finding per record listing every
-    // failing parent, not one row per rule.
-    const cascadeFails = new Map<
-      string,
-      { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
-    >()
-    for (const c of checks.cascades) {
-      if (!c.childIsM2M && !physical.has(c.field)) continue
-      const rowIds = rows.map((r) => r.id)
-
-      // Child value(s) per row: a plain M2O reads the column; an M2M alias
-      // reads its junction set (each linked id must be available).
-      const childSets = new Map<string, Set<string>>()
-      if (c.childIsM2M && c.childJunction) {
-        const links = (await db(c.childJunction.table)
-          .whereIn(c.childJunction.srcFk, rowIds as never[])
-          .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<Record<string, unknown>>
-        for (const l of links) {
-          const key = String(l[c.childJunction.srcFk])
-          if (!childSets.has(key)) childSets.set(key, new Set())
-          childSets.get(key)?.add(String(l[c.childJunction.tgtFk]))
-        }
-      } else {
-        for (const row of rows) {
-          const v = row[c.field]
-          if (v != null && v !== '') childSets.set(String(row.id), new Set([String(v)]))
-        }
-      }
-
-      // Parent value set per row.
-      const parentSets = new Map<string, Set<string>>()
-      if (c.parentIsM2M && c.parentJunction) {
-        const links = (await db(c.parentJunction.table)
-          .whereIn(c.parentJunction.srcFk, rowIds as never[])
-          .select(c.parentJunction.srcFk, c.parentJunction.tgtFk)) as Array<Record<string, unknown>>
-        for (const l of links) {
-          const key = String(l[c.parentJunction.srcFk])
-          if (!parentSets.has(key)) parentSets.set(key, new Set())
-          parentSets.get(key)?.add(String(l[c.parentJunction.tgtFk]))
-        }
-      } else if (physical.has(c.parent_field)) {
-        for (const row of rows) {
-          const pv = row[c.parent_field]
-          if (pv != null && pv !== '') parentSets.set(String(row.id), new Set([String(pv)]))
-        }
-      }
-
-      // Availability of the DISTINCT child values under each parent.
-      const childVals = [...new Set([...childSets.values()].flatMap((set) => [...set]))]
-      if (childVals.length === 0) continue
-      // childValue → the set of parent values it is available under
-      const availability = new Map<string, Set<string>>()
-      if (c.filterIsM2M && c.filterJunction) {
-        const links = (await db(c.filterJunction.table)
-          .whereIn(c.filterJunction.srcFk, childVals as never[])
-          .select(c.filterJunction.srcFk, c.filterJunction.tgtFk)) as Array<Record<string, unknown>>
-        for (const l of links) {
-          const key = String(l[c.filterJunction.srcFk])
-          if (!availability.has(key)) availability.set(key, new Set())
-          availability.get(key)?.add(String(l[c.filterJunction.tgtFk]))
-        }
-      } else {
-        const targets = (await db(c.target)
-          .whereIn('id', childVals as never[])
-          .select('id', c.filter_column)) as Array<Record<string, unknown>>
-        for (const t of targets) {
-          const fv = t[c.filter_column]
-          availability.set(String(t.id), fv == null ? new Set() : new Set([String(fv)]))
-        }
-      }
-
-      for (const row of rows) {
-        const children = childSets.get(String(row.id))
-        if (!children || children.size === 0) continue
-        const parents = parentSets.get(String(row.id))
-        // No parent value on the row: the picker would show all (or prune the
-        // clause) — not a conformance failure.
-        if (!parents || parents.size === 0) continue
-        const bad = [...children].filter((child) => {
-          const avail = availability.get(child)
-          return !(avail && [...avail].some((a) => parents.has(a)))
-        })
-        if (bad.length > 0) {
-          const key = `${row.id}|${c.field}`
-          let agg = cascadeFails.get(key)
-          if (!agg) {
-            agg = {
-              field: c.field,
-              fieldLabel: c.fieldLabel,
-              isM2M: c.childIsM2M,
-              badCount: 0,
-              parents: []
-            }
-            cascadeFails.set(key, agg)
-          }
-          agg.badCount = Math.max(agg.badCount, bad.length)
-          agg.parents.push(c.parentLabel)
-        }
-      }
-    }
-
-    for (const [key, agg] of cascadeFails) {
-      const rowId = key.slice(0, key.length - agg.field.length - 1)
-      const parents =
-        agg.parents.length > 1
-          ? `${agg.parents.slice(0, -1).join(', ')} or ${agg.parents[agg.parents.length - 1]}`
-          : agg.parents[0]
-      findings.push({
-        item_id: rowId,
-        field: agg.field,
-        rule: 'cascade',
-        message: agg.isM2M
-          ? `${agg.badCount} linked ${agg.fieldLabel} value(s) are not available options for the current ${parents}`
-          : `${agg.fieldLabel} value is not an available option for the current ${parents}`
-      })
-    }
-
-    // ── display template completeness, hops batch-resolved per level ─────
-    if (checks.displayTokens.length > 0) {
-      const emptyParts = new Map<string, string[]>()
-      for (const t of checks.displayTokens) {
-        // rowId → current value along the hop chain
-        let values = new Map<string, unknown>(
-          rows.map((r) => [String(r.id), r[t.hops.length > 0 ? t.hops[0].fk : t.leaf]])
-        )
-        for (let i = 0; i < t.hops.length; i++) {
-          const nextCol = i + 1 < t.hops.length ? t.hops[i + 1].fk : t.leaf
-          const ids = [...new Set([...values.values()].filter((v) => v != null && v !== ''))]
-          const fetched =
-            ids.length === 0
-              ? []
-              : ((await db(t.hops[i].target)
-                  .whereIn('id', ids as never[])
-                  .select('id', nextCol)) as Array<Record<string, unknown>>)
-          const byId = new Map(fetched.map((f) => [String(f.id), f[nextCol]]))
-          values = new Map(
-            [...values.entries()].map(([rowId, v]) => [
-              rowId,
-              v == null || v === '' ? null : (byId.get(String(v)) ?? null)
-            ])
-          )
-        }
-        for (const [rowId, v] of values) {
-          if (v == null || String(v).trim() === '') {
-            if (!emptyParts.has(rowId)) emptyParts.set(rowId, [])
-            emptyParts.get(rowId)?.push(t.raw)
-          }
-        }
-      }
-      for (const [rowId, parts] of emptyParts) {
-        findings.push({
-          item_id: rowId,
-          field: parts[0].split('.')[0],
-          rule: 'display',
-          message: `Display template part(s) empty: ${parts.map((p) => `{{${p}}}`).join(', ')} — the record shows as its internal id`
-        })
-      }
-    }
-
-    // ── inline-grid row rules: stored child values vs what the rules derive ─
-    for (const rc of checks.rowRules) {
-      try {
-        findings.push(...(await evaluateRowRuleCheck(rc, rows)))
-      } catch (err) {
-        console.warn(`conformance row-rule check skipped for ${collection}.${rc.aliasField}:`, err)
-      }
-    }
+    const findings = await evaluateRows(checks, rows, physical)
 
     // ── persist chunk findings with labels — EVERY finding stores; the
     // detail is the point, and the rows are small ────────────────────────

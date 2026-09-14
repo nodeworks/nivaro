@@ -232,6 +232,9 @@ export async function registerRoutes(app: FastifyInstance) {
     if (req.method === 'GET' || reply.statusCode >= 400) return
     if (META_ROUTES.test(req.url)) {
       clearMetadataCache()
+      // Live integrity checks compile field/layout config per collection — same
+      // staleness rules as the metadata caches they read from.
+      void import('../services/config-conformance.js').then((m) => m.bustCompiledChecks())
       bustPortalLinkCache()
       clearRowRuleCache()
       // Config hot-push (#268): tell open clients the schema/layout changed —
