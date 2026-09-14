@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-14T21:35:35.619Z",
+  "generated_at": "2026-09-14T22:11:49.545Z",
   "releases": [
+    {
+      "version": "0.1.282",
+      "tag": "v0.1.282",
+      "date": "2026-09-14T18:11:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "summary",
+              "text": "section widths are layout config, empties hide, lines sum, no locks",
+              "hash": "2bffa4bd"
+            },
+            {
+              "section": "Added",
+              "scope": "summary",
+              "text": "one-column read view on a shared field grid",
+              "hash": "c524fbb3"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "summary",
+              "text": "read view accents follow the host brand",
+              "hash": "93313d93"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.281",
       "tag": "v0.1.281",
-      "date": "2026-09-14T17:35:27-04:00",
+      "date": "2026-09-14T17:35:35-04:00",
       "sections": [
         {
           "label": "Added",
