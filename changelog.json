@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-14T17:02:37.427Z",
+  "generated_at": "2026-09-14T17:27:03.601Z",
   "releases": [
+    {
+      "version": "0.1.274",
+      "tag": "v0.1.274",
+      "date": "2026-09-14T13:26:54-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrity",
+              "text": "never-stale record findings — write hook, stored row, fast live check",
+              "hash": "b966e5dc"
+            },
+            {
+              "section": "Added",
+              "scope": "integrity",
+              "text": "live per-record check behind the form banner",
+              "hash": "76641e62"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.273",
       "tag": "v0.1.273",
-      "date": "2026-09-14T13:02:27-04:00",
+      "date": "2026-09-14T13:02:37-04:00",
       "sections": [
         {
           "label": "Added",
