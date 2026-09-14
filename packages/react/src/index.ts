@@ -194,6 +194,8 @@ export {
   NavigationContext,
   NewImportDialog,
   type NotificationActionSpec,
+  NotificationBell,
+  type NotificationBellProps,
   type NotificationLike,
   type NotificationRouteMap,
   NotificationRulesCard,

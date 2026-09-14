@@ -295,16 +295,19 @@ export interface NotificationPage {
   limit: number
 }
 
-/** Paginated notification list. `status` filters inbox/read. */
+/** Paginated notification list. `status` filters inbox/read; `app` scopes
+ *  rows to one consuming app's audience (e.g. 'portal'). */
 export function listNotifications(query?: {
   page?: number
   limit?: number
   status?: 'all' | 'inbox' | 'read'
+  app?: string
 }): Command<NotificationPage> {
   const params: Record<string, unknown> = {}
   if (query?.page != null) params.page = query.page
   if (query?.limit != null) params.limit = query.limit
   if (query?.status) params.status = query.status
+  if (query?.app) params.app = query.app
   return cmd('GET', '/notifications', params)
 }
 
