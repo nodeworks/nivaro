@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-14T19:34:10.078Z",
+  "generated_at": "2026-09-14T19:35:36.851Z",
   "releases": [
     {
-      "version": "0.1.276",
-      "tag": "v0.1.276",
-      "date": "2026-09-14T15:34:01-04:00",
+      "version": "0.1.277",
+      "tag": "v0.1.277",
+      "date": "2026-09-14T15:35:28-04:00",
       "sections": [
         {
           "label": "Added",
@@ -14,6 +14,17 @@
               "scope": "api-log",
               "text": "per-request list, inbound integrations view, root alias logging",
               "hash": "72bfcdf8"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api-log",
+              "text": "internal-dispatch skip uses a single-use nonce, not a bare header",
+              "hash": "3fc2289d"
             }
           ]
         },
@@ -29,7 +40,7 @@
           ]
         }
       ],
-      "count": 2
+      "count": 3
     },
     {
       "version": "0.1.275",
