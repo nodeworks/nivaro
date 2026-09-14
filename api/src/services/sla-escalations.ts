@@ -187,6 +187,12 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
                 message: `${friendly} has been breached for ${Math.round(hoursPast)}h in "${rule.state_key}" with no acknowledgment. Open it and acknowledge to stop further escalation.`,
                 collection: linkCollection,
                 item: linkItem,
+                target: {
+                  kind: 'sla',
+                  collection: linkCollection,
+                  id: linkItem,
+                  action: 'acknowledge'
+                },
                 template: built.template,
                 template_data: built.data
               }).catch(() => {})

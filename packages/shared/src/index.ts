@@ -231,9 +231,13 @@ export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slot
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
 export {
+  type NotificationActionSpec,
+  type NotificationLike,
   type NotificationRouteMap,
   type NotificationTarget,
+  type NotificationTargetSpec,
   resolveNotificationTarget,
+  resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
 export * from './lib/queue-grouping'

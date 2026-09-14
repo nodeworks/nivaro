@@ -110,6 +110,14 @@ async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: stri
     collection: task.collection,
     item: task.item,
     sender: actorId,
+    // Click opens the record; the inline action marks THIS task done.
+    target: {
+      kind: 'record',
+      collection: task.collection,
+      id: task.item,
+      task_id: task.id,
+      action: 'complete'
+    },
     ...(built ? { template: built.template, template_data: built.data } : {})
   })
 }

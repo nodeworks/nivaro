@@ -1,13 +1,34 @@
+import {
+  type NotificationActionSpec,
+  type NotificationRouteMap,
+  type NotificationTargetSpec,
+  resolveNotificationTargetFor,
+  runNotificationTarget
+} from '@nivaro/react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlarmClock, Bell, CheckCheck, ChevronLeft, ChevronRight, Search, Trash2 } from 'lucide-react'
+import {
+  AlarmClock,
+  Bell,
+  CheckCheck,
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  Trash2
+} from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { api } from '@/lib/api'
+import { runNotificationAction } from '@/lib/notification-actions'
 import { cn, formatRelative } from '@/lib/utils'
-import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '@nivaro/react'
 
 /** Where a notification's click lands in the admin app. */
 const NOTIF_ROUTES: NotificationRouteMap = {
@@ -18,7 +39,11 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   dashboard: (id) => `/dashboards/${id}`,
   alerts: () => '/alert-manager',
   imports: () => '/imports',
-  issues: () => '/issues'
+  issues: () => '/issues',
+  tasks: () => '/tasks',
+  approvals: () => '/approvals',
+  access_requests: () => '/access-requests',
+  my_work: () => '/my-work'
 }
 
 const PAGE_SIZE = 25
@@ -40,6 +65,11 @@ interface NotificationRow {
   collection: string | null
   item: string | null
   snoozed_until?: string | null
+  target?: NotificationTargetSpec | null
+  kind?: string | null
+  target_label?: string | null
+  url?: string | null
+  actions?: NotificationActionSpec[] | null
 }
 
 function isUnread(n: NotificationRow): boolean {
@@ -159,7 +189,7 @@ export function NotificationsCenterPage() {
         /* non-fatal */
       }
     }
-    runNotificationTarget(resolveNotificationTarget(n.collection, n.item, NOTIF_ROUTES), navigate)
+    runNotificationTarget(resolveNotificationTargetFor(n, NOTIF_ROUTES), navigate)
   }
 
   return (
@@ -275,144 +305,166 @@ export function NotificationsCenterPage() {
                 ) : null
               return (
                 <Fragment key={n.id}>
-                {header}
-                <div className='group relative flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'>
-                  {/* Unread dot — subtle left-edge marker */}
-                  <span
-                    className={cn(
-                      'mt-2 h-2 w-2 shrink-0 rounded-full',
-                      unread ? 'bg-nvr-cyan' : 'bg-transparent'
-                    )}
-                  />
-                  <div className='min-w-0 flex-1'>
-                    <button
-                      type='button'
-                      onClick={() => handleRowClick(n)}
-                      className='block w-full text-left'
-                    >
-                      <div className='flex items-baseline gap-2'>
-                        <span
-                          className={cn(
-                            'truncate text-[13px]',
-                            unread
-                              ? 'font-medium text-slate-900 dark:text-slate-100'
-                              : 'font-normal text-slate-600 dark:text-slate-400'
-                          )}
-                        >
-                          {n.subject ?? n.title ?? '—'}
-                        </span>
-                        <span className='shrink-0 text-[10.5px] text-slate-400'>
-                          {formatRelative(n.timestamp ?? n.created_at ?? new Date())}
-                        </span>
-                      </div>
-                      {n.message && (
-                        <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
-                          {n.message}
-                        </p>
+                  {header}
+                  <div className='group relative flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'>
+                    {/* Unread dot — subtle left-edge marker */}
+                    <span
+                      className={cn(
+                        'mt-2 h-2 w-2 shrink-0 rounded-full',
+                        unread ? 'bg-nvr-cyan' : 'bg-transparent'
                       )}
-                    </button>
-                    <div className='mt-1 flex items-center gap-2'>
-                      {(n.sender_name || n.sender) && (
-                        <span className='text-[11px] text-slate-400'>
-                          From {n.sender_name ?? n.sender}
-                        </span>
-                      )}
-                      {(() => {
-                        const target = resolveNotificationTarget(n.collection, n.item, NOTIF_ROUTES)
-                        if (!target) return null
-                        if (target.type === 'chat') {
+                    />
+                    <div className='min-w-0 flex-1'>
+                      <button
+                        type='button'
+                        onClick={() => handleRowClick(n)}
+                        className='block w-full text-left'
+                      >
+                        <div className='flex items-baseline gap-2'>
+                          <span
+                            className={cn(
+                              'truncate text-[13px]',
+                              unread
+                                ? 'font-medium text-slate-900 dark:text-slate-100'
+                                : 'font-normal text-slate-600 dark:text-slate-400'
+                            )}
+                          >
+                            {n.subject ?? n.title ?? '—'}
+                          </span>
+                          <span className='shrink-0 text-[10.5px] text-slate-400'>
+                            {formatRelative(n.timestamp ?? n.created_at ?? new Date())}
+                          </span>
+                        </div>
+                        {n.message && (
+                          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+                            {n.message}
+                          </p>
+                        )}
+                      </button>
+                      <div className='mt-1 flex items-center gap-2'>
+                        {(n.sender_name || n.sender) && (
+                          <span className='text-[11px] text-slate-400'>
+                            From {n.sender_name ?? n.sender}
+                          </span>
+                        )}
+                        {(() => {
+                          const target = resolveNotificationTargetFor(n, NOTIF_ROUTES)
+                          if (!target) return null
+                          if (target.type === 'chat' || target.type === 'external') {
+                            return (
+                              <button
+                                type='button'
+                                onClick={() => runNotificationTarget(target, navigate)}
+                                className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                              >
+                                {target.type === 'chat' ? 'Open chat' : 'Open in app ↗'}
+                              </button>
+                            )
+                          }
                           return (
-                            <button
-                              type='button'
-                              onClick={() => runNotificationTarget(target, navigate)}
-                              className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                            <Link
+                              to={target.path}
+                              className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 font-mono text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                             >
-                              Open chat
-                            </button>
+                              {n.target_label && n.kind !== 'record'
+                                ? `${n.target_label}${n.item ? ` #${n.item}` : ''}`
+                                : n.collection === '__chat__'
+                                  ? 'Chat'
+                                  : `${n.collection}${n.item ? ` #${n.item}` : ''}`}
+                            </Link>
                           )
-                        }
-                        return (
-                          <Link
-                            to={target.path}
-                            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 font-mono text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                          >
-                            {n.collection === '__chat__' ? 'Chat' : `${n.collection}${n.item ? ` #${n.item}` : ''}`}
-                          </Link>
-                        )
-                      })()}
-                    </div>
-                  </div>
-                  {/* Snooze */}
-                  <div className='relative shrink-0'>
-                    {n.snoozed_until && new Date(n.snoozed_until) > new Date() ? (
-                      <button
-                        type='button'
-                        onClick={() => snoozeMut.mutate({ id: n.id, until: null })}
-                        className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300'
-                        data-tip='Click to wake now'
-                      >
-                        <AlarmClock className='h-3 w-3' />
-                        Until {new Date(n.snoozed_until).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                      </button>
-                    ) : (
-                      <button
-                        type='button'
-                        onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
-                        className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
-                        aria-label='Snooze notification'
-                      >
-                        <AlarmClock className='h-3.5 w-3.5' />
-                      </button>
-                    )}
-                    {snoozeMenuId === n.id && (
-                      <div className='absolute right-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
-                        {snoozePresets().map((pset) => (
+                        })()}
+                        {n.actions?.map((a) => (
                           <button
-                            key={pset.label}
+                            key={a.key}
                             type='button'
-                            disabled={snoozeMut.isPending}
-                            onClick={() => snoozeMut.mutate({ id: n.id, until: pset.until })}
-                            className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
+                            disabled={!unread}
+                            title={unread ? undefined : 'Already handled'}
+                            onClick={() => void runNotificationAction(a, n.id, invalidate)}
+                            className='inline-flex items-center rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-semibold text-nvr-navy hover:bg-nvr-cyan/20 disabled:opacity-40 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                           >
-                            {pset.label}
+                            {a.label}
                           </button>
                         ))}
                       </div>
-                    )}
-                  </div>
-                  {/* Delete with inline confirm */}
-                  <div className='shrink-0'>
-                    {confirmDeleteId === n.id ? (
-                      <div className='flex items-center gap-1.5'>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          className='h-6 px-2 text-[11px]'
-                          onClick={() => setConfirmDeleteId(null)}
+                    </div>
+                    {/* Snooze */}
+                    <div className='relative shrink-0'>
+                      {n.snoozed_until && new Date(n.snoozed_until) > new Date() ? (
+                        <button
+                          type='button'
+                          onClick={() => snoozeMut.mutate({ id: n.id, until: null })}
+                          className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300'
+                          data-tip='Click to wake now'
                         >
-                          Cancel
-                        </Button>
-                        <Button
-                          size='sm'
-                          className='h-6 bg-red-500 px-2 text-[11px] text-white hover:bg-red-600'
-                          disabled={deleteMut.isPending}
-                          onClick={() => deleteMut.mutate(n.id)}
+                          <AlarmClock className='h-3 w-3' />
+                          Until{' '}
+                          {new Date(n.snoozed_until).toLocaleString([], {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit'
+                          })}
+                        </button>
+                      ) : (
+                        <button
+                          type='button'
+                          onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
+                          className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
+                          aria-label='Snooze notification'
                         >
-                          {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-                        </Button>
-                      </div>
-                    ) : (
-                      <button
-                        type='button'
-                        onClick={() => setConfirmDeleteId(n.id)}
-                        className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 group-hover:opacity-100'
-                        aria-label='Delete notification'
-                      >
-                        <Trash2 className='h-3.5 w-3.5' />
-                      </button>
-                    )}
+                          <AlarmClock className='h-3.5 w-3.5' />
+                        </button>
+                      )}
+                      {snoozeMenuId === n.id && (
+                        <div className='absolute right-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
+                          {snoozePresets().map((pset) => (
+                            <button
+                              key={pset.label}
+                              type='button'
+                              disabled={snoozeMut.isPending}
+                              onClick={() => snoozeMut.mutate({ id: n.id, until: pset.until })}
+                              className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
+                            >
+                              {pset.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* Delete with inline confirm */}
+                    <div className='shrink-0'>
+                      {confirmDeleteId === n.id ? (
+                        <div className='flex items-center gap-1.5'>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-6 px-2 text-[11px]'
+                            onClick={() => setConfirmDeleteId(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size='sm'
+                            className='h-6 bg-red-500 px-2 text-[11px] text-white hover:bg-red-600'
+                            disabled={deleteMut.isPending}
+                            onClick={() => deleteMut.mutate(n.id)}
+                          >
+                            {deleteMut.isPending ? 'Deleting…' : 'Delete'}
+                          </Button>
+                        </div>
+                      ) : (
+                        <button
+                          type='button'
+                          onClick={() => setConfirmDeleteId(n.id)}
+                          className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 group-hover:opacity-100'
+                          aria-label='Delete notification'
+                        >
+                          <Trash2 className='h-3.5 w-3.5' />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
                 </Fragment>
               )
             })}

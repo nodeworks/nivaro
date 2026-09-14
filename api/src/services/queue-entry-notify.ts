@@ -118,6 +118,8 @@ export async function runQueueEntryNotifyPass(app: FastifyInstance): Promise<voi
         ...(first && newOnes.length === 1
           ? { collection: first.collection, item: String(first.item_id) }
           : {}),
+        // Click opens the QUEUE (the thing that changed), not the one record.
+        target: { kind: 'queue', id: String(sub.queue_id), action: 'open' },
         template: built.template,
         template_data: built.data
       })

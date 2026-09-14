@@ -91,8 +91,7 @@ import {
   UserX,
   Webhook,
   Wifi,
-  Workflow,
-  X as XIcon
+  Workflow
 } from 'lucide-react'
 import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
@@ -347,7 +346,13 @@ export const navCategories: NavCategory[] = [
       { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Data Tools' },
       { icon: ListOrdered, label: 'ID Sequences', to: '/sequences', section: 'Data Tools' },
       { icon: Mail, label: 'Mail Templates', to: '/mail-templates', section: 'Data Tools' },
-      { icon: MailCheck, label: 'Mail Log', to: '/mail-log', section: 'Data Tools' }
+      { icon: MailCheck, label: 'Mail Log', to: '/mail-log', section: 'Data Tools' },
+      {
+        icon: FlaskConical,
+        label: 'Notification Bench',
+        to: '/notification-bench',
+        section: 'Data Tools'
+      }
     ]
   },
   {

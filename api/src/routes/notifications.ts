@@ -1,11 +1,18 @@
 import type { FastifyInstance } from 'fastify'
-import { builtinAllowed } from '../services/bulk-actions.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { builtinAllowed } from '../services/bulk-actions.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
-import { notifyUser, NOTIFY_CATEGORIES } from '../services/notification-channels.js'
+import { NOTIFY_CATEGORIES, notifyUser } from '../services/notification-channels.js'
+import {
+  actionsFor,
+  deriveTarget,
+  describeTarget,
+  parseStoredTarget,
+  resolveTargetUrl
+} from '../services/notification-target.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -13,6 +20,16 @@ import { notifyUser, NOTIFY_CATEGORIES } from '../services/notification-channels
 // subject varchar(255), message text|null, collection|null, item|null
 
 function serialize(row: Record<string, unknown>) {
+  // Stored target (written by notifyUser) or derived for legacy rows — the
+  // client resolves it against ITS routes; `url` below is the server's answer
+  // for the recipient's app, the fallback when the client has no route.
+  const target =
+    parseStoredTarget(row.target) ??
+    deriveTarget({
+      collection: row.collection as string | null,
+      item: row.item as string | null,
+      subject: row.subject as string | null
+    })
   return {
     id: row.id,
     user: row.recipient,
@@ -24,8 +41,24 @@ function serialize(row: Record<string, unknown>) {
     item: row.item,
     data: null,
     snoozed_until: row.snoozed_until ?? null,
-    created_at: row.timestamp
+    created_at: row.timestamp,
+    target,
+    kind: target?.kind ?? null,
+    target_label: describeTarget(target),
+    actions: actionsFor(target),
+    url: null as string | null
   }
+}
+
+/** serialize + the URL for the app the caller runs in (`?app=`), else the
+ *  recipient's preferred app. */
+async function serializeFor(
+  row: Record<string, unknown>,
+  opts: { recipientUserId: string; app?: 'portal' | 'admin' }
+) {
+  const out = serialize(row)
+  out.url = await resolveTargetUrl(out.target, opts).catch(() => null)
+  return out
 }
 
 export async function notificationsRoutes(app: FastifyInstance) {
@@ -78,7 +111,12 @@ export async function notificationsRoutes(app: FastifyInstance) {
       .limit(limit)
       .select('*')
 
-    return reply.send({ data: rows.map(serialize), total, page, limit })
+    const appQ = (req.query as { app?: string }).app
+    const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
+    const data = await Promise.all(
+      rows.map((r) => serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app }))
+    )
+    return reply.send({ data, total, page, limit })
   })
 
   app.get('/count', async (req, reply) => {

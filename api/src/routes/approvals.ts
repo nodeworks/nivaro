@@ -96,6 +96,13 @@ async function notifyStepApprovers(
       message: `Your approval (${stepLabel}) is requested for ${instance.collection}/${instance.item}.`,
       collection: instance.collection,
       item: instance.item,
+      target: {
+        kind: 'approval',
+        collection: instance.collection,
+        id: instance.item,
+        instance_id: instance.id,
+        action: 'review'
+      },
       sender: actorId,
       channels: { inapp: true, email: true },
       ...(built ? { template: built.template, template_data: built.data } : {})
@@ -189,6 +196,12 @@ export async function applyApprovalDecision(opts: {
       message: `Your approval request for ${itemRef} was rejected${comment ? `: ${comment}` : '.'}`,
       collection: instance.collection,
       item: instance.item,
+      target: {
+        kind: 'record',
+        collection: instance.collection,
+        id: instance.item,
+        action: 'open'
+      },
       sender: user.id,
       channels: { inapp: true, email: true },
       ...(built ? { template: built.template, template_data: built.data } : {})
@@ -214,6 +227,12 @@ export async function applyApprovalDecision(opts: {
       message: `Your approval request for ${itemRef} was fully approved.`,
       collection: instance.collection,
       item: instance.item,
+      target: {
+        kind: 'record',
+        collection: instance.collection,
+        id: instance.item,
+        action: 'open'
+      },
       sender: user.id,
       channels: { inapp: true, email: true },
       ...(builtDone ? { template: builtDone.template, template_data: builtDone.data } : {})

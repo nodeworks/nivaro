@@ -1,14 +1,22 @@
-import { SlugResolverPage } from '@/pages/SlugResolver'
+import { ErrorSurface } from '@nivaro/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useRef } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
-import { ErrorSurface } from '@nivaro/shared'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams
+} from 'react-router'
 import { Toaster } from 'sonner'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { I18nProvider } from '@/lib/i18n'
 import { ThemeProvider, useTheme } from '@/lib/theme'
+import { SlugResolverPage } from '@/pages/SlugResolver'
 
 /**
  * Sonner needs to be TOLD the theme — without the prop it renders light
@@ -123,8 +131,12 @@ const WallboardPage = lazy(() =>
 const BlueprintsPage = lazy(() =>
   import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
 )
-const ChangeSetsPage = lazy(() => import('@/pages/ChangeSets').then((m) => ({ default: m.ChangeSetsPage })))
-const ProvenanceTracePage = lazy(() => import('@/pages/ProvenanceTrace').then((m) => ({ default: m.ProvenanceTracePage })))
+const ChangeSetsPage = lazy(() =>
+  import('@/pages/ChangeSets').then((m) => ({ default: m.ChangeSetsPage }))
+)
+const ProvenanceTracePage = lazy(() =>
+  import('@/pages/ProvenanceTrace').then((m) => ({ default: m.ProvenanceTracePage }))
+)
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
 const ReportStudioPage = lazy(() =>
   import('@/pages/ReportStudio').then((m) => ({ default: m.ReportStudioPage }))
@@ -171,6 +183,7 @@ const SetupChecklist = lazy(() => import('@/pages/SetupChecklist'))
 const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
 const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
 const MailLog = lazy(() => import('@/pages/MailLog'))
+const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -284,7 +297,9 @@ const HealthDashboardPage = lazy(() =>
 const DbHealthPage = lazy(() =>
   import('@/pages/DbHealth').then((m) => ({ default: m.DbHealthPage }))
 )
-const OpsRedisPage = lazy(() => import('@/pages/OpsRedis').then((m) => ({ default: m.OpsRedisPage })))
+const OpsRedisPage = lazy(() =>
+  import('@/pages/OpsRedis').then((m) => ({ default: m.OpsRedisPage }))
+)
 const CronTimelinePage = lazy(() =>
   import('@/pages/CronTimeline').then((m) => ({ default: m.CronTimelinePage }))
 )
@@ -465,7 +480,10 @@ export default function App() {
                   <Route index element={<DashboardPage />} />
                   <Route path='collections' element={<CollectionsPage />} />
                   <Route path='collections/:collection' element={<CollectionBrowserV2Page />} />
-                  <Route path='collections/:collection/classic' element={<CollectionBrowserPage />} />
+                  <Route
+                    path='collections/:collection/classic'
+                    element={<CollectionBrowserPage />}
+                  />
                   <Route path='collections/:collection/s/:slug' element={<SlugResolverPage />} />
                   <Route path='collections/:collection/:id' element={<ItemEditPage />} />
                   <Route path='users' element={<UsersPage />} />
@@ -518,6 +536,7 @@ export default function App() {
                   <Route path='config-search' element={<ConfigSearch />} />
                   <Route path='access-requests' element={<AccessRequests />} />
                   <Route path='mail-log' element={<MailLog />} />
+                  <Route path='notification-bench' element={<NotificationBench />} />
                   <Route path='sequences' element={<Sequences />} />
                   <Route path='sql-scratchpad' element={<SqlScratchpad />} />
                   <Route path='query-catalog' element={<QueryCatalogPage />} />
@@ -586,7 +605,10 @@ export default function App() {
                   <Route path='feature-flags' element={<FeatureFlagsPage />} />
                   <Route path='command' element={<CommandCenterPage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
-                  <Route path='data-quality' element={<Navigate to='/data-integrity?tab=quality' replace />} />
+                  <Route
+                    path='data-quality'
+                    element={<Navigate to='/data-integrity?tab=quality' replace />}
+                  />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />
                   {/* The workflow template editor merged into /pipelines —

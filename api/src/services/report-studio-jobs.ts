@@ -186,6 +186,7 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
             message: `"${widget.title}" crossed your threshold — ${summary}`,
             collection: null,
             item: null,
+            target: { kind: 'report', id: String(alert.report), action: 'open' },
             channels: { inapp: true, email: false }
           })
         }
@@ -321,6 +322,7 @@ export async function runReportSubscriptions(
           message: `Your ${cadence} report digest is ready to view.`,
           collection: 'nivaro_report_defs',
           item: String(report.id),
+          target: { kind: 'report', id: String(report.id), action: 'open' },
           channels: { inapp: true, email: false }
         })
       }

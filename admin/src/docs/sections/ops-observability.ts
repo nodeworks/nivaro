@@ -254,8 +254,18 @@ export const mailHarnessDocs: DocSection = {
       items: [
         "Flow mail ops: 'One email per recipient' (option `split`) sends each address its own copy — the footer and every link resolve for that person; 'Why-me line' (option `why`, templated) pins a shared reason for ops that mail one person per run.",
         "Programmatic senders pass `why` to notifyUser / sendMail / sendRawMail, or put `why` in the template's data.",
-        "The rules link is the profile page — portal route key `profile` (Settings → Project → Frontend app), admin fallback /profile."
+        'The rules link is the profile page — portal route key `profile` (Settings → Project → Frontend app), admin fallback /profile.'
       ]
+    },
+    { type: 'h2', id: 'notification-bench', text: 'Notification test bench' },
+    {
+      type: 'p',
+      text: 'Data Tools → Notification Bench (admin). "Send me a sample of every category" delivers one real notification per category to you — through your own rules, so a category you switched off will not arrive, which is the point. The simulator takes a person + an event (category, subject, optional record, requested channels, "as of" time) and renders the exact delivery decision notifyUser would make: in-app, push, email (sent now / daily summary / off), SMS, with the reason for every kept or dropped channel (suspended, muted, matrix row, presence, quiet hours, digest mode, critical bypass, sender cadence), plus where the click lands in the portal and the admin and which inline action the row offers. Nothing is sent from the simulator.'
+    },
+    { type: 'h2', id: 'notification-targets', text: 'What a notification click does' },
+    {
+      type: 'p',
+      text: "Every notification carries a structured target (record, task, approval, access request, SLA, chat room, queue, report, alerts, issue, import, dashboard, My Work) plus the action a click should offer. Each app maps the target onto ITS routes — the admin opens /collections/:c/:id or /tasks, the portal opens /records/:c/:id or My Work — and when a host has no page for the kind, it falls back to the server-resolved URL for the recipient's preferred app (same origin = in-app, foreign = new tab). Rows can carry an inline action the server declares safe to fire from a click: Mark task done, Acknowledge SLA. Rows written before targets existed are derived from collection + item + subject."
     },
     { type: 'h2', id: 'mail-delivery-board', text: 'Delivery board' },
     {

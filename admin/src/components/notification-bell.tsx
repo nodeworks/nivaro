@@ -1,15 +1,16 @@
+import {
+  type NotificationRouteMap,
+  resolveNotificationTargetFor,
+  runNotificationTarget
+} from '@nivaro/react'
 import { playNotificationSound } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, ExternalLink, KeyRound } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import {
-  resolveNotificationTarget,
-  runNotificationTarget,
-  type NotificationRouteMap
-} from '@nivaro/react'
+import { runNotificationAction } from '@/lib/notification-actions'
 
 /** Where a notification's click lands in the admin app. */
 const NOTIF_ROUTES: NotificationRouteMap = {
@@ -20,10 +21,16 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   dashboard: (id) => `/dashboards/${id}`,
   alerts: () => '/alert-manager',
   imports: () => '/imports',
-  issues: () => '/issues'
+  issues: () => '/issues',
+  tasks: () => '/tasks',
+  approvals: () => '/approvals',
+  access_requests: () => '/access-requests',
+  my_work: () => '/my-work'
 }
+
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
+  api,
   type CMSNotification,
   getNotifications,
   getUnreadCount,
@@ -31,7 +38,6 @@ import {
   markRead,
   markReadBatch
 } from '@/lib/api'
-import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -261,19 +267,30 @@ export function NotificationBell({
           ) : (
             groups.map((g) => {
               const unreadIds = g.rows.filter((n) => !n.read).map((n) => n.id)
-              const target = resolveNotificationTarget(g.collection, g.item, NOTIF_ROUTES)
+              // The group's target = its newest row's (rows share collection + item).
+              const target = resolveNotificationTargetFor(g.rows[0], NOTIF_ROUTES)
               const hasRecord = !!target
+              // Header label: the target's kind for non-record rows, the
+              // collection · item for record rows, nothing for rows about
+              // nowhere in particular (home / My Work samples, broadcasts).
+              const first = g.rows[0]
+              const groupLabel =
+                first?.target_label && first?.kind !== 'record'
+                  ? `${first.target_label}${g.item ? ` · ${g.item}` : ''}`
+                  : String(g.collection) === '__chat__'
+                    ? 'Chat'
+                    : g.collection
+                      ? `${String(g.collection).replace(/_/g, ' ')}${g.item ? ` · ${g.item}` : ''}`
+                      : null
               return (
                 <div
                   key={g.key}
                   className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
                 >
-                  {hasRecord && (
+                  {hasRecord && groupLabel && (
                     <div className='flex items-center gap-1.5 px-3 pt-2'>
                       <span className='truncate text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                        {String(g.collection) === '__chat__'
-                          ? 'Chat'
-                          : `${String(g.collection).replace(/_/g, ' ')} · ${g.item ?? ''}`}
+                        {groupLabel}
                         {g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
                       </span>
                       <span className='ml-auto flex items-center gap-0.5'>
@@ -302,59 +319,81 @@ export function NotificationBell({
                     </div>
                   )}
                   {g.rows.map((n) => (
-                    <button
-                      type='button'
-                      key={n.id}
-                      onClick={() => {
-                        void handleClick(n)
-                        runNotificationTarget(target, navigate)
-                      }}
-                      className={cn(
-                        'flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors',
-                        hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'
-                      )}
-                    >
-                      <span
+                    <Fragment key={n.id}>
+                      <button
+                        type='button'
+                        onClick={() => {
+                          void handleClick(n)
+                          runNotificationTarget(
+                            resolveNotificationTargetFor(n, NOTIF_ROUTES),
+                            navigate
+                          )
+                        }}
                         className={cn(
-                          'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                          n.read ? 'bg-transparent' : 'bg-nvr-cyan'
+                          'flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors',
+                          hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'
                         )}
-                      />
-                      <span className='min-w-0 flex-1'>
+                      >
                         <span
                           className={cn(
-                            'block truncate text-[12.5px]',
-                            n.read
-                              ? 'font-normal text-slate-600 dark:text-slate-400'
-                              : 'font-medium text-slate-900 dark:text-foreground'
+                            'mt-1.5 h-2 w-2 shrink-0 rounded-full',
+                            n.read ? 'bg-transparent' : 'bg-nvr-cyan'
                           )}
-                        >
-                          {n.title}
+                        />
+                        <span className='min-w-0 flex-1'>
+                          <span
+                            className={cn(
+                              'block truncate text-[12.5px]',
+                              n.read
+                                ? 'font-normal text-slate-600 dark:text-slate-400'
+                                : 'font-medium text-slate-900 dark:text-foreground'
+                            )}
+                          >
+                            {n.title}
+                          </span>
+                          {n.message && (
+                            <span className='mt-0.5 block truncate text-[11px] text-slate-500'>
+                              {n.message}
+                            </span>
+                          )}
+                          <span className='mt-0.5 block text-[10.5px] text-slate-400'>
+                            {formatRelative(n.created_at)}
+                          </span>
                         </span>
-                        {n.message && (
-                          <span className='mt-0.5 block truncate text-[11px] text-slate-500'>
-                            {n.message}
+                        {!hasRecord && !n.read && (
+                          <span
+                            role='button'
+                            tabIndex={-1}
+                            title='Mark read'
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleClick(n)
+                            }}
+                            className='mt-0.5 rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
+                          >
+                            <Check className='h-3 w-3' />
                           </span>
                         )}
-                        <span className='mt-0.5 block text-[10.5px] text-slate-400'>
-                          {formatRelative(n.created_at)}
-                        </span>
-                      </span>
-                      {!hasRecord && !n.read && (
-                        <span
-                          role='button'
-                          tabIndex={-1}
-                          title='Mark read'
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void handleClick(n)
-                          }}
-                          className='mt-0.5 rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
-                        >
-                          <Check className='h-3 w-3' />
-                        </span>
+                      </button>
+                      {n.actions && n.actions.length > 0 && !n.read && (
+                        <div className='flex gap-1 px-3 pb-2 pl-[30px]'>
+                          {n.actions.map((a) => (
+                            <button
+                              key={a.key}
+                              type='button'
+                              onClick={() =>
+                                void runNotificationAction(a, n.id, () =>
+                                  queryClient.invalidateQueries({ queryKey: ['notifications'] })
+                                )
+                              }
+                              className='rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10.5px] font-semibold text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                            >
+                              {a.label}
+                            </button>
+                          ))}
+                        </div>
                       )}
-                    </button>
+                    </Fragment>
                   ))}
                 </div>
               )

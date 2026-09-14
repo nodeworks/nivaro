@@ -70,6 +70,7 @@ export async function delegateOpenTasks(userId: string, app?: FastifyInstance): 
           .slice(0, 5)
           .map((t) => t.title)
           .join(', ')}${open.length > 5 ? '…' : ''}`,
+        target: { kind: 'task', action: 'open' },
         ...(built ? { template: built.template, template_data: built.data } : {})
       }).catch(() => {})
     }

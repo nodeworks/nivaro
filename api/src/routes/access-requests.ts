@@ -174,6 +174,7 @@ export async function accessRequestRoutes(app: FastifyInstance) {
           sender: req.user?.id ?? null,
           collection,
           item,
+          target: { kind: 'access_request', collection, id: item ?? null, action: 'review' },
           ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => {})
       }
@@ -354,6 +355,9 @@ export async function accessRequestRoutes(app: FastifyInstance) {
         sender: req.user?.id ?? null,
         collection,
         item,
+        target: item
+          ? { kind: 'record', collection, id: item, action: 'open' }
+          : { kind: 'record', collection, action: 'open' },
         ...(builtDecision
           ? { template: builtDecision.template, template_data: builtDecision.data }
           : {})
@@ -439,6 +443,9 @@ export async function expireStaleAccessRequests(app: FastifyInstance): Promise<n
         return b ? { template: b.template, template_data: b.data } : {}
       })()),
       message: `Nobody acted on your request within ${EXPIRE_AFTER_DAYS} days, so it was closed. If you still need it, open the record and request access again.`,
+      target: r.item
+        ? { kind: 'record', collection: String(r.collection), id: String(r.item), action: 'open' }
+        : { kind: 'record', collection: String(r.collection), action: 'open' },
       collection: String(r.collection),
       item
     }).catch(() => {})

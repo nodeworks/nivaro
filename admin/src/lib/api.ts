@@ -501,6 +501,12 @@ export interface CMSNotification {
   item?: string | null
   data: unknown
   created_at: string
+  /** Structured target + server-resolved url + inline actions (migration 304). */
+  target?: import('@nivaro/shared').NotificationTargetSpec | null
+  kind?: string | null
+  target_label?: string | null
+  url?: string | null
+  actions?: import('@nivaro/shared').NotificationActionSpec[] | null
 }
 
 export interface ExternalApiEndpoint {
@@ -715,7 +721,8 @@ export interface SubRow {
 
 export async function getNotifications(unread = false): Promise<CMSNotification[]> {
   const r = await api.get<{ data: CMSNotification[] }>('/notifications', {
-    params: unread ? { unread: 'true' } : undefined
+    // Server-resolved fallback urls land in THIS app's routes.
+    params: { app: 'admin', ...(unread ? { unread: 'true' } : {}) }
   })
   return r.data.data
 }

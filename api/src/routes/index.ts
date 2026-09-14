@@ -55,6 +55,7 @@ import { opsCalendarRoutes } from './ops-calendar.js'
 import { setupRoutes } from './setup.js'
 import { configSearchRoutes } from './config-search.js'
 import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
+import { notificationBenchRoutes } from './notification-bench.js'
 import { sequenceRoutes } from './sequences.js'
 import { sqlScratchpadRoutes } from './sql-scratchpad.js'
 import { collectionSnapshotRoutes } from './collection-snapshots.js'
@@ -287,6 +288,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(setupRoutes, { prefix: '/setup' })
   await app.register(configSearchRoutes, { prefix: '/config-search' })
   await app.register(mailLogRoutes, { prefix: '/mail-log' })
+  await app.register(notificationBenchRoutes, { prefix: '/notification-bench' })
   await app.register(mailLogReadRoutes, { prefix: '/mail-log' })
   await app.register(sequenceRoutes, { prefix: '/sequences' })
   await app.register(sqlScratchpadRoutes, { prefix: '/sql-scratchpad' })

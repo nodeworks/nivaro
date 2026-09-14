@@ -3,6 +3,13 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { sendMail } from './mail.js'
+import {
+  actionsFor,
+  deriveTarget,
+  type NotificationTargetSpec,
+  normalizeTarget,
+  resolveTargetUrl
+} from './notification-target.js'
 import { sendWebPush } from './web-push.js'
 
 /**
@@ -114,6 +121,11 @@ export interface NotifyUserOptions {
    *  back to `template_data.why`, then to the honest default: the
    *  recipient's notification rules for the category are on. */
   why?: string | null
+  /** What the notification is about + what a click should offer
+   *  (services/notification-target.ts). Stored on the row, drives the bell /
+   *  center / push / portal click and the inline action. Defaults to the
+   *  record named by collection + item. */
+  target?: NotificationTargetSpec | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
 }
@@ -224,7 +236,7 @@ export const isCriticalSubject = (subject: string) => CRITICAL_SUBJECTS.test(sub
 
 const prefsCache = new Map<string, { at: number; prefs: NotifyPrefs | null }>()
 
-async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
+export async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
   const key = userId.toUpperCase()
   const hit = prefsCache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.prefs
@@ -267,61 +279,144 @@ export function inQuietHours(prefs: NotifyPrefs | null, now = new Date()): boole
   return start <= end ? cur >= start && cur < end : cur >= start || cur < end
 }
 
-export async function notifyUser(
-  app: FastifyInstance,
+/** One reason a channel was kept or dropped — the simulator shows these. */
+export interface DeliveryReason {
+  code:
+    | 'suspended'
+    | 'redacted'
+    | 'muted'
+    | 'critical'
+    | 'always_inbox'
+    | 'presence_viewing'
+    | 'matrix_inapp_off'
+    | 'matrix_push_off'
+    | 'quiet_hours_push'
+    | 'email_off'
+    | 'email_daily'
+    | 'email_quiet_hours'
+    | 'email_instant'
+    | 'no_email'
+    | 'no_phone'
+    | 'sender_cadence'
+  channel: 'all' | 'inapp' | 'push' | 'email' | 'sms'
+  text: string
+}
+
+export interface DeliveryDecision {
+  category: NotifyCategory
+  critical: boolean
+  /** Whether each channel fires; email 'deferred' = lands in the daily summary. */
+  inapp: boolean
+  push: boolean
+  email: 'send' | 'deferred' | 'off' | 'not_requested' | 'no_address'
+  sms: boolean
+  reasons: DeliveryReason[]
+  /** Fully dropped before any channel (suspended / redacted / muted). */
+  dropped: boolean
+}
+
+/**
+ * THE delivery decision for one recipient — notifyUser executes it; the
+ * admin test bench renders it. Every suppression a person can configure
+ * (mutes, the channel matrix, quiet hours, digest mode) and every bypass
+ * (critical subjects, always_inbox) is judged here so the two can never
+ * disagree.
+ */
+export async function decideDelivery(
   userId: string,
-  opts: NotifyUserOptions
-): Promise<void> {
+  opts: Pick<
+    NotifyUserOptions,
+    'subject' | 'collection' | 'item' | 'category' | 'always_inbox' | 'channels'
+  > & { cadence?: 'sender' },
+  now = new Date()
+): Promise<DeliveryDecision> {
   const channels = { inapp: true, email: false, sms: false, ...(opts.channels ?? {}) }
-  const now = new Date()
+  const reasons: DeliveryReason[] = []
+  const category = opts.category ?? classifyNotification(opts.subject)
+  const critical = CRITICAL_SUBJECTS.test(opts.subject)
+  const dropped = (code: DeliveryReason['code'], text: string): DeliveryDecision => ({
+    category,
+    critical,
+    inapp: false,
+    push: false,
+    email: 'off',
+    sms: false,
+    reasons: [{ code, channel: 'all', text }],
+    dropped: true
+  })
 
   // Nobody who has left gets told. A suspended account cannot act on the
   // notification and a redacted one is a person exercising a deletion right —
   // continuing to mail them is the part that matters legally, and an inbox row
   // for an account that can never sign in is noise either way.
-  //
-  // Enforced HERE rather than at each caller because everything funnels
-  // through this: digests, SLA, watches, subscriptions, flows, mentions.
+  let recipient:
+    | {
+        status?: string
+        is_redacted?: boolean | number
+        email?: string | null
+        phone?: string | null
+      }
+    | undefined
   try {
-    const recipient = (await db('nivaro_users')
+    recipient = (await db('nivaro_users')
       .where({ id: userId })
-      .first('status', 'is_redacted')) as
-      | { status?: string; is_redacted?: boolean | number }
-      | undefined
-    const suspended = String(recipient?.status ?? '').toLowerCase() === 'suspended'
-    const redacted = recipient?.is_redacted === true || recipient?.is_redacted === 1
-    if (suspended || redacted) return
+      .first('status', 'is_redacted', 'email', 'phone')) as typeof recipient
   } catch {
-    // A lookup failure must not swallow a notification — deliver and move on.
+    recipient = undefined
   }
+  if (String(recipient?.status ?? '').toLowerCase() === 'suspended')
+    return dropped('suspended', 'The account is suspended — nothing is delivered.')
+  if (recipient?.is_redacted === true || recipient?.is_redacted === 1)
+    return dropped('redacted', 'The account is redacted — nothing is delivered.')
+
+  if (critical)
+    reasons.push({
+      code: 'critical',
+      channel: 'all',
+      text: 'Critical subject — mutes, quiet hours and the matrix are bypassed.'
+    })
+  if (opts.always_inbox && !critical)
+    reasons.push({
+      code: 'always_inbox',
+      channel: 'inapp',
+      text: 'Sender asked for the inbox row to always land (record mutes and presence suppression skipped).'
+    })
 
   // Record mute (#401): "never tell me about THIS record" beats every watch
   // and subscription — the mute is the most specific signal the user can
   // give. Critical subjects still bypass (same rule as quiet hours).
-  if (opts.collection && opts.item && !opts.always_inbox && !CRITICAL_SUBJECTS.test(opts.subject)) {
+  if (opts.collection && opts.item && !opts.always_inbox && !critical) {
     try {
       const muted = await db('nivaro_notification_mutes')
         .where({ user: userId, collection: opts.collection, item: String(opts.item) })
         .first('id')
-      if (muted) return
+      if (muted)
+        return dropped(
+          'muted',
+          `The recipient muted ${opts.collection} ${opts.item} — nothing is delivered.`
+        )
     } catch {
       // table missing mid-migration — deliver rather than drop
     }
   }
 
-  const category = opts.category ?? classifyNotification(opts.subject)
   const prefs = await getNotifyPrefs(userId)
   const matrixRow = prefs?.matrix?.[category]
-  const critical = CRITICAL_SUBJECTS.test(opts.subject)
+  let inapp = channels.inapp
   // Presence-aware suppression (#269): the recipient is LOOKING at the record
   // this notification is about — they watched it happen; the inbox doesn't
   // need to tell them. In-app + push only (email/digest unaffected); critical
   // subjects always land. Per-node presence, same accepted limitation.
-  if (!critical && !opts.always_inbox && opts.collection && opts.item) {
+  if (inapp && !critical && !opts.always_inbox && opts.collection && opts.item) {
     try {
       const { isUserViewing } = await import('../plugins/socketio.js')
       if (isUserViewing(opts.collection, String(opts.item), userId)) {
-        channels.inapp = false
+        inapp = false
+        reasons.push({
+          code: 'presence_viewing',
+          channel: 'inapp',
+          text: 'The recipient is viewing this record right now — in-app row and push are skipped.'
+        })
       }
     } catch {
       // presence lookup failing must never swallow delivery decisions
@@ -329,8 +424,134 @@ export async function notifyUser(
   }
   // Matrix: in-app off for this category kills the whole in-app channel
   // (row, push, toast) — critical subjects always land.
-  if (matrixRow?.inapp === false && !critical) channels.inapp = false
-  const pushAllowed = critical || (matrixRow?.push !== false && !inQuietHours(prefs, now))
+  if (inapp && matrixRow?.inapp === false && !critical) {
+    inapp = false
+    reasons.push({
+      code: 'matrix_inapp_off',
+      channel: 'inapp',
+      text: `Notification rules: in-app is OFF for "${NOTIFY_CATEGORY_LABELS[category]}".`
+    })
+  }
+  let push = inapp
+  if (push && !critical) {
+    if (matrixRow?.push === false) {
+      push = false
+      reasons.push({
+        code: 'matrix_push_off',
+        channel: 'push',
+        text: `Notification rules: push is OFF for "${NOTIFY_CATEGORY_LABELS[category]}".`
+      })
+    } else if (inQuietHours(prefs, now)) {
+      push = false
+      reasons.push({
+        code: 'quiet_hours_push',
+        channel: 'push',
+        text: `Quiet hours (${prefs?.quiet_start}–${prefs?.quiet_end} ET) — push is held; the inbox row still lands.`
+      })
+    }
+  }
+
+  let email: DeliveryDecision['email'] = 'not_requested'
+  if (channels.email) {
+    if (!recipient?.email) {
+      email = 'no_address'
+      reasons.push({
+        code: 'no_email',
+        channel: 'email',
+        text: 'The account has no email address.'
+      })
+    } else {
+      const legacy = await legacyEmailDigest(userId)
+      const mode = emailModeFor(prefs, category, legacy)
+      if (critical) {
+        email = 'send'
+        reasons.push({
+          code: 'email_instant',
+          channel: 'email',
+          text: 'Critical — emailed now regardless of the daily-summary setting.'
+        })
+      } else if (mode === 'off') {
+        email = 'off'
+        reasons.push({
+          code: 'email_off',
+          channel: 'email',
+          text: `Notification rules: email is OFF for "${NOTIFY_CATEGORY_LABELS[category]}" — not sent, not summarised.`
+        })
+      } else if (mode === 'daily' && opts.cadence !== 'sender') {
+        email = 'deferred'
+        reasons.push({
+          code: 'email_daily',
+          channel: 'email',
+          text: `Notification rules: "${NOTIFY_CATEGORY_LABELS[category]}" email goes in the daily summary.`
+        })
+      } else if (inQuietHours(prefs, now)) {
+        email = 'deferred'
+        reasons.push({
+          code: 'email_quiet_hours',
+          channel: 'email',
+          text: 'Quiet hours — the email waits for the next daily summary.'
+        })
+      } else {
+        email = 'send'
+        if (mode === 'daily' && opts.cadence === 'sender')
+          reasons.push({
+            code: 'sender_cadence',
+            channel: 'email',
+            text: 'The sender chose instant delivery (a subscription set to Instantly) — the daily-summary default is skipped.'
+          })
+        else reasons.push({ code: 'email_instant', channel: 'email', text: 'Emailed now.' })
+      }
+    }
+  }
+  let sms = channels.sms
+  if (sms && !recipient?.phone) {
+    sms = false
+    reasons.push({ code: 'no_phone', channel: 'sms', text: 'The account has no phone number.' })
+  }
+
+  return { category, critical, inapp, push, email, sms, reasons, dropped: false }
+}
+
+async function legacyEmailDigest(userId: string): Promise<unknown> {
+  try {
+    const row = (await db('nivaro_users').where({ id: userId }).first('preferences')) as
+      | { preferences: unknown }
+      | undefined
+    const p =
+      typeof row?.preferences === 'string'
+        ? JSON.parse(row.preferences)
+        : (row?.preferences ?? null)
+    return p && typeof p === 'object' ? (p as { email_digest?: unknown }).email_digest : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export async function notifyUser(
+  app: FastifyInstance,
+  userId: string,
+  opts: NotifyUserOptions
+): Promise<void> {
+  const now = new Date()
+  const decision = await decideDelivery(userId, opts, now)
+  if (decision.dropped) return
+  const channels = {
+    inapp: decision.inapp,
+    // Email + SMS keep their own deferral / test-mode paths inside mail.ts /
+    // sms.ts — the decision only says whether the channel was asked for.
+    email: !!opts.channels?.email,
+    sms: !!opts.channels?.sms
+  }
+  const pushAllowed = decision.push
+  // Stored target: the caller's spec, else the record named by collection +
+  // item (derived the same way legacy rows are read).
+  const target =
+    normalizeTarget(opts.target) ??
+    deriveTarget({
+      collection: opts.collection,
+      item: opts.item != null ? String(opts.item) : null,
+      subject: opts.subject
+    })
 
   try {
     if (channels.inapp) {
@@ -343,22 +564,29 @@ export async function notifyUser(
           sender: opts.sender ?? null,
           message: opts.message.slice(0, 500),
           collection: opts.collection ?? null,
-          item: opts.item ?? null
+          item: opts.item ?? null,
+          target: target ? JSON.stringify(target) : null,
+          kind: target?.kind ?? null,
+          action: target?.action ?? null
         })
         .returning('*')
 
       // Browser push rides the in-app channel: no-op for users with no
       // registered subscription, never blocks the caller. Quiet hours and the
       // per-category matrix suppress the interruption, never the inbox row.
-      if (pushAllowed)
+      // The push opens the target in the app THIS recipient uses.
+      if (pushAllowed) {
+        const url =
+          (await resolveTargetUrl(target, { recipientUserId: userId }).catch(() => null)) ??
+          (opts.collection && opts.item
+            ? `/collections/${opts.collection}/${opts.item}`
+            : '/notifications')
         void sendWebPush(userId, {
           title: opts.subject.slice(0, 120),
           body: opts.message.slice(0, 300),
-          url:
-            opts.collection && opts.item
-              ? `/collections/${opts.collection}/${opts.item}`
-              : '/notifications'
+          url
         })
+      }
 
       if (app.io) {
         emitNotification(app.io, userId, {
@@ -368,7 +596,9 @@ export async function notifyUser(
           collection: opts.collection ?? null,
           item: opts.item ?? null,
           sender: opts.sender ?? null,
-          timestamp: now
+          timestamp: now,
+          target,
+          actions: actionsFor(target)
         })
       }
     }

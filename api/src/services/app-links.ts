@@ -28,6 +28,9 @@ export type LinkKind =
   | 'my_work'
   | 'home'
   | 'profile'
+  | 'issues'
+  | 'imports'
+  | 'dashboard'
 
 export type LinkParams = Record<string, string | number | null | undefined>
 
@@ -51,7 +54,10 @@ const ADMIN_ROUTES: Record<LinkKind, string> = {
   notifications: '/notifications',
   my_work: '/my-work',
   home: '/',
-  profile: '/profile'
+  profile: '/profile',
+  issues: '/issues',
+  imports: '/imports',
+  dashboard: '/dashboards/{id}'
 }
 
 let registered: LinkRegistration | null = null
