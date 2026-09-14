@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-14T04:59:55.903Z",
+  "generated_at": "2026-09-14T17:02:37.427Z",
   "releases": [
+    {
+      "version": "0.1.273",
+      "tag": "v0.1.273",
+      "date": "2026-09-14T13:02:27-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "release the edit lock from the header pill at any time",
+              "hash": "e247a583"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "context-menu \"Copy value\" copies the cell under the cursor",
+              "hash": "41692b43"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.272",
       "tag": "v0.1.272",
-      "date": "2026-09-14T00:59:47-04:00",
+      "date": "2026-09-14T00:59:55-04:00",
       "sections": [
         {
           "label": "Added",
