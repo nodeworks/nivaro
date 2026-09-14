@@ -1529,7 +1529,7 @@ function SubscriptionsCard() {
 
 // ── Out of office / delegation ───────────────────────────────────────────────
 
-function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => void }) {
+export function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => void }) {
   const client = useNivaroClient()
   const [ooo, setOoo] = useState(!!user.is_out_of_office)
   const [exposure, setExposure] = useState<{

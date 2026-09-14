@@ -290,6 +290,7 @@ export const navCategories: NavCategory[] = [
         to: '/access-requests',
         section: 'Access & Compliance'
       },
+      { icon: Users, label: 'Delegation', to: '/delegation', section: 'Access & Compliance' },
       { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps', section: 'Access & Compliance' },
       {
         icon: ShieldAlert,

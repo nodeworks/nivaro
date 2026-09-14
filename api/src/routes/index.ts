@@ -52,6 +52,7 @@ import { dashboardsRoutes } from './dashboards.js'
 import { dataModelReadRoutes, dataModelRoutes } from './data-model.js'
 import { dataQualityRoutes } from './data-quality.js'
 import { deadLettersRoutes } from './dead-letters.js'
+import { delegationRoutes } from './delegation.js'
 import { devToolsRoutes } from './dev-tools.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
@@ -257,6 +258,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(announcementRoutes, { prefix: '/announcements' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
+  await app.register(delegationRoutes)
   await app.register(myWorkRoutes)
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)

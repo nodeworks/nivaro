@@ -58,6 +58,8 @@ export * from './components/chat/chat-core'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
+export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
+export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
@@ -153,6 +155,7 @@ export type {
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
 export {
+  DelegationCard,
   DisplayPrefsCard,
   LinkAppCard,
   NotificationRulesCard,

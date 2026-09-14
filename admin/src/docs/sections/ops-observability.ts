@@ -267,6 +267,16 @@ export const mailHarnessDocs: DocSection = {
       type: 'p',
       text: "Every notification carries a structured target (record, task, approval, access request, SLA, chat room, queue, report, alerts, issue, import, dashboard, My Work) plus the action a click should offer. Each app maps the target onto ITS routes — the admin opens /collections/:c/:id or /tasks, the portal opens /records/:c/:id or My Work — and when a host has no page for the kind, it falls back to the server-resolved URL for the recipient's preferred app (same origin = in-app, foreign = new tab). Rows can carry an inline action the server declares safe to fire from a click: Mark task done, Acknowledge SLA. Rows written before targets existed are derived from collection + item + subject."
     },
+    { type: 'h2', id: 'delegation-console', text: 'Delegation console' },
+    {
+      type: 'p',
+      text: 'Monitoring → Delegation: one page for absence coverage. Stat strip (out now, out in the next N days, people covering, expiring, uncovered, approvals at risk), a red "would go unowned" section for anyone out — or entering an OOO window within 24 hours — with no working delegate (none, expired, suspended, or out themselves) and the open items in states they cover, the out-now and coming-up rosters, who covers whom, delegations ending soon (an expired one while the person is still out is flagged), the records blocked right now (admin; the coverage-gap resolver), and your own Out-of-office card. Admins assign or change a delegate for someone inline.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/delegation/overview?days=14
+POST /api/delegation/:userId/delegate   { delegate_id, delegate_expires_at?, is_out_of_office? }   # admin`
+    },
     { type: 'h2', id: 'notification-templates', text: 'In-app notification templates' },
     {
       type: 'p',

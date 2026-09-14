@@ -185,6 +185,7 @@ const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
 const MailLog = lazy(() => import('@/pages/MailLog'))
 const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
 const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics'))
+const DelegationConsole = lazy(() => import('@/pages/DelegationConsole'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -521,6 +522,7 @@ export default function App() {
                   <Route path='data-integrity' element={<DataIntegrityPage />} />
                   <Route path='announcements' element={<AnnouncementsPage />} />
                   <Route path='coverage-gaps' element={<CoverageGapsPage />} />
+                  <Route path='delegation' element={<DelegationConsole />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
