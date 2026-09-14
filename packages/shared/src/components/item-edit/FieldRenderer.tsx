@@ -882,6 +882,7 @@ export function FieldRenderer({
             uploadTemplate={uploadTemplate}
             rowMatchPanel={rowMatchPanel}
             lineSla={(opts.line_sla ?? null) as { enabled?: boolean; field?: string } | null}
+            editorMode={opts.editor_mode === 'split' ? 'split' : undefined}
             rowLints={(Array.isArray(opts.row_lints) ? opts.row_lints : null) as RowLint[] | null}
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
