@@ -323,7 +323,7 @@ function M2MValue({
   return (
     <span className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
       {ids.map((id, i) => (
-        <span key={id} className='inline-flex items-center'>
+        <span key={id} className='inline-flex items-center whitespace-nowrap'>
           <RelatedOrFile collection={target} id={id} />
           {i < ids.length - 1 && <span className='text-slate-300 dark:text-slate-600'>,</span>}
         </span>
@@ -1290,7 +1290,10 @@ export function RecordReadView({
                   return (
                     <div
                       key={a.field}
-                      className={`min-w-0 ${long ? 'col-span-full' : emphasis || wide ? 'col-span-2' : ''}`}
+                      // A list of linked records (files, tags) is a row, not a
+                      // fact: it takes the whole width instead of folding
+                      // inside one track while the card sits mostly empty.
+                      className={`min-w-0 ${long || isM2M(a) ? 'col-span-full' : emphasis || wide ? 'col-span-2' : ''}`}
                     >
                       <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                         {labelFor(a)}
