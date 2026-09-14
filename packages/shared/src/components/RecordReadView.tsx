@@ -178,7 +178,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     <button
       type='button'
       onClick={() => drill.open({ collection, itemId: String(id) })}
-      className='text-left underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:decoration-slate-600'
+      className='text-left underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
     >
       {label}
     </button>
@@ -466,7 +466,7 @@ function ChildTable({
               e.stopPropagation()
               drill.open({ collection: target, itemId: String(id) })
             }}
-            className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#0284c7] dark:decoration-slate-600'
+            className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan'
           >
             {pv.value}
           </button>
@@ -518,7 +518,7 @@ function ChildTable({
               aria-pressed={activePreset === p.name}
               className={`rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition-colors ${
                 activePreset === p.name
-                  ? 'border-[#00ceff] bg-[#00ceff1a] text-[#0e7490] dark:text-[#67e8f9]'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-[#007a99] dark:text-nvr-cyan'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
               }`}
             >
@@ -570,7 +570,7 @@ function ChildTable({
                           onChange={(e) => setFilter(f.field, '_contains', e.target.value)}
                           placeholder='Filter…'
                           aria-label={`Filter ${f.field}`}
-                          className='h-6 w-full min-w-[56px] rounded border border-slate-200 bg-white px-1.5 text-[10.5px] font-normal normal-case tracking-normal outline-none focus:border-[#00ceff80] dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100'
+                          className='h-6 w-full min-w-[56px] rounded border border-slate-200 bg-white px-1.5 text-[10.5px] font-normal normal-case tracking-normal outline-none focus:border-nvr-cyan/50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100'
                         />
                       )}
                       {kind === 'num' && (
@@ -590,7 +590,7 @@ function ChildTable({
                             value={cur?.value ?? ''}
                             onChange={(e) => setFilter(f.field, cur?.op ?? '_eq', e.target.value)}
                             aria-label={`Filter ${f.field}`}
-                            className='h-6 w-full min-w-[48px] rounded border border-slate-200 bg-white px-1 text-[10.5px] font-normal outline-none focus:border-[#00ceff80] dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100'
+                            className='h-6 w-full min-w-[48px] rounded border border-slate-200 bg-white px-1 text-[10.5px] font-normal outline-none focus:border-nvr-cyan/50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100'
                           />
                         </span>
                       )}
@@ -631,7 +631,7 @@ function ChildTable({
                   drill ? () => drill.open({ collection, itemId: String(row.id) }) : undefined
                 }
                 className={`border-b border-slate-100 last:border-0 dark:border-slate-800 ${
-                  drill ? 'cursor-pointer hover:bg-[#00ceff0a] dark:hover:bg-[#00ceff14]' : ''
+                  drill ? 'cursor-pointer hover:bg-nvr-cyan/5 dark:hover:bg-nvr-cyan/10' : ''
                 }`}
               >
                 {hasLineNo && (
