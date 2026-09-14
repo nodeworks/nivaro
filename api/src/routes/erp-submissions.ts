@@ -4,7 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
-import { serializeResponseBody } from '../services/workflow-actions.js'
+import { detectBodyAcceptance, serializeResponseBody } from '../services/workflow-actions.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -81,7 +81,12 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
     if (body && typeof body === 'object' && !Array.isArray(body)) {
       const b = body as Record<string, unknown>
       const bodyStatus = typeof b.status === 'string' ? b.status.toLowerCase() : null
-      if (b.accepted === true || bodyStatus === 'accepted' || bodyStatus === 'acknowledged') {
+      if (
+        b.accepted === true ||
+        bodyStatus === 'accepted' ||
+        bodyStatus === 'acknowledged' ||
+        detectBodyAcceptance(null, body)
+      ) {
         status = 'accepted'
       } else if (bodyStatus === 'rejected') {
         status = 'rejected'

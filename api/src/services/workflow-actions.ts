@@ -1,9 +1,9 @@
 import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { changeSignature, payloadSignature, type PushWhen, shouldPush } from './erp-push-gate.js'
+import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { callExternalApi } from './external-apis.js'
-import { evalConditionRule, type ConditionRule } from './workflow-conditions.js'
+import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
 // ─── Transition actions ──────────────────────────────────────────────────────
 // nivaro_workflow_transitions.actions is a JSON array executed AFTER a
@@ -75,6 +75,7 @@ interface TransitionActionDef {
    *  rule matches, the submission records as FAILED with the mined message
    *  even though the HTTP status was 2xx. See ResponseErrorConfig. */
   response_error?: ResponseErrorConfig
+  response_success?: ResponseSuccessConfig
   /** Blocking actions run BEFORE the transition mutation; a failure ABORTS
    *  the transition (422 to the caller) instead of landing the new state —
    *  e.g. the MDSi submission, whose order number the next state requires. */
@@ -436,6 +437,40 @@ export function detectConfiguredBodyError(
   return summary || 'ERP response body reported an error status'
 }
 
+/**
+ * `response_success` — the mirror of `response_error`: body paths/values that
+ * mean the ERP ACCEPTED the write, so the submission records `accepted`
+ * instead of parking at `pending` forever. Without config, a small generic
+ * heuristic applies: a top-level `status` / `api_status` / `result` string of
+ * OK / SUCCESS / ACCEPTED (MWF answers `{"api_status": "OK"}`).
+ */
+export interface ResponseSuccessConfig {
+  when: Array<{ path: string; in: string[] }>
+}
+
+const DEFAULT_SUCCESS_KEYS = ['status', 'api_status', 'result']
+const DEFAULT_SUCCESS_VALUES = new Set(['OK', 'SUCCESS', 'SUCCEEDED', 'ACCEPTED'])
+
+export function detectBodyAcceptance(
+  cfg: ResponseSuccessConfig | null | undefined,
+  body: unknown
+): boolean {
+  if (cfg && Array.isArray(cfg.when) && cfg.when.length > 0) {
+    return cfg.when.some((rule) => {
+      if (!rule?.path || !Array.isArray(rule.in) || rule.in.length === 0) return false
+      const wanted = rule.in.map((v) => String(v).trim().toUpperCase())
+      return collectPathValues(body, rule.path).some(
+        (v) => typeof v === 'string' && wanted.includes(v.trim().toUpperCase())
+      )
+    })
+  }
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return false
+  return DEFAULT_SUCCESS_KEYS.some((k) => {
+    const v = (body as Record<string, unknown>)[k]
+    return typeof v === 'string' && DEFAULT_SUCCESS_VALUES.has(v.trim().toUpperCase())
+  })
+}
+
 export async function runTransitionActions(opts: {
   transition: { id: string; label: string; actions: string | null }
   instance: { collection: string; item: string }
@@ -699,7 +734,15 @@ export async function runTransitionActions(opts: {
         if (bodyError) {
           error = bodyError
         } else {
-          status = 'pending'
+          // …and a 2xx whose body says OK/SUCCESS (config or the generic
+          // heuristic) is accepted outright — MWF's `api_status: "OK"` used
+          // to sit at pending forever (Rob, 2026-09-14).
+          status = detectBodyAcceptance(
+            action.response_success as ResponseSuccessConfig | undefined,
+            res.body
+          )
+            ? 'accepted'
+            : 'pending'
         }
       } else {
         error = `HTTP ${res.status}: ${JSON.stringify(res.body ?? null)?.slice(0, 500)}`

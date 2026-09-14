@@ -1,15 +1,24 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Loader2, Search, Star, X } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Search,
+  Star,
+  X
+} from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
-import { del, get, patch, post } from '../../lib/commands'
-import { cn, titleCase , matchesAllTokens} from '../../lib/utils'
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
+import { del, get, patch, post } from '../../lib/commands'
+import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
+import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import { useO2MStaging } from './O2MStagingContext'
-import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { RelationCombobox } from './RelationCombobox'
 import type { CMSRelation } from './types'
 
@@ -858,7 +867,10 @@ export function CatalogPickerField({
         type='button'
         onClick={() => catalogCol && openCatalogItem(catalogCol, catalogId, parentDraft)}
         title='View stock & planning detail'
-        className={cn(cls, 'text-left underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe] hover:decoration-[#009abe] dark:decoration-slate-600')}
+        className={cn(
+          cls,
+          'text-left underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe] hover:decoration-[#009abe] dark:decoration-slate-600'
+        )}
       >
         {text}
       </button>
@@ -1194,13 +1206,9 @@ export function CatalogPickerField({
             <Loader2 className='h-3.5 w-3.5 animate-spin' /> Searching the catalog…
           </div>
         )}
-        {search.trim().length > 0 &&
-          fullMatches.length === 0 &&
-          !fullSearchFetching && (
-            <p className='px-3 py-4 text-center text-slate-400'>
-              No CIFAs match "{search.trim()}"
-            </p>
-          )}
+        {search.trim().length > 0 && fullMatches.length === 0 && !fullSearchFetching && (
+          <p className='px-3 py-4 text-center text-slate-400'>No CIFAs match "{search.trim()}"</p>
+        )}
         {search.trim().length > 0 && fullMatches.length > 0 && (
           <Fragment>
             <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
@@ -1246,7 +1254,8 @@ export function CatalogPickerField({
         {missingParents.length > 0 && !search.trim() && (
           <p className='px-3 py-6 text-center text-slate-400'>
             Search the full catalog above, or select{' '}
-            {missingParents.map((f) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f)).join(', ')} to browse by category
+            {missingParents.map((f) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f)).join(', ')}{' '}
+            to browse by category
           </p>
         )}
         {missingParents.length === 0 && catalogLoading && (
@@ -1302,39 +1311,38 @@ export function CatalogPickerField({
               </p>
             )}
             {!collapsed.has('__favorites__') &&
-              pinnedRowsData
-                .map((r, i) => {
-                  const id = String(r.id)
-                  const qty = currentQty(id)
-                  const shortfall = qtyShortfall(id)
-                  return (
-                    <div
-                      key={id}
-                      className={cn(
-                        'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
-                        i % 2 === 0
-                          ? 'bg-white dark:bg-background'
-                          : 'bg-slate-50/50 dark:bg-muted/30',
-                        (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
-                        shortfall && 'bg-amber-50 dark:bg-amber-900/15'
-                      )}
-                    >
-                      {starButton(id)}
-                      {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
-                      {colCells(id, r)}
-                      {shortfall && (
-                        <AlertTriangle
-                          className='h-3.5 w-3.5 shrink-0 text-amber-500'
-                          aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
-                        />
-                      )}
-                      {savingIds.has(id) && (
-                        <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                      )}
-                      {qtyInput(id, r)}
-                    </div>
-                  )
-                })}
+              pinnedRowsData.map((r, i) => {
+                const id = String(r.id)
+                const qty = currentQty(id)
+                const shortfall = qtyShortfall(id)
+                return (
+                  <div
+                    key={id}
+                    className={cn(
+                      'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                      i % 2 === 0
+                        ? 'bg-white dark:bg-background'
+                        : 'bg-slate-50/50 dark:bg-muted/30',
+                      (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
+                      shortfall && 'bg-amber-50 dark:bg-amber-900/15'
+                    )}
+                  >
+                    {starButton(id)}
+                    {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
+                    {colCells(id, r)}
+                    {shortfall && (
+                      <AlertTriangle
+                        className='h-3.5 w-3.5 shrink-0 text-amber-500'
+                        aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
+                      />
+                    )}
+                    {savingIds.has(id) && (
+                      <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                    )}
+                    {qtyInput(id, r)}
+                  </div>
+                )
+              })}
           </Fragment>
         )}
 
@@ -1412,7 +1420,6 @@ export function CatalogPickerField({
               </Fragment>
             )
           })}
-
       </div>
 
       {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
@@ -1442,7 +1449,9 @@ export function CatalogPickerField({
               {config.upload_template && !isNew && reimportHandler && parentCollection && (
                 <ImportFromFileButton
                   collection={parentCollection}
-                  templateFilter={(t) => t.name === config.upload_template && t.reimport?.enabled === true}
+                  templateFilter={(t) =>
+                    t.name === config.upload_template && t.reimport?.enabled === true
+                  }
                   getLabel={(t) => t.reimport?.button_label ?? t.button_label}
                   onParsed={(result, template) => reimportHandler(result, template)}
                   compact
@@ -1503,182 +1512,193 @@ export function CatalogPickerField({
                   const shortfall = isStagedDelete ? null : qtyShortfall(e.key)
                   const submissionError = isStagedDelete ? null : submissionErrorFor(e.key)
                   return (
-                  <div
-                    key={e.key}
-                    className={cn(
-                      'border-b border-slate-100 px-3 py-2 last:border-b-0 dark:border-border/50',
-                      i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30',
-                      shortfall && 'bg-amber-50 dark:bg-amber-900/15',
-                      submissionError && 'bg-red-50/70 dark:bg-red-900/15',
-                      isStagedDelete && 'opacity-60'
-                    )}
-                  >
-                    <div className={cn('flex items-center gap-2', isStagedDelete && 'line-through decoration-slate-400')}>
-                      {itemLabel(
-                        e.key,
-                        labelFor(e.key),
-                        'shrink-0 font-semibold text-slate-800 dark:text-slate-100'
+                    <div
+                      key={e.key}
+                      className={cn(
+                        'border-b border-slate-100 px-3 py-2 last:border-b-0 dark:border-border/50',
+                        i % 2 === 0
+                          ? 'bg-white dark:bg-background'
+                          : 'bg-slate-50/50 dark:bg-muted/30',
+                        shortfall && 'bg-amber-50 dark:bg-amber-900/15',
+                        submissionError && 'bg-red-50/70 dark:bg-red-900/15',
+                        isStagedDelete && 'opacity-60'
                       )}
-                      {submissionError && (
-                        <span className='group/suberr relative shrink-0'>
-                          <AlertCircle className='h-3.5 w-3.5 text-red-500' strokeWidth={2} />
-                          {/* CSS hover tooltip — native title has an OS delay */}
-                          <span className='pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden w-max max-w-[380px] -translate-x-1/2 whitespace-normal break-words rounded-md bg-[#0f172a] px-2.5 py-1.5 text-left text-[11px] font-normal leading-4 text-white shadow-lg group-hover/suberr:block'>
-                            <span className='mb-0.5 block font-semibold text-red-300'>
-                              This line was in the failed submission
-                            </span>
-                            {submissionError}
-                          </span>
-                        </span>
-                      )}
-                      {descCol && (
-                        <span
-                          className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'
-                          title={String(pathValue(catalogRowFor(e.key), descCol.field) ?? '')}
-                        >
-                          {fmtVal(pathValue(catalogRowFor(e.key), descCol.field), undefined)}
-                        </span>
-                      )}
-                      {!descCol && <span className='flex-1' />}
-                      {chipCols.map((c) => {
-                        const v = pathValue(catalogRowFor(e.key), c.field)
-                        if (v == null || v === '') return null
-                        return (
-                          <span
-                            key={c.field}
-                            className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
-                          >
-                            {String(v)}
-                          </span>
-                        )
-                      })}
-                      {copyCols.map((c) =>
-                        editableFields.includes(c) && !readOnly ? (
-                          <input
-                            key={`${e.key}:${c}:${String(e.row[c] ?? '')}`}
-                            type='number'
-                            min={0}
-                            step='any'
-                            defaultValue={e.row[c] == null ? '' : String(e.row[c])}
-                            onBlur={(ev) => void commitField(e.key, c, ev.target.value)}
-                            onKeyDown={(ev) => {
-                              if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur()
-                            }}
-                            className='h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
-                          />
-                        ) : (
-                          <span
-                            key={c}
-                            className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
-                          >
-                            {fmtVal(e.row[c], config.field_formats?.[c])}
-                          </span>
-                        )
-                      )}
-                      <span className='inline-flex w-20 shrink-0 items-center justify-end gap-1'>
-                        {savingIds.has(e.key) && (
-                          <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                    >
+                      <div
+                        className={cn(
+                          'flex items-center gap-2',
+                          isStagedDelete && 'line-through decoration-slate-400'
                         )}
-                        {qtyInput(e.key, catalogRowFor(e.key))}
-                      </span>
-                      {computeCols.map((c) => {
-                        // Stored compute value when present; otherwise derive it
-                        // live from the row (rows created outside the picker —
-                        // imports, API — never ran the client compute on create).
-                        const stored = e.row[c]
-                        const v =
-                          stored != null && stored !== ''
-                            ? stored
-                            : evalClientFormula(config.compute_fields?.[c] ?? '', e.row)
-                        return (
+                      >
+                        {itemLabel(
+                          e.key,
+                          labelFor(e.key),
+                          'shrink-0 font-semibold text-slate-800 dark:text-slate-100'
+                        )}
+                        {submissionError && (
                           <span
-                            key={c}
-                            className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
+                            className='shrink-0'
+                            // TipLayer (viewport-clamped body portal) — the old
+                            // absolute CSS tooltip centred on the icon ran off the
+                            // left edge on the first column (Rob's mdsi.png).
+                            data-tip={`This line was in the failed submission\n${submissionError}`}
+                            data-submission-error
                           >
-                            {fmtVal(v, config.field_formats?.[c])}
+                            <AlertCircle className='h-3.5 w-3.5 text-red-500' strokeWidth={2} />
                           </span>
-                        )
-                      })}
-                      {!readOnly && isStagedDelete && (
-                        <button
-                          type='button'
-                          onClick={() => staging?.cancelPendingDelete(relatedCollection, manyField, rowDbId!)}
-                          className='shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
-                        >
-                          Undo
-                        </button>
-                      )}
-                      {!readOnly && !isStagedDelete && (
-                        <button
-                          type='button'
-                          title='Remove (applies on Save)'
-                          onClick={() => {
-                            // Stage the removal into the outer form's O2M delete
-                            // queue — the DELETE happens on Save, Cancel discards.
-                            // Standalone hosts without staging keep the live path.
-                            if (!isNew && staging && rowDbId != null) {
-                              staging.queueDelete(relatedCollection, manyField, rowDbId)
-                              return
-                            }
-                            void commitQty(e.key, '0', {})
-                          }}
-                          className='w-6 shrink-0 rounded p-0.5 text-slate-300 transition-colors hover:text-red-500'
-                        >
-                          <X className='mx-auto h-3.5 w-3.5' />
-                        </button>
-                      )}
-                    </div>
-                    {(statDisplayCols.length > 0 ||
-                      summaryRelatedCols.length > 0 ||
-                      summaryFields.length > 0) && (
-                      <div className='mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-0.5 text-[11px]'>
-                        {statDisplayCols.map((c) => (
-                          <span key={c.field} className='whitespace-nowrap'>
-                            <span className='text-slate-500 dark:text-muted-foreground'>
-                              {c.label ?? titleCase(c.field.split('.')[0])}
-                            </span>{' '}
-                            <span className='font-medium tabular-nums text-slate-700 dark:text-slate-200'>
-                              {statVal(pathValue(catalogRowFor(e.key), c.field), c.format)}
-                            </span>
+                        )}
+                        {descCol && (
+                          <span
+                            className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'
+                            title={String(pathValue(catalogRowFor(e.key), descCol.field) ?? '')}
+                          >
+                            {fmtVal(pathValue(catalogRowFor(e.key), descCol.field), undefined)}
                           </span>
-                        ))}
-                        {summaryRelatedCols.map((rc) => (
-                          <span key={rc.key} className='whitespace-nowrap'>
-                            <span className='text-slate-500 dark:text-muted-foreground'>
-                              {rc.label ?? titleCase(rc.key)}
-                            </span>{' '}
-                            <span className='font-medium tabular-nums text-slate-700 dark:text-slate-200'>
-                              {statVal(relatedValue(rc.key, e.key), rc.format)}
-                            </span>
-                          </span>
-                        ))}
-                        {summaryFields.map((sf) => {
-                          const v = summaryFieldValue(sf, e)
+                        )}
+                        {!descCol && <span className='flex-1' />}
+                        {chipCols.map((c) => {
+                          const v = pathValue(catalogRowFor(e.key), c.field)
+                          if (v == null || v === '') return null
                           return (
-                            <span key={sf.field} className='whitespace-nowrap'>
-                              <span className='text-slate-500 dark:text-muted-foreground'>
-                                {sf.label ?? titleCase(sf.field)}
-                              </span>{' '}
-                              <span className='font-medium text-slate-700 dark:text-slate-200'>
-                                {statVal(v, sf.format)}
-                              </span>
+                            <span
+                              key={c.field}
+                              className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                            >
+                              {String(v)}
                             </span>
                           )
                         })}
+                        {copyCols.map((c) =>
+                          editableFields.includes(c) && !readOnly ? (
+                            <input
+                              key={`${e.key}:${c}:${String(e.row[c] ?? '')}`}
+                              type='number'
+                              min={0}
+                              step='any'
+                              defaultValue={e.row[c] == null ? '' : String(e.row[c])}
+                              onBlur={(ev) => void commitField(e.key, c, ev.target.value)}
+                              onKeyDown={(ev) => {
+                                if (ev.key === 'Enter')
+                                  (ev.currentTarget as HTMLInputElement).blur()
+                              }}
+                              className='h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+                            />
+                          ) : (
+                            <span
+                              key={c}
+                              className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
+                            >
+                              {fmtVal(e.row[c], config.field_formats?.[c])}
+                            </span>
+                          )
+                        )}
+                        <span className='inline-flex w-20 shrink-0 items-center justify-end gap-1'>
+                          {savingIds.has(e.key) && (
+                            <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                          )}
+                          {qtyInput(e.key, catalogRowFor(e.key))}
+                        </span>
+                        {computeCols.map((c) => {
+                          // Stored compute value when present; otherwise derive it
+                          // live from the row (rows created outside the picker —
+                          // imports, API — never ran the client compute on create).
+                          const stored = e.row[c]
+                          const v =
+                            stored != null && stored !== ''
+                              ? stored
+                              : evalClientFormula(config.compute_fields?.[c] ?? '', e.row)
+                          return (
+                            <span
+                              key={c}
+                              className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
+                            >
+                              {fmtVal(v, config.field_formats?.[c])}
+                            </span>
+                          )
+                        })}
+                        {!readOnly && isStagedDelete && (
+                          <button
+                            type='button'
+                            onClick={() =>
+                              staging?.cancelPendingDelete(relatedCollection, manyField, rowDbId!)
+                            }
+                            className='shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-nvr-navy underline dark:text-nvr-cyan'
+                          >
+                            Undo
+                          </button>
+                        )}
+                        {!readOnly && !isStagedDelete && (
+                          <button
+                            type='button'
+                            title='Remove (applies on Save)'
+                            onClick={() => {
+                              // Stage the removal into the outer form's O2M delete
+                              // queue — the DELETE happens on Save, Cancel discards.
+                              // Standalone hosts without staging keep the live path.
+                              if (!isNew && staging && rowDbId != null) {
+                                staging.queueDelete(relatedCollection, manyField, rowDbId)
+                                return
+                              }
+                              void commitQty(e.key, '0', {})
+                            }}
+                            className='w-6 shrink-0 rounded p-0.5 text-slate-300 transition-colors hover:text-red-500'
+                          >
+                            <X className='mx-auto h-3.5 w-3.5' />
+                          </button>
+                        )}
                       </div>
-                    )}
-                    {shortfall && (
-                      <p className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
-                        <AlertTriangle className='h-3 w-3 shrink-0' />
-                        {qtyWarningLabel} is {fmtVal(shortfall.available, 'number')} — {fmtVal(shortfall.qty, 'number')} requested
-                      </p>
-                    )}
-                    {isStagedDelete && (
-                      <p className='mt-1 pl-0.5 text-[11px] text-red-500'>
-                        Removed — applies when you save
-                      </p>
-                    )}
-                  </div>
+                      {(statDisplayCols.length > 0 ||
+                        summaryRelatedCols.length > 0 ||
+                        summaryFields.length > 0) && (
+                        <div className='mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-0.5 pl-0.5 text-[11px]'>
+                          {statDisplayCols.map((c) => (
+                            <span key={c.field} className='whitespace-nowrap'>
+                              <span className='text-slate-500 dark:text-muted-foreground'>
+                                {c.label ?? titleCase(c.field.split('.')[0])}
+                              </span>{' '}
+                              <span className='font-medium tabular-nums text-slate-700 dark:text-slate-200'>
+                                {statVal(pathValue(catalogRowFor(e.key), c.field), c.format)}
+                              </span>
+                            </span>
+                          ))}
+                          {summaryRelatedCols.map((rc) => (
+                            <span key={rc.key} className='whitespace-nowrap'>
+                              <span className='text-slate-500 dark:text-muted-foreground'>
+                                {rc.label ?? titleCase(rc.key)}
+                              </span>{' '}
+                              <span className='font-medium tabular-nums text-slate-700 dark:text-slate-200'>
+                                {statVal(relatedValue(rc.key, e.key), rc.format)}
+                              </span>
+                            </span>
+                          ))}
+                          {summaryFields.map((sf) => {
+                            const v = summaryFieldValue(sf, e)
+                            return (
+                              <span key={sf.field} className='whitespace-nowrap'>
+                                <span className='text-slate-500 dark:text-muted-foreground'>
+                                  {sf.label ?? titleCase(sf.field)}
+                                </span>{' '}
+                                <span className='font-medium text-slate-700 dark:text-slate-200'>
+                                  {statVal(v, sf.format)}
+                                </span>
+                              </span>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {shortfall && (
+                        <p className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'>
+                          <AlertTriangle className='h-3 w-3 shrink-0' />
+                          {qtyWarningLabel} is {fmtVal(shortfall.available, 'number')} —{' '}
+                          {fmtVal(shortfall.qty, 'number')} requested
+                        </p>
+                      )}
+                      {isStagedDelete && (
+                        <p className='mt-1 pl-0.5 text-[11px] text-red-500'>
+                          Removed — applies when you save
+                        </p>
+                      )}
+                    </div>
                   )
                 })}
                 {/* Totals — one footer row summing every numeric column across
@@ -2272,7 +2292,8 @@ function FavoritesManagerDrawer({
           <p className='truncate text-slate-500 dark:text-slate-400'>{category(row) || '—'}</p>
         </td>
         {relatedCols.map((rc, ci) => {
-          const gated = rc.match !== undefined && resolveRelatedMatch(rc.match, parentDraft) === null
+          const gated =
+            rc.match !== undefined && resolveRelatedMatch(rc.match, parentDraft) === null
           const v = gated ? undefined : relatedResults[ci]?.data?.get(id)
           return (
             <td
@@ -2293,9 +2314,7 @@ function FavoritesManagerDrawer({
   const container = (anchor?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
 
   const filteredPinned = q.trim()
-    ? favRows.filter((r) =>
-        matchesAllTokens(`${label(r)} ${description(r)} ${category(r)}`, q)
-      )
+    ? favRows.filter((r) => matchesAllTokens(`${label(r)} ${description(r)} ${category(r)}`, q))
     : favRows
 
   return createPortal(
