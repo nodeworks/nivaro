@@ -5543,7 +5543,11 @@ export function ItemEditForm({
   // other steps already committed. The server check remains the backstop.
   async function preflightChangeReason(): Promise<ChangeReasonChallenge | null> {
     if (changeReasonRef.current) return null
-    const targets: Array<{ collection: string; changedFields: string[] }> = []
+    const targets: Array<{
+      collection: string
+      changedFields: string[]
+      rows?: Array<{ rowId: string; fields: string[] }>
+    }> = []
     if (!isNew) {
       const parentChanged = allFields
         .filter(
@@ -5560,9 +5564,13 @@ export function ItemEditForm({
       if (edits.size === 0) continue
       const rc = key.split('.')[0]
       const changed = new Set<string>()
-      for (const ch of edits.values())
-        for (const k of Object.keys(ch)) if (!k.startsWith('__')) changed.add(k)
-      if (changed.size) targets.push({ collection: rc, changedFields: [...changed] })
+      const rows: Array<{ rowId: string; fields: string[] }> = []
+      for (const [rowId, ch] of edits.entries()) {
+        const fields = Object.keys(ch).filter((k) => !k.startsWith('__'))
+        for (const k of fields) changed.add(k)
+        if (fields.length) rows.push({ rowId: String(rowId), fields })
+      }
+      if (changed.size) targets.push({ collection: rc, changedFields: [...changed], rows })
     }
     for (const t of targets) {
       try {
@@ -5576,6 +5584,7 @@ export function ItemEditForm({
                     fields?: string[]
                     reasons?: string[]
                     allow_free_text?: boolean
+                    context_fields?: string[]
                   } | null
                 }
               }>(get(`/collections/${t.collection}`))
@@ -5586,6 +5595,50 @@ export function ItemEditForm({
         if (cfg?.fields?.length) {
           const hit = t.changedFields.filter((f) => cfg.fields!.includes(f))
           if (hit.length) {
+            // Staged grid rows: name the row each change belongs to (the
+            // config's context_fields — a forecast's Year) the way the server
+            // does for a direct write, reading the rows off the grid's cache.
+            // One row → context chips + "for Year 2027"; several rows → each
+            // field carries its row: "May (2027), November (2026)".
+            const ctxFields = (cfg.context_fields ?? []).filter(Boolean)
+            if (ctxFields.length && t.rows?.length) {
+              const cached = qc
+                .getQueriesData<Array<Record<string, unknown>>>({ queryKey: ['o2m-rows', t.collection] })
+                .flatMap(([, d]) => (Array.isArray(d) ? d : []))
+              const ctxOf = (rowId: string) => {
+                const row = cached.find((r) => String(r.id) === rowId)
+                return row
+                  ? ctxFields
+                      .map((f) => ({ field: f, value: row[f] }))
+                      .filter((c) => c.value != null && c.value !== '')
+                  : []
+              }
+              const perRow = t.rows.map((r) => ({ ...r, ctx: ctxOf(r.rowId) }))
+              const sigs = new Set(perRow.map((r) => JSON.stringify(r.ctx)))
+              if (sigs.size === 1 && perRow[0].ctx.length) {
+                return {
+                  fields_changed: hit,
+                  reasons: cfg.reasons ?? [],
+                  allow_free_text: cfg.allow_free_text !== false,
+                  context: perRow[0].ctx
+                }
+              }
+              if (sigs.size > 1) {
+                const fields_changed = perRow.flatMap((r) =>
+                  r.fields
+                    .filter((f) => cfg.fields!.includes(f))
+                    .map((f) =>
+                      r.ctx.length ? `${f} (${r.ctx.map((c) => String(c.value)).join(' ')})` : f
+                    )
+                )
+                if (fields_changed.length)
+                  return {
+                    fields_changed,
+                    reasons: cfg.reasons ?? [],
+                    allow_free_text: cfg.allow_free_text !== false
+                  }
+              }
+            }
             return {
               fields_changed: hit,
               reasons: cfg.reasons ?? [],
@@ -9054,58 +9107,6 @@ export function ItemEditForm({
                                           </div>,
                                           document.body
                                         )}
-                                      {collision && (
-                                        <MidairCollisionDialog
-                                          collision={collision}
-                                          fieldLabel={(f) => {
-                                            const fc = allFields.find((af) => af.field === f)
-                                            return fc?.label || titleCase(f)
-                                          }}
-                                          onCancel={() => setCollision(null)}
-                                          onResolve={(takeTheirs) => {
-                                            // 'theirs' fields adopt the newer value in the
-                                            // draft; the retry then writes only what the
-                                            // person explicitly kept, against the new base.
-                                            for (const c of collision.conflicts) {
-                                              if (takeTheirs.has(c.field)) {
-                                                setDraft((prev) => ({
-                                                  ...prev,
-                                                  [c.field]: c.current_value
-                                                }))
-                                              }
-                                            }
-                                            baseRevisionOverrideRef.current = collision.latest
-                                            setCollision(null)
-                                            setTimeout(() => saveMut.mutate(), 0)
-                                          }}
-                                        />
-                                      )}
-                                      <ChangeReasonDialog
-                                        challenge={crChallenge}
-                                        fieldLabel={(f) => {
-                                          const fc = allFields.find((af) => af.field === f)
-                                          return fc?.label || titleCase(f)
-                                        }}
-                                        onCancel={() => setCrChallenge(null)}
-                                        onSubmit={(reason) => {
-                                          changeReasonRef.current = reason
-                                          setCrChallenge(null)
-                                          saveMut.mutate()
-                                        }}
-                                      />
-                                      {isAdmin && !isNew && itemId && (
-                                        <RawEditSheet
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                          open={rawEditOpen}
-                                          onClose={() => setRawEditOpen(false)}
-                                          onSaved={() => {
-                                            qc.invalidateQueries({
-                                              queryKey: ['item', collection, String(itemId)]
-                                            })
-                                          }}
-                                        />
-                                      )}
                                     </HeaderTools>
                                     {!!activeLayoutData?.layout?.changes_tray && !readMode && (
                                       <ChangesTray
@@ -9293,6 +9294,61 @@ export function ItemEditForm({
                                       )}
                                   </div>
                                 </header>
+                              )}
+                              {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
+                                children, so a change-reason / collision prompt raised from Save never
+                                rendered once the tool strip had folded (Rob, forecasts, 2026-09-14). */}
+                              {collision && (
+                                <MidairCollisionDialog
+                                  collision={collision}
+                                  fieldLabel={(f) => {
+                                    const fc = allFields.find((af) => af.field === f)
+                                    return fc?.label || titleCase(f)
+                                  }}
+                                  onCancel={() => setCollision(null)}
+                                  onResolve={(takeTheirs) => {
+                                    // 'theirs' fields adopt the newer value in the
+                                    // draft; the retry then writes only what the
+                                    // person explicitly kept, against the new base.
+                                    for (const c of collision.conflicts) {
+                                      if (takeTheirs.has(c.field)) {
+                                        setDraft((prev) => ({
+                                          ...prev,
+                                          [c.field]: c.current_value
+                                        }))
+                                      }
+                                    }
+                                    baseRevisionOverrideRef.current = collision.latest
+                                    setCollision(null)
+                                    setTimeout(() => saveMut.mutate(), 0)
+                                  }}
+                                />
+                              )}
+                              <ChangeReasonDialog
+                                challenge={crChallenge}
+                                fieldLabel={(f) => {
+                                  const fc = allFields.find((af) => af.field === f)
+                                  return fc?.label || titleCase(f)
+                                }}
+                                onCancel={() => setCrChallenge(null)}
+                                onSubmit={(reason) => {
+                                  changeReasonRef.current = reason
+                                  setCrChallenge(null)
+                                  saveMut.mutate()
+                                }}
+                              />
+                              {isAdmin && !isNew && itemId && (
+                                <RawEditSheet
+                                  collection={collection}
+                                  itemId={String(itemId)}
+                                  open={rawEditOpen}
+                                  onClose={() => setRawEditOpen(false)}
+                                  onSaved={() => {
+                                    qc.invalidateQueries({
+                                      queryKey: ['item', collection, String(itemId)]
+                                    })
+                                  }}
+                                />
                               )}
 
                               {showHeader &&

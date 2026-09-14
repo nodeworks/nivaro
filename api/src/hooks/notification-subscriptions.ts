@@ -608,6 +608,11 @@ async function rollUpToParents(
     }
   }
   const label = await friendlyRecordLabel(child, childItem).catch(() => null)
+  const rowLabel = label && label !== `#${childItem}` ? label : null
+  // Each change names the row it belongs to — "May · 2027: 2 → 1". A month
+  // alone does not say which year was forecast (Rob, 2026-09-14), and the
+  // same holds for a line's Price or an allocation's Amount.
+  if (rowLabel && changes) changes = changes.map((c) => ({ ...c, label: `${c.label} · ${rowLabel}` }))
   for (const rel of rels) {
     const parentId = row[rel.fk]
     if (parentId == null || parentId === '') continue
@@ -621,7 +626,7 @@ async function rollUpToParents(
         collection: child,
         item: childItem,
         event,
-        label: label && label !== `#${childItem}` ? label : null,
+        label: rowLabel,
         changes
       }
     ).catch(() => undefined)
