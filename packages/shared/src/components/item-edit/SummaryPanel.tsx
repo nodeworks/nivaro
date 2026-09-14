@@ -556,9 +556,14 @@ function ChangedDot({
         className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
       />
     )
+  // A <span role='button'>, never a <button>: the dot sits INSIDE the row's
+  // own <button>, and nested buttons are invalid HTML (React warns, and the
+  // outer click handler fires alongside the revert).
   return (
-    <button
-      type='button'
+    // biome-ignore lint/a11y/useSemanticElements: nested inside the row's <button> — a real <button> is invalid there
+    <span
+      role='button'
+      tabIndex={0}
       data-summary-changed
       data-tip={`${base} · click to revert`}
       aria-label='Revert this change'
@@ -566,10 +571,17 @@ function ChangedDot({
         e.stopPropagation()
         onRevert()
       }}
-      className='group/dot inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full hover:bg-amber-100 dark:hover:bg-amber-500/20'
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          e.stopPropagation()
+          onRevert()
+        }
+      }}
+      className='group/dot inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-amber-100 dark:hover:bg-amber-500/20'
     >
       <span className='h-1.5 w-1.5 rounded-full bg-amber-400 ring-2 ring-amber-100 group-hover/dot:ring-amber-200 dark:ring-amber-500/30' />
-    </button>
+    </span>
   )
 }
 

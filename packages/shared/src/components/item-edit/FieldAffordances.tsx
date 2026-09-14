@@ -165,6 +165,27 @@ interface MenuItem {
   disabled?: boolean
 }
 
+/**
+ * What "Copy value" should yield for the element the menu was opened on:
+ * an input's current value, else the text of the table cell (grid rows),
+ * else null so the caller falls back to the field's own value.
+ */
+function textUnderCursor(t: HTMLElement | null, wrapper: HTMLElement | null): string | null {
+  if (!t || !wrapper?.contains(t)) return null
+  const input = t.closest<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    'input, textarea, select'
+  )
+  if (
+    input &&
+    wrapper.contains(input) &&
+    !(input instanceof HTMLInputElement && input.type === 'checkbox')
+  )
+    return input.value
+  const cell = t.closest<HTMLElement>('td, th')
+  if (cell && wrapper.contains(cell)) return cell.innerText.replace(/\s+/g, ' ').trim()
+  return null
+}
+
 export function useFieldContextMenu({
   wrapperRef,
   field,
@@ -185,6 +206,11 @@ export function useFieldContextMenu({
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
   const openAt = useCallback((x: number, y: number) => setAt({ x, y }), [])
   const close = useCallback(() => setAt(null), [])
+  // The element under the cursor when the menu opened. "Copy value" reads
+  // THIS, not the field's draft value: an inline grid is one FieldRow whose
+  // alias value is never in the draft (rows live in their own query), so the
+  // draft-only copy pasted blank on every line cell (Rob, 2026-09-14).
+  const targetRef = useRef<HTMLElement | null>(null)
 
   const onContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -194,6 +220,7 @@ export function useFieldContextMenu({
       const sel = window.getSelection()?.toString()
       if (sel && t.closest('input, textarea, [contenteditable]')) return
       e.preventDefault()
+      targetRef.current = t
       openAt(e.clientX, e.clientY)
     },
     [openAt]
@@ -203,6 +230,7 @@ export function useFieldContextMenu({
       if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
         e.preventDefault()
         const r = wrapperRef.current?.getBoundingClientRect()
+        targetRef.current = document.activeElement as HTMLElement | null
         openAt(r ? r.left + 16 : 16, r ? r.top + 28 : 16)
       }
     },
@@ -227,8 +255,14 @@ export function useFieldContextMenu({
       label: 'Copy value',
       icon: <Copy className='h-3.5 w-3.5' />,
       run: () => {
+        const fromDom = textUnderCursor(targetRef.current, wrapperRef.current)
         const text =
-          value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+          fromDom ??
+          (value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))
+        if (!text) {
+          toast.info('Nothing to copy')
+          return
+        }
         navigator.clipboard.writeText(text).then(
           () => toast.success('Value copied'),
           () => toast.error('Could not copy')
