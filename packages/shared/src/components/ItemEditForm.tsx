@@ -1201,23 +1201,11 @@ export function ItemEditForm({
   const [remoteChanges, setRemoteChanges] = useState<Record<string, RemoteFieldChange>>({})
   const ownSaveAtRef = useRef(0)
   const lastTouchRef = useRef<{ user_id: string | null; user_name: string | null } | null>(null)
-  // Read mode (#3): the grouped layout as RecordReadView — per user per collection.
-  const readModeKey = `nvr_read_mode_${collection}_${authUserId || 'anon'}`
-  const [readMode, setReadModeRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(readModeKey) === '1'
-    } catch {
-      return false
-    }
-  })
-  const setReadMode = (v: boolean) => {
-    setReadModeRaw(v)
-    try {
-      localStorage.setItem(readModeKey, v ? '1' : '0')
-    } catch {
-      /* per-viewer convenience only */
-    }
-  }
+  // Read mode (#3): the grouped layout as RecordReadView. Session-only —
+  // nothing is persisted (Rob): every load starts in edit mode unless the
+  // person's role is listed on the collection (see the role-default effect).
+  const [readMode, setReadModeRaw] = useState<boolean>(false)
+  const setReadMode = (v: boolean) => setReadModeRaw(v)
   // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
   // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
   // staging) is persisted to IndexedDB per collection:record:user, ~800ms
@@ -6541,7 +6529,7 @@ export function ItemEditForm({
       })
 
   // Role default (#2): a role listed on the collection opens saved records in
-  // read mode until the person toggles it themselves (their stored choice wins).
+  // read mode; the toggle then flips it for this mount only (never stored).
   const readModeRoleDefault = useRef(false)
   useEffect(() => {
     if (readModeRoleDefault.current || isNew) return
@@ -6550,13 +6538,7 @@ export function ItemEditForm({
     if (!Array.isArray(roles) || !role || !colMeta?.read_mode_toggle) return
     if (!roles.some((r) => String(r).toLowerCase() === role)) return
     readModeRoleDefault.current = true
-    try {
-      if (localStorage.getItem(readModeKey) !== null) return
-    } catch {
-      /* fall through */
-    }
     setReadModeRaw(true)
-    // biome-ignore lint/correctness/useExhaustiveDependencies: readModeKey is derived from the same inputs
   }, [colMeta?.read_mode_default_roles, colMeta?.read_mode_toggle, currentUserData?.role, isNew])
   // Rail dots revert (#9): the same handlers the changes popover uses.
   const revertByField: Record<string, () => void> = {}
