@@ -3113,6 +3113,27 @@ export function ItemEditForm({
       recordDerivedFill
     ]
   )
+
+  // Prefilled FKs behave like user picks: once the field config and
+  // relations are loaded, run cross-record defaults + upstream cascades for
+  // every seeded value — a deep link that seeds `unit` fills zone/region/
+  // project the same way a manual pick would. Both fill paths are
+  // fill-only-when-empty, so seeds that already carry parents are untouched.
+  const seededCascadesRef = useRef(false)
+  useEffect(() => {
+    if (!isNew || seededCascadesRef.current) return
+    if (!appliedInitialValuesRef.current) return
+    if ((fieldConfig ?? []).length === 0 || relations.length === 0) return
+    seededCascadesRef.current = true
+    const { __links: _links, ...plain } = (initialValues ?? {}) as Record<string, unknown> & {
+      __links?: Record<string, unknown[]>
+    }
+    for (const [field, value] of Object.entries(plain)) {
+      if (value === null || value === undefined || value === '') continue
+      runCrossDefaults(field, value)
+      upstreamCascadesRef.current(field, value)
+    }
+  }, [isNew, fieldConfig, relations, initialValues, runCrossDefaults])
   crossDefaultsRef.current = runCrossDefaults
 
   const applyFieldRuleResults = useCallback(
