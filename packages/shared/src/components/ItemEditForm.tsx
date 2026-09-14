@@ -6423,8 +6423,19 @@ export function ItemEditForm({
   // Rail diff dots (#17) + changes tray (#6) read the same breakdown.
   const labelOf = (k: string) =>
     (fieldConfig ?? []).find((f) => f.field === k)?.label || titleCase(k.replace(/_/g, ' '))
-  const changedFieldMap: Record<string, { from: unknown }> = {}
+  const changedFieldMap: Record<string, { from: unknown; detail?: string }> = {}
   for (const k of unsavedSummary.fields) changedFieldMap[k] = { from: initialDataRef.current[k] }
+  // M2M aliases never sit in the draft — their change is the staged link set.
+  for (const [k, l] of m2mLinks)
+    if (l.length) changedFieldMap[k] = { from: null, detail: `${l.length} linked` }
+  for (const [k, u] of m2mUnlinks)
+    if (u.size) {
+      const prev = changedFieldMap[k]?.detail
+      changedFieldMap[k] = {
+        from: null,
+        detail: prev ? `${prev}, ${u.size} unlinked` : `${u.size} unlinked`
+      }
+    }
   const changeItems: ChangeItem[] = []
   for (const k of unsavedSummary.fields)
     changeItems.push({
@@ -9610,6 +9621,7 @@ export function ItemEditForm({
                                       collection={collection}
                                       itemId={String(itemId)}
                                       layoutData={activeLayoutData as unknown as ReadViewLayout}
+                                      flush
                                     />
                                   ) : hasTabs ? (
                                     isStepsMode ? (

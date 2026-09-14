@@ -485,6 +485,76 @@ const summaryText = (v: unknown): string => {
   return s.length > 48 ? `${s.slice(0, 48)}…` : s
 }
 
+/** Display text for a related record — the rail's change tip must name the
+ *  old vendor, not print its id. Two cached reads (meta for the template,
+ *  then the row); an unresolvable id falls back to '#id'. */
+function useRelatedText(collection: string | null, id: unknown): string | null {
+  const client = useNivaroClient()
+  const enabled = !!collection && id != null && id !== ''
+  const { data: meta } = useQuery({
+    queryKey: ['cbv-collection-meta', collection],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string | null } }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
+    enabled,
+    staleTime: 10 * 60_000,
+    retry: false
+  })
+  const { data: row } = useQuery({
+    queryKey: ['rrv-related', collection, String(id)],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: enabled && !!meta,
+    staleTime: 60_000,
+    retry: false
+  })
+  if (!enabled) return null
+  if (!row) return `#${String(id)}`
+  const t = applyDisplayTemplate(meta?.display_template, row).trim()
+  if (t) return t
+  for (const k of ['name', 'title', 'label', 'number', 'email']) if (row[k]) return String(row[k])
+  return `#${String(id)}`
+}
+
+/** The amber "unsaved" dot beside a rail label, with a tip that reads
+ *  old → new in words (M2O ids resolve to labels; M2M carries a link count). */
+function ChangedDot({
+  field,
+  from,
+  to,
+  detail,
+  relations,
+  collection
+}: {
+  field: CMSField
+  from: unknown
+  to: unknown
+  detail?: string
+  relations: CMSRelation[]
+  collection: string
+}) {
+  const target =
+    relations.find(
+      (r) => r.many_collection === collection && r.many_field === field.field && !!r.one_collection
+    )?.one_collection ?? null
+  const fromText = useRelatedText(target, from)
+  const toText = useRelatedText(target, to)
+  const tip = detail
+    ? `Unsaved — ${detail}`
+    : `Unsaved — was ${fromText ?? summaryText(from)} → now ${toText ?? summaryText(to)}`
+  return (
+    <span
+      data-summary-changed
+      data-tip={tip}
+      className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
+    />
+  )
+}
+
 export function SummaryPanel({
   allSteps,
   groupedMap,
@@ -522,7 +592,7 @@ export function SummaryPanel({
   layoutFields?: Set<string> | null
   /** Fields whose draft value differs from the last saved value (#17) — a dot
    *  beside the label, old → new on hover. */
-  changedFields?: Record<string, { from: unknown }>
+  changedFields?: Record<string, { from: unknown; detail?: string }>
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -643,10 +713,13 @@ export function SummaryPanel({
                   >
                     <span className='truncate'>{label}</span>
                     {changedFields?.[f.field] && (
-                      <span
-                        data-summary-changed
-                        data-tip={`Unsaved — was ${summaryText(changedFields[f.field].from)} → now ${getDisplayText(val)}`}
-                        className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
+                      <ChangedDot
+                        field={f}
+                        from={changedFields[f.field].from}
+                        detail={changedFields[f.field].detail}
+                        to={val}
+                        relations={relations}
+                        collection={collection}
                       />
                     )}
                     {needsValue && (

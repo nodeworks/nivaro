@@ -4,6 +4,7 @@ import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { sanitizeHtml } from '../../lib/sanitize-html'
 import { titleCase } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
@@ -14,8 +15,6 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from '../item-edit/live-rollups'
-import { AddendumCompare } from './AddendumCompare'
-import { AddendumLinesDiff } from './AddendumLinesDiff'
 import type { O2MStagingCtx } from '../item-edit/O2MStagingContext'
 import {
   LiveRowsContext,
@@ -36,6 +35,8 @@ import { Label } from '../ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
+import { AddendumCompare } from './AddendumCompare'
+import { AddendumLinesDiff } from './AddendumLinesDiff'
 
 interface AddendumLayout {
   id: number
@@ -77,25 +78,6 @@ const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' 
  *  on* handlers and javascript: URLs. Rich text here is internal-authored,
  *  but the create form's plain textarea also feeds description — never
  *  render that raw. */
-function sanitizeHtml(html: string): string {
-  const doc = new DOMParser().parseFromString(html, 'text/html')
-  for (const el of doc.querySelectorAll('script, style, iframe, object, embed, form, link, meta')) {
-    el.remove()
-  }
-  for (const el of doc.body.querySelectorAll('*')) {
-    for (const attr of [...el.attributes]) {
-      const name = attr.name.toLowerCase()
-      if (name.startsWith('on')) el.removeAttribute(attr.name)
-      else if (
-        (name === 'href' || name === 'src' || name === 'xlink:href') &&
-        /^\s*javascript:/i.test(attr.value)
-      )
-        el.removeAttribute(attr.name)
-    }
-  }
-  return doc.body.innerHTML
-}
-
 const stripTags = (s: string) =>
   s
     .replace(/<[^>]+>/g, ' ')

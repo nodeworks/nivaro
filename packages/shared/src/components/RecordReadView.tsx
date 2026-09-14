@@ -1,10 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { ChevronDown } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
+import { sanitizeHtml } from '../lib/sanitize-html'
 import { titleCase } from '../lib/utils'
 import { UserChip } from './item-edit/GroupSection'
+import { richTextToPlain } from './item-edit/helpers'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
@@ -20,6 +23,8 @@ interface LayoutGroup {
   sort: number
   id?: number
   container_id?: number | null
+  is_collapsed?: boolean | number | null
+  visibility_mode?: string | null
 }
 interface LayoutAssignment {
   field: string
@@ -51,6 +56,7 @@ interface FieldMeta {
   interface?: string | null
   hidden?: boolean
   label?: string | null
+  layout_assigned?: boolean
 }
 interface RelationRow {
   many_collection: string | null
@@ -271,15 +277,17 @@ function ChildTable({
     (childMeta?.relations ?? []).find(
       (r) => r.many_collection === collection && r.many_field === field && r.one_collection
     )?.one_collection ?? null
-  const { data: cols = [] } = useQuery({
+  const { data: colsRes } = useQuery({
     queryKey: ['rrv-cols', collection, layoutId ?? null],
     queryFn: () =>
       client
         .request<{ data: FieldMeta[] }>(
           get(`/field-config/${collection}`, layoutId ? { layout_id: layoutId } : {})
         )
-        .then((r) =>
-          (r.data ?? [])
+        .then((r) => ({
+          // Lines carry their own number — sort by it and show it first.
+          lineNo: (r.data ?? []).some((f) => f.field === 'line_number'),
+          cols: (r.data ?? [])
             .filter(
               (f) =>
                 !f.hidden &&
@@ -302,11 +310,12 @@ function ChildTable({
                 ].includes(f.type ?? '')
             )
             .filter((f, i, arr) => arr.findIndex((x) => x.field === f.field) === i)
-            .slice(0, 8)
-        ),
+        })),
     staleTime: 5 * 60_000,
     retry: false
   })
+  const cols = colsRes?.cols ?? []
+  const lineNoField = !!colsRes?.lineNo
   // Sort / per-column filters / pagination — all server-side (same
   // conditions dialect as the collection browser).
   const [sort, setSort] = useState('')
@@ -339,13 +348,13 @@ function ChildTable({
     isLoading,
     isFetching
   } = useQuery({
-    queryKey: ['rrv-rows', collection, fkField, parentId, sort, page, conditions],
+    queryKey: ['rrv-rows', collection, fkField, parentId, sort, lineNoField, page, conditions],
     queryFn: () =>
       client.request<{ data: Array<Record<string, unknown>>; total?: number }>(
         get(`/items/${collection}`, {
           limit: PAGE,
           page,
-          ...(sort ? { sort } : {}),
+          ...(sort ? { sort } : lineNoField ? { sort: 'line_number' } : {}),
           conditions
         })
       ),
@@ -355,6 +364,8 @@ function ChildTable({
   })
   const rows = rowsRes?.data ?? []
   const total = rowsRes?.total ?? rows.length
+  // Lines carry their own number — show it first, the way the grid does.
+  const hasLineNo = lineNoField && rows.some((r) => r.line_number != null)
   const totalPages = Math.max(1, Math.ceil(total / PAGE))
   const setFilter = (field: string, op: string, value: string) => {
     setPage(1)
@@ -419,6 +430,11 @@ function ChildTable({
         <table className='w-full' style={{ fontVariantNumeric: 'tabular-nums' }}>
           <thead>
             <tr className='border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800'>
+              {hasLineNo && (
+                <th className='h-7 w-8 px-2 text-right text-[9.5px] font-bold uppercase tracking-wider text-slate-400'>
+                  #
+                </th>
+              )}
               {cols.map((f) => {
                 const active = sort === f.field || sort === `-${f.field}`
                 return (
@@ -427,7 +443,7 @@ function ChildTable({
                     onClick={() => sortable(f) && toggleSort(f.field)}
                     className={`h-7 select-none whitespace-nowrap px-2.5 text-[9.5px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${numeric(f) ? 'text-right' : 'text-left'} ${sortable(f) ? 'cursor-pointer hover:text-slate-700 dark:hover:text-slate-200' : ''}`}
                   >
-                    {titleCase(f.field)}
+                    {f.label || titleCase(f.field)}
                     {sortable(f) && (
                       <span className={active ? 'ml-0.5 text-[#00a5cc]' : 'ml-0.5 text-slate-300'}>
                         {active ? (sort.startsWith('-') ? '▼' : '▲') : '⇅'}
@@ -439,6 +455,7 @@ function ChildTable({
             </tr>
             {anyFilterable && (
               <tr className='border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800'>
+                {hasLineNo && <th className='px-1.5 py-1' />}
                 {cols.map((f) => {
                   const kind = filterKind(f)
                   const cur = filters[f.field]
@@ -496,7 +513,10 @@ function ChildTable({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={cols.length} className='py-4 text-center text-[12px] text-slate-400'>
+                <td
+                  colSpan={cols.length + (hasLineNo ? 1 : 0)}
+                  className='py-4 text-center text-[12px] text-slate-400'
+                >
                   No matches — adjust filters
                 </td>
               </tr>
@@ -511,6 +531,11 @@ function ChildTable({
                   drill ? 'cursor-pointer hover:bg-[#00ceff0a] dark:hover:bg-[#00ceff14]' : ''
                 }`}
               >
+                {hasLineNo && (
+                  <td className='px-2 py-1.5 text-right text-[11px] tabular-nums text-slate-400'>
+                    {row.line_number == null ? '' : String(row.line_number)}
+                  </td>
+                )}
                 {cols.map((f) => (
                   <td
                     key={f.field}
@@ -561,11 +586,14 @@ function ChildTable({
 export function RecordReadView({
   collection,
   itemId,
-  layoutData
+  layoutData,
+  flush
 }: {
   collection: string
   itemId: string
   layoutData: ReadViewLayout
+  /** Host already pads and scrolls the body (the record form's read mode). */
+  flush?: boolean
 }) {
   const client = useNivaroClient()
   const { data: meta } = useQuery({
@@ -588,7 +616,24 @@ export function RecordReadView({
     staleTime: 30_000,
     retry: false
   })
-  const fieldByName = useMemo(() => new Map((meta?.fields ?? []).map((f) => [f.field, f])), [meta])
+  // The layout's field-config merges assignment overrides (hidden, labels,
+  // interfaces) the way the edit form sees them — the raw registry does not.
+  const { data: layoutFields } = useQuery({
+    queryKey: ['rrv-field-config', collection, layoutData.layout.id],
+    queryFn: () =>
+      client
+        .request<{ data: FieldMeta[] }>(
+          get(`/field-config/${collection}`, { layout_id: layoutData.layout.id })
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => null),
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const fieldByName = useMemo(
+    () => new Map((layoutFields ?? meta?.fields ?? []).map((f) => [f.field, f])),
+    [layoutFields, meta]
+  )
   const relations = meta?.relations ?? []
   const m2oTarget = (field: string) =>
     relations.find(
@@ -597,8 +642,14 @@ export function RecordReadView({
   const aliasChild = (field: string) =>
     relations.find((r) => r.one_collection === collection && r.one_field === field) ?? null
 
+  // Same gate as the edit form: assignment visibility, the layout's hidden
+  // override, and the field's own hidden flag.
   const visible = layoutData.assignments.filter(
-    (a) => (a.is_visible === undefined || !!a.is_visible) && !a.field.startsWith('__')
+    (a) =>
+      (a.is_visible === undefined || !!a.is_visible) &&
+      !a.field.startsWith('__') &&
+      parseOverrides(a.overrides).hidden !== true &&
+      !fieldByName.get(a.field)?.hidden
   )
   // Widget slots (statistics / query tables) render in read views too — the
   // slot itself is read-only by nature, and a drill-down without its numbers
@@ -642,7 +693,22 @@ export function RecordReadView({
   // Read mode has no wizard: a steps/tabs container is an INPUT pattern.
   // Every group renders as a card in layout order — a container expands into
   // its child steps in place, so the whole record reads top to bottom.
-  const groups = [...layoutData.groups].sort((a, b) => a.sort - b.sort)
+  const groups = [...layoutData.groups]
+    .sort((a, b) => a.sort - b.sort)
+    // The edit form's group gate: a new-record-only group never shows on a
+    // saved record (read mode only ever renders saved records).
+    .filter((g) => g.visibility_mode !== 'new_only')
+  // Sections the layout collapses by default start collapsed here too — the
+  // same first impression as the form; the header expands them.
+  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set())
+  const isOpen = (g: LayoutGroup) => !g.is_collapsed || openKeys.has(g.key)
+  const toggleOpen = (key: string) =>
+    setOpenKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   const sectionGroups: LayoutGroup[] = []
   for (const g of groups) {
     if (g.type === 'container') {
@@ -655,6 +721,14 @@ export function RecordReadView({
   }
 
   const isM2M = (a: LayoutAssignment) => !!aliasChild(a.field)?.junction_field
+  const isRich = (a: LayoutAssignment) => {
+    const iface = String(
+      (parseOverrides(a.overrides).interface as string | undefined) ??
+        fieldByName.get(a.field)?.interface ??
+        ''
+    )
+    return /rich|wysiwyg|editorjs/i.test(iface)
+  }
   const renderValue = (a: LayoutAssignment) => {
     const f = fieldByName.get(a.field)
     const ov = parseOverrides(a.overrides)
@@ -688,6 +762,18 @@ export function RecordReadView({
         />
       )
     const ovOpts = (ov.options ?? {}) as { format?: string }
+    if (isRich(a) && typeof v === 'string') {
+      // Legacy EditorJS docs render as their plain words; HTML renders as HTML.
+      if (/^\s*\{/.test(v))
+        return <div className='whitespace-pre-wrap font-normal'>{richTextToPlain(v)}</div>
+      return (
+        <div
+          className='rrv-prose font-normal leading-relaxed [&_a]:underline [&_h1]:text-[15px] [&_h1]:font-semibold [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_ul]:list-disc'
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized above
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(v) }}
+        />
+      )
+    }
     if (ovOpts.format === 'currency') return <span className='tabular-nums'>{fmtMoney(v)}</span>
     if (f?.type === 'decimal' || f?.type === 'float')
       return <span className='tabular-nums'>{fmtNumber(v)}</span>
@@ -735,7 +821,8 @@ export function RecordReadView({
   const labelFor = (a: LayoutAssignment) => {
     const ovLabel = parseOverrides(a.overrides).label
     if (typeof ovLabel === 'string' && ovLabel.trim()) return ovLabel
-    return a.label_override ?? fieldByName.get(a.field)?.label ?? titleCase(a.field)
+    // Alias fields carry an EMPTY label, not null — `||` so they still get a name.
+    return a.label_override || fieldByName.get(a.field)?.label || titleCase(a.field)
   }
 
   const renderSection = (g: LayoutGroup) => {
@@ -755,53 +842,74 @@ export function RecordReadView({
           fullWidth ? 'lg:col-span-2' : ''
         }`}
       >
-        <h3 className='border-b border-slate-100 px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:text-slate-400'>
-          {g.label}
-        </h3>
-        <div className='px-4 py-3'>
-          {scalars.length > 0 && (
-            <dl
-              className='grid gap-x-6 gap-y-4'
-              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))' }}
+        <h3
+          className={`flex items-center justify-between px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
+            isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
+          }`}
+        >
+          {g.is_collapsed ? (
+            <button
+              type='button'
+              onClick={() => toggleOpen(g.key)}
+              aria-expanded={isOpen(g)}
+              className='flex w-full items-center justify-between text-left uppercase hover:text-slate-700 dark:hover:text-slate-200'
             >
-              {scalars.map((a) => {
-                const ov = parseOverrides(a.overrides)
-                const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
-                const long = fieldByName.get(a.field)?.interface?.includes('rich-text')
-                return (
-                  <div
-                    key={a.field}
-                    className='min-w-0'
-                    style={long ? { gridColumn: '1 / -1' } : undefined}
-                  >
-                    <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                      {labelFor(a)}
-                    </dt>
-                    <dd
-                      className={`mt-0.5 min-w-0 ${
-                        emphasis
-                          ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
-                          : `${isM2M(a) ? '' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
-                      }`}
-                    >
-                      {record ? (
-                        renderValue(a)
-                      ) : (
-                        <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-                      )}
-                    </dd>
-                  </div>
-                )
-              })}
-            </dl>
+              <span>{g.label}</span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${isOpen(g) ? '' : '-rotate-90'}`}
+              />
+            </button>
+          ) : (
+            g.label
           )}
-          {grids.map((a) => (
-            <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
-              {renderGridAssignment(a)}
-            </div>
-          ))}
-          {renderWidgets(g.key)}
-        </div>
+        </h3>
+        {isOpen(g) && (
+          <div className='px-4 py-3'>
+            {scalars.length > 0 && (
+              <dl
+                className='grid gap-x-6 gap-y-4'
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))' }}
+              >
+                {scalars.map((a) => {
+                  const ov = parseOverrides(a.overrides)
+                  const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
+                  const long =
+                    isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
+                  return (
+                    <div
+                      key={a.field}
+                      className='min-w-0'
+                      style={long ? { gridColumn: '1 / -1' } : undefined}
+                    >
+                      <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                        {labelFor(a)}
+                      </dt>
+                      <dd
+                        className={`mt-0.5 min-w-0 ${
+                          emphasis
+                            ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
+                            : `${isM2M(a) || long ? '' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
+                        }`}
+                      >
+                        {record ? (
+                          renderValue(a)
+                        ) : (
+                          <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                        )}
+                      </dd>
+                    </div>
+                  )
+                })}
+              </dl>
+            )}
+            {grids.map((a) => (
+              <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
+                {renderGridAssignment(a)}
+              </div>
+            ))}
+            {renderWidgets(g.key)}
+          </div>
+        )}
       </section>
     )
   }
@@ -815,7 +923,13 @@ export function RecordReadView({
   const [titleAssignment, ...headerRest] = headerAssignments
 
   return (
-    <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-5 py-4 dark:bg-transparent'>
+    <div
+      className={
+        flush
+          ? 'min-h-0 flex-1'
+          : 'min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-5 py-4 dark:bg-transparent'
+      }
+    >
       {headerAssignments.length > 0 && (
         <div
           data-read-header
