@@ -1002,12 +1002,20 @@ export function FieldRow({
             <button
               type='button'
               onClick={() => applyToLines.onApply(draft[field.field] ?? null)}
-              disabled={draft[field.field] == null || draft[field.field] === ''}
+              disabled={
+                draft[field.field] == null ||
+                draft[field.field] === '' ||
+                applyToLines.count === 0
+              }
               data-apply-to-lines={field.field}
               data-tip={
-                applyToLines.count != null
-                  ? `Copy this value onto all ${applyToLines.count} lines (staged until you save)`
-                  : 'Copy this value onto every line (staged until you save)'
+                applyToLines.count === 0
+                  ? 'No lines yet — add lines first'
+                  : draft[field.field] == null || draft[field.field] === ''
+                    ? 'Pick a value first'
+                    : applyToLines.count != null
+                      ? `Copy this value onto all ${applyToLines.count} lines (staged until you save)`
+                      : 'Copy this value onto every line (staged until you save)'
               }
               className='inline-flex items-center gap-1 rounded border border-nvr-cyan/40 px-1.5 py-0.5 text-[10.5px] font-medium text-[#0e7490] transition-colors hover:bg-nvr-cyan/10 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
             >
@@ -1170,6 +1178,11 @@ export function FieldRow({
         <RemoteChangeGhost
           change={remoteChange}
           onDismiss={() => affordances?.dismissRemoteChange(field.field)}
+          onTakeTheirs={
+            affordances?.takeRemoteChange
+              ? () => affordances.takeRemoteChange?.(field.field)
+              : undefined
+          }
         />
       )}
     </div>

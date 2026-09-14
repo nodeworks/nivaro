@@ -25,6 +25,8 @@ export interface ChangeItem {
   detail?: string
   onRevert: () => void
   onJump?: () => void
+  /** A staged line edit broken down per cell, each revertable on its own. */
+  cells?: Array<{ field: string; label: string; from: unknown; to: unknown; onRevert: () => void }>
 }
 
 const KIND_LABEL: Record<ChangeKind, string> = {
@@ -122,7 +124,7 @@ export function ChangesTray({
           {items.map((it) => (
             <li
               key={it.key}
-              className='flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-slate-800 dark:text-slate-100'
+              className='flex flex-wrap items-center gap-2 px-3 py-1.5 text-[11.5px] text-slate-800 dark:text-slate-100'
             >
               <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', KIND_DOT[it.kind])} />
               <button
@@ -163,6 +165,35 @@ export function ChangesTray({
               >
                 <RotateCcw className='h-3 w-3' />
               </button>
+              {it.cells && it.cells.length > 0 && (
+                <ul className='ml-3.5 w-full space-y-0.5 border-l border-slate-200 pl-2 dark:border-border'>
+                  {it.cells.map((c) => (
+                    <li
+                      key={c.field}
+                      data-change-cell={c.field}
+                      className='flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-200'
+                    >
+                      <span className='min-w-0 flex-1 truncate'>
+                        <span className='font-medium'>{c.label}</span>
+                        <span className='ml-2 text-slate-600 dark:text-slate-300'>
+                          <span className='line-through opacity-60'>{fmt(c.from)}</span> →{' '}
+                          <span className='font-medium'>{fmt(c.to)}</span>
+                        </span>
+                      </span>
+                      <button
+                        type='button'
+                        onClick={c.onRevert}
+                        disabled={saving}
+                        aria-label={`Revert ${it.label} ${c.label}`}
+                        data-tip='Revert this cell'
+                        className='shrink-0 rounded p-0.5 text-amber-600 hover:bg-amber-50 hover:text-amber-900 disabled:opacity-40 dark:text-amber-300 dark:hover:bg-amber-500/20'
+                      >
+                        <RotateCcw className='h-2.5 w-2.5' />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
         </ul>

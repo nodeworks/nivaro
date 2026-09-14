@@ -70,7 +70,17 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { seedQuickPickerSteps } from '@nivaro/shared'
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
@@ -4428,11 +4438,14 @@ function RelationUsageChip({ relId }: { relId: number }) {
 function SettingsTab({
   tableData,
   tableName,
-  onRefresh
+  onRefresh,
+  onGoToLayouts
 }: {
   tableData: DBTableDetail
   tableName: string
   onRefresh: () => void
+  /** Switches the editor to the Layouts tab (the Form UX card links there). */
+  onGoToLayouts?: () => void
 }) {
   const qc = useQueryClient()
   const meta = tableData.collection_meta
@@ -4581,7 +4594,7 @@ function SettingsTab({
       <RenameCollectionSection tableName={tableName} />
       <AuditDepthSection tableName={tableName} />
       <IntegrityBadgeSection tableName={tableName} />
-      <ReadModeToggleSection tableName={tableName} />
+      <FormUxSection tableName={tableName} onGoToLayouts={onGoToLayouts} />
       <DataProtectionSection tableName={tableName} />
       <CastCheckSection tableName={tableName} />
       <GenerateTestDataCard tableName={tableName} />
@@ -4727,43 +4740,170 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
   )
 }
 
-/** Read-mode toggle (migration 306): lets reviewers flip the record form to a
- *  no-inputs view. Off by default — reviewers on a collection that never
- *  needs it should not see one more switch. */
-function ReadModeToggleSection({ tableName }: { tableName: string }) {
+/** Form UX card: the per-collection record-form switches that are not
+ *  per-layout — the Read-mode toggle (migration 306) and which roles land in
+ *  read mode by default (`read_mode_default_roles`, string[] of role ids).
+ *  The changes tray is per layout and lives on the Layouts tab. */
+function FormUxSection({
+  tableName,
+  onGoToLayouts
+}: {
+  tableName: string
+  onGoToLayouts?: () => void
+}) {
   const qc = useQueryClient()
+  const [addOpen, setAddOpen] = useState(false)
   const { data: meta } = useQuery({
     queryKey: ['collection-meta-read-mode', tableName],
     queryFn: () =>
       api
-        .get<{ data: { read_mode_toggle?: boolean } }>(`/collections/${tableName}`)
+        .get<{
+          data: { read_mode_toggle?: boolean; read_mode_default_roles?: string[] | null }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName
   })
+  const { data: roles = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles-list-form-ux'],
+    queryFn: () => api.get('/roles').then((r) => r.data.data ?? []),
+    enabled: !!tableName
+  })
   const saveMut = useMutation({
-    mutationFn: (read_mode_toggle: boolean) =>
-      api.patch(`/collections/${tableName}`, { read_mode_toggle }),
+    mutationFn: (patch: { read_mode_toggle?: boolean; read_mode_default_roles?: string[] }) =>
+      api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
-      toast.success('Read-mode toggle setting saved')
+      toast.success('Form UX setting saved')
     },
     onError: () => toast.error('Failed to update setting')
   })
+  const selectedRoleIds = useMemo(
+    () => (Array.isArray(meta?.read_mode_default_roles) ? meta.read_mode_default_roles : []),
+    [meta]
+  )
+  const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id
+  const addable = roles.filter((r) => !selectedRoleIds.includes(r.id))
+  const busy = saveMut.isPending || meta === undefined
+
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
-      <div className='flex items-center justify-between px-4 py-3'>
-        <div>
-          <p className='text-[13px] font-medium text-slate-800'>Read-mode toggle</p>
-          <p className='mt-0.5 text-[12px] text-slate-500'>
-            Show the Read mode switch on the record form. Lets reviewers flip the form to a
-            no-inputs view. Off by default.
-          </p>
+      <div className='border-b border-slate-100 px-4 py-3'>
+        <p className='text-[13px] font-medium text-slate-800'>Form UX</p>
+        <p className='mt-0.5 text-[12px] text-slate-500'>
+          How the record form behaves for reviewers on this collection.
+        </p>
+      </div>
+      <div className='divide-y divide-slate-100'>
+        {/* Read-mode toggle */}
+        <div className='flex items-center justify-between px-4 py-3'>
+          <div>
+            <p className='text-[12.5px] font-medium text-slate-700'>Read-mode toggle</p>
+            <p className='mt-0.5 text-[12px] text-slate-500'>
+              Show the Read mode switch on the record form. Lets reviewers flip the form to a
+              no-inputs view. Off by default.
+            </p>
+          </div>
+          <Switch
+            checked={meta?.read_mode_toggle === true}
+            onCheckedChange={(v) => saveMut.mutate({ read_mode_toggle: v })}
+            disabled={busy}
+          />
         </div>
-        <Switch
-          checked={meta?.read_mode_toggle === true}
-          onCheckedChange={(v) => saveMut.mutate(v)}
-          disabled={saveMut.isPending || meta === undefined}
-        />
+        {/* Default read-mode roles */}
+        <div className='px-4 py-3'>
+          <p className='text-[12.5px] font-medium text-slate-700'>
+            Open in read mode by default for
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            Members of these roles land on the read view first and switch to edit when they need it.
+            Empty = everyone opens the editable form.
+          </p>
+          <div className='mt-2 flex flex-wrap items-center gap-1.5'>
+            {selectedRoleIds.map((id) => (
+              <span
+                key={id}
+                className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-2 pr-1 text-[11.5px] text-slate-700'
+              >
+                {roleName(id)}
+                <button
+                  type='button'
+                  aria-label={`Remove ${roleName(id)}`}
+                  disabled={busy}
+                  onClick={() =>
+                    saveMut.mutate({
+                      read_mode_default_roles: selectedRoleIds.filter((r) => r !== id)
+                    })
+                  }
+                  className='rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700'
+                >
+                  <X className='h-3 w-3' />
+                </button>
+              </span>
+            ))}
+            <Popover open={addOpen} onOpenChange={setAddOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  role='combobox'
+                  aria-expanded={addOpen}
+                  disabled={busy || addable.length === 0}
+                  className='h-6 gap-1 px-2 text-[11.5px] font-normal'
+                >
+                  <Plus className='h-3 w-3' />
+                  Add role
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className='w-[240px] p-0' align='start'>
+                <Command>
+                  <CommandInput placeholder='Search roles…' className='h-8 text-[12px]' />
+                  <CommandList>
+                    <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+                      No roles
+                    </CommandEmpty>
+                    <CommandGroup>
+                      {addable.map((r) => (
+                        <CommandItem
+                          key={r.id}
+                          value={r.name}
+                          onSelect={() => {
+                            saveMut.mutate({
+                              read_mode_default_roles: [...selectedRoleIds, r.id]
+                            })
+                            setAddOpen(false)
+                          }}
+                          className='text-[12px]'
+                        >
+                          {r.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {selectedRoleIds.length === 0 && (
+              <span className='text-[11.5px] text-slate-400'>
+                No roles — editable form for all.
+              </span>
+            )}
+          </div>
+        </div>
+        {/* Changes tray pointer */}
+        <div className='px-4 py-2.5 text-[12px] text-slate-500'>
+          Changes tray is configured per layout →{' '}
+          {onGoToLayouts ? (
+            <button
+              type='button'
+              onClick={onGoToLayouts}
+              className='font-medium text-nvr-navy hover:underline dark:text-[#00ceff]'
+            >
+              Layouts tab
+            </button>
+          ) : (
+            <span className='font-medium text-slate-600'>Layouts tab</span>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -8290,7 +8430,43 @@ interface FieldSettings {
   computed_type?: string | null
   /** Layout opt-in: let this computed field accept manual entry here. */
   editable_computed?: boolean
+  /** Layout-local: an "apply to lines" button beside this field that copies
+   *  its value into one column of an inline grid on the same layout. */
+  apply_to_lines?: ApplyToLinesConfig | null
 }
+
+interface ApplyToLinesConfig {
+  grid: string
+  target: string
+  label?: string | null
+}
+
+/** One inline-grid (O2M alias) assignment on the layout being edited. */
+interface LayoutEditorGrid {
+  field: string
+  label: string
+  childCollection: string | null
+}
+
+/** What the layout editor knows that individual chips need: the layout's
+ *  grids (for the "Apply to lines" picker) and the role preview (hidden /
+ *  read-only badges). Provided by FieldGroupsTab; chips rendered anywhere
+ *  else see null and render nothing extra. */
+const LayoutEditorContext = createContext<{
+  grids: LayoutEditorGrid[]
+  rolePreview: { hidden: Set<string>; readonly: Set<string> } | null
+} | null>(null)
+
+const ALIAS_INTERFACES = new Set([
+  'inline-table',
+  'inline-grid',
+  'list-o2m',
+  'list-m2m',
+  'list-o2m-tree-view',
+  'm2m',
+  'o2m',
+  'relation-path'
+])
 
 // ── Cascade Filters ───────────────────────────────────────────────────────────
 
@@ -12375,6 +12551,42 @@ function FieldSettingsPopover({
   const [hidden, setHidden] = useState(settings.hidden)
   const [readonly, setReadonly] = useState(settings.readonly)
   const [editableComputed, setEditableComputed] = useState(settings.editable_computed === true)
+  // Apply-to-lines (layout-local): overrides.apply_to_lines = {grid, target, label}
+  const layoutEditor = useContext(LayoutEditorContext)
+  const [atlGrid, setAtlGrid] = useState<string>(settings.apply_to_lines?.grid ?? '')
+  const [atlTarget, setAtlTarget] = useState<string>(settings.apply_to_lines?.target ?? '')
+  const [atlLabel, setAtlLabel] = useState<string>(settings.apply_to_lines?.label ?? '')
+  const atlQualifies =
+    layoutId != null &&
+    !isM2M &&
+    abstractType !== 'o2m' &&
+    abstractType !== 'm2m' &&
+    !ALIAS_INTERFACES.has(settings.interface ?? '') &&
+    !fieldName.includes('.') &&
+    (layoutEditor?.grids.length ?? 0) > 0
+  const atlGridDef = layoutEditor?.grids.find((g) => g.field === atlGrid) ?? null
+  const atlChildCollection = atlGridDef?.childCollection ?? null
+  const { data: atlChildFields = [] } = useQuery<
+    Array<{ field: string; label?: string | null; interface?: string | null; type?: string | null }>
+  >({
+    queryKey: ['field-config-all', atlChildCollection],
+    queryFn: () => api.get(`/field-config/${atlChildCollection}`).then((r) => r.data.data ?? []),
+    enabled: !!atlChildCollection && atlQualifies
+  })
+  const atlTargetOptions = useMemo(
+    () =>
+      atlChildFields
+        .filter(
+          (f) =>
+            f.field !== 'id' &&
+            !f.field.startsWith('__') &&
+            !f.field.includes('.') &&
+            !ALIAS_INTERFACES.has(f.interface ?? '') &&
+            f.type !== 'alias'
+        )
+        .map((f) => ({ value: f.field, label: f.label || titleCase(f.field) })),
+    [atlChildFields]
+  )
   // Drill-down config (M2O / M2M / relation-path): overrides.drilldown
   const ddQualifies = isM2O || isM2M || (settings.interface ?? '') === 'relation-path'
   const [ddEnabled, setDdEnabled] = useState(
@@ -12831,6 +13043,9 @@ function FieldSettingsPopover({
       setHidden(settings.hidden)
       setReadonly(settings.readonly)
       setEditableComputed(settings.editable_computed === true)
+      setAtlGrid(settings.apply_to_lines?.grid ?? '')
+      setAtlTarget(settings.apply_to_lines?.target ?? '')
+      setAtlLabel(settings.apply_to_lines?.label ?? '')
       setInlineRelation(settings.inline_relation)
       setMaxValues(settings.max_values != null ? String(settings.max_values) : '')
       // dependencyConfig is already a parsed object from the API — use directly
@@ -13188,6 +13403,24 @@ function FieldSettingsPopover({
       ...(layoutId != null &&
       (settings.computed_type === 'rollup' || settings.computed_type === 'write')
         ? { editable_computed: editableComputed }
+        : {}),
+      // Only written when it changes: a null clears the key on the assignment.
+      ...(atlQualifies || settings.apply_to_lines
+        ? (() => {
+            const next: ApplyToLinesConfig | null =
+              atlQualifies && atlGrid && atlTarget
+                ? { grid: atlGrid, target: atlTarget, label: atlLabel.trim() || 'Apply to lines' }
+                : null
+            const prev = settings.apply_to_lines ?? null
+            const same =
+              (next === null && prev === null) ||
+              (next !== null &&
+                prev !== null &&
+                next.grid === prev.grid &&
+                next.target === prev.target &&
+                (next.label ?? '') === (prev.label ?? ''))
+            return same ? {} : { apply_to_lines: next }
+          })()
         : {}),
       inline_relation: inlineRelation,
       max_values: maxV && maxV > 0 ? maxV : null
@@ -13565,6 +13798,71 @@ function FieldSettingsPopover({
                   descending); "label" / "-label" sorts by the rendered display label. Empty =
                   default (label ascending).
                 </p>
+              </div>
+            )}
+
+            {/* ── Apply to lines (scalar / M2O → an inline grid column) ── */}
+            {atlQualifies && (
+              <div className='space-y-2'>
+                <SectionHeader label='Apply to lines' />
+                <p className='text-[10.5px] leading-relaxed text-slate-400'>
+                  Adds a button beside this field that copies its value into one column of every row
+                  of an inline grid on this layout.
+                </p>
+                <div className='grid grid-cols-2 gap-2'>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Grid</Label>
+                    <Combobox
+                      value={atlGrid}
+                      onChange={(v) => {
+                        setAtlGrid(v)
+                        setAtlTarget('')
+                      }}
+                      options={(layoutEditor?.grids ?? []).map((g) => ({
+                        value: g.field,
+                        label: g.label
+                      }))}
+                      placeholder='Pick a grid…'
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label className='text-[11px] text-slate-500'>Target column</Label>
+                    <Combobox
+                      value={atlTarget}
+                      onChange={setAtlTarget}
+                      options={atlTargetOptions}
+                      placeholder={atlGrid ? 'Pick a column…' : 'Pick a grid first'}
+                      disabled={!atlGrid}
+                    />
+                  </div>
+                </div>
+                {atlGrid && !atlChildCollection && (
+                  <p className='text-[10px] text-slate-400'>
+                    Child collection unknown for this grid — check its relation.
+                  </p>
+                )}
+                <div className='space-y-1'>
+                  <Label className='text-[11px] text-slate-500'>Button label</Label>
+                  <Input
+                    value={atlLabel}
+                    onChange={(e) => setAtlLabel(e.target.value)}
+                    placeholder='Apply to lines'
+                    className='h-[26px] text-[11px]'
+                  />
+                </div>
+                {(atlGrid || atlTarget || settings.apply_to_lines) && (
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setAtlGrid('')
+                      setAtlTarget('')
+                      setAtlLabel('')
+                    }}
+                    className='text-[11px] text-slate-400 hover:text-red-500'
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
             )}
 
@@ -14650,6 +14948,22 @@ function FieldChip({
 }) {
   const [open, setOpen] = useState(false)
   const widthLabel = WIDTH_OPTIONS.find((w) => w.span === colSpan)?.label ?? 'Full'
+  const rolePreview = useContext(LayoutEditorContext)?.rolePreview ?? null
+  const rolePreviewBadge = rolePreview?.hidden.has(fieldName) ? (
+    <span
+      title='Hidden for the previewed role'
+      className='shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-400/15 dark:text-amber-300'
+    >
+      hidden
+    </span>
+  ) : rolePreview?.readonly.has(fieldName) ? (
+    <span
+      title='Read-only for the previewed role'
+      className='shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+    >
+      read-only
+    </span>
+  ) : null
 
   if (compact) {
     return (
@@ -14717,6 +15031,9 @@ function FieldChip({
           {fieldType}
         </span>
       )}
+
+      {/* role-preview badges (Layouts tab → Preview as role) */}
+      {rolePreviewBadge}
 
       {/* settings popover */}
       {fieldSettings && onSettings && (
@@ -16740,6 +17057,30 @@ function LayoutsTab({
     queryFn: () => api.get('/roles').then((r) => r.data.data ?? [])
   })
 
+  // Preview as role: lifted here so the summary line (settings panel) and the
+  // chip badges (FieldGroupsTab) read one query.
+  const [previewRoleId, setPreviewRoleId] = useState('')
+  const { data: rolePreviewData = null } = useQuery<RolePreviewResult>({
+    queryKey: ['layout-role-preview', tableName, previewRoleId],
+    queryFn: () =>
+      api
+        .get('/collection-layouts/preview-as-role', {
+          params: { collection: tableName, role_id: previewRoleId }
+        })
+        .then((r) => r.data.data),
+    enabled: !!tableName && !!previewRoleId
+  })
+  const rolePreviewSets = useMemo(
+    () =>
+      previewRoleId && rolePreviewData
+        ? {
+            hidden: new Set(rolePreviewData.hidden_fields ?? []),
+            readonly: new Set(rolePreviewData.readonly_fields ?? [])
+          }
+        : null,
+    [previewRoleId, rolePreviewData]
+  )
+
   const { data: workflowTemplates = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['workflow-templates-list'],
     queryFn: () => api.get('/pipelines').then((r) => r.data.data ?? [])
@@ -18300,7 +18641,13 @@ function LayoutsTab({
                         }
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
-                      <PreviewAsRoleSection tableName={tableName} />
+                      <PreviewAsRoleSection
+                        tableName={tableName}
+                        roles={roles}
+                        roleId={previewRoleId}
+                        onRoleChange={setPreviewRoleId}
+                        preview={previewRoleId ? rolePreviewData : null}
+                      />
                     </div>
                   </>
                 )}
@@ -18312,6 +18659,7 @@ function LayoutsTab({
           tableName={tableName}
           dbColumns={dbColumns}
           layoutId={effectiveId}
+          rolePreview={rolePreviewSets}
           layoutType={
             selected?.layout_type === 'table'
               ? 'table'
@@ -18333,35 +18681,53 @@ function LayoutsTab({
  * snapshot, and restore is id-preserving and itself reversible (it snapshots
  * 'before restore' first).
  */
+/** GET /collection-layouts/preview-as-role response. */
+interface RolePreviewResult {
+  role: { name: string; admin_access: boolean }
+  can_read: boolean
+  can_update: boolean
+  layout: { id: number; name: string; is_active: boolean; slug?: string | null } | null
+  hidden_fields: string[]
+  readonly_fields: string[]
+  record_conditional_layouts: string[]
+  note: string | null
+}
+
 /** Preview-as-role (#86): which layout a role's member resolves and which
- *  fields their permissions hide — via the live pickBestLayout + policy code. */
-function PreviewAsRoleSection({ tableName }: { tableName: string }) {
-  const [open, setOpen] = useState(false)
-  const [roleId, setRoleId] = useState('')
-  const { data: roles = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ['roles-list-preview'],
-    queryFn: () => api.get('/roles').then((r) => r.data.data),
-    enabled: open
-  })
-  const { data: preview } = useQuery<{
-    role: { name: string; admin_access: boolean }
-    can_read: boolean
-    can_update: boolean
-    layout: { name: string; is_active: boolean } | null
-    hidden_fields: string[]
-    readonly_fields: string[]
-    record_conditional_layouts: string[]
-    note: string | null
-  }>({
-    queryKey: ['layout-preview-role', tableName, roleId],
-    queryFn: () =>
-      api
-        .get('/collection-layouts/preview-as-role', {
-          params: { collection: tableName, role_id: roleId }
-        })
-        .then((r) => r.data.data),
-    enabled: open && !!roleId
-  })
+ *  fields their permissions hide — via the live pickBestLayout + policy code.
+ *  State lives in LayoutsTab so the chips can badge hidden / read-only fields
+ *  while a role is selected. */
+function PreviewAsRoleSection({
+  tableName,
+  roles,
+  roleId,
+  onRoleChange,
+  preview
+}: {
+  tableName: string
+  roles: Array<{ id: string; name: string }>
+  roleId: string
+  onRoleChange: (id: string) => void
+  preview: RolePreviewResult | null
+}) {
+  const [open, setOpen] = useState(!!roleId)
+  const summary = (() => {
+    if (!preview) return null
+    if (preview.role.admin_access) {
+      return `As ${preview.role.name}: admin — default layout, every field.`
+    }
+    if (!preview.can_read) return `As ${preview.role.name}: cannot read ${tableName} at all.`
+    const parts: string[] = [`layout "${preview.layout?.name ?? '(none)'}"`]
+    if (preview.hidden_fields.length > 0) {
+      parts.push(
+        `${preview.hidden_fields.length} field${preview.hidden_fields.length === 1 ? '' : 's'} hidden`
+      )
+    }
+    if (preview.readonly_fields.length > 0)
+      parts.push(`${preview.readonly_fields.length} read-only`)
+    if (!preview.can_update) parts.push('no edit permission')
+    return `As ${preview.role.name}: ${parts.join(' · ')}`
+  })()
   return (
     <div className='border-t border-slate-200 pt-2 dark:border-border'>
       <button
@@ -18369,57 +18735,44 @@ function PreviewAsRoleSection({ tableName }: { tableName: string }) {
         onClick={() => setOpen((v) => !v)}
         className='flex w-full items-center justify-between text-[11px] font-medium text-slate-600 dark:text-slate-300'
       >
-        Preview as role
+        <span className='flex items-center gap-1.5'>
+          Preview as role
+          {roleId && (
+            <span className='rounded bg-amber-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-400/15 dark:text-amber-300'>
+              on
+            </span>
+          )}
+        </span>
         <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
       </button>
       {open && (
         <div className='mt-2 space-y-2'>
           <Combobox
             value={roleId}
-            onChange={setRoleId}
-            options={roles.map((r) => ({ value: r.id, label: r.name }))}
+            onChange={onRoleChange}
+            options={[
+              { value: '', label: '— (no preview)' },
+              ...roles.map((r) => ({ value: r.id, label: r.name }))
+            ]}
             placeholder='Pick a role…'
           />
-          {preview && (
-            <div className='space-y-1.5 rounded-md border border-slate-100 bg-slate-50 p-2 text-[11.5px] dark:border-border dark:bg-muted/30'>
-              {preview.role.admin_access ? (
-                <p className='text-slate-600 dark:text-slate-300'>
-                  Admin role — sees the default layout and every field.
-                </p>
-              ) : !preview.can_read ? (
-                <p className='text-red-600 dark:text-red-400'>
-                  This role cannot read {tableName} at all.
-                </p>
-              ) : (
-                <>
-                  <p className='text-slate-600 dark:text-slate-300'>
-                    Resolves layout:{' '}
-                    <span className='font-semibold'>{preview.layout?.name ?? '(none)'}</span>
-                    {!preview.can_update && ' · read-only (no update permission)'}
+          {roleId && summary && (
+            <div className='space-y-1 rounded-md border border-slate-100 bg-slate-50 p-2 text-[11.5px] dark:border-border dark:bg-muted/30'>
+              <p
+                className={cn(
+                  'text-slate-600 dark:text-slate-300',
+                  preview && !preview.can_read && 'text-red-600 dark:text-red-400'
+                )}
+              >
+                {summary}
+              </p>
+              {preview?.note && <p className='text-slate-400'>{preview.note}</p>}
+              {preview &&
+                (preview.hidden_fields.length > 0 || preview.readonly_fields.length > 0) && (
+                  <p className='text-[10.5px] text-slate-400'>
+                    Field chips are badged hidden / read-only while this role is selected.
                   </p>
-                  {preview.hidden_fields.length > 0 && (
-                    <p className='text-slate-500 dark:text-muted-foreground'>
-                      Hidden by permissions:{' '}
-                      <span className='font-mono text-[10.5px]'>
-                        {preview.hidden_fields.slice(0, 15).join(', ')}
-                        {preview.hidden_fields.length > 15 &&
-                          ` +${preview.hidden_fields.length - 15} more`}
-                      </span>
-                    </p>
-                  )}
-                  {preview.readonly_fields.length > 0 && (
-                    <p className='text-slate-500 dark:text-muted-foreground'>
-                      Read-only:{' '}
-                      <span className='font-mono text-[10.5px]'>
-                        {preview.readonly_fields.slice(0, 15).join(', ')}
-                        {preview.readonly_fields.length > 15 &&
-                          ` +${preview.readonly_fields.length - 15} more`}
-                      </span>
-                    </p>
-                  )}
-                  {preview.note && <p className='text-slate-400'>{preview.note}</p>}
-                </>
-              )}
+                )}
             </div>
           )}
         </div>
@@ -19039,12 +19392,15 @@ function FieldGroupsTab({
   tableName,
   dbColumns = [],
   layoutId,
-  layoutType = 'grouped'
+  layoutType = 'grouped',
+  rolePreview = null
 }: {
   tableName: string
   dbColumns?: Array<{ name: string; data_type: string }>
   layoutId: number | null
   layoutType?: 'grouped' | 'table' | 'addendum'
+  /** Preview-as-role result: chips in these sets get a hidden / read-only badge. */
+  rolePreview?: { hidden: Set<string>; readonly: Set<string> } | null
 }) {
   const qc = useQueryClient()
 
@@ -20024,7 +20380,8 @@ function FieldGroupsTab({
     'inline_relation',
     'max_values',
     'drilldown',
-    'editable_computed'
+    'editable_computed',
+    'apply_to_lines'
   ]
 
   // Option keys inside `options` JSON that are scoped to a specific layout and must NOT
@@ -20147,6 +20504,9 @@ function FieldGroupsTab({
                     : {}),
                   [k]: v
                 } as Record<string, unknown>
+              } else if (k === 'apply_to_lines' && v == null) {
+                // A cleared apply-to-lines drops the key rather than storing null
+                delete patched[k]
               } else {
                 patched[k] = v
               }
@@ -20426,6 +20786,15 @@ function FieldGroupsTab({
           null,
         computed_type:
           ((fc as Record<string, unknown> | undefined)?.computed_type as string | null) ?? null,
+        apply_to_lines:
+          ov.apply_to_lines !== undefined
+            ? (ov.apply_to_lines as ApplyToLinesConfig | null)
+            : (((
+                (fc as Record<string, unknown> | undefined)?._overrides as
+                  | Record<string, unknown>
+                  | null
+                  | undefined
+              )?.apply_to_lines as ApplyToLinesConfig | null | undefined) ?? null),
         editable_computed:
           ov.editable_computed !== undefined
             ? ov.editable_computed === true
@@ -21215,7 +21584,34 @@ function FieldGroupsTab({
 
   const activeFieldData = activeFieldId ? allFields.find((f) => f.field === activeFieldId) : null
 
-  return (
+  // Inline grids (O2M aliases) assigned on this layout — the "Apply to lines"
+  // picker in every scalar chip's settings sheet lists these. __pool__ holds
+  // every field; any other container is an assignment.
+  // Computed per render (relKind is a plain closure); the context VALUE is
+  // memoized on a content signature so chips do not re-render on every parent
+  // render.
+  const layoutGrids: LayoutEditorGrid[] = []
+  if (layoutId) {
+    const assigned = new Set<string>()
+    for (const [container, list] of Object.entries(localFieldOrder)) {
+      if (container === '__pool__') continue
+      for (const f of list) assigned.add(f)
+    }
+    for (const f of assigned) {
+      if (typeof f !== 'string' || f.startsWith('__') || f.includes('.')) continue
+      if (relKind(f) !== 'O2M') continue
+      const label = getFieldSettings(f).label || titleCase(f)
+      layoutGrids.push({ field: f, label, childCollection: getRelatedCollection(f) })
+    }
+    layoutGrids.sort((a, b) => a.label.localeCompare(b.label))
+  }
+  const layoutGridsSig = JSON.stringify(layoutGrids)
+  const layoutEditorCtx = useMemo(
+    () => ({ grids: JSON.parse(layoutGridsSig) as LayoutEditorGrid[], rolePreview }),
+    [layoutGridsSig, rolePreview]
+  )
+
+  const tree = (
     <DndContext
       sensors={sensors}
       collisionDetection={(args) => {
@@ -21281,7 +21677,7 @@ function FieldGroupsTab({
                   />
                 </div>
                 {/* Extension slot (#425): __ext_<key>__ sentinel — extensions
-                    registered via window.__nvrRegisterLayoutSlot render there */}
+                  registered via window.__nvrRegisterLayoutSlot render there */}
                 <div className='mt-1.5 flex items-center gap-1'>
                   <input
                     value={extSlotDraft}
@@ -22469,6 +22865,7 @@ function FieldGroupsTab({
       </DragOverlay>
     </DndContext>
   )
+  return <LayoutEditorContext.Provider value={layoutEditorCtx}>{tree}</LayoutEditorContext.Provider>
 }
 
 // ─── Behavior tab ─────────────────────────────────────────────────────────────
@@ -24219,6 +24616,7 @@ export function TableEditorPage() {
                 tableData={tableData}
                 tableName={table ?? ''}
                 onRefresh={() => refetch()}
+                onGoToLayouts={() => setTab('groups')}
               />
             )}
           </>

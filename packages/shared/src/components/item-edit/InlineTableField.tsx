@@ -3507,6 +3507,107 @@ export function InlineTableField({
     }
     return [...names]
   }, [sinceOpened, cellProvenance])
+  // ── Row presence: soft locks + "who is editing which line" ───────────────
+  // Presence hosts stamp `data-remote-editor="<name>"` (and .nvr-remote-editing)
+  // on a saved row's [data-o2m-row] element while someone else has that row's
+  // editor open. The DOM attribute is the contract (FieldAffordances'
+  // usePresenceSoftLock reads the same thing per field): opening such a row
+  // asks once — "edit anyway?" — and the since-opened strip lists the editors.
+  const [rowSoftLock, setRowSoftLock] = useState<{ rowKey: string; editor: string } | null>(null)
+  // (rowKey, editor) pairs the local user already said "Edit anyway" to; a
+  // pair drops the moment that editor leaves the row, so a return re-asks.
+  const softLockConfirmedRef = useRef<Set<string>>(new Set())
+  const softLockPairKey = (rowKey: string, editor: string) => JSON.stringify([rowKey, editor])
+  const [remoteRowEditors, setRemoteRowEditors] = useState<Map<string, string>>(() => new Map())
+  const remoteRowEditorsSigRef = useRef('')
+  const readRemoteRowEditorsRef = useRef<() => void>(() => {})
+  /** The remote editor stamped on one saved row RIGHT NOW — a DOM read, never state. */
+  const remoteEditorOfRow = (rowKey: string): string | null => {
+    const wrap = tableWrapRef.current
+    if (!wrap) return null
+    const want = `${relatedCollection}:${rowKey}`
+    for (const el of wrap.querySelectorAll<HTMLElement>('[data-o2m-row]')) {
+      if (el.getAttribute('data-o2m-row') !== want) continue
+      const who = el.getAttribute('data-remote-editor')
+      return who?.trim() ? who : null
+    }
+    return null
+  }
+  // The wrapper only mounts past the loading early-return, so the observer
+  // attaches once the grid's DOM exists (and re-attaches per collection).
+  const gridDomReady = !colsLoading && (isNew || !rowsLoading)
+  useEffect(() => {
+    const wrap = tableWrapRef.current
+    if (!wrap || !gridDomReady || typeof MutationObserver === 'undefined') return
+    const prefix = `${relatedCollection}:`
+    const read = () => {
+      const next = new Map<string, string>()
+      for (const el of wrap.querySelectorAll<HTMLElement>('[data-o2m-row][data-remote-editor]')) {
+        const key = el.getAttribute('data-o2m-row') ?? ''
+        const who = el.getAttribute('data-remote-editor')
+        if (!key.startsWith(prefix) || !who?.trim()) continue
+        const rowKey = key.slice(prefix.length)
+        if (rowKey.startsWith('pending:')) continue
+        next.set(rowKey, who)
+      }
+      const sig = [...next.entries()]
+        .map(([k, v]) => `${k}\u0000${v}`)
+        .sort()
+        .join('\n')
+      if (sig === remoteRowEditorsSigRef.current) return
+      remoteRowEditorsSigRef.current = sig
+      setRemoteRowEditors(next)
+    }
+    readRemoteRowEditorsRef.current = read
+    read()
+    // childList too: a row that mounts already stamped, or unmounts while
+    // stamped, changes the answer without an attribute mutation.
+    const mo = new MutationObserver(read)
+    mo.observe(wrap, {
+      attributes: true,
+      attributeFilter: ['data-remote-editor'],
+      subtree: true,
+      childList: true
+    })
+    return () => {
+      mo.disconnect()
+      readRemoteRowEditorsRef.current = () => {}
+    }
+  }, [gridDomReady, relatedCollection])
+  // A remote editor leaving a row ends the local "Edit anyway" for that pair
+  // and closes a strip still waiting on it.
+  useEffect(() => {
+    const confirmed = softLockConfirmedRef.current
+    for (const key of [...confirmed]) {
+      const [rowKey, editor] = JSON.parse(key) as [string, string]
+      if (remoteRowEditors.get(rowKey) !== editor) confirmed.delete(key)
+    }
+    if (rowSoftLock && remoteRowEditors.get(rowSoftLock.rowKey) !== rowSoftLock.editor)
+      setRowSoftLock(null)
+  }, [remoteRowEditors, rowSoftLock])
+  // Escape = Leave it.
+  useEffect(() => {
+    if (!rowSoftLock || typeof window === 'undefined') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setRowSoftLock(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [rowSoftLock])
+  // "Beth is editing line 3 · Kim is editing line 7" — saved rows only, in
+  // display order; the line is the row's line_number, else its position.
+  const remoteEditorLines = useMemo(() => {
+    if (remoteRowEditors.size === 0) return []
+    const out: string[] = []
+    rows.forEach((r, i) => {
+      const who = remoteRowEditors.get(String(r.id))
+      if (!who) return
+      const ln = r.line_number
+      const hasLn = typeof ln === 'number' || (typeof ln === 'string' && ln.trim() !== '')
+      out.push(`${who} is editing line ${hasLn ? String(ln) : String(i + 1)}`)
+    })
+    return out
+  }, [remoteRowEditors, rows])
   // Any write to the child collection (by anyone) refreshes the rows, debounced.
   useEffect(() => {
     if (!realtime || isNew) return
@@ -4206,6 +4307,15 @@ export function InlineTableField({
     if (readOnly) return
     const id = String(row.id)
     if (editState?.rowId === id) return
+    // Row soft lock: someone else has this line's editor open right now —
+    // ask before opening ours, once per (row, editor) presence.
+    readRemoteRowEditorsRef.current()
+    const remoteEditor = remoteEditorOfRow(id)
+    if (remoteEditor && !softLockConfirmedRef.current.has(softLockPairKey(id, remoteEditor))) {
+      setRowSoftLock({ rowKey: id, editor: remoteEditor })
+      return
+    }
+    if (rowSoftLock) setRowSoftLock(null)
     const draft = applyComputedFields({ ...row })
     setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(id, draft)
@@ -4241,6 +4351,7 @@ export function InlineTableField({
     if (readOnly) return
     const rowId = `pending:${ri}`
     if (editState?.rowId === rowId) return
+    if (rowSoftLock) setRowSoftLock(null)
     const draft = applyComputedFields({ ...row })
     setEditState({ rowId, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(rowId, draft)
@@ -6037,6 +6148,56 @@ export function InlineTableField({
       {renderRowEditorBody(args)}
     </td>
   )
+  // The row soft-lock prompt: rendered where the editor would have opened
+  // (full-width row under the line, or the docked area in split mode).
+  const renderRowSoftLockStrip = (
+    lock: { rowKey: string; editor: string },
+    placement: 'row' | 'docked'
+  ) => {
+    const initials = lock.editor
+      .split(/\s+/)
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase()
+    const confirm = () => {
+      softLockConfirmedRef.current.add(softLockPairKey(lock.rowKey, lock.editor))
+      setRowSoftLock(null)
+      const row = rows.find((r) => String(r.id) === lock.rowKey)
+      if (!row) return
+      startEdit(pendingEdits.has(lock.rowKey) ? { ...row, ...pendingEdits.get(lock.rowKey) } : row)
+    }
+    return (
+      <div
+        data-row-soft-lock=''
+        role='status'
+        className={cn(
+          'flex flex-wrap items-center gap-2 border-amber-300 bg-amber-50 px-3 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100',
+          placement === 'docked' ? 'rounded-lg border' : 'border-b'
+        )}
+      >
+        <span className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-200 text-[9px] font-semibold text-amber-900 dark:bg-amber-500/40 dark:text-amber-50'>
+          {initials || '?'}
+        </span>
+        <span className='min-w-0 flex-1'>{lock.editor} is editing this line — edit anyway?</span>
+        <button
+          type='button'
+          onClick={confirm}
+          className='rounded-md bg-amber-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-amber-700'
+        >
+          Edit anyway
+        </button>
+        <button
+          type='button'
+          onClick={() => setRowSoftLock(null)}
+          className='rounded-md border border-amber-300 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
+        >
+          Leave it
+        </button>
+      </div>
+    )
+  }
 
   const isAllPresetActive = activePreset === ALL_PRESET_SENTINEL
   // Stale stored names keep highlighting columnPresets[0] (unchanged prior behavior);
@@ -6546,43 +6707,62 @@ export function InlineTableField({
           )
         })()}
 
-      {sinceOpened &&
+      {(sinceOpened || remoteEditorLines.length > 0) &&
         !isNew &&
         activeView === 'original' &&
         (() => {
-          const n = sinceOpened.total
+          // The editors line rides in the same strip but never in the counts.
+          const diff = sinceOpened
+          const n = diff?.total ?? 0
           const parts: string[] = []
-          if (sinceOpened.added.size) parts.push(`${sinceOpened.added.size} added`)
-          if (sinceOpened.changed.size) parts.push(`${sinceOpened.changed.size} changed`)
-          if (sinceOpened.removed.length) parts.push(`${sinceOpened.removed.length} removed`)
-          const removedLabels = sinceOpened.removed
+          if (diff?.added.size) parts.push(`${diff.added.size} added`)
+          if (diff?.changed.size) parts.push(`${diff.changed.size} changed`)
+          if (diff?.removed.length) parts.push(`${diff.removed.length} removed`)
+          const removedLabels = (diff?.removed ?? [])
             .slice(0, 5)
             .map((id) => rowIdentityLabel(baselineRef.current?.get(id) ?? { id }))
           return (
-            <div className='flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'>
-              <span className='font-medium'>
-                {n} {n === 1 ? 'line' : 'lines'} changed by others since you opened
-              </span>
-              <span className='text-amber-700/80 dark:text-amber-300/80'>
-                {parts.join(' · ')}
-                {sinceOpenedWho.length > 0 && ` · changed by ${sinceOpenedWho.join(', ')}`}
-              </span>
-              {removedLabels.length > 0 && (
-                <span className='text-amber-700/80 dark:text-amber-300/80'>
-                  removed: {removedLabels.join(', ')}
-                  {sinceOpened.removed.length > removedLabels.length
-                    ? ` +${sinceOpened.removed.length - removedLabels.length}`
-                    : ''}
+            <div
+              data-grid-since-opened=''
+              className='flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+            >
+              {diff && (
+                <>
+                  <span className='font-medium'>
+                    {n} {n === 1 ? 'line' : 'lines'} changed by others since you opened
+                  </span>
+                  <span className='text-amber-700/80 dark:text-amber-300/80'>
+                    {parts.join(' · ')}
+                    {sinceOpenedWho.length > 0 && ` · changed by ${sinceOpenedWho.join(', ')}`}
+                  </span>
+                  {removedLabels.length > 0 && (
+                    <span className='text-amber-700/80 dark:text-amber-300/80'>
+                      removed: {removedLabels.join(', ')}
+                      {diff.removed.length > removedLabels.length
+                        ? ` +${diff.removed.length - removedLabels.length}`
+                        : ''}
+                    </span>
+                  )}
+                  <button
+                    type='button'
+                    onClick={dismissSinceOpened}
+                    className='ml-auto h-6 rounded border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-800 hover:border-amber-400 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-200'
+                    data-tip='Take the current rows as the new baseline'
+                  >
+                    Dismiss
+                  </button>
+                </>
+              )}
+              {remoteEditorLines.length > 0 && (
+                <span
+                  data-remote-editors=''
+                  className={
+                    diff ? 'basis-full text-amber-700/80 dark:text-amber-300/80' : 'font-medium'
+                  }
+                >
+                  {remoteEditorLines.join(' · ')}
                 </span>
               )}
-              <button
-                type='button'
-                onClick={dismissSinceOpened}
-                className='ml-auto h-6 rounded border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-800 hover:border-amber-400 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-200'
-                data-tip='Take the current rows as the new baseline'
-              >
-                Dismiss
-              </button>
             </div>
           )
         })()}
@@ -7173,6 +7353,13 @@ export function InlineTableField({
                         </td>
                       )}
                     </tr>
+                    {!splitMode && rowSoftLock?.rowKey === id && (
+                      <tr data-row-soft-lock-row=''>
+                        <td colSpan={nestedColSpan} className='p-0'>
+                          {renderRowSoftLockStrip(rowSoftLock, 'row')}
+                        </td>
+                      </tr>
+                    )}
                     {lineError && (
                       <tr>
                         <td
@@ -8011,6 +8198,9 @@ export function InlineTableField({
         )}
       </div>
 
+      {splitMode && rowSoftLock && activeView === 'original' && (
+        <div data-grid-split-editor-lock=''>{renderRowSoftLockStrip(rowSoftLock, 'docked')}</div>
+      )}
       {splitMode &&
         editState &&
         activeView === 'original' &&

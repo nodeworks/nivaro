@@ -15,6 +15,8 @@ export interface LockHolder {
   locked_by_name: string | null
   /** The holder's intent note (#10) — "editing lines ~15 min". */
   note?: string | null
+  /** Minutes since the holder last did anything (presence), when known. */
+  idle_minutes?: number | null
 }
 
 export interface LockQueueEntry {
@@ -143,6 +145,7 @@ export function useItemLock(
           locked_by?: string | null
           locked_by_name?: string | null
           note?: string | null
+          locked_by_idle_minutes?: number | null
           queue?: LockQueueEntry[]
           my_position?: number | null
         } | null
@@ -152,6 +155,7 @@ export function useItemLock(
             locked_by?: string | null
             locked_by_name?: string | null
             note?: string | null
+            locked_by_idle_minutes?: number | null
             queue?: LockQueueEntry[]
             my_position?: number | null
           }
@@ -162,7 +166,11 @@ export function useItemLock(
       if (d?.locked_by && !acquiredRef.current)
         setLockHolder((cur) =>
           cur
-            ? { ...cur, note: d.note ?? cur.note ?? null }
+            ? {
+                ...cur,
+                note: d.note ?? cur.note ?? null,
+                idle_minutes: d.locked_by_idle_minutes ?? cur.idle_minutes ?? null
+              }
             : {
                 locked_by: String(d.locked_by),
                 locked_by_name: d.locked_by_name ?? null,
@@ -465,6 +473,15 @@ export function ItemLockBanner({
       <Lock className='h-4 w-4 shrink-0 text-amber-500' />
       <span className='min-w-0 flex-1'>
         <span className='font-medium'>{name}</span> is editing this item — fields are read-only
+        {lockHolder.idle_minutes != null && lockHolder.idle_minutes >= 2 && (
+          <span
+            className='ml-1.5 rounded bg-amber-100 px-1 py-px text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-200'
+            data-lock-holder-idle
+            data-tip='How long since they last touched anything — they may have stepped away'
+          >
+            idle {lockHolder.idle_minutes}m
+          </span>
+        )}
         until the lock is released.
         {lockHolder.note && (
           <span className='mt-0.5 block text-[12.5px] text-amber-800/90 dark:text-amber-200/90'>
@@ -508,7 +525,7 @@ export function ItemLockBanner({
           onClick={onRequestLock}
           disabled={requesting}
         >
-          {requesting ? 'Asking…' : 'Request lock'}
+          {requesting ? 'Asking…' : 'Ask them to wrap up'}
         </Button>
       )}
       {

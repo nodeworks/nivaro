@@ -131,6 +131,23 @@ async function lockHolderName(userId: string): Promise<string | null> {
 }
 
 /** Returns true when item_locking_enabled is 1/true for the collection. */
+/**
+ * Minutes since the lock holder's last real input, from the LEGACY
+ * user_presence table (user_id, last_active, is_idle). null when there is no
+ * row — and a missing/renamed table must never break a lock read, hence the
+ * swallow.
+ */
+async function holderIdleMinutes(userId: string): Promise<number | null> {
+  const row = (await db('user_presence')
+    .whereRaw('UPPER(CAST(user_id AS NVARCHAR(64))) = ?', [String(userId).toUpperCase()])
+    .first('last_active', 'is_idle')
+    .catch(() => null)) as { last_active?: string | Date | null } | null | undefined
+  if (!row?.last_active) return null
+  const at = new Date(row.last_active).getTime()
+  if (!Number.isFinite(at)) return null
+  return Math.max(0, Math.floor((Date.now() - at) / 60_000))
+}
+
 async function isLockingEnabled(collection: string): Promise<boolean> {
   try {
     const row = (await db('nivaro_collections')
@@ -220,13 +237,24 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     // still rides along so a waiting client can show its position.
     if (!lock) return reply.send({ data: null, queue, my_position })
 
+    const [locked_by_name, locked_by_idle_minutes] = await Promise.all([
+      lockHolderName(lock.user),
+      holderIdleMinutes(lock.user)
+    ])
     return reply.send({
       data: {
         collection: lock.collection,
         item: lock.item,
         user: lock.user,
         locked_by: lock.user,
-        locked_by_name: await lockHolderName(lock.user),
+        locked_by_name,
+        // Minutes since the holder's last real input (user_presence.last_active);
+        // null when they have no presence row. Lets a waiting client say
+        // "held by X, idle 12m" instead of just "held by X".
+        locked_by_idle_minutes,
+        // nivaro_item_locks has no heartbeat column — the heartbeat only slides
+        // expires_at forward, so expires_at − LOCK_TTL is the last heartbeat.
+        locked_by_last_heartbeat: new Date(new Date(lock.expires_at).getTime() - LOCK_TTL_MS),
         note: lock.note ?? null,
         locked_at: lock.locked_at,
         expires_at: lock.expires_at,

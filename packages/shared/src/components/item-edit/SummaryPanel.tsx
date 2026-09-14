@@ -528,7 +528,8 @@ function ChangedDot({
   to,
   detail,
   relations,
-  collection
+  collection,
+  onRevert
 }: {
   field: CMSField
   from: unknown
@@ -536,6 +537,7 @@ function ChangedDot({
   detail?: string
   relations: CMSRelation[]
   collection: string
+  onRevert?: () => void
 }) {
   const target =
     relations.find(
@@ -543,15 +545,31 @@ function ChangedDot({
     )?.one_collection ?? null
   const fromText = useRelatedText(target, from)
   const toText = useRelatedText(target, to)
-  const tip = detail
+  const base = detail
     ? `Unsaved — ${detail}`
     : `Unsaved — was ${fromText ?? summaryText(from)} → now ${toText ?? summaryText(to)}`
+  if (!onRevert)
+    return (
+      <span
+        data-summary-changed
+        data-tip={base}
+        className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
+      />
+    )
   return (
-    <span
+    <button
+      type='button'
       data-summary-changed
-      data-tip={tip}
-      className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ring-2 ring-amber-100 dark:ring-amber-500/30'
-    />
+      data-tip={`${base} · click to revert`}
+      aria-label='Revert this change'
+      onClick={(e) => {
+        e.stopPropagation()
+        onRevert()
+      }}
+      className='group/dot inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full hover:bg-amber-100 dark:hover:bg-amber-500/20'
+    >
+      <span className='h-1.5 w-1.5 rounded-full bg-amber-400 ring-2 ring-amber-100 group-hover/dot:ring-amber-200 dark:ring-amber-500/30' />
+    </button>
   )
 }
 
@@ -570,6 +588,7 @@ export function SummaryPanel({
   aliasEmptiness,
   layoutFields,
   changedFields,
+  onRevertChange,
   onFieldClick
 }: {
   allSteps: StepDef[]
@@ -593,6 +612,8 @@ export function SummaryPanel({
   /** Fields whose draft value differs from the last saved value (#17) — a dot
    *  beside the label, old → new on hover. */
   changedFields?: Record<string, { from: unknown; detail?: string }>
+  /** Rail dot click (#9): put the field back to its saved value. */
+  onRevertChange?: (field: string) => void
   onFieldClick: (stepKey: string, fieldKey: string) => void
 }) {
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -720,6 +741,7 @@ export function SummaryPanel({
                         to={val}
                         relations={relations}
                         collection={collection}
+                        onRevert={onRevertChange ? () => onRevertChange(f.field) : undefined}
                       />
                     )}
                     {needsValue && (

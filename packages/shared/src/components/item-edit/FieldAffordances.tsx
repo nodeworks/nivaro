@@ -25,6 +25,10 @@ export interface RemoteFieldChange {
   was: unknown
   by: string | null
   at: string
+  /** Set when the user had ALSO edited this field: the remote value is kept
+   *  aside instead of overwriting their draft, and the ghost offers a choice. */
+  theirs?: unknown
+  conflict?: boolean
 }
 
 export interface ApplyToLinesSpec {
@@ -38,6 +42,8 @@ export interface ApplyToLinesSpec {
 export interface FieldAffordances {
   remoteChanges: Record<string, RemoteFieldChange>
   dismissRemoteChange: (field: string) => void
+  /** Conflict ghosts (#6): replace the user's draft value with the remote one. */
+  takeRemoteChange?: (field: string) => void
   /** field → human reason the input is read-only (shown on the lock glyph + hover). */
   lockReasons: Record<string, string>
   applyToLines: Record<string, ApplyToLinesSpec>
@@ -66,11 +72,47 @@ const fmt = (v: unknown): string => {
  *  form was open. Dismisses per field; the form drops it on the next save. */
 export function RemoteChangeGhost({
   change,
-  onDismiss
+  onDismiss,
+  onTakeTheirs
 }: {
   change: RemoteFieldChange
   onDismiss: () => void
+  onTakeTheirs?: () => void
 }) {
+  if (change.conflict && onTakeTheirs)
+    return (
+      <div
+        data-remote-change-ghost
+        data-remote-conflict
+        className='nvr-expand-in flex flex-wrap items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100'
+      >
+        <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500' />
+        <span className='min-w-0 flex-1'>
+          {change.by ?? 'Someone'} changed this to{' '}
+          <span className='font-medium'>{fmt(change.theirs)}</span> while you were editing
+          <span className='text-amber-700/80 dark:text-amber-200/70'>
+            {' '}
+            · {formatRelative(change.at)}
+          </span>
+        </span>
+        <button
+          type='button'
+          onClick={onTakeTheirs}
+          data-remote-take-theirs
+          className='shrink-0 rounded border border-amber-400 bg-white px-1.5 py-0.5 text-[10.5px] font-medium text-amber-900 hover:bg-amber-100 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/20'
+        >
+          Take theirs
+        </button>
+        <button
+          type='button'
+          onClick={onDismiss}
+          data-remote-keep-mine
+          className='shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-amber-800 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-500/20'
+        >
+          Keep mine
+        </button>
+      </div>
+    )
   return (
     <div
       data-remote-change-ghost

@@ -189,6 +189,12 @@ export async function collectionsRoutes(app: FastifyInstance) {
         // Migration 306 — bit column, always a boolean on the wire (an image
         // whose DB predates the column reads undefined → false).
         read_mode_toggle: !!(col as { read_mode_toggle?: unknown }).read_mode_toggle,
+        // Migration 307 — JSON list of role uuids that open the form in Read
+        // mode by default; always an array on the wire (null/invalid → []).
+        read_mode_default_roles:
+          parseJsonList(
+            (col as { read_mode_default_roles?: string | null }).read_mode_default_roles
+          ) ?? [],
         delete_guard: (() => {
           const rawDg = (col as { delete_guard?: string | null }).delete_guard
           if (!rawDg) return null
@@ -243,6 +249,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       slug_field?: unknown
       empty_state?: unknown
       upsert_keys?: unknown
+      read_mode_default_roles?: unknown
     }
     const {
       picker_filter: rawPickerFilter,
@@ -253,6 +260,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       slug_field: rawSlugField,
       empty_state: rawEmptyState,
       upsert_keys: rawUpsertKeys,
+      read_mode_default_roles: rawReadModeRoles,
       ...restBody
     } = body
     const patch: Record<string, unknown> = { ...restBody }
@@ -260,6 +268,34 @@ export async function collectionsRoutes(app: FastifyInstance) {
       patch.read_mode_toggle = (body as { read_mode_toggle?: unknown }).read_mode_toggle === true
       // updateCollection reads back through the metadata cache — bust it so
       // the PATCH response carries the new value, not the 30s-old one.
+      svc.clearMetadataCache()
+    }
+    // Migration 307: role uuids whose members open the form in Read mode by
+    // default. Array of uuid-shaped strings, cap 50; empty/null clears.
+    if ('read_mode_default_roles' in body) {
+      if (rawReadModeRoles == null) {
+        patch.read_mode_default_roles = null
+      } else {
+        if (!Array.isArray(rawReadModeRoles)) {
+          return reply.code(400).send({ error: 'read_mode_default_roles must be an array' })
+        }
+        if (rawReadModeRoles.length > 50) {
+          return reply.code(400).send({ error: 'read_mode_default_roles: at most 50 roles' })
+        }
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        const roles: string[] = []
+        for (const r of rawReadModeRoles) {
+          if (typeof r !== 'string' || !uuidRe.test(r)) {
+            return reply
+              .code(400)
+              .send({ error: 'read_mode_default_roles entries must be role ids (uuid)' })
+          }
+          const up = r.toUpperCase()
+          if (!roles.includes(up)) roles.push(up)
+        }
+        patch.read_mode_default_roles = roles.length > 0 ? JSON.stringify(roles) : null
+      }
+      // Same read-back-through-cache trap as read_mode_toggle.
       svc.clearMetadataCache()
     }
     // #619: slug_field must name a real physical column when set — a stale or

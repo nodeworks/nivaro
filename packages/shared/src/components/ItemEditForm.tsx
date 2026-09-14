@@ -1009,6 +1009,7 @@ export function ItemEditForm({
     addendum_allowed_roles?: string | null
     addendum_allowed_states?: string | null
     read_mode_toggle?: boolean
+    read_mode_default_roles?: string[]
   }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
@@ -2180,7 +2181,15 @@ export function ItemEditForm({
         const at = new Date().toISOString()
         setRemoteChanges((cur) => {
           const next = { ...cur }
-          for (const k of changed) next[k] = { was: prev[k], by, at }
+          for (const k of changed) {
+            // A field the user ALSO edited is a conflict: their draft stays,
+            // the remote value waits behind "Take theirs / Keep mine" (#6).
+            const conflict =
+              userTouchedRef.current.has(k) && !valuesEqual(draftRef.current[k], itemData[k])
+            next[k] = conflict
+              ? { was: prev[k], by, at, theirs: itemData[k], conflict: true }
+              : { was: prev[k], by, at }
+          }
           return next
         })
         if (userTouchedRef.current.size > 0) {
@@ -6462,17 +6471,44 @@ export function ItemEditForm({
   }
   for (const [key, edits] of pendingO2MEdits) {
     const [rc, mf] = key.split('.')
-    for (const [rowId, ch] of edits)
+    // The grid's saved rows sit in the query cache — that is the "from" side
+    // of every staged cell (#4). Either cache shape the grid has used.
+    // The grid's key carries more segments (filter, layout) — prefix-match.
+    const cachedEntry = qc
+      .getQueriesData<unknown>({ queryKey: ['o2m-rows', rc, mf, String(itemId)] })
+      .find(([, d]) => Array.isArray(d) && (d as unknown[]).length > 0)
+    const savedRows = (cachedEntry?.[1] as Array<Record<string, unknown>> | undefined) ?? []
+    for (const [rowId, ch] of edits) {
+      const saved = savedRows.find((r) => String(r.id) === String(rowId))
+      const cellKeys = Object.keys(ch).filter((c) => !c.startsWith('__'))
+      const lineNo = saved?.line_number != null ? `line ${String(saved.line_number)}` : `row ${rowId}`
       changeItems.push({
         key: `e:${key}:${rowId}`,
         kind: 'edit',
         label: gridLabel(rc),
-        detail: `row ${rowId}: ${Object.keys(ch)
-          .filter((c) => !c.startsWith('__'))
-          .map((c) => titleCase(c.replace(/_/g, ' ')))
-          .join(', ')}`,
-        onRevert: () => o2mStagingCtx.cancelPendingEdit(rc, mf, rowId)
+        detail: `${lineNo}: ${cellKeys.map((c) => titleCase(c.replace(/_/g, ' '))).join(', ')}`,
+        onRevert: () => o2mStagingCtx.cancelPendingEdit(rc, mf, rowId),
+        cells: cellKeys.map((c) => ({
+          field: c,
+          label: titleCase(c.replace(/_/g, ' ')),
+          from: saved ? saved[c] : undefined,
+          to: (ch as Record<string, unknown>)[c],
+          onRevert: () =>
+            setPendingO2MEdits((prev) => {
+              const next = new Map(prev)
+              const rowsMap = new Map(next.get(key))
+              const patch = { ...(rowsMap.get(rowId) ?? {}) } as Record<string, unknown>
+              delete patch[c]
+              if (Object.keys(patch).filter((k) => !k.startsWith('__')).length === 0)
+                rowsMap.delete(rowId)
+              else rowsMap.set(rowId, patch)
+              if (rowsMap.size === 0) next.delete(key)
+              else next.set(key, rowsMap)
+              return next
+            })
+        }))
       })
+    }
   }
   for (const [key, dels] of pendingO2MDeletes) {
     const [rc, mf] = key.split('.')
@@ -6504,6 +6540,39 @@ export function ItemEditForm({
         onRevert: () => m2mStagingCtx.unstageUnlink(key, id)
       })
 
+  // Role default (#2): a role listed on the collection opens saved records in
+  // read mode until the person toggles it themselves (their stored choice wins).
+  const readModeRoleDefault = useRef(false)
+  useEffect(() => {
+    if (readModeRoleDefault.current || isNew) return
+    const roles = colMeta?.read_mode_default_roles
+    const role = currentUserData?.role ? String(currentUserData.role).toLowerCase() : null
+    if (!Array.isArray(roles) || !role || !colMeta?.read_mode_toggle) return
+    if (!roles.some((r) => String(r).toLowerCase() === role)) return
+    readModeRoleDefault.current = true
+    try {
+      if (localStorage.getItem(readModeKey) !== null) return
+    } catch {
+      /* fall through */
+    }
+    setReadModeRaw(true)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: readModeKey is derived from the same inputs
+  }, [colMeta?.read_mode_default_roles, colMeta?.read_mode_toggle, currentUserData?.role, isNew])
+  // Rail dots revert (#9): the same handlers the changes popover uses.
+  const revertByField: Record<string, () => void> = {}
+  for (const it of changeItems) {
+    if (it.kind === 'field') revertByField[it.key.slice(2)] = it.onRevert
+    else if (it.kind === 'link' || it.kind === 'unlink') {
+      const k = it.key.split(':')[1]
+      const prev = revertByField[k]
+      revertByField[k] = prev
+        ? () => {
+            prev()
+            it.onRevert()
+          }
+        : it.onRevert
+    }
+  }
   const fieldAffordances = {
     remoteChanges,
     dismissRemoteChange: (field: string) =>
@@ -6513,6 +6582,16 @@ export function ItemEditForm({
         delete next[field]
         return next
       }),
+    takeRemoteChange: (field: string) => {
+      const ch = remoteChanges[field]
+      if (!ch?.conflict) return
+      handleFieldChange(field, ch.theirs ?? null)
+      setRemoteChanges((cur) => {
+        const next = { ...cur }
+        delete next[field]
+        return next
+      })
+    },
     lockReasons,
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
@@ -9656,6 +9735,7 @@ export function ItemEditForm({
                                     >
                                       <div className='w-[232px] overflow-y-auto h-full'>
                                         <SummaryPanel
+                                          onRevertChange={(f) => revertByField[f]?.()}
                                           layoutFields={
                                             (activeLayoutData?.assignments?.length ?? 0) > 0
                                               ? new Set(

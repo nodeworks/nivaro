@@ -12323,10 +12323,12 @@ GET /api/approvals/decisions?instance=X
         </div>
 
         <!-- ITEM LOCKING & PRESENCE -->
-        <div class="doc-section" id="s-item-locking" data-toc='[{"id":"item-locking","label":"Item Locking &amp; Presence"},{"id":"item-locking-how-it-works","label":"How Locking Works"},{"id":"item-locking-api","label":"API Reference"},{"id":"item-locking-configuration","label":"Per-Collection Configuration"},{"id":"item-locking-ui-behavior","label":"UI Behavior"},{"id":"item-locking-presence","label":"Presence (Who&apos;s Viewing)"}]'>
+        <div class="doc-section" id="s-item-locking" data-toc='[{"id":"item-locking","label":"Item Locking &amp; Presence"},{"id":"draft-recovery","label":"Unsaved-draft recovery"},{"id":"item-locking-how-it-works","label":"How Locking Works"},{"id":"item-locking-api","label":"API Reference"},{"id":"item-locking-configuration","label":"Per-Collection Configuration"},{"id":"item-locking-ui-behavior","label":"UI Behavior"},{"id":"item-locking-presence","label":"Presence (Who&apos;s Viewing)"}]'>
           <!-- SYNC:item-locking -->
           <h1 class="doc-h1" id="item-locking">Item Locking &amp; Presence</h1>
           <p class="doc-p">Prevent simultaneous editing conflicts with soft item locks. When a user opens a record for editing, a 5-minute TTL lock is acquired. Other users attempting to edit see an amber banner and the form switches to read-only. Locks auto-release after 5 minutes without activity, preventing stale locks from crashed tabs.</p>
+          <h3 class="doc-h3" id="draft-recovery">Unsaved-draft recovery</h3>
+          <p class="doc-p">The record form keeps a copy of your unsaved work in the browser (IndexedDB, per record and per user): the fields you changed, staged grid rows, edits and removals, and staged relation links — written about a second after each change and removed the moment the form is clean, saved, or you discard it. If the tab crashes, the session expires or you navigate away, the next time you open that record (or the new-record form for that collection) a banner offers "Restore your unsaved changes from N min ago" with the diff (field: was → will be) and staged counts; nothing is applied until you choose Restore. A draft whose values now match the saved record is dropped silently, and the banner flags when the record changed underneath the draft. On a new-record form only the fields you actually touched are kept — layout defaults and prefills are not treated as your work.</p>
           <h3 class="doc-h3" id="item-locking-how-it-works">How Locking Works</h3>
           <ul class="doc-ul">
             <li>User opens item editor → client POSTs to acquire lock</li>

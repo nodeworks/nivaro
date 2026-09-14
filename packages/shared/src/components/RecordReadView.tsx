@@ -57,6 +57,7 @@ interface FieldMeta {
   hidden?: boolean
   label?: string | null
   layout_assigned?: boolean
+  options?: unknown
 }
 interface RelationRow {
   many_collection: string | null
@@ -251,19 +252,33 @@ function M2MValue({
 
 /** Read-only child list for an O2M alias field — curated columns from a
  *  table layout when the grid assignment pins one. */
+type ColumnPreset = { name: string; columns: string[] }
+
 function ChildTable({
   collection,
   fkField,
   parentId,
-  layoutId
+  layoutId,
+  presets,
+  defaultPreset
 }: {
   collection: string
   fkField: string
   parentId: string
   layoutId?: number | null
+  /** The grid's named column views ('Line' / 'Deployment') — same membership
+   *  rule as the edit grid: a preset filters the layout's columns, never widens. */
+  presets?: ColumnPreset[]
+  defaultPreset?: string | null
 }) {
   const client = useNivaroClient()
   const drill = useDrilldown()
+  const presetList = (presets ?? []).filter((p) => p && Array.isArray(p.columns))
+  const [activePreset, setActivePreset] = useState<string>(() =>
+    presetList.length >= 2
+      ? (presetList.find((p) => p.name === defaultPreset)?.name ?? presetList[0].name)
+      : '__all__'
+  )
   const { data: childMeta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
     queryFn: () =>
@@ -292,30 +307,39 @@ function ChildTable({
               (f) =>
                 !f.hidden &&
                 !f.field.startsWith('__') &&
-                !f.field.includes('.') &&
+                (!f.field.includes('.') || f.interface === 'relation-path') &&
                 f.field !== fkField &&
                 ((layoutId ? (f as { layout_assigned?: boolean }).layout_assigned : true) ??
                   true) &&
-                [
-                  'string',
-                  'text',
-                  'integer',
-                  'decimal',
-                  'float',
-                  'boolean',
-                  'date',
-                  'datetime',
-                  'timestamp',
-                  'uuid'
-                ].includes(f.type ?? '')
+                (f.interface === 'relation-path' ||
+                  [
+                    'string',
+                    'text',
+                    'integer',
+                    'decimal',
+                    'float',
+                    'boolean',
+                    'date',
+                    'datetime',
+                    'timestamp',
+                    'uuid'
+                  ].includes(f.type ?? ''))
             )
             .filter((f, i, arr) => arr.findIndex((x) => x.field === f.field) === i)
         })),
     staleTime: 5 * 60_000,
     retry: false
   })
-  const cols = colsRes?.cols ?? []
+  const allCols = colsRes?.cols ?? []
   const lineNoField = !!colsRes?.lineNo
+  const presetSet =
+    activePreset !== '__all__' ? presetList.find((p) => p.name === activePreset) : null
+  const cols = useMemo(() => {
+    if (!presetSet) return allCols
+    const want = new Set(presetSet.columns)
+    const kept = allCols.filter((c) => want.has(c.field))
+    return kept.length > 0 ? kept : allCols
+  }, [allCols, presetSet])
   // Sort / per-column filters / pagination — all server-side (same
   // conditions dialect as the collection browser).
   const [sort, setSort] = useState('')
@@ -364,6 +388,36 @@ function ChildTable({
   })
   const rows = rowsRes?.data ?? []
   const total = rowsRes?.total ?? rows.length
+  const dottedCols = cols.filter((c) => c.field.includes('.'))
+  const rowIds = rows.map((r) => String(r.id))
+  const { data: resolved } = useQuery<{
+    rows: Record<string, Record<string, { value: string; ids: string[] }>>
+    targets: Record<string, string | null>
+  }>({
+    queryKey: [
+      'rrv-resolve-paths',
+      collection,
+      dottedCols.map((c) => c.field).join(','),
+      rowIds.join(',')
+    ],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            rows: Record<string, Record<string, { value: string; ids: string[] }>>
+            targets: Record<string, string | null>
+          }
+        }>(
+          get(`/items/${collection}/resolve-paths`, {
+            ids: rowIds.join(','),
+            paths: dottedCols.map((c) => c.field).join(',')
+          })
+        )
+        .then((r) => r.data ?? { rows: {}, targets: {} })
+        .catch(() => ({ rows: {}, targets: {} })),
+    enabled: dottedCols.length > 0 && rowIds.length > 0,
+    staleTime: 30_000
+  })
   // Lines carry their own number — show it first, the way the grid does.
   const hasLineNo = lineNoField && rows.some((r) => r.line_number != null)
   const totalPages = Math.max(1, Math.ceil(total / PAGE))
@@ -394,6 +448,30 @@ function ChildTable({
   if (rows.length === 0 && Object.keys(debFilters).length === 0)
     return <p className='py-3 text-[12px] text-slate-400'>No records</p>
   const cell = (row: Record<string, unknown>, f: FieldMeta) => {
+    if (f.field.includes('.')) {
+      const pv = resolved?.rows[String(row.id)]?.[f.field]
+      if (!resolved)
+        return (
+          <span className='inline-block h-3 w-14 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        )
+      if (!pv || pv.value === '') return <Empty />
+      const target = resolved.targets[f.field]
+      const id = pv.ids?.[0]
+      if (drill && target && id)
+        return (
+          <button
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              drill.open({ collection: target, itemId: String(id) })
+            }}
+            className='text-left underline decoration-slate-300 underline-offset-2 hover:text-[#0284c7] dark:decoration-slate-600'
+          >
+            {pv.value}
+          </button>
+        )
+      return pv.value
+    }
     const v = row[f.field]
     if (v == null || v === '') return <Empty />
     const target = m2oOf(f.field)
@@ -412,10 +490,12 @@ function ChildTable({
     return s.length > 48 ? `${s.slice(0, 48)}…` : s
   }
   const numeric = (f: FieldMeta) =>
-    ['decimal', 'float', 'integer'].includes(f.type ?? '') && !m2oOf(f.field)
-  const sortable = (f: FieldMeta) => !m2oOf(f.field)
+    ['decimal', 'float', 'integer'].includes(f.type ?? '') &&
+    !m2oOf(f.field) &&
+    !f.field.includes('.')
+  const sortable = (f: FieldMeta) => !m2oOf(f.field) && !f.field.includes('.')
   const filterKind = (f: FieldMeta): 'text' | 'num' | 'bool' | null => {
-    if (m2oOf(f.field)) return null
+    if (m2oOf(f.field) || f.field.includes('.')) return null
     if (f.type === 'boolean') return 'bool'
     if (['integer', 'decimal', 'float'].includes(f.type ?? '')) return 'num'
     if (['string', 'text'].includes(f.type ?? '')) return 'text'
@@ -424,6 +504,28 @@ function ChildTable({
   const anyFilterable = cols.some((f) => filterKind(f) != null)
   return (
     <div>
+      {presetList.length >= 2 && (
+        <div className='mb-1.5 flex flex-wrap items-center gap-1' data-read-presets>
+          {[
+            { name: '__all__', label: 'All' },
+            ...presetList.map((p) => ({ name: p.name, label: p.name }))
+          ].map((p) => (
+            <button
+              key={p.name}
+              type='button'
+              onClick={() => setActivePreset(p.name)}
+              aria-pressed={activePreset === p.name}
+              className={`rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition-colors ${
+                activePreset === p.name
+                  ? 'border-[#00ceff] bg-[#00ceff1a] text-[#0e7490] dark:text-[#67e8f9]'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div
         className={`overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700 ${isFetching && !isLoading ? 'opacity-70' : ''}`}
       >
@@ -785,7 +887,27 @@ export function RecordReadView({
     const ov = parseOverrides(a.overrides)
     const rel = aliasChild(a.field)
     if (!rel?.many_collection || !rel.many_field) return null
-    const layoutId = ((ov.options ?? {}) as { layout_id?: number }).layout_id ?? null
+    const ovOpts = (ov.options ?? {}) as {
+      layout_id?: number
+      column_presets?: ColumnPreset[]
+      default_preset?: string | null
+    }
+    const fOpts = (() => {
+      const raw = fieldByName.get(a.field)?.options
+      if (!raw) return {} as { column_presets?: ColumnPreset[]; default_preset?: string | null }
+      if (typeof raw === 'string') {
+        try {
+          return JSON.parse(raw) as {
+            column_presets?: ColumnPreset[]
+            default_preset?: string | null
+          }
+        } catch {
+          return {}
+        }
+      }
+      return raw as { column_presets?: ColumnPreset[]; default_preset?: string | null }
+    })()
+    const layoutId = ovOpts.layout_id ?? null
     return (
       <ChildTable
         key={a.field}
@@ -793,6 +915,8 @@ export function RecordReadView({
         fkField={rel.many_field}
         parentId={itemId}
         layoutId={layoutId}
+        presets={ovOpts.column_presets ?? fOpts.column_presets}
+        defaultPreset={ovOpts.default_preset ?? fOpts.default_preset ?? null}
       />
     )
   }
