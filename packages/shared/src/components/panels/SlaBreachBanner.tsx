@@ -48,7 +48,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
   const hoursPast = Math.max(0, (data.elapsed_hours ?? 0) - (data.total_hours ?? 0))
 
   return (
-    <div className='flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
+    <div className='nvr-expand-in flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
       <p className='min-w-0 flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
         <span className='font-semibold'>SLA breached</span>
         {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(hoursPast)} past the limit

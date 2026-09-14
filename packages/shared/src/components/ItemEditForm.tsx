@@ -9776,12 +9776,12 @@ export function ItemEditForm({
                                   {!isNew &&
                                     itemId &&
                                     !activeLayoutData?.layout?.hide_sla_banner && (
-                                      <div className='nvr-expand-in'>
-                                        <SlaBreachBanner
-                                          collection={pipelineCollection}
-                                          itemId={String(pipelineItem)}
-                                        />
-                                      </div>
+                                      // No wrapper div — an EMPTY sibling in this space-y stack
+                                      // still costs a 16px gap (the banner is null unless breached).
+                                      <SlaBreachBanner
+                                        collection={pipelineCollection}
+                                        itemId={String(pipelineItem)}
+                                      />
                                     )}
                                   {importIssues.length > 0 && (
                                     <ImportIssuesPanel
@@ -9789,7 +9789,9 @@ export function ItemEditForm({
                                       onDismiss={() => setImportIssues([])}
                                     />
                                   )}
-                                  {showLockBanner && lockEnabled && (
+                                  {/* The banner is null without a holder — mount it only then, or its
+                                      empty wrapper costs a 16px gap in this space-y stack. */}
+                                  {showLockBanner && lockEnabled && lockHolder && (
                                     <div className='nvr-expand-in'>
                                       <ItemLockBanner
                                         lockHolder={lockHolder}
