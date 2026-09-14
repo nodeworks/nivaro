@@ -541,7 +541,7 @@ export const devexRateLimits: DocSection = {
     {
       type: 'pre',
       code: `# .env
-RATE_LIMIT_PER_MINUTE=600    # Global limit (default: 600)
+RATE_LIMIT_PER_MINUTE=600    # Global limit (unset/0 = no rate limiting, the default)
 RATE_LIMIT_BURST=100         # Allow temporary bursts (optional)`
     },
     {

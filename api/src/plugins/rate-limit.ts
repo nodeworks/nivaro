@@ -6,7 +6,10 @@ import fp from 'fastify-plugin'
  * Redis-backed fixed-window rate limiter for /api routes.
  *
  * - Window: 60s, keyed per user (authenticated) or bearer-token hash or IP.
- * - Limit: RATE_LIMIT_PER_MINUTE env (default 1000).
+ * - OFF unless RATE_LIMIT_PER_MINUTE is set (> 0). Nivaro ships with no rate
+ *   limit (Rob, 2026-09-14 — the old 1000/min default 429'd real record pages:
+ *   a workflow form is 100+ requests, two reloads hit it). Named API keys keep
+ *   their own per-key `rate_limit`, enforced in authenticate.
  * - Headers: X-RateLimit-Limit / X-RateLimit-Remaining / X-RateLimit-Reset
  *   on every /api response; 429 + Retry-After when exceeded.
  * - Skips /api/health. Fails open on Redis errors.
@@ -16,9 +19,10 @@ import fp from 'fastify-plugin'
 
 const WINDOW_SECONDS = 60
 
+/** 0 = disabled (the default). */
 function resolveLimit(): number {
   const raw = Number(process.env.RATE_LIMIT_PER_MINUTE)
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
 }
 
 function clientKey(req: {
@@ -36,6 +40,10 @@ function clientKey(req: {
 
 export const rateLimitPlugin = fp(async (app: FastifyInstance) => {
   const limit = resolveLimit()
+  if (limit <= 0) {
+    app.log.info('Rate limiter off (set RATE_LIMIT_PER_MINUTE to enable)')
+    return
+  }
 
   app.addHook('onRequest', async (req, reply) => {
     const url = req.raw.url ?? ''
