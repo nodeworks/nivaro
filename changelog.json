@@ -1,10 +1,69 @@
 {
-  "generated_at": "2026-09-14T20:41:04.094Z",
+  "generated_at": "2026-09-14T21:35:35.619Z",
   "releases": [
+    {
+      "version": "0.1.281",
+      "tag": "v0.1.281",
+      "date": "2026-09-14T17:35:27-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "Summary layouts + integrity marks in Summary mode",
+              "hash": "eda68868"
+            },
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "Summary Mode — rule-driven opening mode, obvious toggle",
+              "hash": "c9815af2"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "summary",
+              "text": "no half-width jump on section cards while loading",
+              "hash": "57648476"
+            },
+            {
+              "section": "Fixed",
+              "scope": "summary",
+              "text": "hide empty widget slots in Summary mode",
+              "hash": "e0fd1b0b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "recap",
+              "text": "dismissing \"since you last viewed\" sticks across reloads",
+              "hash": "15fd66bf"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "www",
+              "text": "sync highlight-rule filtering section",
+              "hash": "caaff82e"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.1.280",
       "tag": "v0.1.280",
-      "date": "2026-09-14T16:40:54-04:00",
+      "date": "2026-09-14T16:41:04-04:00",
       "sections": [
         {
           "label": "Added",
