@@ -77,6 +77,39 @@ export interface NotificationActionSpec {
   endpoint: string
   body?: Record<string, unknown>
   mark_read?: boolean
+  /** The action takes a line of text (a reply, a note): render an input and
+   *  send its value as body[field]. */
+  input?: { field: string; placeholder: string; submit_label?: string }
+}
+
+/** Inbox lane — Critical and Needs-you are what the badge counts. */
+export type NotificationLane = 'critical' | 'needs_you' | 'fyi'
+
+/** Per-channel delivery outcome recorded on the row (GET /notifications
+ *  `delivery`). Rows from before delivery tracking carry only in-app. */
+export interface NotificationDeliveryRecord {
+  inapp?: { status: 'delivered' | 'skipped'; reason?: string }
+  push?: {
+    status: 'sent' | 'no_subscription' | 'skipped' | 'failed'
+    reason?: string
+    at?: string
+  }
+  email?: {
+    status:
+      | 'sent'
+      | 'deferred'
+      | 'dropped'
+      | 'failed'
+      | 'off'
+      | 'not_requested'
+      | 'no_address'
+      | 'unconfigured'
+    reason?: string
+    mail_log_id?: number | null
+    at?: string
+  }
+  sms?: { status: 'sent' | 'failed' | 'skipped' | 'not_requested'; reason?: string }
+  escalation?: { push_at?: string; email_at?: string; email_log_id?: number | null }
 }
 
 /** The notification row shape every surface receives (GET /notifications). */
@@ -88,6 +121,9 @@ export interface NotificationLike {
    *  host has no route for the kind (opens in a new tab when foreign). */
   url?: string | null
   actions?: NotificationActionSpec[] | null
+  lane?: NotificationLane | null
+  category?: string | null
+  delivery?: NotificationDeliveryRecord | null
 }
 
 const ALERT_COLLECTIONS = new Set([

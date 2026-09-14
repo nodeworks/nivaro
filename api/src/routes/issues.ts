@@ -4,6 +4,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { trackError } from '../services/error-tracking.js'
+import { notificationRowMeta } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
@@ -41,7 +42,15 @@ async function notifyAssignment(
     item: issue.collection ? (issue.item ?? String(issue.id)) : String(issue.id)
   }
   try {
-    await db('nivaro_notifications').insert(notification)
+    await db('nivaro_notifications').insert({
+      ...notification,
+      ...notificationRowMeta({
+        subject: notification.subject,
+        category: 'system',
+        kind: 'issue',
+        action: 'review'
+      })
+    })
     if (app.io) emitNotification(app.io, assigneeId, notification)
   } catch (err) {
     app.log.warn({ err }, 'Failed to send issue assignment notification')

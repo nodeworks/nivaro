@@ -352,6 +352,12 @@ export const navCategories: NavCategory[] = [
         label: 'Notification Bench',
         to: '/notification-bench',
         section: 'Data Tools'
+      },
+      {
+        icon: BarChart3,
+        label: 'Notification Analytics',
+        to: '/notification-analytics',
+        section: 'Data Tools'
       }
     ]
   },

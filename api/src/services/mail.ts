@@ -502,9 +502,9 @@ function logMail(
     collection?: string | null
     item?: string | number | null
   }
-): void {
+): Promise<number | null> {
   const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
-  void db('nivaro_mail_log')
+  return db('nivaro_mail_log')
     .insert({
       to: addr,
       subject: String(subject ?? '').slice(0, 500),
@@ -518,6 +518,12 @@ function logMail(
       body: opts?.body ? String(opts.body).slice(0, 200_000) : null,
       created_at: new Date()
     })
+    .returning('id')
+    .then((rows: unknown) => {
+      const first = Array.isArray(rows) ? rows[0] : rows
+      const id = first && typeof first === 'object' ? (first as { id?: unknown }).id : first
+      return Number.isFinite(Number(id)) ? Number(id) : null
+    })
     .catch((err: unknown) => {
       // Logging must never break sending — but a PERSISTENT insert failure
       // (schema drift) must not be invisible either, or the log quietly
@@ -529,11 +535,23 @@ function logMail(
           err instanceof Error ? err.message : err
         )
       }
+      return null
     })
 }
 let mailLogWarned = false
 
-export async function sendMail(opts: MailOptions): Promise<void> {
+/** What happened to a send — the notification row records it per channel.
+ *  'sent' / 'failed' carry the mail-log row id so an inbox row can link to
+ *  the delivery board; 'deferred' = folded into the daily summary;
+ *  'dropped' = test mode with no test recipient, or every recipient inactive;
+ *  'unconfigured' = no SMTP host. */
+export type MailOutcome = 'sent' | 'deferred' | 'dropped' | 'failed' | 'unconfigured'
+export interface MailResult {
+  status: MailOutcome
+  log_id: number | null
+}
+
+export async function sendMail(opts: MailOptions): Promise<MailResult> {
   // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
   {
@@ -544,7 +562,7 @@ export async function sendMail(opts: MailOptions): Promise<void> {
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {
     console.warn('[mail] SMTP not configured, skipping email to', opts.to)
-    return
+    return { status: 'unconfigured', log_id: null }
   }
   // The why-me footer rides the template context (the base layout renders
   // it); an explicit `why` in data wins over the option.
@@ -579,7 +597,7 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean)
   const active = await dropInactiveRecipients(original)
-  if (active.length === 0) return
+  if (active.length === 0) return { status: 'dropped', log_id: null }
   const afterDigest = await applyDigestDeferral(
     active,
     opts.subject,
@@ -588,8 +606,9 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     opts.category,
     opts.cadence === 'sender'
   )
+  let deferredLogId: number | null = null
   if (afterDigest.length < active.length) {
-    logMail(
+    deferredLogId = await logMail(
       active.filter((a) => !afterDigest.includes(a)),
       opts.subject,
       'deferred',
@@ -598,12 +617,12 @@ export async function sendMail(opts: MailOptions): Promise<void> {
       }
     )
   }
-  if (afterDigest.length === 0) return
+  if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
-    logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
-    return
+    const id = await logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
+    return { status: 'dropped', log_id: id }
   }
   try {
     await buildTransporter(smtp).sendMail({
@@ -613,14 +632,15 @@ export async function sendMail(opts: MailOptions): Promise<void> {
       html,
       text: opts.text
     })
-    logMail(routed.to, opts.subject, 'sent', {
+    const id = await logMail(routed.to, opts.subject, 'sent', {
       template: opts.template,
       body: html,
       collection: opts.collection,
       item: opts.item
     })
+    return { status: 'sent', log_id: id }
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', {
+    await logMail(routed.to, opts.subject, 'failed', {
       template: opts.template,
       error: err,
       body: html,
@@ -655,7 +675,7 @@ export async function sendRawMail(opts: {
   /** Logged as the mail-log `template` so raw sends (flow ops, digests)
    *  group on the delivery board instead of landing as "(untemplated)". */
   template?: string | null
-}): Promise<void> {
+}): Promise<MailResult> {
   // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
   {
@@ -666,7 +686,7 @@ export async function sendRawMail(opts: {
   const smtp = await getSmtpConfig()
   if (!smtp.host || smtp.host === 'localhost') {
     console.warn('[mail] SMTP not configured, skipping email to', opts.to)
-    return
+    return { status: 'unconfigured', log_id: null }
   }
   // Every raw sender historically shipped a bare HTML fragment with no
   // branding at all. Unless explicitly opted out — or the caller already
@@ -687,7 +707,7 @@ export async function sendRawMail(opts: {
     .map((s) => s.trim())
     .filter(Boolean)
   const active2 = await dropInactiveRecipients(original)
-  if (active2.length === 0) return
+  if (active2.length === 0) return { status: 'dropped', log_id: null }
   const afterDigest = await applyDigestDeferral(
     active2,
     opts.subject,
@@ -697,20 +717,21 @@ export async function sendRawMail(opts: {
     opts.cadence === 'sender'
   )
   const logTemplate = opts.template ?? null
+  let deferredLogId: number | null = null
   if (afterDigest.length < active2.length) {
-    logMail(
+    deferredLogId = await logMail(
       active2.filter((a) => !afterDigest.includes(a)),
       opts.subject,
       'deferred',
       { template: logTemplate }
     )
   }
-  if (afterDigest.length === 0) return
+  if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
-    logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
-    return
+    const id = await logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
+    return { status: 'dropped', log_id: id }
   }
   const {
     title: _title,
@@ -732,14 +753,15 @@ export async function sendRawMail(opts: {
       to: routed.to,
       subject: withEnvLabel(smtp, routed.subject)
     })
-    logMail(routed.to, opts.subject, 'sent', {
+    const id = await logMail(routed.to, opts.subject, 'sent', {
       template: logTemplate,
       body: html,
       collection: opts.collection,
       item: opts.item
     })
+    return { status: 'sent', log_id: id }
   } catch (err) {
-    logMail(routed.to, opts.subject, 'failed', {
+    await logMail(routed.to, opts.subject, 'failed', {
       template: logTemplate,
       error: err,
       body: html,

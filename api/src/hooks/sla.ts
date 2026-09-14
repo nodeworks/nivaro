@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+import { notificationRowMeta } from '../services/notification-channels.js'
 import { resolveRecordZones } from '../services/sla-zones.js'
 import { hooks } from './registry.js'
 
@@ -86,7 +87,8 @@ export async function checkSlaForInstance(
           sender: null,
           message: message.slice(0, 500),
           collection,
-          item
+          item,
+          ...notificationRowMeta({ subject, category: 'sla', kind: 'sla', action: 'acknowledge' })
         })
         .returning('*')
 

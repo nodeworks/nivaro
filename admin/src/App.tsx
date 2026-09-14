@@ -184,6 +184,7 @@ const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
 const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
 const MailLog = lazy(() => import('@/pages/MailLog'))
 const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
+const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -537,6 +538,7 @@ export default function App() {
                   <Route path='access-requests' element={<AccessRequests />} />
                   <Route path='mail-log' element={<MailLog />} />
                   <Route path='notification-bench' element={<NotificationBench />} />
+                  <Route path='notification-analytics' element={<NotificationAnalytics />} />
                   <Route path='sequences' element={<Sequences />} />
                   <Route path='sql-scratchpad' element={<SqlScratchpad />} />
                   <Route path='query-catalog' element={<QueryCatalogPage />} />

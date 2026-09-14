@@ -400,6 +400,27 @@ export async function usersRoutes(app: FastifyInstance) {
           }
           clean.matrix = m
         }
+        // Channel fallback chain: per category, minutes-unread before the
+        // push step and before the email step (5 min .. 7 days).
+        if (np.escalation && typeof np.escalation === 'object') {
+          const esc: Record<string, { push_after_min?: number; email_after_min?: number }> = {}
+          const minutes = (v: unknown) => {
+            const n = Number(v)
+            return Number.isFinite(n) && n >= 5 && n <= 10_080 ? Math.round(n) : undefined
+          }
+          for (const cat of CATS) {
+            const row = (np.escalation as Record<string, unknown>)[cat]
+            if (!row || typeof row !== 'object') continue
+            const push = minutes((row as { push_after_min?: unknown }).push_after_min)
+            const email = minutes((row as { email_after_min?: unknown }).email_after_min)
+            if (push || email)
+              esc[cat] = {
+                ...(push ? { push_after_min: push } : {}),
+                ...(email ? { email_after_min: email } : {})
+              }
+          }
+          clean.escalation = esc
+        }
         patch.notification_prefs = clean
       }
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')

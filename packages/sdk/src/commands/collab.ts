@@ -282,10 +282,17 @@ export interface NotificationItem {
   message: string | null
   type: string
   read: boolean
+  read_at?: ISODate | null
   collection: string | null
   item: string | null
   data: unknown | null
   created_at: ISODate
+  /** Inbox lane: 'critical' | 'needs_you' | 'fyi' (the badge counts the first two). */
+  lane?: string | null
+  /** Notification-rules category the row was judged under. */
+  category?: string | null
+  /** Per-channel delivery outcome (in-app / push / email / sms). */
+  delivery?: Record<string, unknown> | null
 }
 
 export interface NotificationPage {
@@ -302,17 +309,27 @@ export function listNotifications(query?: {
   limit?: number
   status?: 'all' | 'inbox' | 'read'
   app?: string
+  /** 'critical' | 'needs_you' | 'fyi' | 'attention' (= critical + needs_you). */
+  lane?: string
+  category?: string
 }): Command<NotificationPage> {
   const params: Record<string, unknown> = {}
   if (query?.page != null) params.page = query.page
   if (query?.limit != null) params.limit = query.limit
   if (query?.status) params.status = query.status
   if (query?.app) params.app = query.app
+  if (query?.lane) params.lane = query.lane
+  if (query?.category) params.category = query.category
   return cmd('GET', '/notifications', params)
 }
 
-/** Unread notification count for the current user. */
-export function readUnreadNotificationCount(): Command<{ unread: number }> {
+/** Unread notification count for the current user, split by lane.
+ *  `attention` (critical + needs-you) is what a badge should show. */
+export function readUnreadNotificationCount(): Command<{
+  unread: number
+  attention?: number
+  lanes?: { critical: number; needs_you: number; fyi: number }
+}> {
   return cmd('GET', '/notifications/unread-count')
 }
 

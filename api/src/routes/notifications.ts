@@ -5,7 +5,16 @@ import { logActivity } from '../services/activity.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
-import { NOTIFY_CATEGORIES, notifyUser } from '../services/notification-channels.js'
+import {
+  classifyNotification,
+  laneFromRow,
+  NOTIFY_CATEGORIES,
+  NOTIFY_CATEGORY_LABELS,
+  type NotificationLane,
+  type NotifyCategory,
+  notifyUser,
+  parseDelivery
+} from '../services/notification-channels.js'
 import {
   actionsFor,
   deriveTarget,
@@ -30,6 +39,21 @@ function serialize(row: Record<string, unknown>) {
       item: row.item as string | null,
       subject: row.subject as string | null
     })
+  const category =
+    (row.category as NotifyCategory | null) ?? classifyNotification(String(row.subject ?? ''))
+  const actions = actionsFor(target, { category })
+  const lane =
+    (row.lane as NotificationLane | null) ??
+    laneFromRow({
+      subject: row.subject as string,
+      category,
+      kind: target?.kind ?? null,
+      action: target?.action ?? null,
+      actions
+    })
+  // Rows written before delivery tracking existed: the row IS the in-app
+  // delivery, nothing else is known.
+  const delivery = parseDelivery(row.delivery) ?? { inapp: { status: 'delivered' } }
   return {
     id: row.id,
     user: row.recipient,
@@ -37,17 +61,55 @@ function serialize(row: Record<string, unknown>) {
     message: row.message,
     type: 'notification',
     read: row.status !== 'inbox',
+    read_at: row.read_at ?? null,
     collection: row.collection,
     item: row.item,
+    sender: row.sender ?? null,
     data: null,
     snoozed_until: row.snoozed_until ?? null,
     created_at: row.timestamp,
     target,
     kind: target?.kind ?? null,
     target_label: describeTarget(target),
-    actions: actionsFor(target),
+    category,
+    lane,
+    delivery,
+    actions,
     url: null as string | null
   }
+}
+
+/** Lane filter → SQL. `attention` = the two lanes the badge counts. A NULL
+ *  lane (a row written by an old image) counts as needs-you, never silently
+ *  FYI — under-counting the badge is the worse failure. */
+function applyLane(query: ReturnType<typeof db>, lane: string | undefined) {
+  if (!lane) return query
+  if (lane === 'attention')
+    return query.where((qb) => qb.whereIn('lane', ['critical', 'needs_you']).orWhereNull('lane'))
+  if (lane === 'needs_you')
+    return query.where((qb) => qb.where('lane', 'needs_you').orWhereNull('lane'))
+  if (lane === 'critical' || lane === 'fyi') return query.where('lane', lane)
+  return query
+}
+
+/** Unread counts per lane + the badge figure (critical + needs you). */
+async function laneCounts(userId: string) {
+  const rows = (await db('nivaro_notifications')
+    .where({ recipient: userId, status: 'inbox' })
+    .where((qb) => qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date()))
+    .select(db.raw("COALESCE(lane, 'needs_you') as lane"))
+    .count({ count: '*' })
+    .groupBy(db.raw("COALESCE(lane, 'needs_you')"))) as Array<{
+    lane: string
+    count: string | number
+  }>
+  const lanes = { critical: 0, needs_you: 0, fyi: 0 }
+  for (const r of rows) {
+    const k = r.lane as keyof typeof lanes
+    if (k in lanes) lanes[k] += Number(r.count)
+  }
+  const unread = lanes.critical + lanes.needs_you + lanes.fyi
+  return { unread, attention: lanes.critical + lanes.needs_you, lanes }
 }
 
 /** serialize + the URL for the app the caller runs in (`?app=`), else the
@@ -77,9 +139,14 @@ export async function notificationsRoutes(app: FastifyInstance) {
       collection?: string
       sender?: string
       snoozed?: string
+      lane?: string
+      category?: string
     }
     const filtered = () => {
       let query = db('nivaro_notifications').where({ recipient: userId })
+      query = applyLane(query, qf.lane)
+      if (qf.category && NOTIFY_CATEGORIES.includes(qf.category as NotifyCategory))
+        query = query.andWhere({ category: qf.category })
       if (q.status === 'inbox' || q.unread === 'true') query = query.andWhere({ status: 'inbox' })
       else if (q.status === 'read') query = query.andWhere({ status: 'read' })
       // Snoozed rows hide from the normal views until they wake; ?snoozed=true
@@ -113,21 +180,44 @@ export async function notificationsRoutes(app: FastifyInstance) {
 
     const appQ = (req.query as { app?: string }).app
     const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
+    // Sender names in one lookup — the rows carry the uuid only.
+    const senderIds = [
+      ...new Set(
+        rows
+          .map((r) => r.sender)
+          .filter(Boolean)
+          .map(String)
+      )
+    ]
+    const senderNames = new Map<string, string>()
+    if (senderIds.length > 0) {
+      const users = (await db('nivaro_users')
+        .whereIn('id', senderIds)
+        .select('id', 'first_name', 'last_name', 'email')
+        .catch(() => [])) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+      }>
+      for (const u of users)
+        senderNames.set(
+          String(u.id).toUpperCase(),
+          `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || ''
+        )
+    }
     const data = await Promise.all(
-      rows.map((r) => serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app }))
+      rows.map(async (r) => ({
+        ...(await serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })),
+        sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null
+      }))
     )
     return reply.send({ data, total, page, limit })
   })
 
-  app.get('/count', async (req, reply) => {
-    const userId = req.user!.id
-    const row = await db('nivaro_notifications')
-      .where({ recipient: userId, status: 'inbox' })
-      .where((qb) => qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date()))
-      .count<{ count: string | number }>({ count: '*' })
-      .first()
-    return reply.send({ unread: Number(row?.count ?? 0) })
-  })
+  // Unread count + lane split. `attention` is what the badge shows: Critical
+  // and Needs-you rows; FYI rows sit in the inbox without pulling the eye.
+  app.get('/count', async (req, reply) => reply.send(await laneCounts(req.user!.id)))
 
   // POST / — user-to-user notification (chat @mentions etc.). Sender is always
   // the authenticated user; rides notifyUser so socket + web push fire too.
@@ -424,7 +514,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const updated = await db('nivaro_notifications')
       .where({ id: Number(id), recipient: userId })
-      .update({ status: 'read' })
+      .update({ status: 'read', read_at: new Date() })
     if (!updated) return reply.code(404).send({ error: 'Not found' })
     await logActivity({
       action: 'notification-read',
@@ -439,7 +529,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
   async function markAllRead(userId: string) {
     return db('nivaro_notifications')
       .where({ recipient: userId, status: 'inbox' })
-      .update({ status: 'read' })
+      .update({ status: 'read', read_at: new Date() })
   }
 
   app.post('/read-all', async (req, reply) => {
@@ -462,7 +552,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const updated = await db('nivaro_notifications')
       .whereIn('id', ids)
       .where({ recipient: req.user!.id, status: 'inbox' })
-      .update({ status: 'read' })
+      .update({ status: 'read', read_at: new Date() })
     // Consistency with the sibling read endpoints, which all log.
     if (updated > 0) {
       void logActivity({
@@ -490,12 +580,214 @@ export async function notificationsRoutes(app: FastifyInstance) {
   })
 
   // GET /unread-count — alias of /count for the notifications center UI
-  app.get('/unread-count', async (req, reply) => {
-    const row = await db('nivaro_notifications')
-      .where({ recipient: req.user!.id, status: 'inbox' })
-      .count<{ count: string | number }>({ count: '*' })
-      .first()
-    return reply.send({ unread: Number(row?.count ?? 0) })
+  app.get('/unread-count', async (req, reply) => reply.send(await laneCounts(req.user!.id)))
+
+  /**
+   * Sender analytics (admin): where the noise comes from and whether it is
+   * read. Category / kind / sender / collection rollups over the window,
+   * read rate + time-to-read (read_at, stamped since delivery tracking), a
+   * daily series, per-channel delivery outcomes, and mutes — the "stop
+   * telling me about this" signal — per collection against what was sent.
+   */
+  app.get('/analytics', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as { days?: string }
+    const days = Math.min(365, Math.max(1, Number(q.days) || 30))
+    const since = new Date(Date.now() - days * 86_400_000)
+    const rows = (await db('nivaro_notifications')
+      .where('timestamp', '>=', since)
+      .orderBy('timestamp', 'desc')
+      .limit(20_000)
+      .select(
+        'id',
+        'timestamp',
+        'status',
+        'read_at',
+        'recipient',
+        'sender',
+        'subject',
+        'collection',
+        'kind',
+        'category',
+        'lane',
+        'delivery'
+      )) as Array<Record<string, unknown>>
+
+    const bump = <K extends string>(
+      m: Map<K, { sent: number; read: number; ttr: number[] }>,
+      key: K,
+      r: Record<string, unknown>
+    ) => {
+      const cur = m.get(key) ?? { sent: 0, read: 0, ttr: [] }
+      cur.sent++
+      if (r.status !== 'inbox') cur.read++
+      if (r.read_at && r.timestamp) {
+        const mins =
+          (new Date(r.read_at as string).getTime() - new Date(r.timestamp as string).getTime()) /
+          60_000
+        if (Number.isFinite(mins) && mins >= 0) cur.ttr.push(mins)
+      }
+      m.set(key, cur)
+    }
+    const byCategory = new Map<string, { sent: number; read: number; ttr: number[] }>()
+    const byKind = new Map<string, { sent: number; read: number; ttr: number[] }>()
+    const bySender = new Map<string, { sent: number; read: number; ttr: number[] }>()
+    const byCollection = new Map<string, { sent: number; read: number; ttr: number[] }>()
+    const byLane = new Map<string, { sent: number; read: number; ttr: number[] }>()
+    const byDay = new Map<string, { sent: number; read: number }>()
+    const channels = {
+      inapp: { delivered: 0, skipped: 0 },
+      push: { sent: 0, no_subscription: 0, skipped: 0, failed: 0 },
+      email: {
+        sent: 0,
+        deferred: 0,
+        dropped: 0,
+        failed: 0,
+        off: 0,
+        no_address: 0,
+        not_requested: 0
+      },
+      sms: { sent: 0, failed: 0, skipped: 0, not_requested: 0 }
+    }
+    const allTtr: number[] = []
+    let readTotal = 0
+    for (const r of rows) {
+      const category =
+        (r.category as string | null) ?? classifyNotification(String(r.subject ?? ''))
+      bump(byCategory, category, r)
+      bump(byKind, (r.kind as string | null) ?? 'record', r)
+      bump(bySender, (r.sender as string | null) ?? '__system__', r)
+      bump(byCollection, (r.collection as string | null) ?? '(none)', r)
+      bump(byLane, (r.lane as string | null) ?? 'fyi', r)
+      const day = new Date(r.timestamp as string).toISOString().slice(0, 10)
+      const d = byDay.get(day) ?? { sent: 0, read: 0 }
+      d.sent++
+      if (r.status !== 'inbox') {
+        d.read++
+        readTotal++
+      }
+      byDay.set(day, d)
+      if (r.read_at && r.timestamp) {
+        const mins =
+          (new Date(r.read_at as string).getTime() - new Date(r.timestamp as string).getTime()) /
+          60_000
+        if (Number.isFinite(mins) && mins >= 0) allTtr.push(mins)
+      }
+      const dv = parseDelivery(r.delivery)
+      if (dv) {
+        const bucket = (obj: Record<string, number>, k: string | undefined) => {
+          if (k && k in obj) obj[k]++
+        }
+        bucket(channels.inapp as Record<string, number>, dv.inapp?.status)
+        bucket(channels.push as Record<string, number>, dv.push?.status)
+        bucket(channels.email as Record<string, number>, dv.email?.status)
+        bucket(channels.sms as Record<string, number>, dv.sms?.status)
+      }
+    }
+    const median = (xs: number[]) => {
+      if (xs.length === 0) return null
+      const s = [...xs].sort((a, b) => a - b)
+      return s[Math.floor(s.length / 2)]
+    }
+    const roll = (m: Map<string, { sent: number; read: number; ttr: number[] }>) =>
+      [...m.entries()]
+        .map(([key, v]) => ({
+          key,
+          sent: v.sent,
+          read: v.read,
+          read_rate: v.sent ? v.read / v.sent : 0,
+          median_minutes_to_read: median(v.ttr)
+        }))
+        .sort((a, b) => b.sent - a.sent)
+
+    // Senders: resolve names for the top rows (null sender = the system).
+    const senders = roll(bySender).slice(0, 15)
+    const senderIds = senders.map((s) => s.key).filter((k) => k !== '__system__')
+    const names = new Map<string, string>()
+    if (senderIds.length > 0) {
+      const users = (await db('nivaro_users')
+        .whereIn('id', senderIds)
+        .select('id', 'first_name', 'last_name', 'email')) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+      }>
+      for (const u of users)
+        names.set(
+          String(u.id).toUpperCase(),
+          `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || String(u.id)
+        )
+    }
+    const senderRows = senders.map((s) => ({
+      ...s,
+      label:
+        s.key === '__system__' ? 'System / automations' : (names.get(s.key.toUpperCase()) ?? s.key)
+    }))
+
+    // Mutes: per collection, against what that collection sent — the
+    // "stop telling me" rate.
+    let mutes: Array<{ collection: string; mutes: number; sent: number; mute_rate: number }> = []
+    let muteTotal = 0
+    let mutingUsers = 0
+    try {
+      const muteRows = (await db('nivaro_notification_mutes')
+        .select('collection')
+        .count({ count: '*' })
+        .groupBy('collection')) as Array<{ collection: string; count: string | number }>
+      const mu = (await db('nivaro_notification_mutes').countDistinct({ count: 'user' }).first()) as
+        | { count: string | number }
+        | undefined
+      mutingUsers = Number(mu?.count ?? 0)
+      mutes = muteRows
+        .map((m) => {
+          const sent = byCollection.get(m.collection)?.sent ?? 0
+          muteTotal += Number(m.count)
+          return {
+            collection: m.collection,
+            mutes: Number(m.count),
+            sent,
+            mute_rate: sent ? Number(m.count) / sent : 0
+          }
+        })
+        .sort((a, b) => b.mutes - a.mutes)
+        .slice(0, 15)
+    } catch {
+      mutes = []
+    }
+    const activeUsers = (await db('nivaro_users')
+      .where({ status: 'active' })
+      .count({ count: '*' })
+      .first()) as { count: string | number } | undefined
+
+    const series = [...byDay.entries()]
+      .map(([day, v]) => ({ day, ...v }))
+      .sort((a, b) => a.day.localeCompare(b.day))
+    return reply.send({
+      data: {
+        days,
+        total: rows.length,
+        read: readTotal,
+        read_rate: rows.length ? readTotal / rows.length : 0,
+        median_minutes_to_read: median(allTtr),
+        truncated: rows.length >= 20_000,
+        by_category: roll(byCategory).map((r) => ({
+          ...r,
+          label: NOTIFY_CATEGORY_LABELS[r.key as NotifyCategory] ?? r.key
+        })),
+        by_kind: roll(byKind),
+        by_lane: roll(byLane),
+        by_sender: senderRows,
+        by_collection: roll(byCollection).slice(0, 20),
+        series,
+        channels,
+        mutes: {
+          total: muteTotal,
+          muting_users: mutingUsers,
+          active_users: Number(activeUsers?.count ?? 0),
+          top: mutes
+        }
+      }
+    })
   })
 
   app.delete('/:id', async (req, reply) => {

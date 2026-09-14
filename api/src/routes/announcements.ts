@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { notifyUser } from '../services/notification-channels.js'
 import { sendRawMail } from '../services/mail.js'
+import { notifyUser } from '../services/notification-channels.js'
 import { sendSms } from '../services/sms.js'
 
 /**
@@ -307,9 +307,22 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       channel: string
       status: 'sent' | 'failed' | 'skipped'
       delivered_at: Date
+      notification_id: number | null
     }> = []
-    const record = (userId: string, channel: string, status: 'sent' | 'failed' | 'skipped') =>
-      receipts.push({ announcement: id, user: userId, channel, status, delivered_at: new Date() })
+    const record = (
+      userId: string,
+      channel: string,
+      status: 'sent' | 'failed' | 'skipped',
+      notificationId: number | null = null
+    ) =>
+      receipts.push({
+        announcement: id,
+        user: userId,
+        channel,
+        status,
+        delivered_at: new Date(),
+        notification_id: notificationId
+      })
     for (const u of users) {
       let reached = false
       const pSubject = personalize(subject, u)
@@ -321,11 +334,15 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
         await notifyUser(app, u.id, {
           subject: pSubject,
           message: pMessage.slice(0, 500),
-          sender: senderId
+          sender: senderId,
+          category: 'system',
+          always_inbox: true
         })
-          .then(() => {
+          .then((r) => {
             reached = true
-            record(u.id, 'message', 'sent')
+            // The inbox row id is what turns a delivery into an "opened"
+            // receipt later (the row's read state).
+            record(u.id, 'message', 'sent', r.id)
           })
           .catch(() => record(u.id, 'message', 'failed'))
       }
@@ -695,7 +712,10 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         // scheduled for Monday cannot show up Friday.
         is_active: (channels.includes('banner') || channels.includes('login')) && !scheduledAt,
         scheduled_send_at: scheduledAt,
-        sent_at: scheduledAt ? null : new Date(),
+        // deliverAnnouncement stamps sent_at itself — and refuses rows that
+        // already carry one, so stamping it here meant immediate sends never
+        // fanned out (delivered 0, no receipts).
+        sent_at: null,
         created_by: req.user?.id ?? null,
         created_at: new Date(),
         updated_at: new Date()
@@ -909,6 +929,226 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
           )
       ])
       return { data: { acks, deliveries } }
+    }
+  )
+
+  /**
+   * Receipts rolled up per AUDIENCE: by role and by every scope dimension
+   * (zone, region…) — delivered / opened (the inbox row was read) / acked
+   * (banner dismissed) — plus who is still unread, so the sender can nudge
+   * exactly them. Opened is known only for the in-app 'message' channel
+   * (email opens are not tracked; link clicks are counted on the row).
+   */
+  app.get<{ Params: { id: string } }>(
+    '/:id/receipts/summary',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const row = (await db('nivaro_announcements').where('id', id).first('id', 'channels')) as
+        | { id: number; channels: string | null }
+        | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const deliveries = (await db('nivaro_announcement_deliveries as d')
+        .leftJoin('nivaro_notifications as n', 'n.id', 'd.notification_id')
+        .where('d.announcement', id)
+        .select(
+          'd.user',
+          'd.channel',
+          'd.status',
+          'd.notification_id',
+          'n.status as n_status'
+        )) as Array<{
+        user: string
+        channel: string
+        status: string
+        notification_id: number | null
+        n_status: string | null
+      }>
+      const acks = (await db('nivaro_announcement_acks')
+        .where('announcement', id)
+        .select('user')) as Array<{ user: string }>
+      const acked = new Set(acks.map((a) => String(a.user).toUpperCase()))
+
+      // Per user: delivered on any channel, opened (in-app row read), acked.
+      const perUser = new Map<string, { delivered: boolean; opened: boolean; acked: boolean }>()
+      for (const d of deliveries) {
+        const u = String(d.user).toUpperCase()
+        const cur = perUser.get(u) ?? { delivered: false, opened: false, acked: acked.has(u) }
+        if (d.status === 'sent') cur.delivered = true
+        if (d.channel === 'message' && d.n_status && d.n_status !== 'inbox') cur.opened = true
+        perUser.set(u, cur)
+      }
+      for (const u of acked)
+        if (!perUser.has(u)) perUser.set(u, { delivered: false, opened: false, acked: true })
+      const userIds = [...perUser.keys()]
+      if (userIds.length === 0)
+        return {
+          data: {
+            totals: { delivered: 0, opened: 0, acked: 0, unread: 0 },
+            by_role: [],
+            by_dimension: {},
+            unread_users: []
+          }
+        }
+
+      const users = (await db('nivaro_users as u')
+        .leftJoin('nivaro_roles as r', 'r.id', 'u.role')
+        .whereIn('u.id', userIds)
+        .select('u.id', 'u.first_name', 'u.last_name', 'u.email', 'r.name as role_name')) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+        role_name: string | null
+      }>
+      const { listScopeDimensions, resolveScopeLabelsForUsers } = await import(
+        '../services/user-scopes.js'
+      )
+      const dims = await listScopeDimensions().catch(() => [])
+      const scopeLabels = await resolveScopeLabelsForUsers(
+        userIds,
+        dims.map((d) => d.name)
+      ).catch(() => new Map<string, Map<string, string[]>>())
+
+      type Bucket = {
+        label: string
+        delivered: number
+        opened: number
+        acked: number
+        unread: number
+      }
+      const bucketInto = (
+        m: Map<string, Bucket>,
+        label: string,
+        s: { delivered: boolean; opened: boolean; acked: boolean }
+      ) => {
+        const b = m.get(label) ?? { label, delivered: 0, opened: 0, acked: 0, unread: 0 }
+        if (s.delivered) b.delivered++
+        if (s.opened) b.opened++
+        if (s.acked) b.acked++
+        if (s.delivered && !s.opened && !s.acked) b.unread++
+        m.set(label, b)
+      }
+      const byRole = new Map<string, Bucket>()
+      const byDim = new Map<string, Map<string, Bucket>>()
+      const totals = { delivered: 0, opened: 0, acked: 0, unread: 0 }
+      const unreadUsers: Array<{ id: string; name: string }> = []
+      for (const u of users) {
+        const key = String(u.id).toUpperCase()
+        const s = perUser.get(key)
+        if (!s) continue
+        if (s.delivered) totals.delivered++
+        if (s.opened) totals.opened++
+        if (s.acked) totals.acked++
+        const name = `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || key
+        if (s.delivered && !s.opened && !s.acked) {
+          totals.unread++
+          unreadUsers.push({ id: u.id, name })
+        }
+        bucketInto(byRole, u.role_name ?? '(no role)', s)
+        const mine = scopeLabels.get(key) ?? scopeLabels.get(String(u.id))
+        for (const d of dims) {
+          const labels = mine?.get(d.name) ?? []
+          const m = byDim.get(d.label) ?? new Map<string, Bucket>()
+          if (labels.length === 0) bucketInto(m, '(unrestricted)', s)
+          for (const l of labels) bucketInto(m, l, s)
+          byDim.set(d.label, m)
+        }
+      }
+      const sortB = (m: Map<string, Bucket>) =>
+        [...m.values()].sort((a, b) => b.delivered - a.delivered)
+      return {
+        data: {
+          totals,
+          by_role: sortB(byRole),
+          by_dimension: Object.fromEntries([...byDim.entries()].map(([k, v]) => [k, sortB(v)])),
+          unread_users: unreadUsers.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 500)
+        }
+      }
+    }
+  )
+
+  /** Nudge everyone the broadcast reached who has neither read the inbox
+   *  row nor dismissed the banner: a fresh in-app "Reminder:" row (+ push
+   *  via the normal channel rules). Recorded as a 'nudge' delivery so the
+   *  receipts show it happened; an already-nudged person is not nudged
+   *  again by the same click unless `again` is set. */
+  app.post<{ Params: { id: string }; Body: { again?: boolean } }>(
+    '/:id/nudge',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const row = (await db('nivaro_announcements').where('id', id).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const deliveries = (await db('nivaro_announcement_deliveries as d')
+        .leftJoin('nivaro_notifications as n', 'n.id', 'd.notification_id')
+        .where('d.announcement', id)
+        .select('d.user', 'd.channel', 'd.status', 'n.status as n_status')) as Array<{
+        user: string
+        channel: string
+        status: string
+        n_status: string | null
+      }>
+      const acked = new Set(
+        (
+          (await db('nivaro_announcement_acks').where('announcement', id).select('user')) as Array<{
+            user: string
+          }>
+        ).map((a) => String(a.user).toUpperCase())
+      )
+      const nudged = new Set(
+        deliveries.filter((d) => d.channel === 'nudge').map((d) => String(d.user).toUpperCase())
+      )
+      const targets = new Map<string, boolean>()
+      for (const d of deliveries) {
+        if (d.status !== 'sent' || d.channel === 'nudge') continue
+        const u = String(d.user).toUpperCase()
+        const opened = d.channel === 'message' && !!d.n_status && d.n_status !== 'inbox'
+        if (acked.has(u) || opened) {
+          targets.set(u, false)
+          continue
+        }
+        if (nudged.has(u) && !req.body?.again) continue
+        if (!targets.has(u)) targets.set(u, true)
+      }
+      const toNudge = [...targets.entries()].filter(([, v]) => v).map(([u]) => u)
+      const subject = `Reminder: ${String(row.subject ?? row.message ?? '').slice(0, 240)}`
+      const message = String(row.message ?? '').slice(0, 500)
+      let sent = 0
+      const receipts: Array<Record<string, unknown>> = []
+      for (const u of toNudge) {
+        const r = await notifyUser(app, u, {
+          subject,
+          message,
+          sender: req.user!.id,
+          category: 'system',
+          always_inbox: true
+        }).catch(() => null)
+        receipts.push({
+          announcement: id,
+          user: u,
+          channel: 'nudge',
+          status: r ? 'sent' : 'failed',
+          delivered_at: new Date(),
+          notification_id: r?.id ?? null
+        })
+        if (r) sent++
+      }
+      for (let i = 0; i < receipts.length; i += 300)
+        await db('nivaro_announcement_deliveries')
+          .insert(receipts.slice(i, i + 300))
+          .catch(() => {})
+      await logActivity({
+        action: 'broadcast-nudge',
+        user: req.user!.id,
+        collection: 'nivaro_announcements',
+        item: String(id),
+        comment: `${sent} nudged`,
+        req
+      })
+      return { data: { nudged: sent, eligible: toNudge.length } }
     }
   )
 

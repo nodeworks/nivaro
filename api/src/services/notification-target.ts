@@ -69,6 +69,9 @@ export interface NotificationActionSpec {
   body?: Record<string, unknown>
   /** The row should be marked read once the action succeeds. */
   mark_read?: boolean
+  /** The action needs text from the person (a reply, a comment): the client
+   *  renders an inline input and puts its value into body[field]. */
+  input?: { field: string; placeholder: string; submit_label?: string }
 }
 
 const KINDS = new Set<NotificationKind>([
@@ -237,11 +240,54 @@ export async function resolveTargetUrl(
   }
 }
 
-/** Inline actions a client may offer for the target — only ones whose
- *  endpoint is safe to fire from a click (no comment / decision needed). */
-export function actionsFor(spec: NotificationTargetSpec | null): NotificationActionSpec[] {
+/** Inline actions a client may offer for the target — one-click ones
+ *  (mark done, acknowledge) plus the reply-style ones that take a line of
+ *  text: a chat mention replies into the room, a comment mention replies on
+ *  the record's thread, a transition notification offers "comment on this"
+ *  into the record's Notes. `ctx.category` picks the reply flavour. */
+export function actionsFor(
+  spec: NotificationTargetSpec | null,
+  ctx: { category?: string | null } = {}
+): NotificationActionSpec[] {
   if (!spec) return []
   const out: NotificationActionSpec[] = []
+  if (spec.kind === 'chat' && spec.room) {
+    out.push({
+      key: 'reply',
+      label: 'Reply',
+      method: 'POST',
+      endpoint: '/chat/messages',
+      body: { room: spec.room },
+      input: { field: 'message', placeholder: 'Reply in chat…', submit_label: 'Send' },
+      mark_read: true
+    })
+  }
+  const recordish =
+    (spec.kind === 'record' || spec.kind === 'approval' || spec.kind === 'sla') &&
+    spec.collection &&
+    spec.id != null &&
+    !/^nivaro_/i.test(spec.collection)
+  if (recordish && ctx.category === 'mentions') {
+    out.push({
+      key: 'reply',
+      label: 'Reply',
+      method: 'POST',
+      endpoint: '/comments',
+      body: { collection: spec.collection, item: String(spec.id) },
+      input: { field: 'text', placeholder: 'Reply on the record…', submit_label: 'Post' },
+      mark_read: true
+    })
+  } else if (recordish && (ctx.category === 'workflow' || spec.kind === 'approval')) {
+    out.push({
+      key: 'reply',
+      label: 'Comment on this',
+      method: 'POST',
+      endpoint: '/comments',
+      body: { collection: spec.collection, item: String(spec.id) },
+      input: { field: 'text', placeholder: 'Add a note to the record…', submit_label: 'Post' },
+      mark_read: false
+    })
+  }
   if (spec.kind === 'task' && spec.id != null) {
     out.push({
       key: 'complete',

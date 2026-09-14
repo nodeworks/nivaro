@@ -183,9 +183,9 @@ export function BroadcastView({ className }: { className?: string }) {
     queryKey: ['broadcast-templates'],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; name: string; snapshot: Record<string, unknown> | null }> }>(
-          get('/announcements/templates')
-        )
+        .request<{
+          data: Array<{ id: number; name: string; snapshot: Record<string, unknown> | null }>
+        }>(get('/announcements/templates'))
         .then((r) => r.data ?? [])
         .catch(() => []),
     staleTime: 60_000
@@ -195,7 +195,14 @@ export function BroadcastView({ className }: { className?: string }) {
       client.request(
         post('/announcements/templates', {
           name,
-          snapshot: { subject, message, severity, channels, require_ack: requireAck, audience: fullAudience }
+          snapshot: {
+            subject,
+            message,
+            severity,
+            channels,
+            require_ack: requireAck,
+            audience: fullAudience
+          }
         })
       ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['broadcast-templates'] })
@@ -273,7 +280,10 @@ export function BroadcastView({ className }: { className?: string }) {
             onClick={() => setGroups((prev) => [...prev, {}])}
             className='rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-[11.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-border dark:text-muted-foreground'
           >
-            ＋ {groups.length === 0 ? 'Target by scope (e.g. Zone 2 + Node Splits)' : 'Add another group (OR)'}
+            ＋{' '}
+            {groups.length === 0
+              ? 'Target by scope (e.g. Zone 2 + Node Splits)'
+              : 'Add another group (OR)'}
           </button>
         </div>
         <div className='mt-3'>
@@ -575,7 +585,10 @@ export function BroadcastView({ className }: { className?: string }) {
           <div className='mt-2 flex flex-wrap items-center gap-1.5'>
             <span className='text-[11px] text-slate-400'>Templates:</span>
             {bTemplates.map((t) => (
-              <span key={t.id} className='inline-flex items-center overflow-hidden rounded-full border border-slate-200 dark:border-border'>
+              <span
+                key={t.id}
+                className='inline-flex items-center overflow-hidden rounded-full border border-slate-200 dark:border-border'
+              >
                 <button
                   type='button'
                   onClick={() => applyTemplate(t)}
@@ -594,11 +607,14 @@ export function BroadcastView({ className }: { className?: string }) {
         <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
           History
         </p>
-        {history.length === 0 && (
-          <p className='text-[12px] text-slate-400'>Nothing sent yet.</p>
-        )}
+        {history.length === 0 && <p className='text-[12px] text-slate-400'>Nothing sent yet.</p>}
         {history.map((a) => (
-          <HistoryRow key={a.id} broadcast={a} onPatch={patchRow.mutate} onRemove={removeRow.mutate} />
+          <HistoryRow
+            key={a.id}
+            broadcast={a}
+            onPatch={patchRow.mutate}
+            onRemove={removeRow.mutate}
+          />
         ))}
       </div>
     </div>
@@ -617,7 +633,33 @@ function HistoryRow({
   onRemove: (id: number) => void
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
+  type Bucket = { label: string; delivered: number; opened: number; acked: number; unread: number }
+  const { data: summary } = useQuery<{
+    totals: { delivered: number; opened: number; acked: number; unread: number }
+    by_role: Bucket[]
+    by_dimension: Record<string, Bucket[]>
+    unread_users: Array<{ id: string; name: string }>
+  }>({
+    queryKey: ['broadcast-receipt-summary', a.id],
+    queryFn: () =>
+      client
+        .request<{ data: never }>(get(`/announcements/${a.id}/receipts/summary`))
+        .then((r) => r.data),
+    enabled: open,
+    staleTime: 5_000
+  })
+  const nudge = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { nudged: number; eligible: number } }>(
+        post(`/announcements/${a.id}/nudge`, {})
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['broadcast-receipt-summary', a.id] })
+      void qc.invalidateQueries({ queryKey: ['broadcast-receipts', a.id] })
+    }
+  })
   const { data: receipts } = useQuery<{
     acks: Array<{ acked_at: string | null; user_name: string | null; user_email: string | null }>
     deliveries: Array<{
@@ -630,9 +672,7 @@ function HistoryRow({
   }>({
     queryKey: ['broadcast-receipts', a.id],
     queryFn: () =>
-      client
-        .request<{ data: never }>(get(`/announcements/${a.id}/receipts`))
-        .then((r) => r.data),
+      client.request<{ data: never }>(get(`/announcements/${a.id}/receipts`)).then((r) => r.data),
     enabled: open,
     staleTime: 5_000,
     // Live ticker (#265): a freshly-sent broadcast's counts climb in real
@@ -711,6 +751,86 @@ function HistoryRow({
           ✕
         </button>
       </div>
+      {open && summary && (summary.totals.delivered > 0 || summary.totals.acked > 0) && (
+        <div
+          className='border-t border-slate-100 px-4 py-3 dark:border-border'
+          data-nvr-receipt-summary
+        >
+          <div className='flex flex-wrap items-center gap-3'>
+            <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              By audience
+            </p>
+            <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              delivered <b>{summary.totals.delivered}</b> · opened <b>{summary.totals.opened}</b> ·
+              acknowledged <b>{summary.totals.acked}</b> · still unread{' '}
+              <b>{summary.totals.unread}</b>
+            </span>
+            <span className='flex-1' />
+            {summary.totals.unread > 0 && (
+              <button
+                type='button'
+                disabled={nudge.isPending}
+                onClick={() => nudge.mutate()}
+                className='rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'
+                data-nvr-nudge
+              >
+                {nudge.isPending
+                  ? 'Nudging…'
+                  : nudge.data
+                    ? `Nudged ${nudge.data.data.nudged}`
+                    : `Nudge ${summary.totals.unread} unread`}
+              </button>
+            )}
+          </div>
+          <div className='mt-2 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3'>
+            {[['Role', summary.by_role] as const, ...Object.entries(summary.by_dimension)].map(
+              ([label, rows]) => (
+                <table key={label} className='w-full text-[11.5px] tabular-nums'>
+                  <thead>
+                    <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+                      <th className='py-0.5 font-semibold'>{label}</th>
+                      <th className='py-0.5 text-right font-semibold'>Sent</th>
+                      <th className='py-0.5 text-right font-semibold'>Opened</th>
+                      <th className='py-0.5 text-right font-semibold'>Ack</th>
+                      <th className='py-0.5 text-right font-semibold'>Unread</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(rows as Bucket[]).map((b) => (
+                      <tr key={b.label} className='border-t border-slate-100 dark:border-border'>
+                        <td className='py-0.5 text-slate-700 dark:text-foreground'>{b.label}</td>
+                        <td className='py-0.5 text-right'>{b.delivered}</td>
+                        <td className='py-0.5 text-right text-emerald-700 dark:text-emerald-400'>
+                          {b.opened}
+                        </td>
+                        <td className='py-0.5 text-right'>{b.acked}</td>
+                        <td
+                          className={cn(
+                            'py-0.5 text-right',
+                            b.unread > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-slate-400'
+                          )}
+                        >
+                          {b.unread}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            )}
+          </div>
+          {summary.unread_users.length > 0 && (
+            <p className='mt-2 text-[11px] text-slate-400'>
+              Unread:{' '}
+              {summary.unread_users
+                .slice(0, 12)
+                .map((u) => u.name)
+                .join(', ')}
+              {summary.unread_users.length > 12 ? ` +${summary.unread_users.length - 12} more` : ''}
+            </p>
+          )}
+        </div>
+      )}
       {open && (
         <div className='grid grid-cols-1 gap-4 border-t border-slate-100 px-4 py-3 dark:border-border sm:grid-cols-2'>
           <div>

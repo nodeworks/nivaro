@@ -421,10 +421,12 @@ export function NotificationRulesCard() {
         .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
   })
   type EmailMode = 'instant' | 'daily' | 'off'
+  type EscalationRule = { push_after_min?: number; email_after_min?: number }
   const np = (prefs?.notification_prefs ?? {}) as {
     quiet_start?: string
     quiet_end?: string
     matrix?: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }>
+    escalation?: Record<string, EscalationRule>
   }
   // Legacy account-wide default (instant vs daily) — categories without an
   // explicit email mode inherit it; the server applies the same fallback.
@@ -450,9 +452,29 @@ export function NotificationRulesCard() {
     save.mutate({
       quiet_start: overrides.quiet_start ?? (effStart || undefined),
       quiet_end: overrides.quiet_end ?? (effEnd || undefined),
-      matrix: overrides.matrix ?? np.matrix ?? {}
+      matrix: overrides.matrix ?? np.matrix ?? {},
+      escalation: overrides.escalation ?? np.escalation ?? {}
     })
   }
+  // Channel fallback chain: per category, how long a row may stay unread
+  // before it climbs to push, then to email. '' = never.
+  const setEscalation = (cat: string, step: keyof EscalationRule, minutes: number | null) => {
+    const cur = { ...(np.escalation?.[cat] ?? {}) }
+    if (minutes) cur[step] = minutes
+    else delete cur[step]
+    const next = { ...(np.escalation ?? {}) }
+    if (Object.keys(cur).length) next[cat] = cur
+    else delete next[cat]
+    commit({ escalation: next })
+  }
+  const ESCALATION_OPTIONS = [
+    { value: '', label: 'never' },
+    { value: '15', label: '15 min' },
+    { value: '60', label: '1 hour' },
+    { value: '240', label: '4 hours' },
+    { value: '480', label: '8 hours' },
+    { value: '1440', label: '1 day' }
+  ]
   const toggle = (cat: string, channel: 'inapp' | 'push') => {
     const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
     commit({
@@ -627,6 +649,50 @@ export function NotificationRulesCard() {
               {o.label}
             </button>
           ))}
+        </div>
+        <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border/60 dark:bg-background/40'>
+          <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+            If it stays unread
+            <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
+              one notification climbs channels on your schedule — push, then email — and stops the
+              moment you read it. A channel that already delivered it is not repeated.
+            </span>
+          </p>
+          <table className='w-full text-[12px]'>
+            <thead>
+              <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+                <th className='py-1 font-semibold'>Category</th>
+                <th className='py-1 font-semibold'>
+                  Push after
+                  <HeaderHelp text='Still unread after this long → a browser / device push (needs a registered device; quiet hours do not apply to escalations you asked for).' />
+                </th>
+                <th className='py-1 font-semibold'>
+                  Email after
+                  <HeaderHelp text='Still unread after this long → one email with the notification, regardless of the Email column above (No email still means no email at delivery time; this is the fallback).' />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {NOTIFY_CATS.map((c) => {
+                const rule = np.escalation?.[c.key] ?? {}
+                return (
+                  <tr key={c.key} className='border-t border-slate-100 dark:border-border'>
+                    <td className='py-1 text-slate-700 dark:text-foreground'>{c.label}</td>
+                    {(['push_after_min', 'email_after_min'] as const).map((step) => (
+                      <td key={step} className='py-1'>
+                        <SimpleSelectXs
+                          ariaLabel={`${step === 'push_after_min' ? 'Push' : 'Email'} after for ${c.label}`}
+                          value={rule[step] ? String(rule[step]) : ''}
+                          options={ESCALATION_OPTIONS}
+                          onChange={(v: string) => setEscalation(c.key, step, v ? Number(v) : null)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
         <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border/60 dark:bg-background/40'>
           <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>

@@ -10,6 +10,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
   // ── Delivery & notifications ──
   'daily-action-digest':
     'Hourly at :45 — sends the "daily action summary" email to users whose delivery hour matches: deferred emails, the notification digest for Daily/Weekly subscriptions (weekly on Mondays), records waiting on them, invoices to review. Flushes nivaro_deferred_emails, advances last_digest_at.',
+  'notification-escalation':
+    'Every 5 minutes — the channel fallback chain: an in-app notification still unread after the minutes a person set for its category gets a browser push, then an email (each step once; skipped when that channel already delivered it). Stops the moment the row is read or snoozed.',
   'view-subscriptions-daily':
     'Re-runs every subscribed saved view as its subscriber and emails the records that entered it since yesterday.',
   'view-subscriptions-weekly': 'Weekly (Monday) version of the saved-view digest.',

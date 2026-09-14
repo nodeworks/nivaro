@@ -324,9 +324,17 @@ export async function chatRoutes(app: FastifyInstance) {
         room,
         message
       }).catch(() => null)
+      const { renderNotificationTemplate } = await import('../services/notification-templates.js')
+      const templatedMention = await renderNotificationTemplate('chat_mention', {
+        actor: senderName ?? 'Someone',
+        room,
+        text: message.slice(0, 300)
+      }).catch(() => null)
       await notifyUser(app, String(target), {
-        subject: `${senderName ?? 'Someone'} mentioned you in chat`,
-        message: message.slice(0, 300),
+        subject: templatedMention?.subject ?? `${senderName ?? 'Someone'} mentioned you in chat`,
+        message: templatedMention?.message || message.slice(0, 300),
+        category: 'mentions',
+        always_inbox: true,
         sender: req.user?.id ?? null,
         // Pseudo-collection: clients resolve '__chat__' + room into opening
         // the chat room rather than a record route.

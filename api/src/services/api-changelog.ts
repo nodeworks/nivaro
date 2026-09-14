@@ -1,5 +1,6 @@
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
+import { notificationRowMeta } from './notification-channels.js'
 
 /**
  * API surface changelogs: GraphQL (#163) — type/field diffs on every schema
@@ -76,7 +77,8 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
         sender: null,
         message: message.slice(0, 500),
         collection: null,
-        item: null
+        item: null,
+        ...notificationRowMeta({ subject, category: 'system' })
       })
     }
   } catch {

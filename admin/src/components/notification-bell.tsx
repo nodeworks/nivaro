@@ -1,16 +1,19 @@
+import { createNivaro } from '@nivaro/sdk'
 import {
+  NivaroProvider,
   type NotificationRouteMap,
-  resolveNotificationTargetFor,
-  runNotificationTarget
-} from '@nivaro/react'
-import { playNotificationSound } from '@nivaro/shared'
+  playNotificationSound,
+  NotificationBell as SharedNotificationBell
+} from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, ExternalLink, KeyRound } from 'lucide-react'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Bell, KeyRound } from 'lucide-react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router'
-import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
-import { runNotificationAction } from '@/lib/notification-actions'
+import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
+import { getSocket } from '@/lib/socket'
+import { cn } from '@/lib/utils'
 
 /** Where a notification's click lands in the admin app. */
 const NOTIF_ROUTES: NotificationRouteMap = {
@@ -28,22 +31,15 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   my_work: () => '/my-work'
 }
 
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  api,
-  type CMSNotification,
-  getNotifications,
-  getUnreadCount,
-  markAllRead,
-  markRead,
-  markReadBatch
-} from '@/lib/api'
-import { useAuth } from '@/lib/auth'
-import { cn, formatRelative } from '@/lib/utils'
+const bellClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
-// Use same-origin so WebSocket goes through Cloudflare Worker → Railway
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
-
+/**
+ * The admin's bell = the shared NotificationBell (lanes, delivery chips,
+ * reply actions, record grouping) hosted in the sidebar footer, plus the
+ * admin-only extras: the pending access-requests strip and the badge share
+ * those count, the shared socket feeds new-notification refreshes, and the
+ * sound preference chimes on arrival.
+ */
 export function NotificationBell({
   collapsed,
   compact
@@ -52,55 +48,8 @@ export function NotificationBell({
   compact?: boolean
 }) {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const socketRef = useRef<Socket | null>(null)
-
-  const { data: unread = 0 } = useQuery({
-    queryKey: ['notifications', 'count'],
-    queryFn: getUnreadCount,
-    refetchInterval: 30_000
-  })
-
-  // Notification sounds (#179): a soft two-tone chime (WebAudio, no asset)
-  // when the unread count RISES — preference-gated, off by default. The
-  // watermark ref means a mount never chimes for existing unread.
-  const prevUnreadRef = useRef<number | null>(null)
-  useEffect(() => {
-    const prefs = (
-      user as {
-        preferences?: { notification_sound?: { enabled?: boolean; volume?: number } }
-      } | null
-    )?.preferences?.notification_sound
-    const prev = prevUnreadRef.current
-    prevUnreadRef.current = unread
-    if (prev === null || unread <= prev) return
-    if (!prefs?.enabled) return
-    try {
-      const AC =
-        window.AudioContext ??
-        (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!AC) return
-      const ctx = new AC()
-      const vol = Math.min(1, Math.max(0.05, prefs.volume ?? 0.4))
-      const play = (freq: number, at: number) => {
-        const osc = ctx.createOscillator()
-        const gain = ctx.createGain()
-        osc.frequency.value = freq
-        osc.type = 'sine'
-        gain.gain.setValueAtTime(0, ctx.currentTime + at)
-        gain.gain.linearRampToValueAtTime(vol * 0.25, ctx.currentTime + at + 0.02)
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.35)
-        osc.connect(gain).connect(ctx.destination)
-        osc.start(ctx.currentTime + at)
-        osc.stop(ctx.currentTime + at + 0.4)
-      }
-      play(880, 0)
-      play(1174.66, 0.12)
-      setTimeout(() => void ctx.close(), 800)
-    } catch {
-      /* audio blocked pre-gesture — silent */
-    }
-  }, [unread, user])
 
   // Access requests waiting on an admin (#19). Non-admins get a 403 → 0, so
   // no client-side role check is needed; the badge counts them with unread.
@@ -117,290 +66,82 @@ export function NotificationBell({
     refetchInterval: 120_000,
     retry: false
   })
-  const badge = unread + pendingAccess
 
-  const { data: notifications = [] } = useQuery({
-    queryKey: ['notifications', 'list'],
-    queryFn: () => getNotifications()
-  })
-
+  const prefsRef = useRef(user?.preferences)
   useEffect(() => {
-    const socket = io(API_URL, {
-      transports: ['websocket', 'polling'],
-      withCredentials: true
-    })
-    socketRef.current = socket
+    prefsRef.current = user?.preferences
+  }, [user?.preferences])
 
-    socket.on('connect', () => {
-      const token = user?.static_token
-      if (token) socket.emit('auth', { token })
-    })
-
-    socket.on('notification:new', (notification: CMSNotification) => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] })
-      toast.info(notification.title)
-      const prefs = (user?.preferences ?? {}) as { notification_sound?: string }
-      playNotificationSound(prefs.notification_sound)
-    })
-
-    return () => {
-      socket.disconnect()
-      socketRef.current = null
-    }
-  }, [user?.static_token, user?.preferences, queryClient])
-
-  const navigate = useNavigate()
-  const [tab, setTab] = useState<'unread' | 'all'>('unread')
-
-  async function handleMarkAll() {
-    await markAllRead()
-    queryClient.invalidateQueries({ queryKey: ['notifications'] })
-  }
-
-  async function handleClick(n: CMSNotification) {
-    if (!n.read) {
-      await markRead(n.id)
-      queryClient.invalidateQueries({ queryKey: ['notifications'] })
-    }
-  }
-
-  async function markGroup(ids: number[]) {
-    await markReadBatch(ids)
-    queryClient.invalidateQueries({ queryKey: ['notifications'] })
-  }
-
-  // Group by record — five updates on one workflow read as one story, not
-  // five rows. Record-less notifications stay individual under 'Other'.
-  const shown = useMemo(
-    () => (tab === 'unread' ? notifications.filter((n) => !n.read) : notifications).slice(0, 40),
-    [notifications, tab]
-  )
-  const groups = useMemo(() => {
-    const map = new Map<
-      string,
-      { key: string; collection: string | null; item: string | null; rows: CMSNotification[] }
-    >()
-    for (const n of shown) {
-      const key = n.collection && n.item ? `${n.collection}:${n.item}` : `single:${n.id}`
-      const g = map.get(key) ?? {
-        key,
-        collection: n.collection ?? null,
-        item: n.item ?? null,
-        rows: []
+  const subscribe = useCallback(
+    (onNew: () => void) => {
+      const socket = getSocket()
+      const handler = (n: { title?: string; subject?: string }) => {
+        onNew()
+        queryClient.invalidateQueries({ queryKey: ['notifications'] })
+        toast.info(n.subject ?? n.title ?? 'New notification')
+        const prefs = (prefsRef.current ?? {}) as { notification_sound?: string }
+        playNotificationSound(prefs.notification_sound)
       }
-      g.rows.push(n)
-      map.set(key, g)
-    }
-    return [...map.values()]
-  }, [shown])
+      socket.on('notification:new', handler)
+      return () => {
+        socket.off('notification:new', handler)
+      }
+    },
+    [queryClient]
+  )
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          aria-label='Notifications'
-          className={cn(
-            'relative flex items-center rounded-md text-[13px] font-medium text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white',
-            collapsed || compact ? 'h-8 w-8 justify-center' : 'w-full gap-2.5 px-2.5 py-[7px]'
-          )}
-        >
-          <span className='relative flex'>
-            <Bell className='h-[15px] w-[15px] shrink-0' />
-            {badge > 0 && (
-              <span className='absolute -right-1.5 -top-1.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white'>
-                {badge > 99 ? '99+' : badge}
-              </span>
-            )}
-          </span>
-          {!collapsed && !compact && 'Notifications'}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side='right' align='end' sideOffset={12} className='w-[340px] p-0'>
-        {pendingAccess > 0 && (
+    <NivaroProvider client={bellClient}>
+      <SharedNotificationBell
+        routes={NOTIF_ROUTES}
+        onNavigate={(p) => navigate(p)}
+        app='admin'
+        subscribe={subscribe}
+        extraBadge={pendingAccess}
+        mailLogUrl={(id) => `/mail-log?id=${id}`}
+        allPath='/notifications'
+        onActionError={(m) => toast.error(m)}
+        // The sidebar footer sits bottom-left inside an overflow-clipped rail:
+        // portal the panel beside the trigger instead of below it.
+        panelPlacement='right'
+        renderTrigger={({ badge, toggle }) => (
           <button
             type='button'
-            onClick={() => navigate('/access-requests')}
-            className='flex w-full items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
+            aria-label='Notifications'
+            onClick={toggle}
+            className={cn(
+              'relative flex items-center rounded-md text-[13px] font-medium text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white',
+              collapsed || compact ? 'h-8 w-8 justify-center' : 'w-full gap-2.5 px-2.5 py-[7px]'
+            )}
           >
-            <KeyRound className='h-3.5 w-3.5 shrink-0' />
-            <span className='flex-1'>
-              <span className='font-semibold'>{pendingAccess}</span> access{' '}
-              {pendingAccess === 1 ? 'request' : 'requests'} waiting on an admin
+            <span className='relative flex'>
+              <Bell className='h-[15px] w-[15px] shrink-0' />
+              {badge > 0 && (
+                <span className='absolute -right-1.5 -top-1.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white'>
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
             </span>
-            <span className='text-[11px] font-medium underline decoration-dotted'>Review</span>
+            {!collapsed && !compact && 'Notifications'}
           </button>
         )}
-        <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-border'>
-          <div className='flex items-center gap-1 rounded-md bg-slate-100 p-0.5 dark:bg-muted'>
-            {(['unread', 'all'] as const).map((t) => (
-              <button
-                key={t}
-                type='button'
-                onClick={() => setTab(t)}
-                className={cn(
-                  'rounded px-2 py-0.5 text-[11px] font-medium capitalize',
-                  tab === t
-                    ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
-                    : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                )}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-          {unread > 0 && (
+        beforeList={
+          pendingAccess > 0 ? (
             <button
               type='button'
-              onClick={handleMarkAll}
-              className='text-[11px] font-medium text-nvr-cyan hover:underline'
+              onClick={() => navigate('/access-requests')}
+              className='flex w-full items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
             >
-              Mark all read
+              <KeyRound className='h-3.5 w-3.5 shrink-0' />
+              <span className='flex-1'>
+                <span className='font-semibold'>{pendingAccess}</span> access{' '}
+                {pendingAccess === 1 ? 'request' : 'requests'} waiting on an admin
+              </span>
+              <span className='text-[11px] font-medium underline decoration-dotted'>Review</span>
             </button>
-          )}
-        </div>
-        <div className='max-h-96 overflow-y-auto'>
-          {groups.length === 0 ? (
-            <p className='px-3 py-6 text-center text-[12px] text-slate-400'>
-              {tab === 'unread' ? "You're all caught up." : 'No notifications'}
-            </p>
-          ) : (
-            groups.map((g) => {
-              const unreadIds = g.rows.filter((n) => !n.read).map((n) => n.id)
-              // The group's target = its newest row's (rows share collection + item).
-              const target = resolveNotificationTargetFor(g.rows[0], NOTIF_ROUTES)
-              const hasRecord = !!target
-              // Header label: the target's kind for non-record rows, the
-              // collection · item for record rows, nothing for rows about
-              // nowhere in particular (home / My Work samples, broadcasts).
-              const first = g.rows[0]
-              const groupLabel =
-                first?.target_label && first?.kind !== 'record'
-                  ? `${first.target_label}${g.item ? ` · ${g.item}` : ''}`
-                  : String(g.collection) === '__chat__'
-                    ? 'Chat'
-                    : g.collection
-                      ? `${String(g.collection).replace(/_/g, ' ')}${g.item ? ` · ${g.item}` : ''}`
-                      : null
-              return (
-                <div
-                  key={g.key}
-                  className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
-                >
-                  {hasRecord && groupLabel && (
-                    <div className='flex items-center gap-1.5 px-3 pt-2'>
-                      <span className='truncate text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                        {groupLabel}
-                        {g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
-                      </span>
-                      <span className='ml-auto flex items-center gap-0.5'>
-                        <button
-                          type='button'
-                          title='Open record'
-                          onClick={() => {
-                            if (unreadIds.length) void markGroup(unreadIds)
-                            runNotificationTarget(target, navigate)
-                          }}
-                          className='rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
-                        >
-                          <ExternalLink className='h-3 w-3' />
-                        </button>
-                        {unreadIds.length > 0 && (
-                          <button
-                            type='button'
-                            title='Mark read'
-                            onClick={() => markGroup(unreadIds)}
-                            className='rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
-                          >
-                            <Check className='h-3 w-3' />
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                  {g.rows.map((n) => (
-                    <Fragment key={n.id}>
-                      <button
-                        type='button'
-                        onClick={() => {
-                          void handleClick(n)
-                          runNotificationTarget(
-                            resolveNotificationTargetFor(n, NOTIF_ROUTES),
-                            navigate
-                          )
-                        }}
-                        className={cn(
-                          'flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors',
-                          hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                            n.read ? 'bg-transparent' : 'bg-nvr-cyan'
-                          )}
-                        />
-                        <span className='min-w-0 flex-1'>
-                          <span
-                            className={cn(
-                              'block truncate text-[12.5px]',
-                              n.read
-                                ? 'font-normal text-slate-600 dark:text-slate-400'
-                                : 'font-medium text-slate-900 dark:text-foreground'
-                            )}
-                          >
-                            {n.title}
-                          </span>
-                          {n.message && (
-                            <span className='mt-0.5 block truncate text-[11px] text-slate-500'>
-                              {n.message}
-                            </span>
-                          )}
-                          <span className='mt-0.5 block text-[10.5px] text-slate-400'>
-                            {formatRelative(n.created_at)}
-                          </span>
-                        </span>
-                        {!hasRecord && !n.read && (
-                          <span
-                            role='button'
-                            tabIndex={-1}
-                            title='Mark read'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void handleClick(n)
-                            }}
-                            className='mt-0.5 rounded p-1 text-slate-400 hover:bg-muted hover:text-foreground'
-                          >
-                            <Check className='h-3 w-3' />
-                          </span>
-                        )}
-                      </button>
-                      {n.actions && n.actions.length > 0 && !n.read && (
-                        <div className='flex gap-1 px-3 pb-2 pl-[30px]'>
-                          {n.actions.map((a) => (
-                            <button
-                              key={a.key}
-                              type='button'
-                              onClick={() =>
-                                void runNotificationAction(a, n.id, () =>
-                                  queryClient.invalidateQueries({ queryKey: ['notifications'] })
-                                )
-                              }
-                              className='rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10.5px] font-semibold text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                            >
-                              {a.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </Fragment>
-                  ))}
-                </div>
-              )
-            })
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+          ) : null
+        }
+      />
+    </NivaroProvider>
   )
 }

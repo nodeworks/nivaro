@@ -462,6 +462,38 @@ export const collabNotificationsCenter: DocSection = {
         '"Mark all read" clears the unread counter everywhere (bell included).'
       ]
     },
+    { type: 'h3', text: 'Priority lanes' },
+    {
+      type: 'p',
+      text: 'Every notification sits in one of three lanes. Critical (SLA escalations, maintenance, failing monitors — they bypass every mute and quiet hour), Needs you (something asks THIS person to act: a task, an approval, an access request, a mention, an SLA clock, a record they currently own moving state, any row with an inline action), and FYI (everything else). The bell badge counts only the first two — FYI rows sit in the inbox without pulling the eye; the badge turns red while a Critical row is unread. The bell offers Needs you / FYI / All tabs, the Notifications page a lane strip (Critical / Needs you / FYI) beside the unread/read/snoozed filters. Lanes are stamped at write time (ownership resolved once, per recipient); rows from before lanes existed were backfilled from their subject and kind.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/notifications/unread-count
+→ { "unread": 7, "attention": 3, "lanes": { "critical": 1, "needs_you": 2, "fyi": 4 } }
+
+GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
+    },
+    { type: 'h3', text: 'Delivery status — where did this go?' },
+    {
+      type: 'p',
+      text: 'Each inbox row shows small chips per channel: In-app (landed / skipped and why), Push (sent · time / no browser registered / held by quiet hours or the matrix / failed), Email (sent · time / held for your daily summary / off for the category / dropped by mail test mode / no address / failed with the SMTP reason) and SMS. The email chip links to the mail-log row that recorded the send. Hover any chip for the reason — the same reason the test bench simulator would give. The record is written by notifyUser as each channel reports back (`delivery` on GET /notifications); rows from older writers carry only the in-app chip.'
+    },
+    { type: 'h3', text: 'Replying from the notification' },
+    {
+      type: 'p',
+      text: 'A chat mention offers Reply — an inline box that posts straight back into the room. A mention in a record note offers Reply onto the record\'s thread. A workflow-transition notification offers "Comment on this", which adds a note to the record (the row stays unread; commenting is not acknowledging). Reply actions are server-declared like every inline action (`actions[].input` names the field the box fills) so hosts stay domain-blind; the normal permissions apply — posting on a record needs create rights on its collection.'
+    },
+    { type: 'h3', text: 'Channel fallback chain (if it stays unread)' },
+    {
+      type: 'p',
+      text: 'Profile → Notification rules → "If it stays unread": per category, how long an in-app notification may sit unread before it climbs to a browser push, then to an email — one notification escalating channels, stopping the moment it is read or snoozed. Each step fires once, and a channel that already delivered the row at send time is not repeated (an email sent immediately is never re-sent as an escalation). Only rows from the last 7 days are considered, so switching the rule on does not replay an old inbox. Runs every 5 minutes (`notification-escalation` cron); the escalation shows as an extra chip on the row.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/users/me/preferences
+{ "notification_prefs": { "escalation": { "workflow": { "push_after_min": 60, "email_after_min": 240 } } } }`
+    },
     { type: 'h3', text: 'Notification rules (per-category channels)' },
     {
       type: 'p',

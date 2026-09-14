@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, RotateCw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { MailDeliveryBoard } from '@/components/mail-delivery-board'
 import { api } from '@/lib/api'
@@ -46,6 +47,16 @@ export default function MailLog() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [openId, setOpenId] = useState<number | null>(null)
+  // Deep link from a notification's email delivery chip (?id=N): open that
+  // row's detail on the Log tab.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const id = Number(searchParams.get('id'))
+    if (Number.isFinite(id) && id > 0) {
+      setView('log')
+      setOpenId(id)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     const t = setTimeout(() => {

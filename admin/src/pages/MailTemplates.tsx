@@ -1,3 +1,5 @@
+import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider, NotificationTemplatesView } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Braces, Mail, RotateCcw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -18,9 +20,11 @@ interface TemplateRow {
   updated_at: string | null
 }
 
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+
 export default function MailTemplates() {
   const qc = useQueryClient()
-  const [tab, setTab] = useState<'templates' | 'harness'>('harness')
+  const [tab, setTab] = useState<'templates' | 'harness' | 'notifications'>('harness')
   const [selected, setSelected] = useState<string | null>(null)
   const [body, setBody] = useState('')
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
@@ -148,12 +152,14 @@ export default function MailTemplates() {
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
               {tab === 'harness'
                 ? 'Every email this instance sends, rendered from real data — preview it, send it to yourself, or to the people who would actually get it.'
-                : 'Edit the Liquid emails this instance sends. Saving stores a database override — the file template stays the baseline you can always revert to.'}
+                : tab === 'notifications'
+                  ? 'The wording of every in-app notification (bell, inbox, push), previewed against a real recent event. First line = subject, the rest = message.'
+                  : 'Edit the Liquid emails this instance sends. Saving stores a database override — the file template stays the baseline you can always revert to.'}
             </p>
           </div>
           <span className='flex-1' />
           <div className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-            {(['harness', 'templates'] as const).map((t) => (
+            {(['harness', 'templates', 'notifications'] as const).map((t) => (
               <button
                 key={t}
                 type='button'
@@ -166,7 +172,11 @@ export default function MailTemplates() {
                 )}
                 data-mail-tab={t}
               >
-                {t === 'harness' ? 'Send a real one' : 'Templates'}
+                {t === 'harness'
+                  ? 'Send a real one'
+                  : t === 'notifications'
+                    ? 'In-app notifications'
+                    : 'Email templates'}
               </button>
             ))}
           </div>
@@ -175,6 +185,14 @@ export default function MailTemplates() {
 
       {tab === 'harness' ? (
         <MailHarness />
+      ) : tab === 'notifications' ? (
+        <NivaroProvider client={sharedClient}>
+          <NotificationTemplatesView
+            embedded
+            onNotice={(m) => toast.success(m)}
+            onError={(m) => toast.error(m)}
+          />
+        </NivaroProvider>
       ) : (
         <div className='flex flex-1 min-h-0 overflow-hidden'>
           <aside className='w-[220px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white py-2 dark:border-border dark:bg-card'>

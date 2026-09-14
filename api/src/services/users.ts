@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
+import { notificationRowMeta } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
 
 export async function findOrCreateFromOIDC(profile: {
@@ -118,7 +119,8 @@ export async function findOrCreateFromOIDC(profile: {
           status: 'inbox',
           timestamp: new Date(),
           sender: null,
-          message: msg.trim().slice(0, 500)
+          message: msg.trim().slice(0, 500),
+          ...notificationRowMeta({ subject: 'Welcome!', category: 'system' })
         })
       })
       .catch(() => {})

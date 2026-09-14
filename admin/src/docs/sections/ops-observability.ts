@@ -267,6 +267,29 @@ export const mailHarnessDocs: DocSection = {
       type: 'p',
       text: "Every notification carries a structured target (record, task, approval, access request, SLA, chat room, queue, report, alerts, issue, import, dashboard, My Work) plus the action a click should offer. Each app maps the target onto ITS routes — the admin opens /collections/:c/:id or /tasks, the portal opens /records/:c/:id or My Work — and when a host has no page for the kind, it falls back to the server-resolved URL for the recipient's preferred app (same origin = in-app, foreign = new tab). Rows can carry an inline action the server declares safe to fire from a click: Mark task done, Acknowledge SLA. Rows written before targets existed are derived from collection + item + subject."
     },
+    { type: 'h2', id: 'notification-templates', text: 'In-app notification templates' },
+    {
+      type: 'p',
+      text: "Mail Templates → In-app notifications (admin). The wording of every templatable notification event — workflow state change, record created/updated/deleted (subscriptions and watches), mention in a record note, mention in chat, task assigned — edited as Liquid over the event's tokens: the first line renders the subject, the rest the message. The preview renders against a REAL recent example pulled from this database (the newest matching transition, activity row, mention, task), or a placeholder when none exists yet, so the admin sees what people actually receive. Saving stores an override (a `notification:<event>` row in the mail-template table, same revert lifecycle as email templates); a template that fails to render, or renders an empty subject, is refused rather than silently falling back."
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/notification-templates            # events, tokens, override state
+GET    /api/notification-templates/:key       # body (override or default) + real sample
+POST   /api/notification-templates/:key/preview  { body?, data? } → { subject, message, context }
+PUT    /api/notification-templates/:key       { body }
+DELETE /api/notification-templates/:key       # revert`
+    },
+    { type: 'h2', id: 'notification-analytics', text: 'Notification analytics' },
+    {
+      type: 'p',
+      text: 'Data Tools → Notification Analytics (admin). Over 7 / 30 / 90 days: notifications sent and read, the read rate and median time-to-read (read timestamps are stamped from this release on), a per-day series, and roll-ups by category, lane, kind, sender (people vs "System / automations") and collection — each with its own read rate and time-to-read — plus per-channel delivery outcomes (push sent vs no device, email sent / summary / off / failed) and the mute picture: how many people mute something, and which collections draw the most mutes against what they sent (the "stop telling me about this" rate).'
+    },
+    { type: 'h2', id: 'broadcast-receipts', text: 'Broadcast receipts by audience' },
+    {
+      type: 'p',
+      text: 'Broadcasts → history → "who saw this?" now opens with a per-audience roll-up: by role and by every scope dimension (zone, region…), delivered / opened (the inbox row was read — known for the in-app message channel) / acknowledged (banner dismissed) / still unread, with the unread names. "Nudge N unread" re-sends a "Reminder: …" inbox row (+ push through the normal rules) to exactly those people and records it as a `nudge` delivery; a second click skips anyone already nudged unless `again` is set. The in-app delivery of a broadcast keeps the inbox row id it produced (`notification_id` on the delivery receipt), which is what makes "opened" knowable.'
+    },
     { type: 'h2', id: 'mail-delivery-board', text: 'Delivery board' },
     {
       type: 'p',

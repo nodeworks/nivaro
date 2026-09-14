@@ -527,14 +527,185 @@ async function legacyEmailDigest(userId: string): Promise<unknown> {
   }
 }
 
+// ── Lanes, delivery outcomes ────────────────────────────────────────────────
+
+/** Inbox lane: Critical (bypasses everything, needs eyes now), Needs you
+ *  (asks THIS person to act — a task, an approval, a mention, an SLA clock,
+ *  a record they own moving), FYI (everything else). The bell badge counts
+ *  the first two. */
+export type NotificationLane = 'critical' | 'needs_you' | 'fyi'
+
+const ACT_KINDS = new Set(['task', 'approval', 'access_request', 'sla'])
+
+/** Lane from what is KNOWN about the row alone — no ownership lookup. */
+export function laneFromRow(row: {
+  subject?: string | null
+  category?: string | null
+  kind?: string | null
+  action?: string | null
+  actions?: unknown[] | null
+}): NotificationLane {
+  const subject = String(row.subject ?? '')
+  if (CRITICAL_SUBJECTS.test(subject)) return 'critical'
+  const category = row.category ?? classifyNotification(subject)
+  if (row.kind && ACT_KINDS.has(row.kind)) return 'needs_you'
+  if (row.action && row.action !== 'open') return 'needs_you'
+  if (category === 'mentions' || category === 'sla') return 'needs_you'
+  if (row.actions && row.actions.length > 0) return 'needs_you'
+  if (/^(task assigned|approval requested)/i.test(subject) || /requested access/i.test(subject))
+    return 'needs_you'
+  return 'fyi'
+}
+
+/** Does the recipient currently OWN the record (resolved pipeline owner of
+ *  its open instance)? A record you own moving is "needs you", the same
+ *  record someone else owns is FYI. Best-effort: any failure = not owner. */
+async function recipientOwnsRecord(
+  userId: string,
+  collection: string | null | undefined,
+  item: string | number | null | undefined
+): Promise<boolean> {
+  if (!collection || item == null || /^nivaro_|^directus_|^__/i.test(collection)) return false
+  try {
+    const inst = (await db('nivaro_workflow_instances')
+      .where({ collection, item: String(item) })
+      .whereNull('completed_at')
+      .first('id', 'current_state')) as { id: string; current_state: string } | undefined
+    if (!inst) return false
+    const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
+    const owners = await resolveStateOwnersBatch([
+      {
+        key: String(item),
+        stateId: String(inst.current_state),
+        instanceId: String(inst.id),
+        collection,
+        itemId: String(item)
+      }
+    ])
+    const set = owners.get(String(item)) as Array<{ id: unknown }> | undefined
+    const me = userId.toUpperCase()
+    return !!set?.some((o) => String(o.id).toUpperCase() === me)
+  } catch {
+    return false
+  }
+}
+
+/** Lane for a row being written now: row rules first, then the ownership
+ *  lookup for plain record rows. */
+export async function computeLane(
+  userId: string,
+  row: {
+    subject: string
+    category: NotifyCategory
+    critical: boolean
+    target: NotificationTargetSpec | null
+    collection?: string | null
+    item?: string | number | null
+  }
+): Promise<NotificationLane> {
+  if (row.critical) return 'critical'
+  const byRow = laneFromRow({
+    subject: row.subject,
+    category: row.category,
+    kind: row.target?.kind ?? null,
+    action: row.target?.action ?? null,
+    actions: actionsFor(row.target, { category: row.category })
+  })
+  if (byRow !== 'fyi') return byRow
+  const collection = row.target?.collection ?? row.collection
+  const item = row.target?.id ?? row.item
+  if (row.target && row.target.kind !== 'record') return 'fyi'
+  return (await recipientOwnsRecord(userId, collection, item)) ? 'needs_you' : 'fyi'
+}
+
+/** Column values the raw nivaro_notifications writers (subscription hooks,
+ *  SLA hook) stamp alongside their insert so every row carries a category
+ *  and a lane, not only the ones notifyUser wrote. */
+export function notificationRowMeta(row: {
+  subject: string
+  category?: NotifyCategory
+  kind?: string | null
+  action?: string | null
+}): { category: NotifyCategory; lane: NotificationLane; delivery: string } {
+  const category = row.category ?? classifyNotification(row.subject)
+  return {
+    category,
+    lane: laneFromRow({ subject: row.subject, category, kind: row.kind, action: row.action }),
+    delivery: JSON.stringify({ inapp: { status: 'delivered' } })
+  }
+}
+
+/** Per-channel outcome recorded on the inbox row — what the person can see
+ *  under "where did this go?". */
+export interface NotificationDelivery {
+  inapp?: { status: 'delivered' | 'skipped'; reason?: string }
+  push?: {
+    status: 'sent' | 'no_subscription' | 'skipped' | 'failed'
+    reason?: string
+    at?: string
+  }
+  email?: {
+    status:
+      | 'sent'
+      | 'deferred'
+      | 'dropped'
+      | 'failed'
+      | 'off'
+      | 'not_requested'
+      | 'no_address'
+      | 'unconfigured'
+    reason?: string
+    mail_log_id?: number | null
+    at?: string
+  }
+  sms?: { status: 'sent' | 'failed' | 'skipped' | 'not_requested'; reason?: string }
+  /** Unread-escalation stamps (channel fallback chain). */
+  escalation?: { push_at?: string; email_at?: string; email_log_id?: number | null }
+}
+
+export function parseDelivery(raw: unknown): NotificationDelivery | null {
+  if (!raw) return null
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return v && typeof v === 'object' ? (v as NotificationDelivery) : null
+  } catch {
+    return null
+  }
+}
+
+async function stampDelivery(
+  notificationId: number | null,
+  patch: Partial<NotificationDelivery>
+): Promise<void> {
+  if (notificationId == null) return
+  try {
+    const row = (await db('nivaro_notifications')
+      .where({ id: notificationId })
+      .first('delivery')) as { delivery?: string | null } | undefined
+    const cur = parseDelivery(row?.delivery) ?? {}
+    await db('nivaro_notifications')
+      .where({ id: notificationId })
+      .update({ delivery: JSON.stringify({ ...cur, ...patch }) })
+  } catch {
+    // the delivery record is diagnostic — never a reason a notification fails
+  }
+}
+
+export interface NotifyUserResult {
+  /** Inbox row id, null when no in-app row landed. */
+  id: number | null
+  decision: DeliveryDecision
+  lane: NotificationLane | null
+}
+
 export async function notifyUser(
   app: FastifyInstance,
   userId: string,
   opts: NotifyUserOptions
-): Promise<void> {
+): Promise<NotifyUserResult> {
   const now = new Date()
   const decision = await decideDelivery(userId, opts, now)
-  if (decision.dropped) return
+  if (decision.dropped) return { id: null, decision, lane: null }
   const channels = {
     inapp: decision.inapp,
     // Email + SMS keep their own deferral / test-mode paths inside mail.ts /
@@ -553,6 +724,46 @@ export async function notifyUser(
       subject: opts.subject
     })
 
+  const lane = await computeLane(userId, {
+    subject: opts.subject,
+    category: decision.category,
+    critical: decision.critical,
+    target,
+    collection: opts.collection,
+    item: opts.item
+  })
+  const reasonText = (channel: DeliveryReason['channel']) =>
+    decision.reasons.find((r) => r.channel === channel || r.channel === 'all')?.text
+  // The delivery record starts from the decision (what was planned and why)
+  // and is patched as each channel reports back.
+  const delivery: NotificationDelivery = {
+    inapp: decision.inapp
+      ? { status: 'delivered' }
+      : { status: 'skipped', reason: reasonText('inapp') },
+    push: decision.inapp
+      ? pushAllowed
+        ? { status: 'skipped', reason: 'pending' }
+        : { status: 'skipped', reason: reasonText('push') }
+      : { status: 'skipped', reason: reasonText('inapp') },
+    email:
+      decision.email === 'not_requested'
+        ? { status: 'not_requested' }
+        : decision.email === 'no_address'
+          ? { status: 'no_address', reason: reasonText('email') }
+          : decision.email === 'off'
+            ? { status: 'off', reason: reasonText('email') }
+            : {
+                status: decision.email === 'deferred' ? 'deferred' : 'sent',
+                reason: reasonText('email')
+              },
+    sms: channels.sms
+      ? decision.sms
+        ? { status: 'sent' }
+        : { status: 'skipped', reason: reasonText('sms') }
+      : { status: 'not_requested' }
+  }
+  let notifId: number | null = null
+
   try {
     if (channels.inapp) {
       const [notif] = await db('nivaro_notifications')
@@ -567,9 +778,14 @@ export async function notifyUser(
           item: opts.item ?? null,
           target: target ? JSON.stringify(target) : null,
           kind: target?.kind ?? null,
-          action: target?.action ?? null
+          action: target?.action ?? null,
+          category: decision.category,
+          lane,
+          delivery: JSON.stringify(delivery)
         })
         .returning('*')
+      const rawId = (notif as { id?: unknown } | undefined)?.id
+      notifId = Number.isFinite(Number(rawId)) ? Number(rawId) : null
 
       // Browser push rides the in-app channel: no-op for users with no
       // registered subscription, never blocks the caller. Quiet hours and the
@@ -585,12 +801,21 @@ export async function notifyUser(
           title: opts.subject.slice(0, 120),
           body: opts.message.slice(0, 300),
           url
-        })
+        }).then(
+          (sent) =>
+            stampDelivery(notifId, {
+              push:
+                sent > 0
+                  ? { status: 'sent', at: new Date().toISOString() }
+                  : { status: 'no_subscription', reason: 'No browser registered for push.' }
+            }),
+          () => stampDelivery(notifId, { push: { status: 'failed' } })
+        )
       }
 
       if (app.io) {
         emitNotification(app.io, userId, {
-          id: (notif as { id?: number } | undefined)?.id ?? null,
+          id: notifId,
           subject: opts.subject.slice(0, 255),
           message: opts.message.slice(0, 200),
           collection: opts.collection ?? null,
@@ -598,7 +823,9 @@ export async function notifyUser(
           sender: opts.sender ?? null,
           timestamp: now,
           target,
-          actions: actionsFor(target)
+          category: decision.category,
+          lane,
+          actions: actionsFor(target, { category: decision.category })
         })
       }
     }
@@ -631,29 +858,51 @@ export async function notifyUser(
           opts.why ??
           (typeof templateData?.why === 'string' ? (templateData.why as string) : null) ??
           `your notification rules for "${NOTIFY_CATEGORY_LABELS[category]}" send you email`
-        await sendMail({
-          to: user.email,
-          subject: opts.subject,
-          template: opts.template ?? 'notification',
-          why,
-          // Record context rides into the mail log so the record's Mail tab
-          // sees every notification email about it.
-          collection: opts.collection ?? undefined,
-          item: opts.item != null ? String(opts.item) : undefined,
-          data: {
-            first_name: user.first_name,
+        try {
+          const mail = await sendMail({
+            to: user.email,
             subject: opts.subject,
-            message: opts.message,
-            category,
-            ...(card ? { record_card: card } : {}),
-            ...(actionUrl ? { action_url: actionUrl, action_label: 'View item' } : {}),
-            ...(templateData ?? {})
-          }
-        })
+            template: opts.template ?? 'notification',
+            why,
+            // Record context rides into the mail log so the record's Mail tab
+            // sees every notification email about it.
+            collection: opts.collection ?? undefined,
+            item: opts.item != null ? String(opts.item) : undefined,
+            data: {
+              first_name: user.first_name,
+              subject: opts.subject,
+              message: opts.message,
+              category,
+              ...(card ? { record_card: card } : {}),
+              ...(actionUrl ? { action_url: actionUrl, action_label: 'View item' } : {}),
+              ...(templateData ?? {})
+            }
+          })
+          await stampDelivery(notifId, {
+            email: {
+              status: mail.status,
+              mail_log_id: mail.log_id,
+              at: new Date().toISOString(),
+              reason: mail.status === 'sent' ? undefined : delivery.email?.reason
+            }
+          })
+        } catch (err) {
+          await stampDelivery(notifId, {
+            email: {
+              status: 'failed',
+              reason: err instanceof Error ? err.message.slice(0, 200) : 'send failed',
+              at: new Date().toISOString()
+            }
+          })
+          throw err
+        }
+      } else if (channels.email && !user?.email) {
+        await stampDelivery(notifId, { email: { status: 'no_address' } })
       }
 
       if (channels.sms && user?.phone) {
-        await sendSms(user.phone, `${opts.subject}\n${opts.message}`.slice(0, 1600))
+        const ok = await sendSms(user.phone, `${opts.subject}\n${opts.message}`.slice(0, 1600))
+        await stampDelivery(notifId, { sms: { status: ok ? 'sent' : 'failed' } })
       }
     }
   } catch (err) {
@@ -668,4 +917,5 @@ export async function notifyUser(
       await enqueueOutbox('notification', { userId, opts: { ...opts, _retry: true } })
     }
   }
+  return { id: notifId, decision, lane }
 }

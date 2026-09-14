@@ -17,6 +17,7 @@ import {
 import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerPortalLinks } from '../services/app-links.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import {
   type ExtensionEventHandler,
@@ -24,9 +25,7 @@ import {
   registerExtensionEventHandler
 } from '../services/extension-events.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
-import { registerMailTemplateRoot } from '../services/mail.js'
-import { renderMailTemplate } from '../services/mail.js'
-import { registerPortalLinks } from '../services/app-links.js'
+import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -592,7 +591,10 @@ async function loadExtension(
       },
       notifyUser: (userId, opts) => {
         note('notifications')
-        return notifyUser(ctx.app, userId, opts).catch(() => undefined)
+        return notifyUser(ctx.app, userId, opts).then(
+          () => undefined,
+          () => undefined
+        )
       },
       logActivity: (entry) => {
         note('activity')
@@ -1044,7 +1046,11 @@ export async function loadCloudExtensions(
           renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
           renderTemplate: (name, data) => renderMailTemplate(name, data)
         },
-        notifyUser: (userId, opts) => notifyUser(ctx.app, userId, opts).catch(() => undefined),
+        notifyUser: (userId, opts) =>
+          notifyUser(ctx.app, userId, opts).then(
+            () => undefined,
+            () => undefined
+          ),
         logActivity: (entry) =>
           logActivity({
             action: `${extId}:${entry.action}`,

@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { ensureAutoWatch } from '../services/auto-watch.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
+import { ensureAutoWatch } from '../services/auto-watch.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
+import { notifyUser } from '../services/notification-channels.js'
+import { renderNotificationTemplate } from '../services/notification-templates.js'
 import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 
@@ -1010,33 +1012,39 @@ export async function commentsRoutes(app: FastifyInstance) {
         // Don't notify yourself.
         if (u.id === userId) continue
 
-        const message = body.text.slice(0, 100)
-        const [notif] = await db('nivaro_notifications')
-          .insert({
-            recipient: u.id,
-            subject: 'You were mentioned',
-            status: 'inbox',
-            timestamp: now,
-            sender: userId,
-            message,
-            collection: body.collection,
-            item: body.item
-          })
-          .returning('*')
-
-        if (app.io) {
-          emitNotification(app.io, u.id, {
-            id: notif && typeof notif === 'object' ? (notif as { id: number }).id : null,
-            subject: 'You were mentioned',
-            message,
-            collection: body.collection,
-            item: body.item,
-            sender: userId,
-            timestamp: now
-          })
+        let subject = 'You were mentioned'
+        let message = body.text.slice(0, 100)
+        const actorName =
+          [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
+          req.user?.email ||
+          'Someone'
+        // Notification templates: `notification:comment_mention` rewrites
+        // the wording; the hardcoded line stays the default.
+        const templated = await renderNotificationTemplate('comment_mention', {
+          actor: actorName,
+          collection: body.collection,
+          record: body.item,
+          text: body.text.slice(0, 300)
+        }).catch(() => null)
+        if (templated) {
+          subject = templated.subject
+          message = templated.message || message
         }
+        // A mention is addressed to the person — it always lands (no record
+        // mute / presence suppression), and the row offers an inline reply
+        // straight back onto the record's thread.
+        await notifyUser(app, u.id, {
+          subject,
+          message,
+          sender: userId,
+          collection: body.collection,
+          item: body.item,
+          category: 'mentions',
+          always_inbox: true,
+          target: { kind: 'record', collection: body.collection, id: body.item, action: 'reply' }
+        }).catch(() => undefined)
 
-        sendTeamsNotification({ title: 'You were mentioned', text: message }).catch(() => {})
+        sendTeamsNotification({ title: subject, text: message }).catch(() => {})
       }
 
       // Real-time broadcast to viewers of this record.

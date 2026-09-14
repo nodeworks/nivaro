@@ -116,11 +116,24 @@ export { JsonMapEditor } from './components/JsonMapEditor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
-export type { NotificationBellProps } from './components/NotificationBell'
+export type {
+  BellLaneTab,
+  BellNotification,
+  NotificationBellProps
+} from './components/NotificationBell'
 export { NotificationBell } from './components/NotificationBell'
 export type { NotificationSourcesCardProps } from './components/NotificationSourcesCard'
 export { NotificationSourcesCard } from './components/NotificationSourcesCard'
+export type { DeliveryChipsProps } from './components/notifications/DeliveryChips'
+export { DeliveryChips } from './components/notifications/DeliveryChips'
+export type { NotificationActionsProps } from './components/notifications/NotificationActions'
+export { NotificationActions } from './components/notifications/NotificationActions'
+export { NotificationAnalyticsView } from './components/notifications/NotificationAnalyticsView'
+export type { NotificationCenterViewProps } from './components/notifications/NotificationCenterView'
+export { NotificationCenterView } from './components/notifications/NotificationCenterView'
 export { NotificationSubscriptionsView } from './components/notifications/NotificationSubscriptionsView'
+export type { NotificationTemplatesViewProps } from './components/notifications/NotificationTemplatesView'
+export { NotificationTemplatesView } from './components/notifications/NotificationTemplatesView'
 export type {
   SubscriptionFormState,
   SubscriptionRecord
@@ -234,6 +247,8 @@ export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket
 export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
 export {
   type NotificationActionSpec,
+  type NotificationDeliveryRecord,
+  type NotificationLane,
   type NotificationLike,
   type NotificationRouteMap,
   type NotificationTarget,

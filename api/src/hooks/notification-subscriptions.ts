@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
+import { notificationRowMeta } from '../services/notification-channels.js'
 import {
   renderChangesToken,
   renderNotificationTemplate
@@ -207,7 +208,8 @@ async function fireSubscriptionNotifications(
             sender: actorUserId ?? null,
             message: message.slice(0, 500),
             collection,
-            item
+            item,
+            ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' })
           })
           .returning('*')
 
@@ -483,7 +485,13 @@ export async function fireWorkflowStateSubscriptions(opts: {
             sender: opts.actorUserId ?? null,
             message: message.slice(0, 500),
             collection: opts.collection,
-            item: opts.item
+            item: opts.item,
+            ...notificationRowMeta({
+              subject,
+              category: 'workflow',
+              kind: 'record',
+              action: 'open'
+            })
           })
           .returning('*')
 

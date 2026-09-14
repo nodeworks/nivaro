@@ -101,12 +101,22 @@ async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: stri
   if (task.assignee === actorId) return // self-assignment needs no notification
   const { buildTaskAssignedMail } = await import('../services/mail-builders.js')
   const built = await buildTaskAssignedMail(task.id).catch(() => null)
+  const { renderNotificationTemplate } = await import('../services/notification-templates.js')
+  const templated = await renderNotificationTemplate('task_assigned', {
+    title: task.title,
+    description: task.description ?? '',
+    collection: task.collection,
+    record: task.item,
+    due: (task as { due_date?: string | null }).due_date ?? ''
+  }).catch(() => null)
   await notifyUser(app, task.assignee, {
-    subject: `Task assigned: ${task.title}`,
+    subject: templated?.subject ?? `Task assigned: ${task.title}`,
     category: 'workflow',
-    message: task.description
-      ? task.description.slice(0, 400)
-      : `You have been assigned a task on ${task.collection}/${task.item}.`,
+    message:
+      templated?.message ||
+      (task.description
+        ? task.description.slice(0, 400)
+        : `You have been assigned a task on ${task.collection}/${task.item}.`),
     collection: task.collection,
     item: task.item,
     sender: actorId,

@@ -1,4 +1,3 @@
-import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { existsSync } from 'node:fs'
 import { STATUS_CODES } from 'node:http'
 import { join } from 'node:path'
@@ -32,6 +31,7 @@ import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
+import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
@@ -603,6 +603,13 @@ export async function buildServer() {
           }).format(new Date())
         )
         await runDailyActionDigest(etHour % 24)
+      })
+
+      // Channel fallback chain: unread rows climb push → email on the
+      // recipient's own per-category schedule; stops when read.
+      app.cron.schedule('notification-escalation', '*/5 * * * *', async () => {
+        const { runNotificationEscalation } = await import('./services/notification-escalation.js')
+        await runNotificationEscalation(app)
       })
 
       app.cron.schedule('workflow-auto-sweep', '30 * * * *', async () => {
