@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-14T19:45:44.041Z",
+  "generated_at": "2026-09-14T19:58:52.645Z",
   "releases": [
+    {
+      "version": "0.1.279",
+      "tag": "v0.1.279",
+      "date": "2026-09-14T15:58:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "prefilled FKs run cascades like user picks",
+              "hash": "33ea64b2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.278",
       "tag": "v0.1.278",
-      "date": "2026-09-14T15:45:32-04:00",
+      "date": "2026-09-14T15:45:44-04:00",
       "sections": [
         {
           "label": "Fixed",
