@@ -46,7 +46,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
         'content',
         'content_tone',
         'visible_when',
-        'hidden_for_roles'
+        'hidden_for_roles',
+        'read_width'
       )
       .orderBy('sort', 'asc')
 
@@ -130,9 +131,18 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       skip_if_filled: string | null
       visible_when?: string | null
       hidden_for_roles?: string | null
+      read_width?: string | null
     }>
 
     const patch: Record<string, unknown> = {}
+    // Migration 311: read-view section width — full | half | third | null (auto).
+    if ('read_width' in body) {
+      const rw = body.read_width
+      if (rw != null && rw !== '' && !['full', 'half', 'third'].includes(rw)) {
+        return reply.code(400).send({ error: "read_width must be 'full', 'half', 'third' or null" })
+      }
+      patch.read_width = rw || null
+    }
     if (body.key !== undefined) patch.key = body.key
     if (body.label !== undefined) patch.label = body.label
     if (body.type !== undefined) patch.type = body.type

@@ -8496,6 +8496,7 @@ interface FieldGroup {
   summary_fields?: string | null
   summary_hide_empty?: boolean | number
   swap_config?: string | null
+  read_width?: 'full' | 'half' | 'third' | null
 }
 
 // ── Width options ──────────────────────────────────────────────────────────────
@@ -16119,6 +16120,7 @@ function SortableGroupCard({
         | 'summary_hide_empty'
         | 'swap_config'
         | 'skip_if_filled'
+        | 'read_width'
       >
     >
   ) => void
@@ -16348,6 +16350,28 @@ function SortableGroupCard({
                     />
                     Hide when all fields are empty
                   </label>
+                  <div>
+                    <Label className='mb-1 block text-[11px]'>Summary / read-view width</Label>
+                    <p className='mb-1.5 text-[10px] text-slate-400'>
+                      How wide this section renders on the read-only board (Summary mode, detail
+                      sheets). Auto = half for a short fact list, full when it holds a grid or
+                      a widget.
+                    </p>
+                    <Sel
+                      value={group.read_width ?? 'auto'}
+                      onChange={(v) =>
+                        onGroupSettings(group.id, {
+                          read_width: v === 'auto' ? null : (v as 'full' | 'half' | 'third')
+                        })
+                      }
+                      options={[
+                        { value: 'auto', label: 'Auto' },
+                        { value: 'full', label: 'Full width' },
+                        { value: 'half', label: 'Half' },
+                        { value: 'third', label: 'One third' }
+                      ]}
+                    />
+                  </div>
                   {group.type === 'tab' && (
                     <div>
                       <Label className='mb-1 block text-[11px]'>

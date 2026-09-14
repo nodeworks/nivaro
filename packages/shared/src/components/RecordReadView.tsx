@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
-import { useDrilldown, useNivaroClient } from '../context'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
 import { sanitizeHtml } from '../lib/sanitize-html'
@@ -26,6 +26,8 @@ interface LayoutGroup {
   container_id?: number | null
   is_collapsed?: boolean | number | null
   visibility_mode?: string | null
+  /** Migration 311 — read-board width: full | half | third | null (auto). */
+  read_width?: string | null
 }
 interface LayoutAssignment {
   field: string
@@ -95,6 +97,29 @@ const fmtNumber = (v: unknown) => {
 
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
+/**
+ * Read-board grid rules, attribute-scoped so a host app's Tailwind sheet can
+ * never outrank them (same specificity, but ours is a later <style>). The
+ * board is 6 tracks from lg; a section spans its read_width; a section's
+ * facts (`data-read-dl`) sit on 2 → 3 → 4 → 6 tracks for a full card, 2 → 3
+ * for a half, 2 for a third — the same cell size for a fact everywhere.
+ */
+const READ_BOARD_CSS = `
+[data-read-board]{grid-template-columns:minmax(0,1fr)}
+[data-read-dl]{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (min-width:640px){[data-read-dl="full"]{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:1024px){
+[data-read-board]{grid-template-columns:repeat(6,minmax(0,1fr))}
+[data-read-width="full"]{grid-column:span 6 / span 6}
+[data-read-width="half"]{grid-column:span 3 / span 3}
+[data-read-width="third"]{grid-column:span 2 / span 2}
+[data-read-dl="full"]{grid-template-columns:repeat(4,minmax(0,1fr))}
+[data-read-dl="half"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+[data-read-dl="third"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (min-width:1536px){[data-read-dl="full"]{grid-template-columns:repeat(6,minmax(0,1fr))}}
+`
+
 function BoolPill({
   value,
   trueTone = 'positive'
@@ -131,7 +156,11 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
         .request<{ data: { display_template?: string | null; fields: FieldMeta[] } }>(
           get(`/collections/${collection}`)
         )
-        .then((r) => r.data),
+        .then((r) => r.data)
+        // A target with no registry row (nivaro_files) still has a record to
+        // label — without this the row query never ran and files rendered as
+        // an empty skeleton forever.
+        .catch(() => ({ display_template: null, fields: [] as FieldMeta[] })),
     staleTime: 10 * 60_000,
     retry: false
   })
@@ -165,7 +194,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
       .trim()
   }
   if (!label) {
-    for (const k of ['name', 'title', 'label', 'number', 'subject', 'email']) {
+    for (const k of ['name', 'title', 'label', 'number', 'subject', 'email', 'filename_download', 'filename']) {
       if (row[k]) {
         label = String(row[k])
         break
@@ -185,6 +214,51 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   )
 }
 
+/** A file reference: nivaro_files has no registry row and no /items read, so
+ *  the label comes from /files/:id/meta (title, else download name) and the
+ *  click opens the file itself. */
+function FileValue({ id }: { id: unknown }) {
+  const client = useNivaroClient()
+  const { apiBase } = useApiFetchConfig()
+  const { data: meta, isPending } = useQuery({
+    queryKey: ['rrv-file-meta', String(id)],
+    queryFn: () =>
+      client
+        .request<{ data: { title?: string | null; filename_download?: string | null } }>(
+          get(`/files/${id}/meta`)
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: id != null,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  if (id == null) return <Empty />
+  if (!meta && isPending)
+    return (
+      <span className='inline-block h-3.5 w-24 animate-pulse rounded bg-slate-100 align-middle dark:bg-[hsl(var(--nvr-skeleton))]' />
+    )
+  const label = meta?.title || meta?.filename_download || `#${String(id)}`
+  return (
+    <a
+      href={`${apiBase}/files/${id}`}
+      target='_blank'
+      rel='noreferrer'
+      className='underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#007a99] hover:decoration-[#007a99] dark:decoration-slate-600 dark:hover:text-nvr-cyan dark:hover:decoration-nvr-cyan'
+    >
+      {label}
+    </a>
+  )
+}
+
+/** RelatedValue, except a file target resolves through the files API. */
+const RelatedOrFile = ({ collection, id }: { collection: string; id: unknown }) =>
+  collection === 'nivaro_files' ? (
+    <FileValue id={id} />
+  ) : (
+    <RelatedValue collection={collection} id={id} />
+  )
+
 /** An M2M alias reads as the linked records' labels, not a table of junction
  *  rows: the junction's companion leg names the target collection, each
  *  linked id resolves through RelatedValue (display template + drill). */
@@ -192,12 +266,15 @@ function M2MValue({
   junction,
   parentFk,
   junctionField,
-  parentId
+  parentId,
+  onCount
 }: {
   junction: string
   parentFk: string
   junctionField: string
   parentId: string
+  /** Reports how many records are linked — hide_empty hides the field at 0. */
+  onCount?: (n: number) => void
 }) {
   const client = useNivaroClient()
   const { data: jMeta } = useQuery({
@@ -234,6 +311,10 @@ function M2MValue({
     staleTime: 30_000,
     retry: false
   })
+  const linked = ids?.length
+  useEffect(() => {
+    if (linked !== undefined) onCount?.(linked)
+  }, [linked, onCount])
   if (!ids || !target)
     return (
       <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
@@ -243,7 +324,7 @@ function M2MValue({
     <span className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
       {ids.map((id, i) => (
         <span key={id} className='inline-flex items-center'>
-          <RelatedValue collection={target} id={id} />
+          <RelatedOrFile collection={target} id={id} />
           {i < ids.length - 1 && <span className='text-slate-300 dark:text-slate-600'>,</span>}
         </span>
       ))}
@@ -261,7 +342,8 @@ function ChildTable({
   parentId,
   layoutId,
   presets,
-  defaultPreset
+  defaultPreset,
+  onCount
 }: {
   collection: string
   fkField: string
@@ -271,6 +353,8 @@ function ChildTable({
    *  rule as the edit grid: a preset filters the layout's columns, never widens. */
   presets?: ColumnPreset[]
   defaultPreset?: string | null
+  /** Reports the row count once known — hide_empty hides the grid at 0. */
+  onCount?: (n: number) => void
 }) {
   const client = useNivaroClient()
   const drill = useDrilldown()
@@ -389,6 +473,12 @@ function ChildTable({
   })
   const rows = rowsRes?.data ?? []
   const total = rowsRes?.total ?? rows.length
+  // The unfiltered count is the honest "does this grid have rows" answer — a
+  // column filter narrowing to zero must not make the whole grid vanish.
+  const userFiltered = Object.values(debFilters).some((f) => !!f?.value.trim())
+  useEffect(() => {
+    if (rowsRes && !userFiltered) onCount?.(total)
+  }, [rowsRes, userFiltered, total, onCount])
   const dottedCols = cols.filter((c) => c.field.includes('.'))
   const rowIds = rows.map((r) => String(r.id))
   const { data: resolved } = useQuery<{
@@ -482,7 +572,7 @@ function ChildTable({
           <UserChip userId={String(v)} size='compact' />
         </span>
       )
-    if (target) return <RelatedValue collection={target} id={v} />
+    if (target) return <RelatedOrFile collection={target} id={v} />
     if (f.type === 'boolean') return <BoolPill value={v} />
     if (f.type === 'decimal' || f.type === 'float') return fmtMoney(v)
     if (f.type === 'integer') return fmtNumber(v)
@@ -494,6 +584,43 @@ function ChildTable({
     ['decimal', 'float', 'integer'].includes(f.type ?? '') &&
     !m2oOf(f.field) &&
     !f.field.includes('.')
+  // Aggregate footer — the same `options.aggregate` the edit grid honours
+  // (sum / avg / min / max / count), over the rows on screen.
+  const optsOf = (f: FieldMeta): Record<string, unknown> => {
+    const raw = f.options
+    if (!raw) return {}
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw) as Record<string, unknown>
+      } catch {
+        return {}
+      }
+    }
+    return raw as Record<string, unknown>
+  }
+  const aggOf = (f: FieldMeta) => {
+    const a = optsOf(f).aggregate
+    return typeof a === 'string' && ['sum', 'avg', 'min', 'max', 'count'].includes(a) ? a : null
+  }
+  const hasFooter = cols.some((f) => aggOf(f))
+  const footerCell = (f: FieldMeta) => {
+    const agg = aggOf(f)
+    if (!agg) return null
+    const nums = rows.map((r) => Number(r[f.field])).filter((n) => !Number.isNaN(n))
+    let result: number | null = null
+    if (agg === 'count') result = rows.length
+    else if (nums.length > 0) {
+      if (agg === 'sum') result = nums.reduce((a, b) => a + b, 0)
+      else if (agg === 'avg') result = nums.reduce((a, b) => a + b, 0) / nums.length
+      else if (agg === 'min') result = Math.min(...nums)
+      else if (agg === 'max') result = Math.max(...nums)
+    }
+    if (result === null) return '—'
+    const fmt = optsOf(f).format
+    if (agg === 'count' || fmt === 'int') return fmtNumber(Math.round(result))
+    if (fmt === 'currency' || f.type === 'decimal' || f.type === 'float') return fmtMoney(result)
+    return agg === 'avg' ? result.toFixed(2) : fmtNumber(result)
+  }
   const sortable = (f: FieldMeta) => !m2oOf(f.field) && !f.field.includes('.')
   const filterKind = (f: FieldMeta): 'text' | 'num' | 'bool' | null => {
     if (m2oOf(f.field) || f.field.includes('.')) return null
@@ -650,6 +777,34 @@ function ChildTable({
               </tr>
             ))}
           </tbody>
+          {hasFooter && rows.length > 0 && (
+            <tfoot>
+              <tr
+                data-read-grid-footer
+                className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300'
+              >
+                {hasLineNo && <td />}
+                {cols.map((f) => {
+                  const agg = aggOf(f)
+                  return (
+                    <td
+                      key={f.field}
+                      className={`whitespace-nowrap px-2.5 py-1.5 ${numeric(f) ? 'text-right' : ''}`}
+                    >
+                      {agg && (
+                        <>
+                          <span className='mr-1 font-mono text-[10px] text-slate-400'>
+                            {agg.toUpperCase()}
+                          </span>
+                          <span className='tabular-nums'>{footerCell(f)}</span>
+                        </>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
       {total > PAGE && (
@@ -779,8 +934,13 @@ export function RecordReadView({
     relations.find(
       (r) => r.many_collection === collection && r.many_field === field && r.one_collection
     )?.one_collection ?? null
+  // Same alias rule as the edit form: an O2M/M2M assignment is keyed by the
+  // alias field OR by the child table's own name (the `workflows_files` form
+  // a second grid on one relation has to use).
   const aliasChild = (field: string) =>
-    relations.find((r) => r.one_collection === collection && r.one_field === field) ?? null
+    relations.find(
+      (r) => r.one_collection === collection && (r.one_field === field || r.many_collection === field)
+    ) ?? null
 
   // Same gate as the edit form: assignment visibility, the layout's hidden
   // override, and the field's own hidden flag.
@@ -819,12 +979,17 @@ export function RecordReadView({
         )
         .sort((a, b) => a.sort - b.sort)
     : []
+  // Only slots the host actually renders count as content — a `__pdf__` or
+  // `__pipeline__` slot the host declines must not keep an empty card alive.
+  const liveNodes = (groupKey: string | null) =>
+    renderSlot
+      ? liveSlots
+          .filter((a) => (groupKey === null ? a.group_key == null : a.group_key === groupKey))
+          .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
+          .filter((s) => s.node != null)
+      : []
   const renderLiveSlots = (groupKey: string | null) => {
-    if (!renderSlot) return null
-    const nodes = liveSlots
-      .filter((a) => (groupKey === null ? a.group_key == null : a.group_key === groupKey))
-      .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
-      .filter((s) => s.node != null)
+    const nodes = liveNodes(groupKey)
     if (nodes.length === 0) return null
     return (
       <div className='mt-3 space-y-4' data-read-live-slots>
@@ -841,6 +1006,15 @@ export function RecordReadView({
   // MOUNTED (hidden) so its fetch and report keep running.
   const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
   const widgetHasContent = (key: string) => widgetContent[key] === true
+  // Related-record counts (child grids, M2M chips) reported by their renderers
+  // — under hide_empty a grid with no rows or an alias with no links is as
+  // empty as a blank scalar, and a "Files" section with nothing in it goes.
+  const [relCounts, setRelCounts] = useState<Record<string, number>>({})
+  const countReporter = useCallback(
+    (field: string) => (n: number) =>
+      setRelCounts((cur) => (cur[field] === n ? cur : { ...cur, [field]: n })),
+    []
+  )
   const renderWidgets = (groupKey: string | null) => {
     const slots = widgetSlots
       .filter((w) => w.group_key === groupKey)
@@ -918,6 +1092,7 @@ export function RecordReadView({
           parentFk={m2m.many_field}
           junctionField={m2m.junction_field}
           parentId={itemId}
+          onCount={countReporter(a.field)}
         />
       )
     const v = record?.[a.field]
@@ -928,7 +1103,7 @@ export function RecordReadView({
           <UserChip userId={String(v)} size='compact' />
         </span>
       )
-    if (target) return <RelatedValue collection={target} id={v} />
+    if (target) return <RelatedOrFile collection={target} id={v} />
     if (v == null || v === '') return <Empty />
     if (f?.type === 'boolean')
       return (
@@ -993,6 +1168,7 @@ export function RecordReadView({
         layoutId={layoutId}
         presets={ovOpts.column_presets ?? fOpts.column_presets}
         defaultPreset={ovOpts.default_preset ?? fOpts.default_preset ?? null}
+        onCount={countReporter(a.field)}
       />
     )
   }
@@ -1031,25 +1207,41 @@ export function RecordReadView({
       .filter((a) => !(hideEmpty && !isGrid(a) && isEmptyValue(a)))
       .sort((a, b) => a.sort - b.sort)
     const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
-    const groupLive = liveSlots.filter((a) => a.group_key === g.key)
+    const groupLive = liveNodes(g.key)
     if (items.length === 0 && groupWidgets.length === 0 && groupLive.length === 0) return null
+    // A grid with no rows / an alias with no links is empty too (once its
+    // count has reported); it stays mounted so the count keeps reporting.
+    const relEmpty = (a: LayoutAssignment) =>
+      hideEmpty && (isGrid(a) || isM2M(a)) && relCounts[a.field] === 0
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
     const shownWidgets = groupWidgets.filter((w) => widgetHasContent(w.field))
-    // A section whose only content is empty widgets collapses with them —
-    // the widgets stay mounted (hidden) inside so they can still report.
+    const shownItems = items.filter((a) => !relEmpty(a))
+    // A section whose visible content is gone (empty widgets, empty grids,
+    // empty links) collapses; everything stays mounted inside so it can
+    // still report.
     const sectionHidden =
-      items.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
-    // Width comes from what the section is CONFIGURED to hold, never from what
-    // has loaded — a widget card that started half width and snapped to full
-    // once its data reported was the "forecasts slot is half width until the
-    // page loads" jump.
+      shownItems.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
+    // Board width is CONFIGURATION (group.read_width, Table Editor), never a
+    // function of what loaded. Auto = half for a short fact list, full when
+    // the section holds a grid, a widget, a live slot or many fields.
+    const configured = g.read_width === 'full' || g.read_width === 'half' || g.read_width === 'third'
+    const width = configured
+      ? (g.read_width as 'full' | 'half' | 'third')
+      : grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0 || scalars.length > 4
+        ? 'full'
+        : 'half'
+    // Spans and field tracks come from READ_BOARD_CSS (attribute selectors in
+    // a style block of our own) — Tailwind responsive utilities lost to host
+    // apps whose own sheet emits the same class names later (efp-new's
+    // `.grid-cols-1` / `.lg:grid-cols-4` outranked ours at equal specificity).
     return (
       <section
         key={g.key}
         hidden={sectionHidden}
         data-read-section={g.key}
-        className='rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40'
+        data-read-width={width}
+        className='min-w-0 rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40'
       >
         <h3
           className={`flex items-center justify-between px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
@@ -1078,8 +1270,9 @@ export function RecordReadView({
               // One column rhythm for the whole page: every section's facts sit
               // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
               // card instead of each card auto-filling its own grid.
-              <dl className='grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6'>
+              <dl className='grid gap-x-6 gap-y-5' data-read-dl={width}>
                 {scalars.map((a) => {
+                  if (relEmpty(a)) return null
                   const ov = parseOverrides(a.overrides)
                   const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
                   const long =
@@ -1122,7 +1315,7 @@ export function RecordReadView({
               </dl>
             )}
             {grids.map((a) => (
-              <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
+              <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''} hidden={relEmpty(a)}>
                 {integrityMap?.get(a.field)?.length ? (
                   <div className='mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
                     <span className='uppercase tracking-wide'>{labelFor(a)}</span>
@@ -1203,8 +1396,14 @@ export function RecordReadView({
       {/* Sections stack in layout order, full width — the same top-to-bottom
           reading the edit form has. A two-column board of unequal cards left
           pockets beside every short section and read as splayed. */}
+      {/* No base `grid-cols-1` on the board: a host app's own Tailwind sheet
+          loads after ours and its .grid-cols-1 outranks our media-scoped
+          lg:grid-cols-6 (efp-new did exactly that — two half sections rendered
+          76/23); a grid with no template is one column anyway. Sections
+          STRETCH to their row (Rob: "no row where one element is shorter"). */}
+      <style>{READ_BOARD_CSS}</style>
       {meta ? (
-        <div className='flex flex-col gap-4' data-read-board>
+        <div className='grid items-stretch gap-4' data-read-board>
           {sectionGroups.map(renderSection)}
         </div>
       ) : (

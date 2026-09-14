@@ -1238,6 +1238,16 @@ export function ItemEditForm({
     () => (colMeta?.read_mode_toggle ? normalizeSummaryModeRules(colMeta.summary_mode_rules) : null),
     [colMeta?.read_mode_toggle, colMeta?.summary_mode_rules]
   )
+  // State (not just a ref) so the body can HOLD until the opening mode is
+  // known — otherwise the form paints Edit for a beat and snaps to Summary
+  // (Rob: "flashes edit mode first"). Resolved by the effect further down.
+  const [summaryResolvedKey, setSummaryResolvedKey] = useState<string | null>(null)
+  const summaryRecordKey = `${collection}|${String(itemId)}`
+  // True once the opening mode is known: new records and collections without
+  // the toggle settle immediately; otherwise wait for colMeta (the rules) and
+  // the resolution. The body renders a skeleton until then.
+  const summaryModeSettled =
+    isNew || (colMeta !== undefined && (!summaryRules || summaryResolvedKey === summaryRecordKey))
   // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
   // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
   // staging) is persisted to IndexedDB per collection:record:user, ~800ms
@@ -3469,7 +3479,15 @@ export function ItemEditForm({
   )
 
   // ── Item lock ──────────────────────────────────────────────────────────────
-  const lockEnabled = showLockBanner && !isNew && !!colMeta?.item_locking_enabled
+  // Summary mode neither takes nor honours the edit lock (Rob): the lock is
+  // only acquired once the opening mode has settled on Edit, released when
+  // the person flips to Summary, re-acquired on the way back.
+  const lockEnabled =
+    showLockBanner &&
+    !isNew &&
+    !!colMeta?.item_locking_enabled &&
+    summaryModeSettled &&
+    !readMode
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -6605,11 +6623,6 @@ export function ItemEditForm({
   // never judges an unloaded state as "no state". The toggle flips it for this
   // mount only (never stored).
   const summaryResolvedFor = useRef<string | null>(null)
-  // State (not just the ref) so the body can HOLD until the opening mode is
-  // known — otherwise the form paints Edit for a beat and snaps to Summary
-  // (Rob: "flashes edit mode first").
-  const [summaryResolvedKey, setSummaryResolvedKey] = useState<string | null>(null)
-  const summaryRecordKey = `${collection}|${String(itemId)}`
   useEffect(() => {
     const key = summaryRecordKey
     if (summaryResolvedFor.current === key || isNew || !summaryRules) return
@@ -6636,11 +6649,6 @@ export function ItemEditForm({
     pipelineInstanceData,
     pipelineInstanceError
   ])
-  // True once the opening mode is known: new records and collections without
-  // the toggle settle immediately; otherwise wait for colMeta (the rules) and
-  // the resolution above. The body renders a skeleton until then.
-  const summaryModeSettled =
-    isNew || (colMeta !== undefined && (!summaryRules || summaryResolvedKey === summaryRecordKey))
   // Summary mode collapses the right-hand rail by default (Rob) — the read
   // view is the summary; the rail would repeat it. Restore whatever the rail
   // was doing when the person switches back to Edit.
@@ -9781,7 +9789,7 @@ export function ItemEditForm({
                                       onDismiss={() => setImportIssues([])}
                                     />
                                   )}
-                                  {showLockBanner && (
+                                  {showLockBanner && lockEnabled && (
                                     <div className='nvr-expand-in'>
                                       <ItemLockBanner
                                         lockHolder={lockHolder}
