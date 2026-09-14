@@ -1,4 +1,4 @@
-import { Lock } from 'lucide-react'
+import { Lock, LockOpen } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
@@ -41,6 +41,12 @@ export function useItemLock(
   const [myPosition, setMyPosition] = useState<number | null>(null)
   const [joining, setJoining] = useState(false)
   const [myNote, setMyNote] = useState('')
+  // Manual release (Rob, 2026-09-14): the holder can free the record from the
+  // header pill at any time, waiting room or not. `released` keeps the pill
+  // visible as an unlocked glyph so they can lock it again; the form's next
+  // real edit re-acquires via `relock`.
+  const [released, setReleased] = useState(false)
+  const [releasing, setReleasing] = useState(false)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const acquiredRef = useRef(false)
 
@@ -57,6 +63,7 @@ export function useItemLock(
       await client.request(post(`/item-locks/${collection}/${item}/lock`, {}))
       acquiredRef.current = true
       setAcquired(true)
+      setReleased(false)
       setLockHolder(null)
       stopHeartbeat()
       heartbeatRef.current = setInterval(() => {
@@ -332,6 +339,36 @@ export function useItemLock(
     [client, collection, item]
   )
 
+  /** Holder gives the lock up without leaving the record. The server hands it
+   *  to whoever is first in the wait queue (same path as closing the tab). */
+  const release = useCallback(async () => {
+    if (!collection || !item || !acquiredRef.current) return
+    setReleasing(true)
+    stopHeartbeat()
+    acquiredRef.current = false
+    setAcquired(false)
+    try {
+      await client.request(del(`/item-locks/${collection}/${item}/lock`))
+      setReleased(true)
+      setMyNote('')
+      toast.success('Lock released — anyone can edit this record now')
+    } catch {
+      toast.error('Failed to release the lock')
+      // Best effort to get back to a known state: re-acquire.
+      void acquire()
+    } finally {
+      setReleasing(false)
+    }
+  }, [client, collection, item, stopHeartbeat, acquire])
+  /** After a manual release: take the lock back (the pill's "Lock again", or
+   *  the form's next real edit). A 409 lands in lockHolder like any acquire. */
+  const relock = useCallback(async () => {
+    if (acquiredRef.current) return true
+    const ok = await acquire()
+    if (ok) toast.success('You hold the edit lock again')
+    return ok
+  }, [acquire])
+
   const takeOver = useCallback(async () => {
     if (!collection || !item) return
     setTakingOver(true)
@@ -365,7 +402,11 @@ export function useItemLock(
     leaveQueue,
     joining,
     myNote,
-    saveNote
+    saveNote,
+    release,
+    releasing,
+    released,
+    relock
   }
 }
 
@@ -377,16 +418,60 @@ export function useItemLock(
 export function LockHolderButton({
   note,
   onSave,
-  waiting
+  waiting,
+  onRelease,
+  releasing,
+  released,
+  onRelock
 }: {
   note: string
   onSave: (note: string) => void
   waiting: LockQueueEntry[]
+  /** Give the lock up now (any time — no waiter required). */
+  onRelease?: () => void
+  releasing?: boolean
+  /** The holder released it and has not edited since: unlocked glyph + "Lock again". */
+  released?: boolean
+  onRelock?: () => void
 }) {
   const [draft, setDraft] = useState(note)
   useEffect(() => setDraft(note), [note])
   const commit = () => {
     if (draft.trim() !== note) onSave(draft.trim())
+  }
+  if (released) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            aria-label='You released the edit lock — lock it again'
+            title='Lock released — anyone can edit this record'
+            data-lock-released
+            className='relative inline-flex h-8 w-8 items-center justify-center text-slate-400 transition-colors hover:bg-accent hover:text-accent-foreground dark:text-slate-500'
+          >
+            <LockOpen className='h-4 w-4' strokeWidth={2} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align='end' sideOffset={6} className='w-[300px] p-3'>
+          <p className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+            You released the edit lock
+          </p>
+          <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
+            Anyone can edit this record now. Your next edit locks it again — or lock it now.
+          </p>
+          <Button
+            type='button'
+            size='sm'
+            className='mt-2 h-7 w-full text-[12px]'
+            onClick={onRelock}
+            data-lock-relock
+          >
+            <Lock className='mr-1.5 h-3.5 w-3.5' /> Lock again
+          </Button>
+        </PopoverContent>
+      </Popover>
+    )
   }
   return (
     <Popover>
@@ -434,6 +519,24 @@ export function LockHolderButton({
             <span className='font-semibold'>{waiting.length} waiting for the lock:</span>{' '}
             {waiting.map((w) => w.name ?? 'someone').join(', ')}
           </div>
+        )}
+        {onRelease && (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='mt-2 h-7 w-full text-[12px]'
+            onClick={onRelease}
+            disabled={releasing}
+            data-lock-release
+          >
+            <LockOpen className='mr-1.5 h-3.5 w-3.5' />
+            {releasing
+              ? 'Releasing…'
+              : waiting.length > 0
+                ? `Release lock to ${waiting[0]?.name ?? 'the next person'}`
+                : 'Release lock'}
+          </Button>
         )}
       </PopoverContent>
     </Popover>

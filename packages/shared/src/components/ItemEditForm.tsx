@@ -3254,6 +3254,9 @@ export function ItemEditForm({
     evaluateFieldRulesForChange
   ])
 
+  // After a manual lock release the next real edit re-acquires the lock.
+  // Ref because useItemLock is declared below this callback.
+  const relockOnEditRef = useRef<null | (() => void)>(null)
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
       // No-op guard: editors can emit a change with an IDENTICAL value (rich
@@ -3262,6 +3265,7 @@ export function ItemEditForm({
       // actually different (the phantom-dirty report).
       if (valuesEqual(draftRef.current[field], value)) return
       userTouchedRef.current.add(field)
+      relockOnEditRef.current?.()
       fieldEditSeqRef.current.set(field, ++ruleSeqRef.current)
       const next = { ...draftRef.current, [field]: value }
       for (const fc of fieldConfig ?? []) {
@@ -3427,8 +3431,13 @@ export function ItemEditForm({
     leaveQueue: leaveLockQueue,
     joining: joiningLockQueue,
     myNote: lockNote,
-    saveNote: saveLockNote
+    saveNote: saveLockNote,
+    release: releaseLock,
+    releasing: releasingLock,
+    released: lockReleased,
+    relock: relockLock
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
+  relockOnEditRef.current = lockReleased && !lockHolder ? () => void relockLock() : null
 
   // ── Layout / groups ────────────────────────────────────────────────────────
   const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
@@ -8287,11 +8296,15 @@ export function ItemEditForm({
                                           dialog; the group supplies border + dividers. */}
                                       {!isNew && itemId ? (
                                         <HeaderToolGroup>
-                                          {lockEnabled && lockAcquired && !lockHolder && (
+                                          {lockEnabled && !lockHolder && (lockAcquired || lockReleased) && (
                                             <LockHolderButton
                                               note={lockNote}
                                               onSave={saveLockNote}
                                               waiting={lockQueue}
+                                              onRelease={releaseLock}
+                                              releasing={releasingLock}
+                                              released={lockReleased && !lockAcquired}
+                                              onRelock={relockLock}
                                             />
                                           )}
                                           {!!colMeta?.read_mode_toggle && (
