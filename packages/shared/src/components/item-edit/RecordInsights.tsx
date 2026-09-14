@@ -38,10 +38,13 @@ export function invalidateRecordInsights(
 
 export function RecordInsightsButton({
   collection,
-  itemId
+  itemId,
+  compact
 }: {
   collection: string
   itemId: string
+  /** Icon-only, borderless — for the record header's tool group. */
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('audience')
@@ -60,10 +63,15 @@ export function RecordInsightsButton({
         type='button'
         onClick={() => setOpen((v) => !v)}
         data-tip='Record insights — audience, integrations, owner history'
+        title='Record insights'
         aria-label='Record insights'
-        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+        className={
+          compact
+            ? 'inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+            : 'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+        }
       >
-        <Info className='h-3.5 w-3.5' />
+        <Info className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
       </button>
       {open && (
         <div className='absolute right-0 top-full z-[60] mt-1 w-[480px] max-w-[92vw] rounded-lg border border-slate-200 bg-white p-3 shadow-xl dark:border-border dark:bg-card'>
@@ -126,9 +134,7 @@ function AudienceTab({ collection, itemId }: { collection: string; itemId: strin
   }>({
     queryKey: ['record-audience', collection, itemId],
     queryFn: () =>
-      client
-        .request<{ data: never }>(get(`/audience/${collection}/${itemId}`))
-        .then((r) => r.data),
+      client.request<{ data: never }>(get(`/audience/${collection}/${itemId}`)).then((r) => r.data),
     staleTime: 30_000
   })
   if (isLoading) return <p className='text-[12px] text-slate-400'>Loading…</p>
@@ -142,8 +148,8 @@ function AudienceTab({ collection, itemId }: { collection: string; itemId: strin
   return (
     <div className='max-h-72 overflow-y-auto'>
       <p className='pb-1.5 text-[10.5px] text-slate-400'>
-        {people.length} {people.length === 1 ? 'person hears' : 'people hear'} about changes to
-        this record
+        {people.length} {people.length === 1 ? 'person hears' : 'people hear'} about changes to this
+        record
       </p>
       {people.map((p) => (
         <div
@@ -200,7 +206,9 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
     queryKey: ['erp-submissions', collection, String(itemId)],
     queryFn: () =>
       client
-        .request<{ data: never }>(get(`/erp-submissions/${collection}/${encodeURIComponent(itemId)}`))
+        .request<{ data: never }>(
+          get(`/erp-submissions/${collection}/${encodeURIComponent(itemId)}`)
+        )
         .then((r) => r.data ?? [])
         .catch(() => [] as never),
     staleTime: 30_000
@@ -224,7 +232,8 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
         .then((r) => {
           const row = r.data ?? {}
-          const PATTERN = /(external|nuvolo|mwf|oracle|sap|erp|legacy|fusion|mdsi).*(id|number|ref)|^(order_number|requisition_id|sales_order_id)$/i
+          const PATTERN =
+            /(external|nuvolo|mwf|oracle|sap|erp|legacy|fusion|mdsi).*(id|number|ref)|^(order_number|requisition_id|sales_order_id)$/i
           return Object.entries(row)
             .filter(([k, v]) => k !== 'id' && v != null && v !== '' && PATTERN.test(k))
             .map(([field, v]) => ({ field, value: String(v).slice(0, 60) }))
@@ -256,38 +265,40 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
           </div>
         </div>
       )}
-      {(() => { return (
-    <div className='max-h-72 space-y-1 overflow-y-auto text-[12px]'>
-      {erpRows.map((e) => (
-        <p key={`e${e.id}`} className='flex items-baseline justify-between gap-2'>
-          <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
-            {e.external_api_name ?? e.target ?? e.endpoint_path ?? 'ERP push'}
-          </span>
-          <span
-            className={
-              e.status === 'failed'
-                ? 'shrink-0 text-red-500'
-                : e.status === 'accepted'
-                  ? 'shrink-0 text-emerald-600'
-                  : 'shrink-0 text-slate-400'
-            }
-          >
-            {e.status} · {new Date(e.created_at).toLocaleDateString()}
-          </span>
-        </p>
-      ))}
-      {data?.webhooks.map((w) => (
-        <p key={`w${w.id}`} className='flex items-baseline justify-between gap-2'>
-          <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
-            webhook: {w.webhook}
-          </span>
-          <span className='shrink-0 text-slate-400'>
-            {w.response_status} · {new Date(w.created_at).toLocaleDateString()}
-          </span>
-        </p>
-      ))}
-    </div>
-  ) })()}
+      {(() => {
+        return (
+          <div className='max-h-72 space-y-1 overflow-y-auto text-[12px]'>
+            {erpRows.map((e) => (
+              <p key={`e${e.id}`} className='flex items-baseline justify-between gap-2'>
+                <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
+                  {e.external_api_name ?? e.target ?? e.endpoint_path ?? 'ERP push'}
+                </span>
+                <span
+                  className={
+                    e.status === 'failed'
+                      ? 'shrink-0 text-red-500'
+                      : e.status === 'accepted'
+                        ? 'shrink-0 text-emerald-600'
+                        : 'shrink-0 text-slate-400'
+                  }
+                >
+                  {e.status} · {new Date(e.created_at).toLocaleDateString()}
+                </span>
+              </p>
+            ))}
+            {data?.webhooks.map((w) => (
+              <p key={`w${w.id}`} className='flex items-baseline justify-between gap-2'>
+                <span className='min-w-0 truncate text-slate-700 dark:text-slate-200'>
+                  webhook: {w.webhook}
+                </span>
+                <span className='shrink-0 text-slate-400'>
+                  {w.response_status} · {new Date(w.created_at).toLocaleDateString()}
+                </span>
+              </p>
+            ))}
+          </div>
+        )
+      })()}
     </>
   )
 }
@@ -316,8 +327,8 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
   return (
     <div className='max-h-72 space-y-2 overflow-y-auto text-[12px]'>
       <p className='text-[10.5px] text-amber-600 dark:text-amber-400'>
-        Owners shown are resolved with TODAY's matrix config — membership changes since then
-        aren't snapshotted.
+        Owners shown are resolved with TODAY's matrix config — membership changes since then aren't
+        snapshotted.
       </p>
       {data.map((h, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: ordered stays
@@ -339,13 +350,15 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
   )
 }
 
-
 // ─── Mail tab (#261): mail sent about this record — headers only ─────────────
 const MAIL_STATUS: Record<string, { label: string; cls: string }> = {
   sent: { label: 'Sent', cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
   failed: { label: 'Failed', cls: 'bg-red-500/10 text-red-600 dark:text-red-400' },
   deferred: { label: 'In daily digest', cls: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  dropped: { label: 'Not sent (test mode)', cls: 'bg-slate-500/10 text-slate-500 dark:text-slate-400' }
+  dropped: {
+    label: 'Not sent (test mode)',
+    cls: 'bg-slate-500/10 text-slate-500 dark:text-slate-400'
+  }
 }
 
 /** "beth@x.com, rob@y.com, …" → "beth, rob +3" — full list rides the tip. */
@@ -382,9 +395,7 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
   if (isLoading) return <p className='p-3 text-[12px] text-slate-400'>Loading…</p>
   if (rows.length === 0)
     return (
-      <p className='p-3 text-[12px] text-slate-400'>
-        No emails have been sent about this record.
-      </p>
+      <p className='p-3 text-[12px] text-slate-400'>No emails have been sent about this record.</p>
     )
   return (
     <div className='max-h-80 overflow-y-auto'>
@@ -436,7 +447,6 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
   )
 }
 
-
 // ─── Chat mentions (#132): messages naming this record beyond its own room ──
 function ChatMentionsTab({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useNivaroClient()
@@ -444,9 +454,15 @@ function ChatMentionsTab({ collection, itemId }: { collection: string; itemId: s
     queryKey: ['record-chat-mentions', collection, itemId],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: number; room: string; message: string; sender_name: string | null; date_created: string }> }>(
-          get(`/chat/record-mentions/${collection}/${itemId}`)
-        )
+        .request<{
+          data: Array<{
+            id: number
+            room: string
+            message: string
+            sender_name: string | null
+            date_created: string
+          }>
+        }>(get(`/chat/record-mentions/${collection}/${itemId}`))
         .then((r) => r.data ?? [])
         .catch(() => []),
     staleTime: 60_000
@@ -459,11 +475,20 @@ function ChatMentionsTab({ collection, itemId }: { collection: string; itemId: s
       </p>
     )
   const roomLabel = (r: string) =>
-    r === 'global' ? '#global' : r.startsWith('ch:') ? `#${r.slice(3)}` : r.startsWith('dm:') ? 'a direct message' : r
+    r === 'global'
+      ? '#global'
+      : r.startsWith('ch:')
+        ? `#${r.slice(3)}`
+        : r.startsWith('dm:')
+          ? 'a direct message'
+          : r
   return (
     <div className='max-h-72 overflow-y-auto'>
       {rows.map((m) => (
-        <div key={m.id} className='border-b border-slate-100 px-3 py-1.5 last:border-b-0 dark:border-border/50'>
+        <div
+          key={m.id}
+          className='border-b border-slate-100 px-3 py-1.5 last:border-b-0 dark:border-border/50'
+        >
           <p className='text-[12px] text-slate-700 dark:text-slate-200'>
             <span className='font-medium'>{m.sender_name ?? 'Someone'}</span>{' '}
             <span className='text-slate-400'>in {roomLabel(m.room)}</span>

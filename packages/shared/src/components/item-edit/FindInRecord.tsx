@@ -72,10 +72,13 @@ function Hi({ text, needle }: { text: string; needle: string }) {
 
 export function FindInRecordButton({
   fields,
-  onJump
+  onJump,
+  compact
 }: {
   fields: FindableField[]
   onJump: (field: string) => boolean
+  /** Icon-only, borderless — for the record header's tool group. */
+  compact?: boolean
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -100,10 +103,7 @@ export function FindInRecordButton({
   }, [open])
 
   const relFields = useMemo(() => fields.filter((f) => f.relation), [fields])
-  const targets = useMemo(
-    () => [...new Set(relFields.map((f) => f.relation!.target))],
-    [relFields]
-  )
+  const targets = useMemo(() => [...new Set(relFields.map((f) => f.relation!.target))], [relFields])
 
   // Display templates per target collection — cached long, cheap.
   const metaQs = useQueries({
@@ -165,12 +165,7 @@ export function FindInRecordButton({
   const o2mList = useMemo(() => relFields.filter((f) => f.relation!.kind === 'o2m'), [relFields])
   const o2mQs = useQueries({
     queries: o2mList.map((f) => ({
-      queryKey: [
-        'find-o2m',
-        f.relation!.target,
-        f.relation!.fkField,
-        String(f.relation!.parentId)
-      ],
+      queryKey: ['find-o2m', f.relation!.target, f.relation!.fkField, String(f.relation!.parentId)],
       queryFn: () =>
         client
           .request<{ data: Array<Record<string, unknown>> }>(
@@ -259,21 +254,28 @@ export function FindInRecordButton({
   }, [fields, needle, resolved])
 
   const anyPending =
-    open && needle.length >= 2 && (rowQs.some((rq) => rq.isFetching) || o2mQs.some((oq) => oq.isFetching))
+    open &&
+    needle.length >= 2 &&
+    (rowQs.some((rq) => rq.isFetching) || o2mQs.some((oq) => oq.isFetching))
 
   return (
     <div ref={rootRef} className='relative'>
       <button
         type='button'
         title='Find a field in this record'
+        aria-label='Find a field in this record'
         onClick={() => {
           setOpen((o) => !o)
           setMiss(null)
           setQ('')
         }}
-        className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+        className={
+          compact
+            ? 'inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+            : 'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+        }
       >
-        <Search className='h-3.5 w-3.5' />
+        <Search className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
       </button>
       {open && (
         <div className='absolute right-0 top-full z-[110] mt-1 w-[368px] rounded-lg border border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
@@ -301,13 +303,15 @@ export function FindInRecordButton({
           <div className='max-h-[300px] overflow-y-auto p-1.5'>
             {needle.length < 2 && (
               <p className='px-1.5 py-2 text-[11.5px] leading-relaxed text-slate-400'>
-                Search by field name or current value — linked records count too, so a vendor's
-                name finds the vendor field.
+                Search by field name or current value — linked records count too, so a vendor's name
+                finds the vendor field.
               </p>
             )}
             {needle.length >= 2 && matches.length === 0 && (
               <p className='px-1.5 py-2 text-[12px] text-slate-400'>
-                {anyPending ? 'Searching linked records…' : `No fields or values match “${q.trim()}”.`}
+                {anyPending
+                  ? 'Searching linked records…'
+                  : `No fields or values match “${q.trim()}”.`}
               </p>
             )}
             {matches.map(({ f, value, pending }) => (

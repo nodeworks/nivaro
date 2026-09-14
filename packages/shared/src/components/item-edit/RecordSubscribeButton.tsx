@@ -44,11 +44,14 @@ type SubscribeMode = 'state' | 'all'
 export function RecordSubscribeButton({
   collection,
   itemId,
-  recordLabel
+  recordLabel,
+  compact
 }: {
   collection: string
   itemId: string
   recordLabel?: string
+  /** Icon-only, borderless — for the record header's tool group. */
+  compact?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -183,20 +186,23 @@ export function RecordSubscribeButton({
     <>
       <Button
         type='button'
-        variant='outline'
+        variant={compact ? 'ghost' : 'outline'}
         size='sm'
         onClick={() => {
           setMode(subscribed ? currentMode : 'all')
           setOpen(true)
         }}
-        title={subscribed ? 'Subscribed to this record — click to manage' : 'Subscribe to this record'}
-        className='gap-1.5 px-2'
+        title={
+          subscribed ? 'Subscribed to this record — click to manage' : 'Subscribe to this record'
+        }
+        aria-label={subscribed ? 'Manage subscription' : 'Subscribe to this record'}
+        className={compact ? 'h-8 w-8 rounded-none p-0' : 'gap-1.5 px-2'}
         data-nvr-record-subscribe={subscribed ? 'on' : 'off'}
       >
         {subscribed ? (
-          <BellRing className='h-3.5 w-3.5 text-nvr-cyan' />
+          <BellRing className={compact ? 'h-4 w-4 text-nvr-cyan' : 'h-3.5 w-3.5 text-nvr-cyan'} />
         ) : (
-          <Bell className='h-3.5 w-3.5' />
+          <Bell className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
         )}
       </Button>
       <Dialog open={open} onOpenChange={(o) => !o && setOpen(false)}>
@@ -207,8 +213,9 @@ export function RecordSubscribeButton({
               {subscribed ? 'Manage subscription' : 'Subscribe to this record'}
             </DialogTitle>
             <DialogDescription className='text-[12px]'>
-              Get notified when this {titleCase(collection).replace(/s$/, '').toLowerCase() || 'record'}{' '}
-              changes. Notifications arrive in-app and by email.
+              Get notified when this{' '}
+              {titleCase(collection).replace(/s$/, '').toLowerCase() || 'record'} changes.
+              Notifications arrive in-app and by email.
             </DialogDescription>
           </DialogHeader>
           {implicitReasons.length > 0 && (

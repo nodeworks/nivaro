@@ -86,7 +86,7 @@ import {
 import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
-import { HeaderTools } from './item-edit/HeaderTools'
+import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -7816,36 +7816,7 @@ export function ItemEditForm({
                                           onParsed={applyImportResult}
                                         />
                                       )}
-                                      {!isNew && (
-                                        <ImportFromFileButton
-                                          collection={collection}
-                                          templateFilter={(t) => t.reimport?.enabled === true}
-                                          getLabel={(t) =>
-                                            t.reimport?.button_label ?? t.button_label
-                                          }
-                                          onParsed={handleReimportParsed}
-                                        />
-                                      )}
-                                      <FindInRecordButton
-                                        fields={findableFields}
-                                        onJump={jumpToField}
-                                      />
-                                      {!isNew && itemId && (
-                                        <button
-                                          type='button'
-                                          title='Copy a plain-text summary of this record (fields + link) for chat or email'
-                                          onClick={() => void copyRecordSummary()}
-                                          disabled={copyingSummary}
-                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
-                                        >
-                                          {copyingSummary ? (
-                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                          ) : (
-                                            <Clipboard className='h-3.5 w-3.5' />
-                                          )}
-                                        </button>
-                                      )}
-                                      {quickPickerSteps.length > 0 && !isReadOnly && (
+                                      {isNew && quickPickerSteps.length > 0 && !isReadOnly && (
                                         <Popover
                                           open={quickPickOpen}
                                           onOpenChange={setQuickPickOpen}
@@ -7894,53 +7865,426 @@ export function ItemEditForm({
                                           </PopoverContent>
                                         </Popover>
                                       )}
-                                      {!isNew && itemId && (
-                                        <RecordSubscribeButton
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                        />
-                                      )}
-                                      {!isNew && itemId && (
-                                        <RecordInsightsButton
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                        />
-                                      )}
-                                      {!isNew && itemId && (
-                                        <RecordChatActions
-                                          collection={collection}
-                                          itemDraft={draft}
-                                        />
-                                      )}
-                                      {!isNew && itemId && (
-                                        <button
-                                          type='button'
-                                          title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
-                                          data-save-as-template
-                                          onClick={() => {
-                                            setTemplateName('')
-                                            setTemplateShared(false)
-                                            setTemplateDialogOpen(true)
-                                          }}
-                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                        >
-                                          <svg
-                                            width='13'
-                                            height='13'
-                                            viewBox='0 0 24 24'
-                                            fill='none'
-                                            stroke='currentColor'
-                                            strokeWidth='2'
-                                            strokeLinecap='round'
-                                            strokeLinejoin='round'
-                                            aria-hidden='true'
+                                      {/* Record tools: one compact icon group instead of a strip of
+                                          equal-weight buttons. Each tool keeps its own popover /
+                                          dialog; the group supplies border + dividers. */}
+                                      {!isNew && itemId ? (
+                                        <HeaderToolGroup>
+                                          <FindInRecordButton
+                                            compact
+                                            fields={findableFields}
+                                            onJump={jumpToField}
+                                          />
+                                          <button
+                                            type='button'
+                                            title='Copy a plain-text summary of this record (fields + link) for chat or email'
+                                            onClick={() => void copyRecordSummary()}
+                                            disabled={copyingSummary}
+                                            aria-label='Copy record summary'
+                                            className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
                                           >
-                                            <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
-                                            <polyline points='17 21 17 13 7 13 7 21' />
-                                            <polyline points='7 3 7 8 15 8' />
-                                          </svg>
-                                          Save as template
-                                        </button>
+                                            {copyingSummary ? (
+                                              <Loader2 className='h-4 w-4 animate-spin' />
+                                            ) : (
+                                              <Clipboard className='h-4 w-4' />
+                                            )}
+                                          </button>
+                                          <RecordSubscribeButton
+                                            compact
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                          />
+                                          <RecordInsightsButton
+                                            compact
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                          />
+                                          <RecordChatActions
+                                            compact
+                                            collection={collection}
+                                            itemDraft={draft}
+                                          />
+                                          {effectiveShowRevisions && (
+                                            <RevisionsPanel
+                                              compact
+                                              collection={collection}
+                                              item={itemId}
+                                              onRollback={() =>
+                                                qc.invalidateQueries({
+                                                  queryKey: ['item', collection, itemId]
+                                                })
+                                              }
+                                            />
+                                          )}
+                                        </HeaderToolGroup>
+                                      ) : (
+                                        <FindInRecordButton
+                                          fields={findableFields}
+                                          onJump={jumpToField}
+                                        />
+                                      )}
+                                      {showItemActions && !isNew && (
+                                        <ItemActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {/* Admin-defined no-code actions (#39) — always
+                                        mounted; renders nothing when none exist. */}
+                                      {!isNew && itemId && (
+                                        <CustomActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          draft={draft}
+                                        />
+                                      )}
+                                      {/* Secondary tools — one "More" menu; the rows are the same
+                                          components (dialogs, sheets, confirms unchanged). */}
+                                      {!isNew && itemId && (
+                                        <HeaderMenu>
+                                          <ImportFromFileButton
+                                            collection={collection}
+                                            templateFilter={(t) => t.reimport?.enabled === true}
+                                            getLabel={(t) =>
+                                              t.reimport?.button_label ?? t.button_label
+                                            }
+                                            onParsed={handleReimportParsed}
+                                          />
+                                          {fileLayouts.map((fl) => (
+                                            <Button
+                                              key={fl.id}
+                                              type='button'
+                                              variant='outline'
+                                              size='sm'
+                                              disabled={pdfLoading === fl.id}
+                                              onClick={() => void downloadPdf(fl.id)}
+                                              className='gap-1.5'
+                                            >
+                                              {pdfLoading === fl.id ? (
+                                                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                              ) : (
+                                                <FileDown className='h-3.5 w-3.5' />
+                                              )}
+                                              {fl.pdf_button_label || 'Export PDF'}
+                                            </Button>
+                                          ))}
+                                          {!!(
+                                            activeLayoutData?.layout as
+                                              | { dossier_enabled?: boolean | number }
+                                              | undefined
+                                          )?.dossier_enabled && (
+                                            <button
+                                              type='button'
+                                              data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
+                                              onClick={async () => {
+                                                // #641 — server assembles the whole story; this just
+                                                // streams the PDF down with the caller's own auth.
+                                                try {
+                                                  const res = await fetch(
+                                                    `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
+                                                    {
+                                                      headers: fetchCfg.authHeaders,
+                                                      credentials: fetchCfg.credentials
+                                                    }
+                                                  )
+                                                  if (!res.ok) throw new Error(String(res.status))
+                                                  const blob = await res.blob()
+                                                  const url = URL.createObjectURL(blob)
+                                                  const a = document.createElement('a')
+                                                  a.href = url
+                                                  a.download = `dossier-${collection}-${itemId}.pdf`
+                                                  a.click()
+                                                  setTimeout(() => URL.revokeObjectURL(url), 30_000)
+                                                } catch {
+                                                  toast.error('Dossier export failed')
+                                                }
+                                              }}
+                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                            >
+                                              <FileDown className='h-3.5 w-3.5' />
+                                              {(
+                                                activeLayoutData?.layout as
+                                                  | { dossier_label?: string | null }
+                                                  | undefined
+                                              )?.dossier_label || 'Dossier'}
+                                            </button>
+                                          )}
+                                          <div data-nvr-menu-divider />
+                                          {onDuplicate && (
+                                            <button
+                                              type='button'
+                                              title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                              onClick={async () => {
+                                                // Copy what a person would re-create: plain scalars + M2O
+                                                // FKs, the M2M link sets (Zone, funding years…), and the
+                                                // O2M grids' child rows. Excluded: id, audit stamps,
+                                                // auto-id fields (they regenerate), computed fields
+                                                // (server re-derives), attachments.
+                                                const AUDIT = new Set([
+                                                  'id',
+                                                  'user_created',
+                                                  'date_created',
+                                                  'user_updated',
+                                                  'date_updated',
+                                                  'created_at',
+                                                  'updated_at',
+                                                  'created',
+                                                  'changed',
+                                                  'creator',
+                                                  'last_state_change'
+                                                ])
+                                                // Only fields the form actually SHOWS copy — hidden columns
+                                                // are integration/system state (external ids, status
+                                                // mirrors) that must not follow the record.
+                                                const copyable = new Set<string>()
+                                                const skip = new Set<string>(AUDIT)
+                                                for (const fc of fieldConfig ?? []) {
+                                                  const opts = fc.options as Record<
+                                                    string,
+                                                    unknown
+                                                  > | null
+                                                  if (
+                                                    opts &&
+                                                    typeof opts === 'object' &&
+                                                    (opts as { auto_id?: unknown }).auto_id
+                                                  )
+                                                    skip.add(fc.field)
+                                                  if (
+                                                    isDerivedForRecord(
+                                                      fc as { computed_type?: string | null },
+                                                      draft
+                                                    )
+                                                  )
+                                                    skip.add(fc.field)
+                                                  const readonlyFc = Boolean(
+                                                    (fc as { readonly?: boolean }).readonly
+                                                  )
+                                                  const noDupe = Boolean(
+                                                    opts &&
+                                                      typeof opts === 'object' &&
+                                                      (opts as { no_duplicate?: unknown })
+                                                        .no_duplicate
+                                                  )
+                                                  if (
+                                                    !fc.hidden &&
+                                                    !readonlyFc &&
+                                                    !noDupe &&
+                                                    (fc as { layout_assigned?: boolean })
+                                                      .layout_assigned !== false
+                                                  ) {
+                                                    copyable.add(fc.field)
+                                                  }
+                                                }
+                                                const values: Record<string, unknown> = {}
+                                                for (const [k, v] of Object.entries(draft)) {
+                                                  if (
+                                                    !copyable.has(k) ||
+                                                    skip.has(k) ||
+                                                    k.includes('.') ||
+                                                    k.startsWith('__')
+                                                  )
+                                                    continue
+                                                  if (v === undefined || v === null || v === '')
+                                                    continue
+                                                  if (typeof v === 'object') continue
+                                                  values[k] = v
+                                                }
+                                                // M2M links — every alias's committed id set, staged on the
+                                                // new form exactly like hand-picked selections.
+                                                const links: Record<string, unknown[]> = {}
+                                                for (const [
+                                                  aliasField,
+                                                  info
+                                                ] of m2mAliasFieldsForRules.entries()) {
+                                                  // Attachments never copy — file links belong to the original.
+                                                  if (
+                                                    aliasField === 'files' ||
+                                                    /_files$/i.test(info.manyCollection)
+                                                  )
+                                                    continue
+                                                  const ids =
+                                                    m2mAliasFieldStates[aliasField]?.ids ?? []
+                                                  if (ids.length) links[info.stagingKey] = ids
+                                                }
+                                                // O2M child rows for the grids this layout shows (files
+                                                // and audit children are not grids, so they never copy).
+                                                const rows: Record<
+                                                  string,
+                                                  Array<Record<string, unknown>>
+                                                > = {}
+                                                const CHILD_SKIP = [
+                                                  'id',
+                                                  'user_created',
+                                                  'date_created',
+                                                  'user_updated',
+                                                  'date_updated',
+                                                  'created_at',
+                                                  'updated_at',
+                                                  'created',
+                                                  'changed',
+                                                  'creator'
+                                                ]
+                                                for (const fc of fieldConfig ?? []) {
+                                                  if (fc.hidden) continue
+                                                  const rel = (relations ?? []).find(
+                                                    (r) =>
+                                                      r.one_collection === collection &&
+                                                      !r.junction_field &&
+                                                      (r.one_field === fc.field ||
+                                                        r.many_collection === fc.field)
+                                                  )
+                                                  if (!rel?.many_collection || !rel.many_field)
+                                                    continue
+                                                  const key = `${rel.many_collection}.${rel.many_field}`
+                                                  if (rows[key]) continue
+                                                  try {
+                                                    const res = (await client.request(
+                                                      get<{ data: Array<Record<string, unknown>> }>(
+                                                        `/items/${rel.many_collection}`,
+                                                        {
+                                                          limit: 200,
+                                                          filter: JSON.stringify({
+                                                            [rel.many_field]: { _eq: itemId }
+                                                          })
+                                                        }
+                                                      )
+                                                    )) as { data: Array<Record<string, unknown>> }
+                                                    const childRows = (res.data ?? []).map((r0) => {
+                                                      const c = { ...r0 }
+                                                      for (const k of CHILD_SKIP) delete c[k]
+                                                      delete c[rel.many_field as string]
+                                                      for (const k of Object.keys(c)) {
+                                                        if (
+                                                          c[k] === null ||
+                                                          typeof c[k] === 'object'
+                                                        )
+                                                          delete c[k]
+                                                      }
+                                                      return c
+                                                    })
+                                                    if (childRows.length) rows[key] = childRows
+                                                  } catch {
+                                                    /* a grid that fails to read just doesn't copy */
+                                                  }
+                                                }
+                                                onDuplicate({ values, links, rows })
+                                              }}
+                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                              data-duplicate-record
+                                            >
+                                              <svg
+                                                width='13'
+                                                height='13'
+                                                viewBox='0 0 24 24'
+                                                fill='none'
+                                                stroke='currentColor'
+                                                strokeWidth='2'
+                                                strokeLinecap='round'
+                                                strokeLinejoin='round'
+                                                aria-hidden='true'
+                                              >
+                                                <rect x='9' y='9' width='13' height='13' rx='2' />
+                                                <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                              </svg>
+                                              Duplicate
+                                            </button>
+                                          )}
+                                          <button
+                                            type='button'
+                                            title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
+                                            data-save-as-template
+                                            onClick={() => {
+                                              setTemplateName('')
+                                              setTemplateShared(false)
+                                              setTemplateDialogOpen(true)
+                                            }}
+                                            className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                          >
+                                            <svg
+                                              width='13'
+                                              height='13'
+                                              viewBox='0 0 24 24'
+                                              fill='none'
+                                              stroke='currentColor'
+                                              strokeWidth='2'
+                                              strokeLinecap='round'
+                                              strokeLinejoin='round'
+                                              aria-hidden='true'
+                                            >
+                                              <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
+                                              <polyline points='17 21 17 13 7 13 7 21' />
+                                              <polyline points='7 3 7 8 15 8' />
+                                            </svg>
+                                            Save as template
+                                          </button>
+                                          {isAdmin && (
+                                            <>
+                                              <div data-nvr-menu-divider />
+                                              <Button
+                                                type='button'
+                                                variant='outline'
+                                                size='sm'
+                                                onClick={() => setRawEditOpen(true)}
+                                                title='Edit every field with conditional logic bypassed (admin)'
+                                                className='gap-1.5'
+                                              >
+                                                <Wrench className='h-3.5 w-3.5' />
+                                                Raw edit
+                                              </Button>
+                                              {effectiveShowClone && (
+                                                <CloneDialog
+                                                  collection={collection}
+                                                  itemId={itemId}
+                                                  fields={fieldConfig ?? []}
+                                                  relations={relations}
+                                                  currentValues={itemData ?? {}}
+                                                  onSuccess={(newId) => onSaved?.(String(newId))}
+                                                />
+                                              )}
+                                            </>
+                                          )}
+                                          {canDelete && <div data-nvr-menu-divider />}
+                                          {canDelete &&
+                                            (confirmDelete ? (
+                                              <>
+                                                <span className='text-sm text-muted-foreground'>
+                                                  Delete?
+                                                </span>
+                                                <Button
+                                                  type='button'
+                                                  size='sm'
+                                                  variant='destructive'
+                                                  className='gap-1.5'
+                                                  onClick={() => deleteMut.mutate()}
+                                                  disabled={deleteMut.isPending}
+                                                >
+                                                  {deleteMut.isPending ? (
+                                                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                  ) : (
+                                                    'Yes, delete'
+                                                  )}
+                                                </Button>
+                                                <Button
+                                                  type='button'
+                                                  size='sm'
+                                                  variant='outline'
+                                                  onClick={() => setConfirmDelete(false)}
+                                                >
+                                                  Cancel
+                                                </Button>
+                                              </>
+                                            ) : (
+                                              <Button
+                                                type='button'
+                                                size='sm'
+                                                variant='outline'
+                                                className='gap-1.5 text-destructive hover:text-destructive'
+                                                onClick={() => setConfirmDelete(true)}
+                                              >
+                                                <Trash2 className='h-3.5 w-3.5' />
+                                              </Button>
+                                            ))}
+                                        </HeaderMenu>
                                       )}
                                       {templateDialogOpen &&
                                         createPortal(
@@ -8094,390 +8438,58 @@ export function ItemEditForm({
                                           </div>,
                                           document.body
                                         )}
-                                      {!isNew &&
-                                        itemId &&
-                                        !!(
-                                          activeLayoutData?.layout as
-                                            | { dossier_enabled?: boolean | number }
-                                            | undefined
-                                        )?.dossier_enabled && (
-                                          <button
-                                            type='button'
-                                            data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
-                                            onClick={async () => {
-                                              // #641 — server assembles the whole story; this just
-                                              // streams the PDF down with the caller's own auth.
-                                              try {
-                                                const res = await fetch(
-                                                  `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
-                                                  {
-                                                    headers: fetchCfg.authHeaders,
-                                                    credentials: fetchCfg.credentials
-                                                  }
-                                                )
-                                                if (!res.ok) throw new Error(String(res.status))
-                                                const blob = await res.blob()
-                                                const url = URL.createObjectURL(blob)
-                                                const a = document.createElement('a')
-                                                a.href = url
-                                                a.download = `dossier-${collection}-${itemId}.pdf`
-                                                a.click()
-                                                setTimeout(() => URL.revokeObjectURL(url), 30_000)
-                                              } catch {
-                                                toast.error('Dossier export failed')
-                                              }
-                                            }}
-                                            className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                          >
-                                            <FileDown className='h-3.5 w-3.5' />
-                                            {(
-                                              activeLayoutData?.layout as
-                                                | { dossier_label?: string | null }
-                                                | undefined
-                                            )?.dossier_label || 'Dossier'}
-                                          </button>
-                                        )}
-                                      {!isNew && itemId && onDuplicate && (
-                                        <button
-                                          type='button'
-                                          title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
-                                          onClick={async () => {
-                                            // Copy what a person would re-create: plain scalars + M2O
-                                            // FKs, the M2M link sets (Zone, funding years…), and the
-                                            // O2M grids' child rows. Excluded: id, audit stamps,
-                                            // auto-id fields (they regenerate), computed fields
-                                            // (server re-derives), attachments.
-                                            const AUDIT = new Set([
-                                              'id',
-                                              'user_created',
-                                              'date_created',
-                                              'user_updated',
-                                              'date_updated',
-                                              'created_at',
-                                              'updated_at',
-                                              'created',
-                                              'changed',
-                                              'creator',
-                                              'last_state_change'
-                                            ])
-                                            // Only fields the form actually SHOWS copy — hidden columns
-                                            // are integration/system state (external ids, status
-                                            // mirrors) that must not follow the record.
-                                            const copyable = new Set<string>()
-                                            const skip = new Set<string>(AUDIT)
-                                            for (const fc of fieldConfig ?? []) {
-                                              const opts = fc.options as Record<
-                                                string,
-                                                unknown
-                                              > | null
-                                              if (
-                                                opts &&
-                                                typeof opts === 'object' &&
-                                                (opts as { auto_id?: unknown }).auto_id
-                                              )
-                                                skip.add(fc.field)
-                                              if (
-                                                isDerivedForRecord(
-                                                  fc as { computed_type?: string | null },
-                                                  draft
-                                                )
-                                              )
-                                                skip.add(fc.field)
-                                              const readonlyFc = Boolean(
-                                                (fc as { readonly?: boolean }).readonly
-                                              )
-                                              const noDupe = Boolean(
-                                                opts &&
-                                                  typeof opts === 'object' &&
-                                                  (opts as { no_duplicate?: unknown }).no_duplicate
-                                              )
-                                              if (
-                                                !fc.hidden &&
-                                                !readonlyFc &&
-                                                !noDupe &&
-                                                (fc as { layout_assigned?: boolean })
-                                                  .layout_assigned !== false
-                                              ) {
-                                                copyable.add(fc.field)
-                                              }
-                                            }
-                                            const values: Record<string, unknown> = {}
-                                            for (const [k, v] of Object.entries(draft)) {
-                                              if (
-                                                !copyable.has(k) ||
-                                                skip.has(k) ||
-                                                k.includes('.') ||
-                                                k.startsWith('__')
-                                              )
-                                                continue
-                                              if (v === undefined || v === null || v === '')
-                                                continue
-                                              if (typeof v === 'object') continue
-                                              values[k] = v
-                                            }
-                                            // M2M links — every alias's committed id set, staged on the
-                                            // new form exactly like hand-picked selections.
-                                            const links: Record<string, unknown[]> = {}
-                                            for (const [
-                                              aliasField,
-                                              info
-                                            ] of m2mAliasFieldsForRules.entries()) {
-                                              // Attachments never copy — file links belong to the original.
-                                              if (
-                                                aliasField === 'files' ||
-                                                /_files$/i.test(info.manyCollection)
-                                              )
-                                                continue
-                                              const ids = m2mAliasFieldStates[aliasField]?.ids ?? []
-                                              if (ids.length) links[info.stagingKey] = ids
-                                            }
-                                            // O2M child rows for the grids this layout shows (files
-                                            // and audit children are not grids, so they never copy).
-                                            const rows: Record<
-                                              string,
-                                              Array<Record<string, unknown>>
-                                            > = {}
-                                            const CHILD_SKIP = [
-                                              'id',
-                                              'user_created',
-                                              'date_created',
-                                              'user_updated',
-                                              'date_updated',
-                                              'created_at',
-                                              'updated_at',
-                                              'created',
-                                              'changed',
-                                              'creator'
-                                            ]
-                                            for (const fc of fieldConfig ?? []) {
-                                              if (fc.hidden) continue
-                                              const rel = (relations ?? []).find(
-                                                (r) =>
-                                                  r.one_collection === collection &&
-                                                  !r.junction_field &&
-                                                  (r.one_field === fc.field ||
-                                                    r.many_collection === fc.field)
-                                              )
-                                              if (!rel?.many_collection || !rel.many_field) continue
-                                              const key = `${rel.many_collection}.${rel.many_field}`
-                                              if (rows[key]) continue
-                                              try {
-                                                const res = (await client.request(
-                                                  get<{ data: Array<Record<string, unknown>> }>(
-                                                    `/items/${rel.many_collection}`,
-                                                    {
-                                                      limit: 200,
-                                                      filter: JSON.stringify({
-                                                        [rel.many_field]: { _eq: itemId }
-                                                      })
-                                                    }
-                                                  )
-                                                )) as { data: Array<Record<string, unknown>> }
-                                                const childRows = (res.data ?? []).map((r0) => {
-                                                  const c = { ...r0 }
-                                                  for (const k of CHILD_SKIP) delete c[k]
-                                                  delete c[rel.many_field as string]
-                                                  for (const k of Object.keys(c)) {
-                                                    if (c[k] === null || typeof c[k] === 'object')
-                                                      delete c[k]
-                                                  }
-                                                  return c
-                                                })
-                                                if (childRows.length) rows[key] = childRows
-                                              } catch {
-                                                /* a grid that fails to read just doesn't copy */
-                                              }
-                                            }
-                                            onDuplicate({ values, links, rows })
+                                      {collision && (
+                                        <MidairCollisionDialog
+                                          collision={collision}
+                                          fieldLabel={(f) => {
+                                            const fc = allFields.find((af) => af.field === f)
+                                            return fc?.label || titleCase(f)
                                           }}
-                                          className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                          data-duplicate-record
-                                        >
-                                          <svg
-                                            width='13'
-                                            height='13'
-                                            viewBox='0 0 24 24'
-                                            fill='none'
-                                            stroke='currentColor'
-                                            strokeWidth='2'
-                                            strokeLinecap='round'
-                                            strokeLinejoin='round'
-                                            aria-hidden='true'
-                                          >
-                                            <rect x='9' y='9' width='13' height='13' rx='2' />
-                                            <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
-                                          </svg>
-                                          Duplicate
-                                        </button>
-                                      )}
-                                      {showItemActions && !isNew && (
-                                        <ItemActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                        />
-                                      )}
-                                      {/* Admin-defined no-code actions (#39) — always
-                                        mounted; renders nothing when none exist. */}
-                                      {!isNew && itemId && (
-                                        <CustomActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                          draft={draft}
-                                        />
-                                      )}
-                                      {!isNew &&
-                                        itemId &&
-                                        fileLayouts.map((fl) => (
-                                          <Button
-                                            key={fl.id}
-                                            type='button'
-                                            variant='outline'
-                                            size='sm'
-                                            disabled={pdfLoading === fl.id}
-                                            onClick={() => void downloadPdf(fl.id)}
-                                            className='gap-1.5'
-                                          >
-                                            {pdfLoading === fl.id ? (
-                                              <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                            ) : (
-                                              <FileDown className='h-3.5 w-3.5' />
-                                            )}
-                                            {fl.pdf_button_label || 'Export PDF'}
-                                          </Button>
-                                        ))}
-                                      {(effectiveShowRevisions && !isNew) ||
-                                      (effectiveShowClone && !isNew && isAdmin) ||
-                                      canDelete ? (
-                                        <>
-                                          {effectiveShowRevisions && !isNew && (
-                                            <RevisionsPanel
-                                              collection={collection}
-                                              item={itemId}
-                                              onRollback={() =>
-                                                qc.invalidateQueries({
-                                                  queryKey: ['item', collection, itemId]
-                                                })
+                                          onCancel={() => setCollision(null)}
+                                          onResolve={(takeTheirs) => {
+                                            // 'theirs' fields adopt the newer value in the
+                                            // draft; the retry then writes only what the
+                                            // person explicitly kept, against the new base.
+                                            for (const c of collision.conflicts) {
+                                              if (takeTheirs.has(c.field)) {
+                                                setDraft((prev) => ({
+                                                  ...prev,
+                                                  [c.field]: c.current_value
+                                                }))
                                               }
-                                            />
-                                          )}
-                                          {collision && (
-                                            <MidairCollisionDialog
-                                              collision={collision}
-                                              fieldLabel={(f) => {
-                                                const fc = allFields.find((af) => af.field === f)
-                                                return fc?.label || titleCase(f)
-                                              }}
-                                              onCancel={() => setCollision(null)}
-                                              onResolve={(takeTheirs) => {
-                                                // 'theirs' fields adopt the newer value in the
-                                                // draft; the retry then writes only what the
-                                                // person explicitly kept, against the new base.
-                                                for (const c of collision.conflicts) {
-                                                  if (takeTheirs.has(c.field)) {
-                                                    setDraft((prev) => ({
-                                                      ...prev,
-                                                      [c.field]: c.current_value
-                                                    }))
-                                                  }
-                                                }
-                                                baseRevisionOverrideRef.current = collision.latest
-                                                setCollision(null)
-                                                setTimeout(() => saveMut.mutate(), 0)
-                                              }}
-                                            />
-                                          )}
-                                          <ChangeReasonDialog
-                                            challenge={crChallenge}
-                                            fieldLabel={(f) => {
-                                              const fc = allFields.find((af) => af.field === f)
-                                              return fc?.label || titleCase(f)
-                                            }}
-                                            onCancel={() => setCrChallenge(null)}
-                                            onSubmit={(reason) => {
-                                              changeReasonRef.current = reason
-                                              setCrChallenge(null)
-                                              saveMut.mutate()
-                                            }}
-                                          />
-                                          {isAdmin && !isNew && itemId && (
-                                            <>
-                                              <Button
-                                                type='button'
-                                                variant='outline'
-                                                size='sm'
-                                                onClick={() => setRawEditOpen(true)}
-                                                title='Edit every field with conditional logic bypassed (admin)'
-                                                className='gap-1.5'
-                                              >
-                                                <Wrench className='h-3.5 w-3.5' />
-                                                Raw edit
-                                              </Button>
-                                              <RawEditSheet
-                                                collection={collection}
-                                                itemId={String(itemId)}
-                                                open={rawEditOpen}
-                                                onClose={() => setRawEditOpen(false)}
-                                                onSaved={() => {
-                                                  qc.invalidateQueries({
-                                                    queryKey: ['item', collection, String(itemId)]
-                                                  })
-                                                }}
-                                              />
-                                            </>
-                                          )}
-                                          {effectiveShowClone && !isNew && isAdmin && (
-                                            <CloneDialog
-                                              collection={collection}
-                                              itemId={itemId}
-                                              fields={fieldConfig ?? []}
-                                              relations={relations}
-                                              currentValues={itemData ?? {}}
-                                              onSuccess={(newId) => onSaved?.(String(newId))}
-                                            />
-                                          )}
-                                          {canDelete &&
-                                            (confirmDelete ? (
-                                              <>
-                                                <span className='text-sm text-muted-foreground'>
-                                                  Delete?
-                                                </span>
-                                                <Button
-                                                  type='button'
-                                                  size='sm'
-                                                  variant='destructive'
-                                                  className='gap-1.5'
-                                                  onClick={() => deleteMut.mutate()}
-                                                  disabled={deleteMut.isPending}
-                                                >
-                                                  {deleteMut.isPending ? (
-                                                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                                  ) : (
-                                                    'Yes, delete'
-                                                  )}
-                                                </Button>
-                                                <Button
-                                                  type='button'
-                                                  size='sm'
-                                                  variant='outline'
-                                                  onClick={() => setConfirmDelete(false)}
-                                                >
-                                                  Cancel
-                                                </Button>
-                                              </>
-                                            ) : (
-                                              <Button
-                                                type='button'
-                                                size='sm'
-                                                variant='outline'
-                                                className='gap-1.5 text-destructive hover:text-destructive'
-                                                onClick={() => setConfirmDelete(true)}
-                                              >
-                                                <Trash2 className='h-3.5 w-3.5' />
-                                              </Button>
-                                            ))}
-                                          <div className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />
-                                        </>
-                                      ) : null}
+                                            }
+                                            baseRevisionOverrideRef.current = collision.latest
+                                            setCollision(null)
+                                            setTimeout(() => saveMut.mutate(), 0)
+                                          }}
+                                        />
+                                      )}
+                                      <ChangeReasonDialog
+                                        challenge={crChallenge}
+                                        fieldLabel={(f) => {
+                                          const fc = allFields.find((af) => af.field === f)
+                                          return fc?.label || titleCase(f)
+                                        }}
+                                        onCancel={() => setCrChallenge(null)}
+                                        onSubmit={(reason) => {
+                                          changeReasonRef.current = reason
+                                          setCrChallenge(null)
+                                          saveMut.mutate()
+                                        }}
+                                      />
+                                      {isAdmin && !isNew && itemId && (
+                                        <RawEditSheet
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          open={rawEditOpen}
+                                          onClose={() => setRawEditOpen(false)}
+                                          onSaved={() => {
+                                            qc.invalidateQueries({
+                                              queryKey: ['item', collection, String(itemId)]
+                                            })
+                                          }}
+                                        />
+                                      )}
                                     </HeaderTools>
                                     {!isStepsMode && (
                                       <div className='relative'>

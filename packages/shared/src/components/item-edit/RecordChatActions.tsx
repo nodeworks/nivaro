@@ -3,9 +3,9 @@ import { ChevronDown, MessageSquare, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { SimpleSelect } from '../ui/SimpleSelect'
 import { get, post } from '../../lib/commands'
 import { canOpenChatRoom, openChatRoom } from '../chat/chat-core'
+import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
  * Record ↔ chat: "Discuss" opens the record's entity room (`wf:CR26-…`) in the
@@ -34,10 +34,13 @@ interface SidebarRoom {
 
 export function RecordChatActions({
   collection,
-  itemDraft
+  itemDraft,
+  compact
 }: {
   collection: string
   itemDraft: Record<string, unknown>
+  /** Icon-only, borderless — for the record header's tool group. */
+  compact?: boolean
 }) {
   const client = useNivaroClient()
   const [shareOpen, setShareOpen] = useState(false)
@@ -110,7 +113,13 @@ export function RecordChatActions({
 
   return (
     <div ref={rootRef} className='relative'>
-      <div className='inline-flex h-9 items-stretch overflow-hidden rounded-md border border-input bg-background text-sm font-medium shadow-sm'>
+      <div
+        className={
+          compact
+            ? 'inline-flex h-8 items-stretch text-sm font-medium'
+            : 'inline-flex h-9 items-stretch overflow-hidden rounded-md border border-input bg-background text-sm font-medium shadow-sm'
+        }
+      >
         {/* Primary click = straight into the record's own room. No menu, no
             picking — the room IS the point of the button. */}
         <button
@@ -120,11 +129,16 @@ export function RecordChatActions({
             else setShareOpen((o) => !o)
           }}
           title="Open this record's chat room"
-          className='inline-flex items-center gap-1.5 px-3 transition-colors hover:bg-accent hover:text-accent-foreground'
+          aria-label="Open this record's chat room"
+          className={
+            compact
+              ? 'inline-flex w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+              : 'inline-flex items-center gap-1.5 px-3 transition-colors hover:bg-accent hover:text-accent-foreground'
+          }
           data-record-chat
         >
-          <MessageSquare className='h-3.5 w-3.5' strokeWidth={2} />
-          Chat
+          <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
+          {!compact && 'Chat'}
         </button>
         {discussable && (
           <button
@@ -132,7 +146,11 @@ export function RecordChatActions({
             onClick={() => setShareOpen((o) => !o)}
             title='Send this record to a room'
             aria-label='Send this record to a room'
-            className='inline-flex items-center border-l border-input px-1.5 transition-colors hover:bg-accent hover:text-accent-foreground'
+            className={
+              compact
+                ? 'inline-flex items-center px-1 transition-colors hover:bg-accent hover:text-accent-foreground'
+                : 'inline-flex items-center border-l border-input px-1.5 transition-colors hover:bg-accent hover:text-accent-foreground'
+            }
             data-record-chat-more
           >
             <ChevronDown className='h-3 w-3' strokeWidth={2} />

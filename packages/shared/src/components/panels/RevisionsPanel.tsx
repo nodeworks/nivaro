@@ -1325,12 +1325,15 @@ export function RevisionsPanel({
   triggerClassName,
   inlineTableFields,
   open,
-  onOpenChange
+  onOpenChange,
+  compact
 }: {
   collection: string
   item: string
   onRollback?: () => void
   triggerClassName?: string
+  /** Icon-only, borderless trigger — for the record header's tool group. */
+  compact?: boolean
   inlineTableFields?: O2MFieldInfo[]
   /** Controlled mode (no trigger button) — open the sheet programmatically,
    *  e.g. from a row Actions menu. */
@@ -1342,9 +1345,15 @@ export function RevisionsPanel({
     <Sheet open={open} onOpenChange={onOpenChange}>
       {!controlled && (
         <SheetTrigger asChild>
-          <Button variant='outline' size='sm' className={triggerClassName ?? 'gap-1.5'}>
-            <Clock className='h-3.5 w-3.5' />
-            History
+          <Button
+            variant={compact ? 'ghost' : 'outline'}
+            size='sm'
+            title={compact ? 'History — revisions of this record' : undefined}
+            aria-label='History'
+            className={triggerClassName ?? (compact ? 'h-8 w-8 rounded-none p-0' : 'gap-1.5')}
+          >
+            <Clock className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
+            {!compact && 'History'}
           </Button>
         </SheetTrigger>
       )}
