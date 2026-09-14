@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
-import { applyWorkspaceScope } from '../services/items.js'
+import { applyWorkspaceScope, applyWriteComputedFields } from '../services/items.js'
 import { applyRowFilter, getRowFilter } from '../services/permissions.js'
 import { getAiCollectionSettings } from './ai-validation.js'
 import type { HookContext } from './registry.js'
@@ -162,7 +162,14 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const groupValue = payload[rule.group_by] ?? currentRow?.[rule.group_by] ?? null
   if (groupValue == null) return
 
-  const incomingRaw = payload[rule.sum_field] ?? currentRow?.[rule.sum_field] ?? 0
+  // The sum field may be WRITE-COMPUTED (forecasts.total = the months added
+  // up) and this hook runs BEFORE items.ts applies those formulas — a grid
+  // that sends only the months would otherwise be judged on the stale stored
+  // total (or 0 on create). Re-derive it over the merged row; a caller who
+  // sent the field explicitly still wins when no formula owns it.
+  const merged: Record<string, unknown> = { ...(currentRow ?? {}), ...payload }
+  await applyWriteComputedFields(ctx.collection, merged, merged).catch(() => {})
+  const incomingRaw = merged[rule.sum_field] ?? 0
   const incoming = Number(incomingRaw ?? 0)
 
   // Workspace-scoped only — NOT row-filtered. The cap is a data-integrity
@@ -200,6 +207,12 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const cap = Number(capRaw)
 
   if (total <= cap) return
+  // A group that is ALREADY over the cap (legacy data, a lowered cap) must
+  // stay editable: a write that does not raise the group total — lowering a
+  // row, or a no-op re-save — passes. Only a write that pushes the total
+  // further past the cap is refused.
+  const before = existingSum + Number(currentRow?.[rule.sum_field] ?? 0)
+  if (currentId != null && total <= before + 0.005) return
 
   const explanation = `${rule.message} (${total} exceeds cap of ${cap})`
 

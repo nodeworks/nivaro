@@ -884,6 +884,16 @@ export function FieldRenderer({
             lineSla={(opts.line_sla ?? null) as { enabled?: boolean; field?: string } | null}
             editorMode={opts.editor_mode === 'split' ? 'split' : undefined}
             rowLints={(Array.isArray(opts.row_lints) ? opts.row_lints : null) as RowLint[] | null}
+            stats={
+              (Array.isArray(opts.stats) ? opts.stats : null) as
+                | import('./InlineTableField').GridStatConfig[]
+                | null
+            }
+            sumCap={
+              (opts.sum_cap && typeof opts.sum_cap === 'object' ? opts.sum_cap : null) as
+                | import('./InlineTableField').GridSumCapConfig
+                | null
+            }
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
             parentFieldKey={field.field}

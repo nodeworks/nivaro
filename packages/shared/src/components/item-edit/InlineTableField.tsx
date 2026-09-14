@@ -305,6 +305,25 @@ const ALL_PRESET_SENTINEL = '__all__'
  * (new record, addendum, save_mode 'pending') stages the change and an
  * immediate grid PATCHes it — the action never invents its own persistence.
  */
+export interface GridStatConfig {
+  label: string
+  /** Expression — `{{$parent.requisition_amount}} - {{$sum.total}}`. */
+  value: string
+  format?: 'currency' | 'number'
+  /** 'danger' paints a negative result red (the "over" state). */
+  negative?: 'danger'
+}
+
+export interface GridSumCapConfig {
+  /** Column summed over the grid (write-computed columns are derived per row). */
+  field: string
+  /** Expression for the ceiling — `{{$parent.requisition_amount}}`. */
+  cap: string
+  format?: 'currency' | 'number'
+  label?: string
+  message?: string
+}
+
 export interface RowBulkActionConfig {
   label: string
   /** O2M alias on the ROW's collection pointing at the rows to aggregate. */
@@ -1311,6 +1330,8 @@ export function InlineTableField({
   rowMatchPanel,
   lineSla,
   rowLints,
+  stats,
+  sumCap,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1377,6 +1398,16 @@ export function InlineTableField({
   lineSla?: { enabled?: boolean; field?: string } | null
   /** options.row_lints — "when X, expect Y" checks judged per row on the client. */
   rowLints?: RowLint[] | null
+  /** options.stats — a figure strip above the grid (both modes). Each value is
+   *  an expression over `{{$parent.<field>}}` (the parent record's draft),
+   *  `{{$sum.<column>}}` (that column summed over the rows on screen, staged
+   *  edits and the row being typed into included) and `{{$count}}`. A
+   *  negative result reads red when `negative` is 'danger'. */
+  stats?: GridStatConfig[] | null
+  /** options.sum_cap — refuse to save/stage a row when `field` summed over the
+   *  grid (this row's draft included) would exceed `cap` (same tokens as
+   *  stats). The client twin of the server's sum_cap validation rule. */
+  sumCap?: GridSumCapConfig | null
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -2665,6 +2696,30 @@ export function InlineTableField({
   // set, and a total summed from it would be confidently wrong — worse than the
   // stored figure it would replace. Withhold rows instead.
   const rowsTruncated = rawRows.length >= O2M_ROW_LIMIT
+
+  // Token resolver for `options.stats` / `options.sum_cap` expressions:
+  // `$parent.<field>` reads the parent record's draft, `$sum.<col>` sums the
+  // rows on screen (staged edits + the row being typed into — the same set the
+  // live rollups read), `$count` = their number.
+  const parentDraftForStats = parentDraftCtx?.draft
+  const resolveGridToken = useCallback(
+    (path: string): unknown => {
+      // An unset parent figure (a rollup with no rows yet) reads as 0, not
+      // '—': "PO amount $0" is the honest strip for a workflow with no PO.
+      if (path.startsWith('$parent.')) return parentDraftForStats?.[path.slice('$parent.'.length)] ?? 0
+      if (path.startsWith('$sum.')) {
+        const col = path.slice('$sum.'.length)
+        return rowsForRollup.reduce((a, r) => a + (Number(r[col]) || 0), 0)
+      }
+      if (path === '$count') return rowsForRollup.length
+      return parentDraftForStats?.[path]
+    },
+    [parentDraftForStats, rowsForRollup]
+  )
+  const gridStatValues = useMemo(() => {
+    if (!stats?.length) return null
+    return stats.map((st) => ({ ...st, result: evaluateNumeric(st.value, resolveGridToken) }))
+  }, [stats, resolveGridToken])
 
   const reportLiveRows = liveRows?.report
   useEffect(() => {
@@ -4659,6 +4714,58 @@ export function InlineTableField({
       )
       setEditState((s) => (s ? { ...s, missing: missingRequired.map((c) => c.field) } : s))
       return false
+    }
+    // Sum cap (options.sum_cap): the grid's total for `field` — with this
+    // row's draft in place of its stored values — must stay within the cap.
+    // rowsForRollup already folds the draft in for saved/pending rows; a row
+    // being ADDED is not in it yet, so its own figure is added here.
+    if (sumCap?.field && sumCap.cap) {
+      const capValue = evaluateNumeric(sumCap.cap, resolveGridToken)
+      if (capValue != null) {
+        const col = sumCap.field
+        const draftComputed = applyComputedFields({ ...editState.draft })
+        const pendingIdx = editState.rowId.startsWith('pending:')
+          ? Number(editState.rowId.slice('pending:'.length))
+          : -1
+        const isSaved = (rows ?? []).some((r) => String(r.id) === editState.rowId)
+        // Every OTHER row as it stands (staged edits applied), plus this row's
+        // stored figure = the total before this edit; plus its draft = after.
+        const others =
+          (rows ?? [])
+            .filter((r) => !pendingDeletes.has(String(r.id)) && String(r.id) !== editState.rowId)
+            .reduce((a, r) => {
+              const rid = String(r.id)
+              const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
+              return a + (Number(applyComputedFields(merged as Record<string, unknown>)[col]) || 0)
+            }, 0) +
+          pendingRows.reduce(
+            (a, r, i) => (i === pendingIdx ? a : a + (Number(applyComputedFields(r as Record<string, unknown>)[col]) || 0)),
+            0
+          )
+        const storedThis = isSaved
+          ? (() => {
+              const r = (rows ?? []).find((x) => String(x.id) === editState.rowId) as Record<string, unknown>
+              const merged = pendingEdits.has(editState.rowId) ? { ...r, ...pendingEdits.get(editState.rowId) } : r
+              return Number(applyComputedFields(merged)[col]) || 0
+            })()
+          : pendingIdx >= 0
+            ? Number(applyComputedFields(pendingRows[pendingIdx] as Record<string, unknown>)[col]) || 0
+            : 0
+        const before = others + storedThis
+        const sum = others + (Number(draftComputed[col]) || 0)
+        // Over the cap AND raising the total: refuse. An already-over grid
+        // (legacy data) stays editable as long as the edit does not add to it.
+        if (sum > capValue + 0.005 && sum > before + 0.005) {
+          const fmt = (n: number) =>
+            sumCap.format === 'currency'
+              ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+              : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+          setUniqueError(
+            `${sumCap.message ?? `${sumCap.label ?? 'Total'} cannot exceed ${fmt(capValue)}`} — this would make it ${fmt(sum)} (${fmt(sum - capValue)} over).`
+          )
+          return false
+        }
+      }
     }
     setUniqueError(null)
     setSaving(true)
@@ -6771,6 +6878,43 @@ export function InlineTableField({
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
+        </div>
+      )}
+      {gridStatValues && gridStatValues.length > 0 && (
+        <div data-o2m-stats className='mb-2 flex flex-wrap items-stretch gap-1.5'>
+          {gridStatValues.map((st) => {
+            const n = st.result
+            const neg = n != null && n < -0.005 && st.negative === 'danger'
+            const text =
+              n == null
+                ? '—'
+                : st.format === 'currency'
+                  ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+                  : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+            return (
+              <div
+                key={st.label}
+                data-o2m-stat={st.label}
+                data-stat-negative={neg ? 'true' : undefined}
+                className={`flex items-baseline gap-2 rounded-md border px-2.5 py-1 ${
+                  neg
+                    ? 'border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30'
+                    : 'border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/40'
+                }`}
+              >
+                <span className='text-[10.5px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                  {st.label}
+                </span>
+                <span
+                  className={`text-[12.5px] font-semibold tabular-nums ${
+                    neg ? 'text-red-700 dark:text-red-300' : 'text-slate-800 dark:text-slate-100'
+                  }`}
+                >
+                  {text}
+                </span>
+              </div>
+            )
+          })}
         </div>
       )}
       {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}

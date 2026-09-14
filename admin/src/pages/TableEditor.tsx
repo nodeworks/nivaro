@@ -12903,6 +12903,8 @@ function FieldSettingsPopover({
   const [headerSummaryLocal, setHeaderSummaryLocal] = useState<string>('')
   const [lineSlaLocal, setLineSlaLocal] = useState<string>('')
   const [rowLintsLocal, setRowLintsLocal] = useState<string>('')
+  const [gridStatsLocal, setGridStatsLocal] = useState<string>('')
+  const [sumCapLocal, setSumCapLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -13325,6 +13327,8 @@ function FieldSettingsPopover({
         )
         setLineSlaLocal(opts.line_sla ? JSON.stringify(opts.line_sla, null, 2) : '')
         setRowLintsLocal(opts.row_lints ? JSON.stringify(opts.row_lints, null, 2) : '')
+        setGridStatsLocal(opts.stats ? JSON.stringify(opts.stats, null, 2) : '')
+        setSumCapLocal(opts.sum_cap ? JSON.stringify(opts.sum_cap, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -13512,6 +13516,26 @@ function FieldSettingsPopover({
                             : { row_lints: undefined }
                         } catch {
                           return { row_lints: undefined }
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = gridStatsLocal.trim() ? JSON.parse(gridStatsLocal) : null
+                          return (Array.isArray(parsed) && parsed.length
+                            ? { stats: parsed }
+                            : { stats: undefined }) as Record<string, unknown>
+                        } catch {
+                          return { stats: undefined } as Record<string, unknown>
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = sumCapLocal.trim() ? JSON.parse(sumCapLocal) : null
+                          return (parsed?.field && parsed?.cap
+                            ? { sum_cap: parsed }
+                            : { sum_cap: undefined }) as Record<string, unknown>
+                        } catch {
+                          return { sum_cap: undefined } as Record<string, unknown>
                         }
                       })()
                     })
@@ -14810,6 +14834,46 @@ function FieldSettingsPopover({
                       Per-row consistency checks judged in the browser: when the first condition
                       holds, the second must too (ops eq / neq / in / null / nnull; M2O values are
                       ids). Rows that fail get an amber marker naming the lint. Empty = none.
+                    </p>
+                  </div>
+                )}
+
+                {/* Stat strip + sum cap (table only) */}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Figure strip (JSON)</Label>
+                    <Textarea
+                      value={gridStatsLocal}
+                      onChange={(e) => setGridStatsLocal(e.target.value)}
+                      placeholder={
+                        '[\n  { "label": "Left to forecast", "value": "{{$parent.requisition_amount}} - {{$sum.total}}", "format": "currency", "negative": "danger" },\n  { "label": "Workflow amount", "value": "{{$parent.requisition_amount}}", "format": "currency" }\n]'
+                      }
+                      rows={5}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Figures shown above the grid in every mode. Tokens: {'{{$parent.<field>}}'} (the
+                      record), {'{{$sum.<column>}}'} (that column over the rows on screen, incl.
+                      unsaved edits), {'{{$count}}'}. "negative": "danger" paints a negative result red.
+                    </p>
+                  </div>
+                )}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Sum cap (JSON)</Label>
+                    <Textarea
+                      value={sumCapLocal}
+                      onChange={(e) => setSumCapLocal(e.target.value)}
+                      placeholder={
+                        '{ "field": "total", "cap": "{{$parent.requisition_amount}}", "format": "currency", "label": "Forecast total", "message": "Forecasts cannot exceed the requisition amount" }'
+                      }
+                      rows={3}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      A row cannot be saved or staged when the column summed over the grid (this row
+                      included) would exceed the cap. Pair with a server sum_cap validation rule on the
+                      child collection — this is the browser half only.
                     </p>
                   </div>
                 )}
@@ -20658,6 +20722,8 @@ function FieldGroupsTab({
     'header_summary',
     'line_sla',
     'row_lints',
+    'stats',
+    'sum_cap',
     'picker_facets',
     'option_sort',
     'option_filter',

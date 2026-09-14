@@ -431,7 +431,7 @@ async function applyReadComputedFields(
  * `context` should be the merged { ...previousData, ...payload } so formulas can
  * read existing field values even when they are not in the incoming payload.
  */
-async function applyWriteComputedFields(
+export async function applyWriteComputedFields(
   collection: string,
   payload: Record<string, unknown>,
   context?: Record<string, unknown>
