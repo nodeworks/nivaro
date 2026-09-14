@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-14T19:35:36.851Z",
+  "generated_at": "2026-09-14T19:45:44.041Z",
   "releases": [
+    {
+      "version": "0.1.278",
+      "tag": "v0.1.278",
+      "date": "2026-09-14T15:45:32-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "erp",
+              "text": "2xx bodies that say OK record accepted; catalog error tip no longer clips",
+              "hash": "fd0ca00a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.277",
       "tag": "v0.1.277",
-      "date": "2026-09-14T15:35:28-04:00",
+      "date": "2026-09-14T15:35:36-04:00",
       "sections": [
         {
           "label": "Added",
