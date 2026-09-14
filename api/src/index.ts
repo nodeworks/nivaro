@@ -1,5 +1,6 @@
 import { config } from './config.js'
 import { closeDb, migrationSource, runMigrationsSafely } from './db/index.js'
+import { registerCoreTriggers } from './flows/core-triggers.js'
 import { registerActivityHooks } from './hooks/activity.js'
 import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
@@ -13,9 +14,9 @@ import {
 } from './hooks/notification-subscriptions.js'
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
-import { registerCoreTriggers } from './flows/core-triggers.js'
-import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
+import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
+import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
 import { NIVARO_VERSION } from './version.js'
@@ -35,6 +36,7 @@ async function main() {
     registerAiValidationHooks()
     registerAggregateCapHooks()
     registerQueueMaterializationHooks()
+    registerRecordIntegrityHooks()
     registerWorkflowAutoHooks()
     registerCoreTriggers()
   }

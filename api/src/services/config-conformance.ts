@@ -703,34 +703,67 @@ export interface RecordFinding {
  * Evaluate every compiled check over one batch of parent rows. Shared by the
  * collection sweep (chunk by chunk) and the per-record live check the form
  * banner fires on load — one evaluator, so the two can never disagree.
+ *
+ * PARALLEL by section: the cascade rules, the required-M2M probes, the
+ * display tokens and the row-rule grids are independent reads, and at this
+ * server's ~40ms round trip a single record's ~50 serial queries cost 2.4s
+ * while the same work in parallel is a handful of round trips deep. Junction
+ * reads are memoized per call — the 19 workflows cascades re-read
+ * workflows_regions five times otherwise. Findings are assembled in a fixed
+ * section order so the output is stable regardless of which read lands first.
  */
 async function evaluateRows(
   checks: CompiledChecks,
   rows: Array<Record<string, unknown>>,
-  physical: Set<string>
+  physical: Set<string>,
+  rowRuleCache?: RowRuleLookupCache
 ): Promise<RecordFinding[]> {
   const { collection } = checks
-  const findings: RecordFinding[] = []
+  if (rows.length === 0) return []
+  const rowIds = rows.map((r) => r.id)
+
+  // Memoized junction fetch: (table, srcFk, tgtFk) over THIS batch's ids.
+  const linkMemo = new Map<string, Promise<Array<Record<string, unknown>>>>()
+  const links = (table: string, srcFk: string, tgtFk: string) => {
+    const key = `${table}|${srcFk}|${tgtFk}`
+    let hit = linkMemo.get(key)
+    if (!hit) {
+      hit = db(table)
+        .whereIn(srcFk, rowIds as never[])
+        .select(srcFk, tgtFk) as Promise<Array<Record<string, unknown>>>
+      linkMemo.set(key, hit)
+    }
+    return hit
+  }
+  const setsFromLinks = (
+    rowsIn: Array<Record<string, unknown>>,
+    srcFk: string,
+    tgtFk: string
+  ): Map<string, Set<string>> => {
+    const out = new Map<string, Set<string>>()
+    for (const l of rowsIn) {
+      const key = String(l[srcFk])
+      if (!out.has(key)) out.set(key, new Set())
+      out.get(key)?.add(String(l[tgtFk]))
+    }
+    return out
+  }
 
   // ── required + validation, plain JS per row ──────────────────────────
+  const scalar: RecordFinding[] = []
   for (const row of rows) {
     for (const r of checks.requiredFields) {
       if (r.kind !== 'column' || !physical.has(r.field)) continue
       const msg = applyValidationRule({ type: 'required' }, row[r.field], r.label)
       if (msg)
-        findings.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
+        scalar.push({ item_id: String(row.id), field: r.field, rule: 'required', message: msg })
     }
     for (const v of checks.validation) {
       if (!physical.has(v.field)) continue
       for (const rule of v.rules) {
         const msg = applyValidationRule(rule, row[v.field], v.label, row)
         if (msg) {
-          findings.push({
-            item_id: String(row.id),
-            field: v.field,
-            rule: 'validation',
-            message: msg
-          })
+          scalar.push({ item_id: String(row.id), field: v.field, rule: 'validation', message: msg })
           break
         }
       }
@@ -743,7 +776,7 @@ async function evaluateRows(
       const diff = Math.round((value - created) / 86_400_000)
       const bad = d.op === 'min' ? diff < d.days : diff > d.days
       if (bad) {
-        findings.push({
+        scalar.push({
           item_id: String(row.id),
           field: d.field,
           rule: 'validation',
@@ -754,93 +787,80 @@ async function evaluateRows(
   }
 
   // ── required M2M aliases: zero junction rows = empty ─────────────────
-  for (const r of checks.requiredFields) {
-    if (r.kind !== 'm2m' || !r.junction) continue
-    // NOTE: .distinct(col).select(col) doubles the column on mssql and the
-    // value comes back as a nested array (the chat-DM .pluck trap) — plain
-    // .distinct(col) alone selects it correctly.
-    const linked = new Set(
-      (
-        (await db(r.junction.table)
-          .whereIn(r.junction.srcFk, rows.map((x) => x.id) as never[])
-          .distinct(r.junction.srcFk)) as Array<Record<string, unknown>>
-      ).map((l) => String(l[r.junction?.srcFk ?? '']))
+  const m2mRequired = async (): Promise<RecordFinding[]> => {
+    const out: RecordFinding[] = []
+    const probes = checks.requiredFields.filter((r) => r.kind === 'm2m' && r.junction)
+    const linkedSets = await Promise.all(
+      probes.map(async (r) => {
+        const j = r.junction as NonNullable<typeof r.junction>
+        // NOTE: .distinct(col).select(col) doubles the column on mssql and the
+        // value comes back as a nested array (the chat-DM .pluck trap) — plain
+        // .distinct(col) alone selects it correctly.
+        const linked = (await db(j.table)
+          .whereIn(j.srcFk, rowIds as never[])
+          .distinct(j.srcFk)) as Array<Record<string, unknown>>
+        return new Set(linked.map((l) => String(l[j.srcFk])))
+      })
     )
-    for (const row of rows) {
-      if (!linked.has(String(row.id))) {
-        findings.push({
-          item_id: String(row.id),
-          field: r.field,
-          rule: 'required',
-          message: `${r.label} has no linked records`
-        })
+    probes.forEach((r, idx) => {
+      const linked = linkedSets[idx]
+      for (const row of rows) {
+        if (!linked.has(String(row.id))) {
+          out.push({
+            item_id: String(row.id),
+            field: r.field,
+            rule: 'required',
+            message: `${r.label} has no linked records`
+          })
+        }
       }
-    }
+    })
+    return out
   }
 
   // ── cascade availability, batched per rule ───────────────────────────
   // A field with several cascade rules (unit: by project type, unit type
   // AND install location) reports ONE finding per record listing every
   // failing parent, not one row per rule.
-  const cascadeFails = new Map<
-    string,
-    { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
-  >()
-  for (const c of checks.cascades) {
-    if (!c.childIsM2M && !physical.has(c.field)) continue
-    const rowIds = rows.map((r) => r.id)
-
+  type CascadeHit = { rowId: string; c: CompiledChecks['cascades'][number]; bad: number }
+  const cascadeOne = async (c: CompiledChecks['cascades'][number]): Promise<CascadeHit[]> => {
+    if (!c.childIsM2M && !physical.has(c.field)) return []
     // Child value(s) per row: a plain M2O reads the column; an M2M alias
     // reads its junction set (each linked id must be available).
     const childSets = new Map<string, Set<string>>()
     if (c.childIsM2M && c.childJunction) {
-      const links = (await db(c.childJunction.table)
-        .whereIn(c.childJunction.srcFk, rowIds as never[])
-        .select(c.childJunction.srcFk, c.childJunction.tgtFk)) as Array<Record<string, unknown>>
-      for (const l of links) {
-        const key = String(l[c.childJunction.srcFk])
-        if (!childSets.has(key)) childSets.set(key, new Set())
-        childSets.get(key)?.add(String(l[c.childJunction.tgtFk]))
-      }
+      const j = c.childJunction
+      for (const [k, v] of setsFromLinks(await links(j.table, j.srcFk, j.tgtFk), j.srcFk, j.tgtFk))
+        childSets.set(k, v)
     } else {
       for (const row of rows) {
         const v = row[c.field]
         if (v != null && v !== '') childSets.set(String(row.id), new Set([String(v)]))
       }
     }
-
     // Parent value set per row.
     const parentSets = new Map<string, Set<string>>()
     if (c.parentIsM2M && c.parentJunction) {
-      const links = (await db(c.parentJunction.table)
-        .whereIn(c.parentJunction.srcFk, rowIds as never[])
-        .select(c.parentJunction.srcFk, c.parentJunction.tgtFk)) as Array<Record<string, unknown>>
-      for (const l of links) {
-        const key = String(l[c.parentJunction.srcFk])
-        if (!parentSets.has(key)) parentSets.set(key, new Set())
-        parentSets.get(key)?.add(String(l[c.parentJunction.tgtFk]))
-      }
+      const j = c.parentJunction
+      for (const [k, v] of setsFromLinks(await links(j.table, j.srcFk, j.tgtFk), j.srcFk, j.tgtFk))
+        parentSets.set(k, v)
     } else if (physical.has(c.parent_field)) {
       for (const row of rows) {
         const pv = row[c.parent_field]
         if (pv != null && pv !== '') parentSets.set(String(row.id), new Set([String(pv)]))
       }
     }
-
     // Availability of the DISTINCT child values under each parent.
     const childVals = [...new Set([...childSets.values()].flatMap((set) => [...set]))]
-    if (childVals.length === 0) continue
+    if (childVals.length === 0) return []
     // childValue → the set of parent values it is available under
     const availability = new Map<string, Set<string>>()
     if (c.filterIsM2M && c.filterJunction) {
-      const links = (await db(c.filterJunction.table)
-        .whereIn(c.filterJunction.srcFk, childVals as never[])
-        .select(c.filterJunction.srcFk, c.filterJunction.tgtFk)) as Array<Record<string, unknown>>
-      for (const l of links) {
-        const key = String(l[c.filterJunction.srcFk])
-        if (!availability.has(key)) availability.set(key, new Set())
-        availability.get(key)?.add(String(l[c.filterJunction.tgtFk]))
-      }
+      const j = c.filterJunction
+      const rowsIn = (await db(j.table)
+        .whereIn(j.srcFk, childVals as never[])
+        .select(j.srcFk, j.tgtFk)) as Array<Record<string, unknown>>
+      for (const [k, v] of setsFromLinks(rowsIn, j.srcFk, j.tgtFk)) availability.set(k, v)
     } else {
       const targets = (await db(c.target)
         .whereIn('id', childVals as never[])
@@ -850,7 +870,7 @@ async function evaluateRows(
         availability.set(String(t.id), fv == null ? new Set() : new Set([String(fv)]))
       }
     }
-
+    const hits: CascadeHit[] = []
     for (const row of rows) {
       const children = childSets.get(String(row.id))
       if (!children || children.size === 0) continue
@@ -861,117 +881,218 @@ async function evaluateRows(
       const bad = [...children].filter((child) => {
         const avail = availability.get(child)
         return !(avail && [...avail].some((a) => parents.has(a)))
-      })
-      if (bad.length > 0) {
-        const key = `${row.id}|${c.field}`
-        let agg = cascadeFails.get(key)
-        if (!agg) {
-          agg = {
-            field: c.field,
-            fieldLabel: c.fieldLabel,
-            isM2M: c.childIsM2M,
-            badCount: 0,
-            parents: []
-          }
-          cascadeFails.set(key, agg)
-        }
-        agg.badCount = Math.max(agg.badCount, bad.length)
-        agg.parents.push(c.parentLabel)
-      }
+      }).length
+      if (bad > 0) hits.push({ rowId: String(row.id), c, bad })
     }
+    return hits
   }
-
-  for (const [key, agg] of cascadeFails) {
-    const rowId = key.slice(0, key.length - agg.field.length - 1)
-    const parents =
-      agg.parents.length > 1
-        ? `${agg.parents.slice(0, -1).join(', ')} or ${agg.parents[agg.parents.length - 1]}`
-        : agg.parents[0]
-    findings.push({
-      item_id: rowId,
-      field: agg.field,
-      rule: 'cascade',
-      message: agg.isM2M
-        ? `${agg.badCount} linked ${agg.fieldLabel} value(s) are not available options for the current ${parents}`
-        : `${agg.fieldLabel} value is not an available option for the current ${parents}`
-    })
+  const cascades = async (): Promise<RecordFinding[]> => {
+    const hits = (await Promise.all(checks.cascades.map(cascadeOne))).flat()
+    const agg = new Map<
+      string,
+      { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
+    >()
+    for (const h of hits) {
+      const key = `${h.rowId}|${h.c.field}`
+      let a = agg.get(key)
+      if (!a) {
+        a = {
+          field: h.c.field,
+          fieldLabel: h.c.fieldLabel,
+          isM2M: h.c.childIsM2M,
+          badCount: 0,
+          parents: []
+        }
+        agg.set(key, a)
+      }
+      a.badCount = Math.max(a.badCount, h.bad)
+      a.parents.push(h.c.parentLabel)
+    }
+    const out: RecordFinding[] = []
+    for (const [key, a] of agg) {
+      const rowId = key.slice(0, key.length - a.field.length - 1)
+      const parents =
+        a.parents.length > 1
+          ? `${a.parents.slice(0, -1).join(', ')} or ${a.parents[a.parents.length - 1]}`
+          : a.parents[0]
+      out.push({
+        item_id: rowId,
+        field: a.field,
+        rule: 'cascade',
+        message: a.isM2M
+          ? `${a.badCount} linked ${a.fieldLabel} value(s) are not available options for the current ${parents}`
+          : `${a.fieldLabel} value is not an available option for the current ${parents}`
+      })
+    }
+    return out
   }
 
   // ── display template completeness, hops batch-resolved per level ─────
-  if (checks.displayTokens.length > 0) {
+  const display = async (): Promise<RecordFinding[]> => {
+    if (checks.displayTokens.length === 0) return []
     const emptyParts = new Map<string, string[]>()
-    for (const t of checks.displayTokens) {
-      // rowId → current value along the hop chain
-      let values = new Map<string, unknown>(
-        rows.map((r) => [String(r.id), r[t.hops.length > 0 ? t.hops[0].fk : t.leaf]])
-      )
-      for (let i = 0; i < t.hops.length; i++) {
-        const nextCol = i + 1 < t.hops.length ? t.hops[i + 1].fk : t.leaf
-        const ids = [...new Set([...values.values()].filter((v) => v != null && v !== ''))]
-        const fetched =
-          ids.length === 0
-            ? []
-            : ((await db(t.hops[i].target)
-                .whereIn('id', ids as never[])
-                .select('id', nextCol)) as Array<Record<string, unknown>>)
-        const byId = new Map(fetched.map((f) => [String(f.id), f[nextCol]]))
-        values = new Map(
-          [...values.entries()].map(([rowId, v]) => [
-            rowId,
-            v == null || v === '' ? null : (byId.get(String(v)) ?? null)
-          ])
+    const perToken = await Promise.all(
+      checks.displayTokens.map(async (t) => {
+        // rowId → current value along the hop chain
+        let values = new Map<string, unknown>(
+          rows.map((r) => [String(r.id), r[t.hops.length > 0 ? t.hops[0].fk : t.leaf]])
         )
-      }
+        for (let i = 0; i < t.hops.length; i++) {
+          const nextCol = i + 1 < t.hops.length ? t.hops[i + 1].fk : t.leaf
+          const ids = [...new Set([...values.values()].filter((v) => v != null && v !== ''))]
+          const fetched =
+            ids.length === 0
+              ? []
+              : ((await db(t.hops[i].target)
+                  .whereIn('id', ids as never[])
+                  .select('id', nextCol)) as Array<Record<string, unknown>>)
+          const byId = new Map(fetched.map((f) => [String(f.id), f[nextCol]]))
+          values = new Map(
+            [...values.entries()].map(([rowId, v]) => [
+              rowId,
+              v == null || v === '' ? null : (byId.get(String(v)) ?? null)
+            ])
+          )
+        }
+        return { raw: t.raw, values }
+      })
+    )
+    for (const { raw, values } of perToken) {
       for (const [rowId, v] of values) {
         if (v == null || String(v).trim() === '') {
           if (!emptyParts.has(rowId)) emptyParts.set(rowId, [])
-          emptyParts.get(rowId)?.push(t.raw)
+          emptyParts.get(rowId)?.push(raw)
         }
       }
     }
+    const out: RecordFinding[] = []
     for (const [rowId, parts] of emptyParts) {
-      findings.push({
+      out.push({
         item_id: rowId,
         field: parts[0].split('.')[0],
         rule: 'display',
         message: `Display template part(s) empty: ${parts.map((p) => `{{${p}}}`).join(', ')} — the record shows as its internal id`
       })
     }
+    return out
   }
 
   // ── inline-grid row rules: stored child values vs what the rules derive ─
-  for (const rc of checks.rowRules) {
-    try {
-      findings.push(...(await evaluateRowRuleCheck(rc, rows)))
-    } catch (err) {
-      console.warn(`conformance row-rule check skipped for ${collection}.${rc.aliasField}:`, err)
-    }
-  }
-  return findings
+  const rowRules = async (): Promise<RecordFinding[]> =>
+    (
+      await Promise.all(
+        checks.rowRules.map(async (rc) => {
+          try {
+            return await evaluateRowRuleCheck(rc, rows, rowRuleCache)
+          } catch (err) {
+            console.warn(
+              `conformance row-rule check skipped for ${collection}.${rc.aliasField}:`,
+              err
+            )
+            return []
+          }
+        })
+      )
+    ).flat()
+
+  const [m2m, cas, disp, rr] = await Promise.all([m2mRequired(), cascades(), display(), rowRules()])
+  return [...scalar, ...m2m, ...cas, ...disp, ...rr]
 }
 
-// compileChecks walks field config + layouts + relations (several reads);
-// a form load must not pay that on every record, so live checks share one
-// compiled set per collection for a minute. Busted by the central metadata
-// hook alongside every other per-collection cache.
-const compiledCache = new Map<string, { at: number; checks: Promise<CompiledChecks> }>()
-const COMPILED_TTL_MS = 60_000
+// compileChecks walks field config + layouts + relations (~120 reads, 6s
+// cold at this RTT); a form load must never pay that. One compiled set per
+// collection, served STALE-WHILE-REVALIDATE: fresh for 5 minutes, and past
+// that the stale set answers while a refresh runs behind it. Busted by the
+// central metadata hook alongside every other per-collection cache.
+interface Compiled {
+  checks: CompiledChecks
+  physical: Set<string>
+  selectable: string[]
+}
+const compiledCache = new Map<string, { at: number; value: Promise<Compiled> }>()
+const COMPILED_FRESH_MS = 5 * 60_000
 export function bustCompiledChecks(collection?: string): void {
   if (collection) compiledCache.delete(collection)
   else compiledCache.clear()
 }
-async function compileChecksCached(collection: string): Promise<CompiledChecks> {
+async function buildCompiled(collection: string): Promise<Compiled> {
+  const checks = await compileChecks(collection)
+  const { physical, selectable } = await columnsFor(checks)
+  return { checks, physical, selectable }
+}
+function compileChecksCached(collection: string): Promise<Compiled> {
   const hit = compiledCache.get(collection)
-  if (hit && Date.now() - hit.at < COMPILED_TTL_MS) return hit.checks
-  const checks = compileChecks(collection)
-  compiledCache.set(collection, { at: Date.now(), checks })
-  checks.catch(() => compiledCache.delete(collection))
-  return checks
+  if (hit) {
+    if (Date.now() - hit.at >= COMPILED_FRESH_MS) {
+      // Stale: refresh in the background, answer with what we have.
+      const next = buildCompiled(collection)
+      compiledCache.set(collection, { at: Date.now(), value: next })
+      next.catch(() => compiledCache.set(collection, hit))
+      return hit.value
+    }
+    return hit.value
+  }
+  const value = buildCompiled(collection)
+  compiledCache.set(collection, { at: Date.now(), value })
+  value.catch(() => compiledCache.delete(collection))
+  return value
+}
+/**
+ * Boot warm-up: compile the checks of every collection that carries a
+ * layout (the ones a form can open) so the first record after a deploy gets
+ * a warm live check instead of paying the ~6s compile. Sequential and
+ * best-effort — a slow collection never blocks readiness.
+ */
+export async function warmCompiledChecks(): Promise<number> {
+  const rows = (await db('nivaro_collection_layouts')
+    .distinct('collection')
+    .catch(() => [])) as Array<{ collection: string }>
+  let n = 0
+  for (const r of rows) {
+    const c = String(r.collection)
+    if (/^nivaro_|^directus_/i.test(c)) continue
+    try {
+      await compileChecksCached(c)
+      n += 1
+    } catch {
+      /* best effort */
+    }
+  }
+  return n
+}
+
+/** Does this collection have anything to check? Cheap once compiled. */
+export async function hasChecks(collection: string): Promise<boolean> {
+  const { checks } = await compileChecksCached(collection)
+  return (
+    checks.requiredFields.length +
+      checks.validation.length +
+      checks.cascades.length +
+      checks.displayTokens.length +
+      checks.dateOffsets.length +
+      checks.rowRules.length >
+    0
+  )
+}
+
+// Row-rule lookups (relation rows + reference records the rules read) are
+// shared across live checks for a short window — the cost of a cold check is
+// almost entirely these reads. 20s is well inside what an integrity banner
+// can be "wrong" by, and the sweep keeps its own per-chunk cache.
+// (60s: reference rows the rules read — categories, cifa items, project
+// defaults — change on a human timescale.)
+let liveRowRuleCache: { at: number; cache: RowRuleLookupCache } | null = null
+const LIVE_CACHE_MS = 60_000
+function liveCache(): RowRuleLookupCache {
+  if (!liveRowRuleCache || Date.now() - liveRowRuleCache.at > LIVE_CACHE_MS) {
+    liveRowRuleCache = { at: Date.now(), cache: new RowRuleLookupCache(db) }
+  }
+  return liveRowRuleCache.cache
 }
 
 /**
  * Live integrity check for ONE record — what the collection sweep would say
- * about it right now. Sub-second: the same evaluator over a single row.
+ * about it right now, from the same evaluator over a single row.
  * Returns null when the record does not exist.
  */
 export async function checkRecord(
@@ -979,14 +1100,106 @@ export async function checkRecord(
   id: string
 ): Promise<{ findings: RecordFinding[]; ms: number } | null> {
   const t0 = Date.now()
-  const checks = await compileChecksCached(collection)
-  const { physical, selectable } = await columnsFor(checks)
+  const { checks, physical, selectable } = await compileChecksCached(collection)
   const row = (await db(collection)
     .where('id', id as never)
     .first(selectable)) as Record<string, unknown> | undefined
   if (!row) return null
-  const findings = await evaluateRows(checks, [row], physical)
+  const findings = await evaluateRows(checks, [row], physical, liveCache())
   return { findings, ms: Date.now() - t0 }
+}
+
+/**
+ * Persist a record's live result: the per-record row the banner reads
+ * (nivaro_record_integrity — the "never stale" store, written by the write
+ * hook and the on-load check) AND the latest completed sweep's rows for the
+ * record, so the Data Integrity page agrees with the form.
+ */
+export async function storeRecordResult(
+  collection: string,
+  id: string,
+  findings: RecordFinding[],
+  source: 'write' | 'live' | 'sweep'
+): Promise<void> {
+  const now = new Date()
+  const payload = JSON.stringify(
+    findings.map((f) => ({ field: f.field, rule: f.rule, message: f.message.slice(0, 1000) }))
+  )
+  const updated = await db('nivaro_record_integrity')
+    .where({ collection, item_id: String(id) })
+    .update({ findings: payload, checked_at: now, source })
+  if (!updated) {
+    await db('nivaro_record_integrity')
+      .insert({ collection, item_id: String(id), findings: payload, checked_at: now, source })
+      .catch(async () => {
+        // Lost a race with a concurrent insert — the update path wins.
+        await db('nivaro_record_integrity')
+          .where({ collection, item_id: String(id) })
+          .update({ findings: payload, checked_at: now, source })
+      })
+  }
+  const run = (await db('nivaro_conformance_runs')
+    .where({ collection, status: 'completed' })
+    .orderBy('id', 'desc')
+    .first('id')) as { id: number } | undefined
+  if (!run) return
+  const stale = (await db('nivaro_conformance_findings')
+    .where({ run: run.id, item_id: String(id) })
+    .count({ n: '*' })
+    .first()) as { n: number | string } | undefined
+  const staleN = Number(stale?.n ?? 0)
+  await db('nivaro_conformance_findings')
+    .where({ run: run.id, item_id: String(id) })
+    .del()
+  if (findings.length > 0) {
+    const labels = await getLabels(new Map([[collection, new Set([String(id)])]])).catch(
+      () => ({}) as Record<string, string>
+    )
+    await db('nivaro_conformance_findings').insert(
+      findings.map((f) => ({
+        run: run.id,
+        item_id: f.item_id,
+        item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
+        field: f.field,
+        rule: f.rule,
+        message: f.message.slice(0, 1000)
+      }))
+    )
+  }
+  const delta = findings.length - staleN
+  if (delta !== 0) {
+    await db('nivaro_conformance_runs')
+      .where('id', run.id)
+      .update({
+        violation_count: db.raw(
+          'CASE WHEN violation_count + ? < 0 THEN 0 ELSE violation_count + ? END',
+          [delta, delta]
+        )
+      })
+      .catch(() => {})
+  }
+}
+
+/** The stored per-record result, when one exists. */
+export async function readRecordResult(
+  collection: string,
+  id: string
+): Promise<{ findings: RecordFinding[]; checked_at: Date; source: string } | null> {
+  const row = (await db('nivaro_record_integrity')
+    .where({ collection, item_id: String(id) })
+    .first('findings', 'checked_at', 'source')
+    .catch(() => undefined)) as { findings: string; checked_at: Date; source: string } | undefined
+  if (!row) return null
+  try {
+    const parsed = JSON.parse(row.findings) as Array<Omit<RecordFinding, 'item_id'>>
+    return {
+      findings: parsed.map((f) => ({ ...f, item_id: String(id) })),
+      checked_at: row.checked_at,
+      source: row.source
+    }
+  } catch {
+    return null
+  }
 }
 
 async function evaluate(
@@ -1079,7 +1292,8 @@ async function evaluate(
  */
 async function evaluateRowRuleCheck(
   rc: RowRuleCheck,
-  parents: Array<Record<string, unknown>>
+  parents: Array<Record<string, unknown>>,
+  sharedCache?: RowRuleLookupCache
 ): Promise<Array<{ item_id: string; field: string; rule: string; message: string }>> {
   const out: Array<{ item_id: string; field: string; rule: string; message: string }> = []
   const parentIds = parents.map((p) => String(p.id))
@@ -1100,7 +1314,8 @@ async function evaluateRowRuleCheck(
   }
   // One lookup cache per chunk: relation metadata + related records are
   // shared across every line of every parent in the chunk, bounded in size.
-  const cache = new RowRuleLookupCache(db)
+  // The live per-record path hands in a short-lived process cache instead.
+  const cache = sharedCache ?? new RowRuleLookupCache(db)
   type Drift = {
     parentId: string
     line: Record<string, unknown>

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatRelative } from '../../lib/utils'
 
 /**
  * Data-integrity findings for THIS record, from the latest completed
@@ -155,8 +155,9 @@ export function RecordIntegrityBanner({
           <span
             className='text-[11px] text-amber-600/80 dark:text-amber-400/70'
             data-integrity-checked='stored'
+            title={new Date(data.checked_at).toLocaleString()}
           >
-            checked {new Date(data.checked_at).toLocaleDateString()}
+            checked {formatRelative(data.checked_at)}
           </span>
         ) : null}
         <button

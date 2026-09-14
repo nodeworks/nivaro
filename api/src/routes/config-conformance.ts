@@ -4,7 +4,9 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   checkRecord,
+  readRecordResult,
   runConformance,
+  storeRecordResult,
   summarizeAllCollections
 } from '../services/config-conformance.js'
 import {
@@ -158,6 +160,24 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
         .where({ collection, status: 'completed' })
         .orderBy('id', 'desc')
         .first('id', 'finished_at')) as { id: number; finished_at: Date | null } | undefined
+      // The per-record store (written on every API write + live check) wins
+      // whenever it is newer than the sweep — that is the "never stale" path.
+      const stored = await readRecordResult(collection, String(id))
+      const storedWins =
+        stored &&
+        (!run?.finished_at ||
+          new Date(stored.checked_at).getTime() >= new Date(run.finished_at).getTime())
+      if (stored && storedWins) {
+        return {
+          data: {
+            enabled: true,
+            run_id: run?.id ?? null,
+            checked_at: stored.checked_at,
+            source: stored.source,
+            findings: await annotateFindings(collection, stored.findings)
+          }
+        }
+      }
       if (!run) return { data: { enabled: true, findings: [] } }
       const findings = (await db('nivaro_conformance_findings')
         .where({ run: run.id, item_id: String(id) })
@@ -171,6 +191,7 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
           enabled: true,
           run_id: run.id,
           checked_at: run.finished_at,
+          source: 'sweep',
           findings: await annotateFindings(collection, findings)
         }
       }
@@ -199,53 +220,12 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
       }
       const result = await checkRecord(collection, String(id))
       if (!result) return reply.code(404).send({ error: 'Not found' })
-      const run = (await db('nivaro_conformance_runs')
-        .where({ collection, status: 'completed' })
-        .orderBy('id', 'desc')
-        .first('id')) as { id: number } | undefined
-      if (run) {
-        // Reconcile: the run's rows for THIS record become the live answer.
-        const stale = (await db('nivaro_conformance_findings')
-          .where({ run: run.id, item_id: String(id) })
-          .count({ n: '*' })
-          .first()) as { n: number | string } | undefined
-        const staleN = Number(stale?.n ?? 0)
-        await db('nivaro_conformance_findings')
-          .where({ run: run.id, item_id: String(id) })
-          .del()
-        if (result.findings.length > 0) {
-          const { getLabels } = await import('../services/queues.js')
-          const labels = await getLabels(new Map([[collection, new Set([String(id)])]])).catch(
-            () => ({}) as Record<string, string>
-          )
-          await db('nivaro_conformance_findings').insert(
-            result.findings.map((f) => ({
-              run: run.id,
-              item_id: f.item_id,
-              item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
-              field: f.field,
-              rule: f.rule,
-              message: f.message.slice(0, 1000)
-            }))
-          )
-        }
-        const delta = result.findings.length - staleN
-        if (delta !== 0) {
-          await db('nivaro_conformance_runs')
-            .where('id', run.id)
-            .update({
-              violation_count: db.raw(
-                'CASE WHEN violation_count + ? < 0 THEN 0 ELSE violation_count + ? END',
-                [delta, delta]
-              )
-            })
-            .catch(() => {})
-        }
-      }
+      await storeRecordResult(collection, String(id), result.findings, 'live').catch((err) =>
+        console.warn('record integrity store failed:', err)
+      )
       return {
         data: {
           enabled: true,
-          run_id: run?.id ?? null,
           checked_at: new Date().toISOString(),
           live: true,
           ms: result.ms,

@@ -1068,100 +1068,112 @@ export async function buildServer() {
       // so file chips and the Files page render dead links honestly.
       // Manual: POST /api/cron/file-integrity-sweep/run.
       app.cron.schedule('file-integrity-sweep', '50 3 * * *', async () => {
-        // Nightly config-conformance runs for scheduled collections, with a
-        // regression note when a collection's issue count grew since last run.
-        app.cron.schedule('conformance-nightly', '40 2 * * *', async () => {
-          const { runConformance } = await import('./services/config-conformance.js')
-          const schedules = (await db('nivaro_conformance_schedules').where(
-            'is_active',
-            true
-          )) as Array<{
-            collection: string
-            row_cap: number
-            created_by: string | null
-          }>
-          for (const sch of schedules) {
-            const running = await db('nivaro_conformance_runs')
-              .where({ collection: sch.collection, status: 'running' })
-              .first('id')
-            if (running) continue
-            const prev = (await db('nivaro_conformance_runs')
-              .where({ collection: sch.collection, status: 'completed' })
-              .orderBy('id', 'desc')
-              .first('violation_count')) as { violation_count: number } | undefined
-            const [inserted] = await db('nivaro_conformance_runs')
-              .insert({ collection: sch.collection, status: 'running', started_at: new Date() })
-              .returning('id')
-            const runId = Number(
-              typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
-            )
-            await runConformance(
-              runId,
-              sch.collection,
-              sch.row_cap > 0 ? sch.row_cap : Number.MAX_SAFE_INTEGER
-            )
-            const done = (await db('nivaro_conformance_runs').where('id', runId).first()) as
-              | { status: string; violation_count: number }
-              | undefined
-            if (
-              done?.status === 'completed' &&
-              prev &&
-              done.violation_count > prev.violation_count &&
-              sch.created_by
-            ) {
-              const { notifyUser } = await import('./services/notification-channels.js')
-              await notifyUser(app, sch.created_by, {
-                subject: `Data integrity regression: ${sch.collection}`,
-                category: 'system',
-                message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
-                collection: 'nivaro_conformance_runs',
-                item: String(runId)
-              }).catch(() => {})
-            }
-          }
-        })
-
-        // Daily readiness score snapshot — the trend line toward cutover.
-        // Presence janitor — the socket's disconnect bookkeeping is per-process,
-        // so restarts strand is_online=true bits; anything raw /items readers see
-        // must self-heal even if no client ever beats again.
-        app.cron.schedule('presence-janitor', '*/5 * * * *', async () => {
-          const has = await db.schema.hasTable('user_presence')
-          if (!has) return
-          await db('user_presence')
-            .where('is_online', true)
-            .where('last_seen', '<', new Date(Date.now() - 10 * 60_000))
-            .update({ is_online: false, is_idle: true })
-            .catch(() => {})
-        })
-
-        app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
-          const { runReadinessChecks } = await import('./services/readiness.js')
-          const report = await runReadinessChecks()
-          if (report.checks.length === 0) return
-          const today = new Date().toISOString().slice(0, 10)
-          const exists = await db('nivaro_readiness_snapshots')
-            .where('snapshot_date', today)
-            .first('id')
-          if (exists) {
-            await db('nivaro_readiness_snapshots')
-              .where('snapshot_date', today)
-              .update({ score: report.score, counts: JSON.stringify(report.counts) })
-          } else {
-            await db('nivaro_readiness_snapshots').insert({
-              snapshot_date: today,
-              score: report.score,
-              counts: JSON.stringify(report.counts),
-              created_at: new Date()
-            })
-          }
-        })
         const { fileIntegritySweep } = await import('./services/file-integrity.js')
         const r = await fileIntegritySweep()
         if (r.newly_missing > 0) {
           app.log.warn(
             `file integrity: ${r.newly_missing} file(s) newly missing (${r.missing} missing of ${r.checked} checked)`
           )
+        }
+      })
+
+      // Warm the compiled integrity checks for every laid-out collection so
+      // the FIRST record form after a boot gets a sub-second live check
+      // instead of paying the ~6s compile. Best-effort, never awaited.
+      void import('./services/config-conformance.js')
+        .then((m) => m.warmCompiledChecks())
+        .then((n) => app.log.info(`integrity: warmed checks for ${n} collection(s)`))
+        .catch(() => {})
+
+      // Nightly config-conformance runs for scheduled collections, with a
+      // regression note when a collection's issue count grew since last run.
+      // NOTE (2026-09-14): this and the two crons after it used to sit INSIDE
+      // the file-integrity-sweep callback — registered only when that sweep
+      // fired at 03:50, i.e. absent on any process younger than a day.
+      app.cron.schedule('conformance-nightly', '40 2 * * *', async () => {
+        const { runConformance } = await import('./services/config-conformance.js')
+        const schedules = (await db('nivaro_conformance_schedules').where(
+          'is_active',
+          true
+        )) as Array<{
+          collection: string
+          row_cap: number
+          created_by: string | null
+        }>
+        for (const sch of schedules) {
+          const running = await db('nivaro_conformance_runs')
+            .where({ collection: sch.collection, status: 'running' })
+            .first('id')
+          if (running) continue
+          const prev = (await db('nivaro_conformance_runs')
+            .where({ collection: sch.collection, status: 'completed' })
+            .orderBy('id', 'desc')
+            .first('violation_count')) as { violation_count: number } | undefined
+          const [inserted] = await db('nivaro_conformance_runs')
+            .insert({ collection: sch.collection, status: 'running', started_at: new Date() })
+            .returning('id')
+          const runId = Number(
+            typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
+          )
+          await runConformance(
+            runId,
+            sch.collection,
+            sch.row_cap > 0 ? sch.row_cap : Number.MAX_SAFE_INTEGER
+          )
+          const done = (await db('nivaro_conformance_runs').where('id', runId).first()) as
+            | { status: string; violation_count: number }
+            | undefined
+          if (
+            done?.status === 'completed' &&
+            prev &&
+            done.violation_count > prev.violation_count &&
+            sch.created_by
+          ) {
+            const { notifyUser } = await import('./services/notification-channels.js')
+            await notifyUser(app, sch.created_by, {
+              subject: `Data integrity regression: ${sch.collection}`,
+              category: 'system',
+              message: `${sch.collection} went from ${prev.violation_count} to ${done.violation_count} issue(s) in last night's sweep.`,
+              collection: 'nivaro_conformance_runs',
+              item: String(runId)
+            }).catch(() => {})
+          }
+        }
+      })
+
+      // Daily readiness score snapshot — the trend line toward cutover.
+      // Presence janitor — the socket's disconnect bookkeeping is per-process,
+      // so restarts strand is_online=true bits; anything raw /items readers see
+      // must self-heal even if no client ever beats again.
+      app.cron.schedule('presence-janitor', '*/5 * * * *', async () => {
+        const has = await db.schema.hasTable('user_presence')
+        if (!has) return
+        await db('user_presence')
+          .where('is_online', true)
+          .where('last_seen', '<', new Date(Date.now() - 10 * 60_000))
+          .update({ is_online: false, is_idle: true })
+          .catch(() => {})
+      })
+
+      app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
+        const { runReadinessChecks } = await import('./services/readiness.js')
+        const report = await runReadinessChecks()
+        if (report.checks.length === 0) return
+        const today = new Date().toISOString().slice(0, 10)
+        const exists = await db('nivaro_readiness_snapshots')
+          .where('snapshot_date', today)
+          .first('id')
+        if (exists) {
+          await db('nivaro_readiness_snapshots')
+            .where('snapshot_date', today)
+            .update({ score: report.score, counts: JSON.stringify(report.counts) })
+        } else {
+          await db('nivaro_readiness_snapshots').insert({
+            snapshot_date: today,
+            score: report.score,
+            counts: JSON.stringify(report.counts),
+            created_at: new Date()
+          })
         }
       })
 
