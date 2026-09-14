@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-14T22:11:49.545Z",
+  "generated_at": "2026-09-14T22:19:59.149Z",
   "releases": [
+    {
+      "version": "0.1.283",
+      "tag": "v0.1.283",
+      "date": "2026-09-14T18:19:50-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "summary",
+              "text": "files render as file rows; only file/long link lists span the row",
+              "hash": "03b660f8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "summary",
+              "text": "linked-record lists take the whole row",
+              "hash": "5319758d"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.282",
       "tag": "v0.1.282",
-      "date": "2026-09-14T18:11:40-04:00",
+      "date": "2026-09-14T18:11:49-04:00",
       "sections": [
         {
           "label": "Added",
