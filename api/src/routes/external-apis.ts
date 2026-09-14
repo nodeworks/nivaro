@@ -255,6 +255,48 @@ async function resolveAuth(
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
+/**
+ * A network-level failure reaches here as undici's bare "fetch failed" with
+ * the real reason buried in `err.cause` (ECONNREFUSED, ENOTFOUND, a TLS
+ * code…). The test panel showed only the outer message, so "the host is not
+ * reachable from THIS server" read as a mystery. Surface the cause plus a
+ * one-line hint; the caller still gets a plain string.
+ */
+export function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Request failed'
+  if (err.name === 'AbortError') return 'Request timed out after 10s'
+  const cause = (err as { cause?: unknown }).cause as
+    | { code?: string; message?: string; address?: string; port?: number; hostname?: string }
+    | undefined
+  if (!cause || err.message !== 'fetch failed') return err.message
+  const where = cause.hostname
+    ? cause.hostname
+    : cause.address
+      ? `${cause.address}${cause.port ? `:${cause.port}` : ''}`
+      : ''
+  const code = cause.code ?? ''
+  const hint: Record<string, string> = {
+    ECONNREFUSED: 'the host refused the connection — wrong port, or the service is down',
+    ENOTFOUND: 'DNS could not resolve the host from the API server',
+    EAI_AGAIN: 'DNS lookup failed (temporary) from the API server',
+    ETIMEDOUT: 'no answer from the host — firewall, VPN, or the server is not on that network',
+    EHOSTUNREACH: 'no route to the host from the API server — internal network / VPN',
+    ENETUNREACH: 'no route to the network from the API server',
+    ECONNRESET: 'the host closed the connection mid-request',
+    CERT_HAS_EXPIRED: 'the host presented an expired TLS certificate',
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS certificate chain not trusted by the API server',
+    SELF_SIGNED_CERT_IN_CHAIN: 'self-signed TLS certificate in the chain',
+    DEPTH_ZERO_SELF_SIGNED_CERT: 'self-signed TLS certificate',
+    ERR_TLS_CERT_ALTNAME_INVALID: 'TLS certificate does not match the host name'
+  }
+  const parts = ['fetch failed']
+  if (code || where) parts.push(`— ${[code, where].filter(Boolean).join(' ')}`)
+  if (code && hint[code]) parts.push(`(${hint[code]})`)
+  else if (cause.message && cause.message !== err.message) parts.push(`(${cause.message})`)
+  parts.push('· the request is made by the API server, not your browser')
+  return parts.join(' ')
+}
+
 export async function externalApisRoutes(app: FastifyInstance) {
   // List all
   app.get('/', { preHandler: requireAdmin }, async () => {
@@ -530,12 +572,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
         }
       }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.name === 'AbortError'
-            ? 'Request timed out after 10s'
-            : err.message
-          : 'Request failed'
+      const message = describeFetchError(err)
 
       await writeApiCallLog({
         api_id: row.id,
@@ -866,12 +903,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
 
       return { data: { status: res.status, headers: resHeaders, body: parsedBody } }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.name === 'AbortError'
-            ? 'Request timed out after 10s'
-            : err.message
-          : 'Request failed'
+      const message = describeFetchError(err)
 
       await writeApiCallLog({
         api_id: api.id,
@@ -993,12 +1025,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
 
       return { data: { status: res.status, headers: resHeaders, body: parsedBody } }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.name === 'AbortError'
-            ? 'Request timed out after 10s'
-            : err.message
-          : 'Request failed'
+      const message = describeFetchError(err)
 
       await writeApiCallLog({
         api_id: api.id,
