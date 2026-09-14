@@ -1044,18 +1044,15 @@ export function RecordReadView({
     // has loaded — a widget card that started half width and snapped to full
     // once its data reported was the "forecasts slot is half width until the
     // page loads" jump.
-    const fullWidth = grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0
     return (
       <section
         key={g.key}
         hidden={sectionHidden}
         data-read-section={g.key}
-        className={`rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40 ${
-          fullWidth ? 'lg:col-span-2' : ''
-        }`}
+        className='rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40'
       >
         <h3
-          className={`flex items-center justify-between px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
+          className={`flex items-center justify-between px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
             isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
           }`}
         >
@@ -1076,32 +1073,41 @@ export function RecordReadView({
           )}
         </h3>
         {isOpen(g) && (
-          <div className='px-4 py-3'>
+          <div className='px-5 pb-5 pt-4'>
             {scalars.length > 0 && (
-              <dl
-                className='grid gap-x-6 gap-y-4'
-                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))' }}
-              >
+              // One column rhythm for the whole page: every section's facts sit
+              // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
+              // card instead of each card auto-filling its own grid.
+              <dl className='grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6'>
                 {scalars.map((a) => {
                   const ov = parseOverrides(a.overrides)
                   const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
                   const long =
                     isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
+                  // Free text that would truncate in one track (a description,
+                  // a textarea) takes two tracks and wraps to a few lines —
+                  // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
+                  const rawV = record?.[a.field]
+                  const wide =
+                    !long &&
+                    !isM2M(a) &&
+                    !m2oTarget(a.field) &&
+                    (String(fieldByName.get(a.field)?.interface ?? '').includes('textarea') ||
+                      (typeof rawV === 'string' && rawV.length > 36))
                   return (
                     <div
                       key={a.field}
-                      className='min-w-0'
-                      style={long ? { gridColumn: '1 / -1' } : undefined}
+                      className={`min-w-0 ${long ? 'col-span-full' : emphasis || wide ? 'col-span-2' : ''}`}
                     >
                       <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                         {labelFor(a)}
                         <IntegrityMark field={a.field} />
                       </dt>
                       <dd
-                        className={`mt-0.5 min-w-0 ${
+                        className={`mt-1 min-w-0 ${
                           emphasis
                             ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
-                            : `${isM2M(a) || long ? '' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
+                            : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
                         }`}
                       >
                         {record ? (
@@ -1194,15 +1200,18 @@ export function RecordReadView({
       {/* The board needs the collection's relations to know which cards hold
           child grids (full width) — until they arrive every grid card would
           render at half width and jump. Hold a skeleton board instead. */}
+      {/* Sections stack in layout order, full width — the same top-to-bottom
+          reading the edit form has. A two-column board of unequal cards left
+          pockets beside every short section and read as splayed. */}
       {meta ? (
-        <div className='grid items-start gap-4 lg:grid-cols-2'>
+        <div className='flex flex-col gap-4' data-read-board>
           {sectionGroups.map(renderSection)}
         </div>
       ) : (
-        <div className='grid items-start gap-4 lg:grid-cols-2' data-read-board-pending>
-          <div className='h-40 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-          <div className='h-40 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-          <div className='h-56 animate-pulse rounded-xl bg-slate-100 lg:col-span-2 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        <div className='flex flex-col gap-4' data-read-board-pending>
+          <div className='h-32 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-32 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-56 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
         </div>
       )}
       {trailingSlots && <div className='mt-1'>{trailingSlots}</div>}
