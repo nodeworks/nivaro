@@ -23,8 +23,20 @@ interface ApiLogRow {
  * without this MWF's file pushes were invisible to every log surface.
  */
 const LEGACY_ALIASES = new Set(['/files', '/graphql'])
-/** Header the /graphql alias sets on its inner app.inject — log the OUTER call once, not both. */
+/**
+ * Header the /graphql alias sets on its inner app.inject — log the OUTER call
+ * once, not both. The value is a single-use random token registered in
+ * `internalDispatchTokens` by the dispatching handler; a caller on the wire
+ * can send the header name but cannot guess a registered value, so it cannot
+ * exempt its own requests from the log.
+ */
 export const INTERNAL_DISPATCH_HEADER = 'x-nivaro-internal-dispatch'
+export const internalDispatchTokens = new Set<string>()
+
+function isInternalDispatch(req: { headers: Record<string, unknown> }): boolean {
+  const t = req.headers[INTERNAL_DISPATCH_HEADER]
+  return typeof t === 'string' && internalDispatchTokens.has(t)
+}
 const ERROR_BODY_CAP = 1000
 
 const FLUSH_INTERVAL_MS = 5000
@@ -120,7 +132,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   app.addHook('onResponse', async (req, reply) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
     if (shouldSkip(path, req.method)) return
-    if (req.headers[INTERNAL_DISPATCH_HEADER]) return
+    if (isInternalDispatch(req as unknown as { headers: Record<string, unknown> })) return
 
     const ua = req.headers['user-agent']
     buffer.push({

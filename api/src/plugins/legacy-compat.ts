@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFile } from '../services/files.js'
-import { INTERNAL_DISPATCH_HEADER } from './api-logger.js'
+import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from './api-logger.js'
 
 /**
  * Root-level aliases for integrations written against the Directus-era API.
@@ -58,13 +59,20 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
     if (auth) headers.authorization = auth
     if (req.headers.cookie) headers.cookie = req.headers.cookie
     headers['content-type'] = 'application/json'
-    headers[INTERNAL_DISPATCH_HEADER] = '1'
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/graphql',
-      headers,
-      payload: req.body as Record<string, unknown>
-    })
+    const dispatchToken = randomUUID()
+    headers[INTERNAL_DISPATCH_HEADER] = dispatchToken
+    internalDispatchTokens.add(dispatchToken)
+    let res: Awaited<ReturnType<typeof app.inject>>
+    try {
+      res = await app.inject({
+        method: 'POST',
+        url: '/api/graphql',
+        headers,
+        payload: req.body as Record<string, unknown>
+      })
+    } finally {
+      internalDispatchTokens.delete(dispatchToken)
+    }
     return reply
       .code(res.statusCode)
       .header('content-type', res.headers['content-type'] ?? 'application/json')
