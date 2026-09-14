@@ -1040,7 +1040,11 @@ export function RecordReadView({
     // the widgets stay mounted (hidden) inside so they can still report.
     const sectionHidden =
       items.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
-    const fullWidth = grids.length > 0 || shownWidgets.length > 0 || groupLive.length > 0
+    // Width comes from what the section is CONFIGURED to hold, never from what
+    // has loaded — a widget card that started half width and snapped to full
+    // once its data reported was the "forecasts slot is half width until the
+    // page loads" jump.
+    const fullWidth = grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0
     return (
       <section
         key={g.key}
@@ -1187,9 +1191,20 @@ export function RecordReadView({
           )}
         </div>
       )}
-      <div className='grid items-start gap-4 lg:grid-cols-2'>
-        {sectionGroups.map(renderSection)}
-      </div>
+      {/* The board needs the collection's relations to know which cards hold
+          child grids (full width) — until they arrive every grid card would
+          render at half width and jump. Hold a skeleton board instead. */}
+      {meta ? (
+        <div className='grid items-start gap-4 lg:grid-cols-2'>
+          {sectionGroups.map(renderSection)}
+        </div>
+      ) : (
+        <div className='grid items-start gap-4 lg:grid-cols-2' data-read-board-pending>
+          <div className='h-40 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-40 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-56 animate-pulse rounded-xl bg-slate-100 lg:col-span-2 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        </div>
+      )}
       {trailingSlots && <div className='mt-1'>{trailingSlots}</div>}
     </div>
   )
