@@ -834,24 +834,36 @@ export function RecordReadView({
       </div>
     )
   }
+  // A read view is for reading — a widget with nothing to show ("No
+  // deployments yet") is pure chrome here (Rob: "empty slots just take up
+  // space"). Widgets report content through onContentChange; unreported =
+  // empty, so a slot only appears once it has something. The slot stays
+  // MOUNTED (hidden) so its fetch and report keep running.
+  const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
+  const widgetHasContent = (key: string) => widgetContent[key] === true
   const renderWidgets = (groupKey: string | null) => {
     const slots = widgetSlots
       .filter((w) => w.group_key === groupKey)
       .sort((a, b) => a.sort - b.sort)
     if (slots.length === 0) return null
+    const anyShown = slots.some((w) => widgetHasContent(w.field))
     return (
-      <div className='mt-3 space-y-4'>
+      <div className={anyShown ? 'mt-3 space-y-4' : 'hidden'} data-read-widgets>
         {slots.map((w) => (
-          <WidgetSlot
-            key={w.field}
-            widgetId={w.widget_id as number}
-            inputBindings={slotBindings(w)}
-            itemDraft={record ?? {}}
-            itemCollection={collection}
-            ready={!!record}
-            label={w.label_override ?? undefined}
-            defaultExpanded={w.default_expanded == null ? true : !!w.default_expanded}
-          />
+          <div key={w.field} hidden={!widgetHasContent(w.field)}>
+            <WidgetSlot
+              widgetId={w.widget_id as number}
+              inputBindings={slotBindings(w)}
+              itemDraft={record ?? {}}
+              itemCollection={collection}
+              ready={!!record}
+              label={w.label_override ?? undefined}
+              defaultExpanded={w.default_expanded == null ? true : !!w.default_expanded}
+              onContentChange={(has) =>
+                setWidgetContent((cur) => (cur[w.field] === has ? cur : { ...cur, [w.field]: has }))
+              }
+            />
+          </div>
         ))}
       </div>
     )
@@ -1023,10 +1035,17 @@ export function RecordReadView({
     if (items.length === 0 && groupWidgets.length === 0 && groupLive.length === 0) return null
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
-    const fullWidth = grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0
+    const shownWidgets = groupWidgets.filter((w) => widgetHasContent(w.field))
+    // A section whose only content is empty widgets collapses with them —
+    // the widgets stay mounted (hidden) inside so they can still report.
+    const sectionHidden =
+      items.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
+    const fullWidth = grids.length > 0 || shownWidgets.length > 0 || groupLive.length > 0
     return (
       <section
         key={g.key}
+        hidden={sectionHidden}
+        data-read-section={g.key}
         className={`rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40 ${
           fullWidth ? 'lg:col-span-2' : ''
         }`}
