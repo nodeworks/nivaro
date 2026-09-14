@@ -296,6 +296,11 @@ export const collabItemLocking: DocSection = {
       type: 'p',
       text: 'Prevent simultaneous editing conflicts with soft item locks. When a user opens a record for editing, a 5-minute TTL lock is acquired. Other users attempting to edit see an amber banner and the form switches to read-only. Locks auto-release after 5 minutes without activity, preventing stale locks from crashed tabs.'
     },
+    { type: 'h3', id: 'draft-recovery', text: 'Unsaved-draft recovery' },
+    {
+      type: 'p',
+      text: 'The record form keeps a copy of your unsaved work in the browser (IndexedDB, per record and per user): the fields you changed, staged grid rows, edits and removals, and staged relation links — written about a second after each change and removed the moment the form is clean, saved, or you discard it. If the tab crashes, the session expires or you navigate away, the next time you open that record (or the new-record form for that collection) a banner offers "Restore your unsaved changes from N min ago" with the diff (field: was → will be) and staged counts; nothing is applied until you choose Restore. A draft whose values now match the saved record is dropped silently, and the banner flags when the record changed underneath the draft. On a new-record form only the fields you actually touched are kept — layout defaults and prefills are not treated as your work.'
+    },
     {
       type: 'h3',
       id: 'item-locking-how-it-works',

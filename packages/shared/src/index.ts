@@ -232,6 +232,15 @@ export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export * from './lib/catalog-item-open'
 export * from './lib/commands'
+export {
+  deleteDraft,
+  draftHasContent,
+  draftKey,
+  listDrafts,
+  loadDraft,
+  type StoredDraft,
+  saveDraft
+} from './lib/draft-store'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'

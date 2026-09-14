@@ -41,7 +41,14 @@ import {
   useNivaroClient
 } from '../context'
 import { del, get, patch, post } from '../lib/commands'
-import { QuickPicker } from './item-edit/QuickPicker'
+import {
+  deleteDraft,
+  draftHasContent,
+  draftKey,
+  loadDraft,
+  type StoredDraft,
+  saveDraft
+} from '../lib/draft-store'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { extSlotKey } from '../lib/layout-slots'
@@ -66,6 +73,7 @@ import {
   changeReasonChallenge
 } from './item-edit/ChangeReasonDialog'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 import { FieldRow } from './item-edit/FieldRow'
 import {
@@ -109,6 +117,7 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { invalidateRecordInsights, RecordInsightsButton } from './item-edit/RecordInsights'
@@ -1155,6 +1164,22 @@ export function ItemEditForm({
   const baseRevisionOverrideRef = useRef<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
+  // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
+  // staging) is persisted to IndexedDB per collection:record:user, ~800ms
+  // after the last change, and removed on save / discard. On open, a stored
+  // draft is OFFERED (banner) — never applied silently.
+  const recoveryKey = draftKey(collection, itemId, authUserId)
+  const [recovery, setRecovery] = useState<
+    { state: 'checking' } | { state: 'offer'; draft: StoredDraft } | { state: 'none' }
+  >({ state: 'checking' })
+  const recoveryRef = useRef(recovery)
+  recoveryRef.current = recovery
+  // The key the last completed check was for. The auth user id can arrive a
+  // render after mount (key anon → real): persistence must not run for a key
+  // whose stored draft has not been looked at yet, or a clean form would
+  // delete the draft it is about to be offered.
+  const [recoveryCheckedKey, setRecoveryCheckedKey] = useState<string | null>(null)
   useEffect(() => {
     onDirtyChange?.(isDirty)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callback identity is the host's concern
@@ -2094,6 +2119,140 @@ export function ItemEditForm({
       setIsDirty(false)
     }
   }, [itemData])
+
+  // Recovery check: once the record (or the blank new form) is ready, look
+  // for a stored draft. A draft whose every value now equals the loaded
+  // record is stale and silently dropped; otherwise the banner offers it.
+  // Guarded by STATE, not a ref: StrictMode runs the effect twice on mount
+  // (cleanup cancels the first load) and a ref stamped on the first run would
+  // make the second bail out with the check never completing.
+  useEffect(() => {
+    if (!isNew && !itemData) return
+    if (recoveryCheckedKey === recoveryKey) return
+    let cancelled = false
+    void loadDraft(recoveryKey).then((stored) => {
+      if (cancelled) return
+      setRecoveryCheckedKey(recoveryKey)
+      if (!stored || !draftHasContent(stored)) {
+        setRecovery({ state: 'none' })
+        return
+      }
+      const base = initialDataRef.current
+      const liveFields: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(stored.fields ?? {}))
+        if (!valuesEqual(v, base[k])) liveFields[k] = v
+      const pruned = { ...stored, fields: liveFields }
+      if (!draftHasContent(pruned)) {
+        void deleteDraft(recoveryKey)
+        setRecovery({ state: 'none' })
+        return
+      }
+      setRecovery({ state: 'offer', draft: pruned })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isNew, itemData, recoveryKey, recoveryCheckedKey])
+
+  // Persist: debounced after every change while dirty; cleared the moment
+  // the form is clean. Held off while an offer is pending so the freshly
+  // loaded (clean) form cannot delete the draft it is about to offer.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `draft` is the re-run trigger; the payload reads draftRef for the synchronous mirror
+  useEffect(() => {
+    if (recovery.state !== 'none' || recoveryCheckedKey !== recoveryKey) return
+    const t = setTimeout(() => {
+      if (!isDirty) {
+        void deleteDraft(recoveryKey)
+        return
+      }
+      const base = initialDataRef.current
+      const fields: Record<string, unknown> = {}
+      const baseVals: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(draftRef.current)) {
+        if (k.startsWith('__') || valuesEqual(v, base[k])) continue
+        // A new form's layout defaults / prefill are not the person's work —
+        // only fields they touched count (an existing record diffs vs base).
+        if (isNew && !userTouchedRef.current.has(k)) continue
+        fields[k] = v
+        baseVals[k] = base[k]
+      }
+      const obj = <T,>(m: Map<string, T>, conv: (v: T) => unknown) =>
+        Object.fromEntries([...m.entries()].map(([k, v]) => [k, conv(v)]))
+      const stored: StoredDraft = {
+        key: recoveryKey,
+        collection,
+        item_id: isNew ? 'new' : String(itemId),
+        user_id: authUserId || 'anon',
+        saved_at: new Date().toISOString(),
+        fields,
+        base: baseVals,
+        base_updated_at:
+          (base.date_updated as string | undefined) ??
+          (base.updated_at as string | undefined) ??
+          null,
+        pending_rows: obj(pendingO2MRows, (r) => r) as StoredDraft['pending_rows'],
+        pending_edits: obj(pendingO2MEdits, (e) =>
+          Object.fromEntries(e)
+        ) as StoredDraft['pending_edits'],
+        pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
+        m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
+        m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks']
+      }
+      if (!draftHasContent(stored)) {
+        void deleteDraft(recoveryKey)
+        return
+      }
+      void saveDraft(stored)
+    }, 800)
+    return () => clearTimeout(t)
+  }, [
+    recovery.state,
+    recoveryCheckedKey,
+    recoveryKey,
+    isDirty,
+    draft,
+    pendingO2MRows,
+    pendingO2MEdits,
+    pendingO2MDeletes,
+    m2mLinks,
+    m2mUnlinks,
+    isNew,
+    itemId,
+    collection,
+    authUserId
+  ])
+
+  const restoreDraft = useCallback(() => {
+    const r = recoveryRef.current
+    if (r.state !== 'offer') return
+    const d = r.draft
+    const next = { ...draftRef.current, ...d.fields }
+    draftRef.current = next
+    setDraft(next)
+    for (const k of Object.keys(d.fields)) {
+      userTouchedRef.current.add(k)
+      fieldEditSeqRef.current.set(k, ++ruleSeqRef.current)
+    }
+    if (Object.keys(d.pending_rows ?? {}).length)
+      setPendingO2MRows(new Map(Object.entries(d.pending_rows)))
+    if (Object.keys(d.pending_edits ?? {}).length)
+      setPendingO2MEdits(
+        new Map(Object.entries(d.pending_edits).map(([k, e]) => [k, new Map(Object.entries(e))]))
+      )
+    if (Object.keys(d.pending_deletes ?? {}).length)
+      setPendingO2MDeletes(
+        new Map(Object.entries(d.pending_deletes).map(([k, x]) => [k, new Set(x)]))
+      )
+    if (Object.keys(d.m2m_links ?? {}).length) setM2mLinks(new Map(Object.entries(d.m2m_links)))
+    if (Object.keys(d.m2m_unlinks ?? {}).length)
+      setM2mUnlinks(new Map(Object.entries(d.m2m_unlinks).map(([k, x]) => [k, new Set(x)])))
+    setIsDirty(true)
+    setRecovery({ state: 'none' })
+  }, [])
+  const discardDraft = useCallback(() => {
+    void deleteDraft(recoveryKey)
+    setRecovery({ state: 'none' })
+  }, [recoveryKey])
 
   // New records: stamp the resolved layout's default_values onto the draft,
   // once, filling only keys the draft doesn't already have a value for.
@@ -5907,6 +6066,9 @@ export function ItemEditForm({
       baseRevisionOverrideRef.current = null
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
       setIsDirty(false)
+      // The persisted recovery draft is spent — remove it now rather than on
+      // the debounce, since a created record navigates away immediately.
+      void deleteDraft(recoveryKey)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
       setPendingComments([])
@@ -8911,6 +9073,31 @@ export function ItemEditForm({
                                     </div>
                                   )}
 
+                                  {recovery.state === 'offer' && (
+                                    <div className='nvr-expand-in'>
+                                      <DraftRecoveryBanner
+                                        draft={recovery.draft}
+                                        labelFor={(f) =>
+                                          (fieldConfig ?? []).find((x) => x.field === f)?.label ??
+                                          ''
+                                        }
+                                        current={initialDataRef.current}
+                                        recordChanged={
+                                          !!recovery.draft.base_updated_at &&
+                                          !!(
+                                            initialDataRef.current.date_updated ??
+                                            initialDataRef.current.updated_at
+                                          ) &&
+                                          String(
+                                            initialDataRef.current.date_updated ??
+                                              initialDataRef.current.updated_at
+                                          ) !== recovery.draft.base_updated_at
+                                        }
+                                        onRestore={restoreDraft}
+                                        onDiscard={discardDraft}
+                                      />
+                                    </div>
+                                  )}
                                   {!isNew && itemId && (
                                     <div className='nvr-expand-in'>
                                       <RecordRecapStrip
