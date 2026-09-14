@@ -14,6 +14,11 @@ export const summaryMode: DocSection = {
       type: 'p',
       text: 'When the collection has Summary mode enabled, the record header carries a Summary / Edit segmented control with the active side filled. The choice lasts for the current visit only — nothing is stored per user; every open runs the opening-mode rules again. New records always open in Edit. The right-hand summary rail collapses while in Summary mode and returns when switching back.'
     },
+    { type: 'h3', text: 'The Summary layout' },
+    {
+      type: 'p',
+      text: 'What Summary mode shows is a layout of type "summary" (Data Model → collection → Layouts → layout type). It renders the same way a read-only detail sheet does — section cards, definition grids, child tables, the header band and hide-empty settings — and it carries its own groups and field assignments, so the summary can differ from the edit form: fewer fields, a different order, a header band with the identity fields. Start one with "Clone as Summary" on the grouped layout, which copies every group, assignment and override, then trim. A collection without a summary layout renders its grouped layout read-only, which is the pre-layout behaviour. Data-integrity findings do not render as a banner in Summary mode; the affected fields (or child grids) carry an amber mark whose tooltip lists the issues.'
+    },
     { type: 'h3', text: 'Which mode a record opens in' },
     {
       type: 'p',

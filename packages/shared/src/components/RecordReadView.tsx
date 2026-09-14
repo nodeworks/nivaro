@@ -8,6 +8,7 @@ import { sanitizeHtml } from '../lib/sanitize-html'
 import { titleCase } from '../lib/utils'
 import { UserChip } from './item-edit/GroupSection'
 import { richTextToPlain } from './item-edit/helpers'
+import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
 
@@ -690,7 +691,8 @@ export function RecordReadView({
   itemId,
   layoutData,
   flush,
-  renderSlot
+  renderSlot,
+  integrityMarks
 }: {
   collection: string
   itemId: string
@@ -705,8 +707,35 @@ export function RecordReadView({
    * rest render full-width under the cards, in layout order.
    */
   renderSlot?: (key: string, assignment: LayoutAssignment) => ReactNode
+  /**
+   * Summary mode hides the data-integrity banner but must not hide the
+   * problem: with this on, every field (or child grid) that carries a
+   * finding gets an amber mark whose tip lists the messages.
+   */
+  integrityMarks?: boolean
 }) {
   const client = useNivaroClient()
+  const { data: integrity } = useRecordIntegrity(collection, itemId, !!integrityMarks)
+  const integrityMap = useMemo(
+    () => (integrityMarks && integrity?.enabled ? integrityByField(integrity.findings) : null),
+    [integrityMarks, integrity]
+  )
+  const IntegrityMark = ({ field }: { field: string }) => {
+    const list = integrityMap?.get(field)
+    if (!list || list.length === 0) return null
+    const tip = list.map((f) => f.message || f.rule).join('\n')
+    return (
+      <span
+        data-integrity-mark={field}
+        data-tip={tip}
+        role='img'
+        aria-label={`${list.length} data integrity issue${list.length === 1 ? '' : 's'}: ${tip}`}
+        className='ml-1.5 inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-amber-400/90 px-1 align-middle text-[9px] font-bold leading-none text-amber-950 dark:bg-amber-400 dark:text-amber-950'
+      >
+        {list.length > 1 ? list.length : '!'}
+      </span>
+    )
+  }
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
     queryFn: () =>
@@ -1043,6 +1072,7 @@ export function RecordReadView({
                     >
                       <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                         {labelFor(a)}
+                        <IntegrityMark field={a.field} />
                       </dt>
                       <dd
                         className={`mt-0.5 min-w-0 ${
@@ -1064,6 +1094,16 @@ export function RecordReadView({
             )}
             {grids.map((a) => (
               <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''}>
+                {integrityMap?.get(a.field)?.length ? (
+                  <div className='mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
+                    <span className='uppercase tracking-wide'>{labelFor(a)}</span>
+                    <IntegrityMark field={a.field} />
+                    <span className='font-normal text-amber-700/80 dark:text-amber-300/80'>
+                      — {integrityMap.get(a.field)!.length} line issue
+                      {integrityMap.get(a.field)!.length === 1 ? '' : 's'}; switch to Edit to fix
+                    </span>
+                  </div>
+                ) : null}
                 {renderGridAssignment(a)}
               </div>
             ))}
@@ -1104,6 +1144,7 @@ export function RecordReadView({
             <div className='min-w-0'>
               <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                 {labelFor(titleAssignment)}
+                <IntegrityMark field={titleAssignment.field} />
               </p>
               <p className='truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white'>
                 {record ? renderValue(titleAssignment) : '…'}
@@ -1116,6 +1157,7 @@ export function RecordReadView({
                 <div key={a.field} className='min-w-0'>
                   <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                     {labelFor(a)}
+                    <IntegrityMark field={a.field} />
                   </dt>
                   <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                     {record ? renderValue(a) : '…'}

@@ -19,11 +19,71 @@ import { cn, formatRelative } from '../../lib/utils'
  * through the normal write path and can be undone for 30 seconds.
  */
 
-interface Finding {
+export interface IntegrityFinding {
   field: string
   rule: string
   message: string | null
   fixable?: boolean
+}
+type Finding = IntegrityFinding
+
+interface IntegrityResult {
+  enabled: boolean
+  checked_at?: string | null
+  live?: boolean
+  findings: Finding[]
+}
+
+/**
+ * The record's integrity findings — the STORED result (latest sweep / write
+ * hook) paints first, the LIVE check replaces it. Both keys share the
+ * ['record-integrity', collection, itemId] prefix so every existing
+ * invalidation (Fix, save, RecordLiveSync) refreshes both. Shared by the
+ * banner and the Summary-mode field marks so the two never disagree.
+ */
+export function useRecordIntegrity(collection: string, itemId: string, enabled = true) {
+  const client = useNivaroClient()
+  const { data: stored } = useQuery<IntegrityResult>({
+    queryKey: ['record-integrity', collection, itemId],
+    enabled,
+    queryFn: () =>
+      client
+        .request<{ data: never }>(
+          get(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}`)
+        )
+        .then((r) => r.data)
+        .catch(() => ({ enabled: false, findings: [] }) as never),
+    staleTime: 5 * 60_000
+  })
+  const { data: live, isFetching: checking } = useQuery<IntegrityResult>({
+    queryKey: ['record-integrity', collection, itemId, 'live'],
+    enabled,
+    queryFn: () =>
+      client
+        .request<{ data: never }>(
+          post(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}/check`, {})
+        )
+        .then((r) => r.data)
+        // A failed live check must not blank the banner — the stored view stands.
+        .catch(() => null as never),
+    staleTime: 60_000,
+    // Never spin the banner on a background refetch storm — one live check per
+    // mount / invalidation is the contract.
+    refetchOnWindowFocus: false
+  })
+  return { data: live ?? stored, checking }
+}
+
+/** Findings grouped by the layout field they belong to — a line finding
+ *  ("Line 3: Category is empty…") lands on its grid alias. */
+export function integrityByField(findings: Finding[] | undefined): Map<string, Finding[]> {
+  const map = new Map<string, Finding[]>()
+  for (const f of findings ?? []) {
+    const list = map.get(f.field) ?? []
+    list.push(f)
+    map.set(f.field, list)
+  }
+  return map
 }
 
 interface Preview {
@@ -75,46 +135,12 @@ export function RecordIntegrityBanner({
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [openIdx, setOpenIdx] = useState<number | null>(null)
-  type Result = {
-    enabled: boolean
-    checked_at?: string | null
-    live?: boolean
-    findings: Finding[]
-  }
   // Two reads race on mount: the STORED findings (the latest collection
   // sweep — instant, but as old as that sweep) paint first, then the LIVE
   // check (POST …/check, the same evaluator over this one record, sub-second)
   // replaces them. Rob 2026-09-14: the sweep view lagged days behind the
-  // record — lines fixed since still read as broken. Both keys share the
-  // ['record-integrity', collection, itemId] prefix so every existing
-  // invalidation (Fix, save) refreshes both.
-  const { data: stored } = useQuery<Result>({
-    queryKey: ['record-integrity', collection, itemId],
-    queryFn: () =>
-      client
-        .request<{ data: never }>(
-          get(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}`)
-        )
-        .then((r) => r.data)
-        .catch(() => ({ enabled: false, findings: [] }) as never),
-    staleTime: 5 * 60_000
-  })
-  const { data: live, isFetching: checking } = useQuery<Result>({
-    queryKey: ['record-integrity', collection, itemId, 'live'],
-    queryFn: () =>
-      client
-        .request<{ data: never }>(
-          post(`/config-conformance/record/${collection}/${encodeURIComponent(itemId)}/check`, {})
-        )
-        .then((r) => r.data)
-        // A failed live check must not blank the banner — the stored view stands.
-        .catch(() => null as never),
-    staleTime: 60_000,
-    // Never spin the banner on a background refetch storm — one live check per
-    // mount / invalidation is the contract.
-    refetchOnWindowFocus: false
-  })
-  const data = live ?? stored
+  // record — lines fixed since still read as broken. See useRecordIntegrity.
+  const { data, checking } = useRecordIntegrity(collection, itemId)
 
   const invalidateRecord = () => {
     void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })

@@ -91,6 +91,63 @@ export function matchesRecordConditions(
 
 const FIELD_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
+/** Every layout_type the form knows how to render. 'summary' (2026-09-14) =
+ *  the read-only presentation Summary mode shows instead of the grouped
+ *  layout; activation is type-scoped like the rest. */
+const LAYOUT_TYPES = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const
+
+/** Layout settings a clone carries over — every column except identity
+ *  (id/collection/name/slug/sort/is_active/created_at), the type (the clone
+ *  request may change it) and parent inheritance (a clone is a copy, not a
+ *  child). */
+const CLONE_CARRIED_COLUMNS = [
+  'disable_comments',
+  'disable_tasks',
+  'tab_mode',
+  'validate_before_next',
+  'summary_enabled',
+  'summary_show_all',
+  'ai_enabled',
+  'conditions',
+  'allow_clone',
+  'allow_schedule',
+  'allow_disable_pickers',
+  'pdf_theme',
+  'pdf_template_id',
+  'pdf_cover_enabled',
+  'pdf_cover_title_field',
+  'pdf_cover_subtitle',
+  'pdf_show_logo',
+  'pdf_page_size',
+  'pdf_orientation',
+  'row_order_field',
+  'disable_revisions',
+  'disable_clone',
+  'accordion_mode',
+  'disable_delete',
+  'summary_hide_empty',
+  'pdf_button_label',
+  'addendum_layout_id',
+  'workflow_template_id',
+  'single_active_addendum',
+  'addendum_default_view',
+  'addendum_lock_fields',
+  'record_conditions',
+  'default_values',
+  'create_label',
+  'create_hidden',
+  'display_mode',
+  'hide_integrity_banner',
+  'hide_sla_banner',
+  'dossier_enabled',
+  'dossier_label',
+  'quick_picker',
+  'sheet_width',
+  'header_fields',
+  'hide_empty',
+  'changes_tray'
+] as const
+
 // Validate a PATCH body's record_conditions array; returns an error string
 // (naming the offending index) or null when valid.
 function validateRecordConditions(rules: unknown): string | null {
@@ -490,6 +547,43 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: { layout, groups, assignments } })
   })
 
+  // GET /collection-layouts/summary/:collection — the layout Summary mode
+  // renders (layout_type 'summary': the read-only presentation of the record
+  // form, customisable like any other layout). Active-first, role-gated, null
+  // when the collection has none — the form then falls back to rendering its
+  // grouped layout read-only, which is what it did before summary layouts.
+  app.get('/summary/:collection', { preHandler: authenticate }, async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const roleId = req.user?.role ?? null
+    const isAdmin = !!req.isAdmin
+    const candidates = (await db('nivaro_collection_layouts')
+      .where({ collection, layout_type: 'summary' })
+      .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
+    const layout = candidates.find((l) => roleAllows(l, roleId, isAdmin))
+    if (!layout) return reply.send({ data: null })
+    layout.header_fields = parseQuickPicker(layout.header_fields)
+    layout.hide_empty = !!layout.hide_empty
+    layout.changes_tray = !!layout.changes_tray
+    const [groups, assignments] = await Promise.all([
+      db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
+      db('nivaro_layout_field_assignments')
+        .where({ layout_id: layout.id })
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'default_expanded',
+          'overrides',
+          'widget_id',
+          'input_bindings'
+        )
+        .orderBy('sort', 'asc')
+    ])
+    return reply.send({ data: { layout, groups, assignments } })
+  })
+
   // GET /collection-layouts?collection=x[&active=true]
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
     const { collection, active } = req.query as { collection?: string; active?: string }
@@ -717,7 +811,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         patch.parent_layout_id = Number(body.parent_layout_id)
       }
     }
-    if (body.layout_type !== undefined) patch.layout_type = body.layout_type
+    if (body.layout_type !== undefined) {
+      if (!LAYOUT_TYPES.includes(body.layout_type as (typeof LAYOUT_TYPES)[number])) {
+        return reply
+          .code(400)
+          .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+      }
+      patch.layout_type = body.layout_type
+    }
     if (body.validate_before_next !== undefined)
       patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
@@ -1415,8 +1516,18 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const source = await db('nivaro_collection_layouts').where({ id }).first()
     if (!source) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as { name: string }
+    const body = req.body as { name: string; layout_type?: string }
     if (!body.name) return reply.code(400).send({ error: 'name is required' })
+    // A clone may land as another TYPE (grouped → summary is how a Summary
+    // layout starts life: the same groups and fields, rendered read-only).
+    if (
+      body.layout_type !== undefined &&
+      !LAYOUT_TYPES.includes(body.layout_type as (typeof LAYOUT_TYPES)[number])
+    ) {
+      return reply
+        .code(400)
+        .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+    }
 
     const maxSortRow = await db('nivaro_collection_layouts')
       .where({ collection: source.collection })
@@ -1424,10 +1535,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
+    // Carry the source's settings — a clone used to land as a bare 'grouped'
+    // layout with every presentation/behaviour column at its default, and
+    // assignments lost their overrides (labels, interfaces, grid options).
+    const carried: Record<string, unknown> = {}
+    for (const col of CLONE_CARRIED_COLUMNS) {
+      if (col in source && source[col] !== undefined) carried[col] = source[col]
+    }
     try {
       await db('nivaro_collection_layouts').insert({
+        ...carried,
         collection: source.collection,
         name: body.name,
+        layout_type: body.layout_type ?? source.layout_type ?? 'grouped',
+        slug: null,
         is_active: 0,
         sort: maxSort + 1
       })
@@ -1444,35 +1565,39 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const newId = newLayout.id
 
-    // Clone groups
-    const groups = await db('nivaro_field_groups')
+    // Clone groups — every column except identity, with container_id remapped
+    // to the cloned parent group (containers own their steps by id).
+    const groups = (await db('nivaro_field_groups')
       .where({ layout_id: Number(id) })
-      .select('*')
+      .orderBy('sort', 'asc')
+      .select('*')) as Array<Record<string, unknown>>
+    const groupIdMap = new Map<number, number>()
     for (const g of groups) {
-      await db('nivaro_field_groups').insert({
-        collection: g.collection,
-        key: g.key,
-        label: g.label,
-        type: g.type,
-        icon: g.icon ?? null,
-        sort: g.sort,
-        is_collapsed: g.is_collapsed,
-        layout_id: newId
-      })
+      const { id: oldId, container_id, layout_id: _l, ...rest } = g
+      const row = {
+        ...rest,
+        layout_id: newId,
+        container_id:
+          container_id != null ? (groupIdMap.get(Number(container_id)) ?? null) : null
+      }
+      await db('nivaro_field_groups').insert(row)
+      const inserted = await db('nivaro_field_groups')
+        .where({ layout_id: newId, key: g.key as string })
+        .orderBy('id', 'desc')
+        .first('id')
+      if (inserted) groupIdMap.set(Number(oldId), Number(inserted.id))
     }
 
-    // Clone field assignments
-    const assignments = await db('nivaro_layout_field_assignments')
+    // Clone field assignments WITH their overrides/visibility/widget wiring.
+    const assignments = (await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
-      .select('field', 'group_key', 'sort')
+      .select('*')) as Array<Record<string, unknown>>
     if (assignments.length > 0) {
       await db('nivaro_layout_field_assignments').insert(
-        assignments.map((a: { field: string; group_key: string | null; sort: number }) => ({
-          layout_id: newId,
-          field: a.field,
-          group_key: a.group_key,
-          sort: a.sort
-        }))
+        assignments.map((a) => {
+          const { id: _id, layout_id: _lid, ...rest } = a
+          return { ...rest, layout_id: newId }
+        })
       )
     }
 

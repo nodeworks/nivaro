@@ -963,6 +963,24 @@ export function ItemEditForm({
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
+  // Summary layout (layout_type 'summary'): the customisable read-only
+  // presentation Summary mode renders. Null = the collection has none, and
+  // the grouped layout above renders read-only instead (the pre-layout
+  // behaviour). Fetched only for saved records — Summary mode never applies
+  // to a new one.
+  const { data: summaryLayoutData } = useQuery<ActiveLayoutData | null>({
+    queryKey: ['summary-layout', collection],
+    queryFn: () =>
+      client
+        .request<{ data: ActiveLayoutData | null }>(
+          get(`/collection-layouts/summary/${collection}`)
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    staleTime: 60_000,
+    enabled: !isNew
+  })
+
   const {
     data: fieldConfig,
     isLoading: fieldsLoading,
@@ -9737,7 +9755,10 @@ export function ItemEditForm({
                                   )}
                                   {!isNew &&
                                     itemId &&
-                                    !activeLayoutData?.layout?.hide_integrity_banner && (
+                                    !activeLayoutData?.layout?.hide_integrity_banner &&
+                                    // Summary mode marks the affected fields instead (Rob) —
+                                    // the banner would only push the record down.
+                                    !(readMode && summaryModeSettled) && (
                                       <RecordIntegrityBanner
                                         collection={collection}
                                         itemId={String(itemId)}
@@ -9822,7 +9843,13 @@ export function ItemEditForm({
                                     <RecordReadView
                                       collection={collection}
                                       itemId={String(itemId)}
-                                      layoutData={activeLayoutData as unknown as ReadViewLayout}
+                                      // The collection's Summary layout when it has one (Table
+                                      // Editor → Layouts → type Summary), else the grouped layout
+                                      // rendered read-only.
+                                      layoutData={
+                                        (summaryLayoutData ??
+                                          activeLayoutData) as unknown as ReadViewLayout
+                                      }
                                       flush
                                       // Notes + tasks stay live in Summary mode — the record's
                                       // FIELDS are read-only, the conversation about it is not.
@@ -9831,6 +9858,9 @@ export function ItemEditForm({
                                           ? renderSentinel(key)
                                           : null
                                       }
+                                      // The integrity banner is hidden in Summary mode; the
+                                      // affected fields carry an amber mark instead.
+                                      integrityMarks
                                     />
                                   ) : hasTabs ? (
                                     isStepsMode ? (

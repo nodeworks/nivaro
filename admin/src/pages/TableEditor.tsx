@@ -16876,7 +16876,7 @@ interface CollectionLayout {
   header_fields?: string[] | null
   hide_empty?: boolean
   conditions?: { role_ids?: string[] } | null
-  layout_type?: 'grouped' | 'table' | 'file' | 'addendum' | 'detail'
+  layout_type?: 'grouped' | 'table' | 'file' | 'addendum' | 'detail' | 'summary'
   addendum_layout_id?: number | null
   workflow_template_id?: string | null
   single_active_addendum?: boolean
@@ -17373,10 +17373,19 @@ function LayoutsTab({
   })
 
   const cloneMut = useMutation({
-    mutationFn: ({ id, name }: { id: number; name: string }) =>
+    mutationFn: ({
+      id,
+      name,
+      layout_type
+    }: {
+      id: number
+      name: string
+      layout_type?: CollectionLayout['layout_type']
+    }) =>
       api.post<{ data: CollectionLayout }>(`/collection-layouts/${id}/clone`, {
         name,
-        slug: nameToSlug(name)
+        slug: nameToSlug(name),
+        ...(layout_type ? { layout_type } : {})
       }),
     onSuccess: (res) => {
       invalidateLayouts()
@@ -17730,6 +17739,23 @@ function LayoutsTab({
               >
                 Clone
               </button>
+              {(selected.layout_type ?? 'grouped') === 'grouped' && (
+                <button
+                  type='button'
+                  title='Copy this layout as the read-only Summary layout (what Summary mode renders)'
+                  onClick={() =>
+                    cloneMut.mutate({
+                      id: selected.id,
+                      name: `${selected.name} — Summary`,
+                      layout_type: 'summary'
+                    })
+                  }
+                  className='rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  data-clone-as-summary
+                >
+                  Clone as Summary
+                </button>
+              )}
               {confirmDeleteId === selected.id ? (
                 <>
                   <span className='text-[10px] text-slate-500'>Delete?</span>
@@ -17953,7 +17979,7 @@ function LayoutsTab({
                     Layout type
                   </span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['grouped', 'table', 'file', 'addendum', 'detail'] as const).map((lt) => (
+                    {(['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const).map((lt) => (
                       <button
                         key={lt}
                         type='button'
@@ -17969,7 +17995,9 @@ function LayoutsTab({
                           ? 'Addendum Form'
                           : lt === 'detail'
                             ? 'Detail (drill-down)'
-                            : lt}
+                            : lt === 'summary'
+                              ? 'Summary (read-only)'
+                              : lt}
                       </button>
                     ))}
                   </div>
@@ -18652,7 +18680,7 @@ function LayoutsTab({
                           })
                         }
                       />
-                      {selected.layout_type === 'detail' && (
+                      {(selected.layout_type === 'detail' || selected.layout_type === 'summary') && (
                         <ReadPresentationEditor
                           layout={selected}
                           fields={layoutFieldMeta}
