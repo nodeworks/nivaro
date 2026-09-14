@@ -19,6 +19,7 @@
     "sync:legacy-owners": "tsx extensions/efp-ops/scripts/sync-legacy-owners.ts",
     "sync:legacy-states": "tsx extensions/efp-ops/scripts/sync-legacy-states.ts",
     "sync:legacy-scopes": "tsx extensions/efp-ops/scripts/sync-legacy-scopes.ts",
+    "sync:legacy-users": "tsx extensions/efp-ops/scripts/sync-legacy-users.ts",
     "fix:file-fks": "tsx extensions/efp-ops/scripts/repoint-file-fks.ts",
     "fix:user-fks": "tsx extensions/efp-ops/scripts/repoint-user-fks.ts",
     "fix:junction-fields": "tsx extensions/efp-ops/scripts/fix-junction-fields.ts",
@@ -36,6 +37,7 @@
     "seed:sla-zones": "tsx extensions/efp-ops/scripts/seed-sla-zone-map.ts",
     "proc:dump": "tsx extensions/efp-ops/scripts/dump-procedures.ts",
     "proc:deploy": "tsx extensions/efp-ops/scripts/deploy-procedures.ts",
+    "proc:deploy-app-managed": "tsx extensions/efp-ops/scripts/deploy-app-managed-procs.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
     "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts"
