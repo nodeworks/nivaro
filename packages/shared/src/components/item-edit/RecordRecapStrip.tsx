@@ -18,8 +18,9 @@ interface Recap {
  * watermark and, when other people changed the record in between, renders a
  * one-line recap above the form. The server owns the session semantics (a
  * refresh within 30 minutes keeps the same baseline), the strip just shows
- * whatever the touch returned. Dismiss is per-mount — the next genuine visit
- * recomputes against the new baseline anyway.
+ * whatever the touch returned. Dismiss POSTs /dismiss, which collapses the
+ * server baseline to now — a reload inside the session grace stays quiet, and
+ * only changes made after the dismissal come back as news.
  */
 export function RecordRecapStrip({
   collection,
@@ -51,6 +52,15 @@ export function RecordRecapStrip({
       })
   }, [client, collection, itemId])
 
+  const dismiss = () => {
+    setDismissed(true)
+    // Best effort — a failed dismiss just means the strip may come back on
+    // the next reload, which is the old behaviour, never worse.
+    client
+      .request(post(`/record-views/${collection}/${encodeURIComponent(itemId)}/dismiss`, {}))
+      .catch(() => {})
+  }
+
   if (!recap || dismissed) return null
 
   const parts: string[] = []
@@ -79,7 +89,7 @@ export function RecordRecapStrip({
       </p>
       <button
         type='button'
-        onClick={() => setDismissed(true)}
+        onClick={dismiss}
         aria-label='Dismiss recap'
         className='shrink-0 rounded p-0.5 text-sky-400 hover:bg-sky-100 hover:text-sky-600 dark:hover:bg-sky-500/15'
       >

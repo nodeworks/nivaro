@@ -31,6 +31,26 @@ const SESSION_GRACE_MS = 30 * 60 * 1000
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export async function recordViewRoutes(app: FastifyInstance) {
+  // Dismissing the recap means "I have seen these changes": the diff baseline
+  // collapses to now, so a refresh inside the session grace (which deliberately
+  // keeps the baseline stable) no longer re-renders the same recap. Anything
+  // that changes AFTER the dismissal still shows on the next open.
+  app.post<{ Params: { collection: string; id: string } }>(
+    '/record-views/:collection/:id/dismiss',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      const now = new Date()
+      await db('nivaro_record_views')
+        .where({ user: req.user!.id, collection, item_id: String(id) })
+        .update({ last_viewed_at: now, prev_viewed_at: now })
+      return reply.send({ data: { ok: true } })
+    }
+  )
+
   app.post<{ Params: { collection: string; id: string } }>(
     '/record-views/:collection/:id/touch',
     { preHandler: requireAuth },
