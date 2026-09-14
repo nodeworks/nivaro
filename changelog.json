@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-14T04:02:13.823Z",
+  "generated_at": "2026-09-14T04:59:55.903Z",
   "releases": [
+    {
+      "version": "0.1.272",
+      "tag": "v0.1.272",
+      "date": "2026-09-14T00:59:47-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "form-ux",
+              "text": "apply-to-lines editor, role-default read mode, cell diffs, lock ETA, ghost merge, role preview, row soft locks",
+              "hash": "34463ce3"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "form-ux",
+              "text": "read mode is session-only, never stored in localStorage",
+              "hash": "6009456c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.271",
       "tag": "v0.1.271",
-      "date": "2026-09-14T00:02:05-04:00",
+      "date": "2026-09-14T00:02:13-04:00",
       "sections": [
         {
           "label": "Added",
