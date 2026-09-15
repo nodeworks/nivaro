@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-15T19:47:03.811Z",
+  "generated_at": "2026-09-15T20:35:28.147Z",
   "releases": [
+    {
+      "version": "0.1.294",
+      "tag": "v0.1.294",
+      "date": "2026-09-15T16:35:16-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "resolve relation-path columns on prefilled pending rows and addendum views",
+              "hash": "90f2953e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "browser",
+              "text": "refresh every per-page derived query after bulk and row actions",
+              "hash": "263a2b87"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.293",
       "tag": "v0.1.293",
-      "date": "2026-09-15T15:46:53-04:00",
+      "date": "2026-09-15T15:47:03-04:00",
       "sections": [
         {
           "label": "Fixed",
