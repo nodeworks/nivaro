@@ -29,7 +29,8 @@
  *       projects(
  *         filter: { status: { _eq: "active" }, owner: { department: { _eq: "Engineering" } } }
  *         sort: ["-priority", "owner.last_name"]
- *       ) { data { id name } total }
+ *       ) { id name }
+ *       projects_metadata(filter: { status: { _eq: "active" } }) { total }
  *     }
  *   `)
  *

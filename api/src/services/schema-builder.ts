@@ -503,10 +503,42 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     const fields = allFields.get(name) ?? []
     if (fields.length === 0) continue
 
-    const listType = new GraphQLObjectType({
-      name: `${name}_list`,
+    // The list query returns the ITEMS directly (the shape every GraphQL client
+    // written against a Directus-style API already expects — no `data`
+    // wrapper), and `<name>_metadata` answers the same filter/search with the
+    // page facts the wrapper used to carry. A GraphQL field is either a list
+    // or an object, so the two cannot share one field.
+    const listArgs = {
+      filter: {
+        type: (filterRegistry.get(name) ?? GraphQLJSON) as GraphQLInputType,
+        description: 'Filter by field values.'
+      },
+      sort: {
+        type: new GraphQLList(GraphQLString),
+        description: 'Sort fields. Prefix - for desc.'
+      },
+      limit: { type: GraphQLInt },
+      offset: { type: GraphQLInt },
+      search: { type: GraphQLString }
+    }
+    const listRead = (args: Record<string, unknown>, ctx: GQLContext, fields?: string[]) => {
+      if (!ctx.user)
+        throw Object.assign(new Error('Unauthorized'), {
+          extensions: { code: 'UNAUTHENTICATED' }
+        })
+      return readItems(ctx.user, name, {
+        filter: args.filter as Record<string, unknown> | undefined,
+        sort: args.sort as string[] | undefined,
+        limit: args.limit as number | undefined,
+        offset: args.offset as number | undefined,
+        search: args.search as string | undefined,
+        ...(fields ? { fields } : {})
+      })
+    }
+
+    const metadataType = new GraphQLObjectType({
+      name: `${name}_metadata`,
       fields: {
-        data: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(itemType))) },
         total: { type: new GraphQLNonNull(GraphQLInt) },
         limit: { type: new GraphQLNonNull(GraphQLInt) },
         offset: { type: new GraphQLNonNull(GraphQLInt) }
@@ -514,34 +546,26 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     })
 
     queryFields[name] = {
-      type: new GraphQLNonNull(listType),
+      type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(itemType))),
       description: `List ${col.display_name ?? name} items.`,
-      args: {
-        filter: {
-          type: (filterRegistry.get(name) ?? GraphQLJSON) as GraphQLInputType,
-          description: 'Filter by field values.'
-        },
-        sort: {
-          type: new GraphQLList(GraphQLString),
-          description: 'Sort fields. Prefix - for desc.'
-        },
-        limit: { type: GraphQLInt },
-        offset: { type: GraphQLInt },
-        search: { type: GraphQLString }
-      },
+      args: listArgs,
       resolve: async (_root, args: Record<string, unknown>, ctx: GQLContext) => {
-        if (!ctx.user)
-          throw Object.assign(new Error('Unauthorized'), {
-            extensions: { code: 'UNAUTHENTICATED' }
-          })
         try {
-          return await readItems(ctx.user, name, {
-            filter: args.filter as Record<string, unknown> | undefined,
-            sort: args.sort as string[] | undefined,
-            limit: args.limit as number | undefined,
-            offset: args.offset as number | undefined,
-            search: args.search as string | undefined
-          })
+          return (await listRead(args, ctx)).data
+        } catch (e) {
+          wrapError(e)
+        }
+      }
+    }
+
+    queryFields[`${name}_metadata`] = {
+      type: new GraphQLNonNull(metadataType),
+      description: `Page facts (total / limit / offset) for the same ${col.display_name ?? name} list arguments.`,
+      args: listArgs,
+      resolve: async (_root, args: Record<string, unknown>, ctx: GQLContext) => {
+        try {
+          const page = await listRead(args, ctx, ['id'])
+          return { total: page.total, limit: page.limit, offset: page.offset }
         } catch (e) {
           wrapError(e)
         }

@@ -46,8 +46,8 @@ export const graphqlSchema: DocSection = {
       type: 'ul',
       items: [
         'An object type named after the collection (e.g. `articles`)',
-        'A list wrapper type named `collectionName_list` with `data`, `total`, `limit`, and `offset`',
-        'Two query fields: `collectionName` (list) and `collectionName_by_id` (single)',
+        'A page-facts type named `collectionName_metadata` with `total`, `limit`, and `offset`',
+        'Three query fields: `collectionName` (list of items), `collectionName_metadata` (page facts for the same arguments) and `collectionName_by_id` (single)',
         'Three mutation fields: `create_collectionName`, `update_collectionName_item`, `delete_collectionName_item`',
         'A typed filter input type named `collectionName_filter` with per-field operator inputs and `_and`/`_or` combinators'
       ]
@@ -120,6 +120,10 @@ export const graphqlQueries: DocSection = {
     { type: 'h1', id: 'graphql-queries', text: 'Queries' },
     { type: 'h3', text: 'List query' },
     {
+      type: 'p',
+      text: 'A list query returns the items directly. Page facts (`total`, `limit`, `offset`) live on the sibling `<collection>_metadata` query, which takes the same `filter` / `search` / `limit` / `offset` arguments — ask for both in one request when you paginate.'
+    },
+    {
       type: 'pre',
       code: `query {
   articles(
@@ -129,11 +133,16 @@ export const graphqlQueries: DocSection = {
     offset: 0
     search: "fiber"
   ) {
-    data {
-      id
-      name
-      status
-    }
+    id
+    name
+    status
+  }
+  articles_metadata(
+    filter: { status: { _eq: "active" } }
+    search: "fiber"
+    limit: 10
+    offset: 0
+  ) {
     total
     limit
     offset
@@ -190,8 +199,7 @@ export const graphqlFilters: DocSection = {
     title: { _contains: "fiber" }
     submitted_at: { _nnull: true }
   }) {
-    data { id status amount }
-    total
+    id status amount
   }
 }`
     },
@@ -205,7 +213,7 @@ export const graphqlFilters: DocSection = {
       { priority: { _gte: 3 } }
     ]
   }) {
-    data { id name status }
+    id name status
   }
 }`
     },
@@ -223,7 +231,7 @@ query {
       division: { name: { _eq: "Network Engineering" } }
     }
   }) {
-    data { id title }
+    id title
   }
 }`
     },
@@ -239,7 +247,7 @@ query {
   projects(filter: {
     inventory_requests: { _some: { status: { _eq: "pending" } } }
   }) {
-    data { id name }
+    id name
   }
 }
 
@@ -248,7 +256,7 @@ query {
   inventory_requests(filter: {
     tags: { _none: { label: { _eq: "archived" } } }
   }) {
-    data { id title }
+    id title
   }
 }`
     },
@@ -294,21 +302,21 @@ export const graphqlSort: DocSection = {
       code: `# Simple multi-field sort
 query {
   inventory_requests(sort: ["-submitted_at", "title"]) {
-    data { id title submitted_at }
+    id title submitted_at
   }
 }
 
 # Sort by related field (M2O)
 query {
   inventory_requests(sort: ["project.name", "-submitted_at"]) {
-    data { id title }
+    id title
   }
 }
 
 # Two-hop M2O sort
 query {
   inventory_requests(sort: ["project.division.name"]) {
-    data { id title }
+    id title
   }
 }`
     },
@@ -530,7 +538,7 @@ const res = await fetch('https://nivaro.example.com/api/graphql', {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer 3a7f2b9c...',
   },
-  body: JSON.stringify({ query: '{ articles { data { id name } total } }' }),
+  body: JSON.stringify({ query: '{ articles { id name } articles_metadata { total } }' }),
 })
 const { data, errors } = await res.json()
 
@@ -543,7 +551,7 @@ const client = axios.create({
 })
 
 const { data } = await client.post('/api/graphql', {
-  query: '{ articles { data { id name } total } }',
+  query: '{ articles { id name } articles_metadata { total } }',
 })`
     },
     {

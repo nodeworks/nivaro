@@ -31,7 +31,7 @@ export function GraphQLExplorerPage() {
         defaultQuery={`# Nivaro GraphQL API — authenticated as ${user?.email ?? 'you'}
 #
 # Example:
-# { collections { data { id collection display_name } } }
+# { nivaro_collections { id collection display_name } }
 `}
       />
     </div>

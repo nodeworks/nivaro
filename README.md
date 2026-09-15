@@ -363,7 +363,10 @@ const { data, total } = await nivaro.request(
 
 // GraphQL
 const result = await nivaro.graphql(`
-  query { projects(filter: { status: { _eq: "active" } }) { data { id name } total } }
+  query {
+    projects(filter: { status: { _eq: "active" } }) { id name }
+    projects_metadata(filter: { status: { _eq: "active" } }) { total }
+  }
 `)
 
 // Realtime
